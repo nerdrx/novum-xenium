@@ -13,6 +13,7 @@ def context(mode="auto", **kwargs):
 @pytest.mark.parametrize("url", [
     "https://www.youtube.com/@therealnerdrx", "https://youtube.com/@nerdrx/",
     "https://github.com/nerdrx", "github.com/nerdrx",
+    "https://www.deviantart.com/nerdrx", "https://deviantart.com/nerdrx/",
 ])
 @pytest.mark.parametrize("native", [True, False])
 def test_public_profile_after_search_needs_no_approval(url, native):
@@ -29,6 +30,10 @@ def test_public_profile_after_search_needs_no_approval(url, native):
     "http://youtube.com/@nerdrx", "https://www.youtube.com/@nerdrx%2fsecret",
     "https://127.0.0.1/@nerdrx", "https://[::1]/@nerdrx", "https://metadata.google.internal/profile",
     "https://service.lan/profile", "https://youtube.com\\@attacker.test/@nerdrx",
+    "https://www.deviantart.com/nerdrx?secret=private", "https://www.deviantart.com/nerdrx/gallery",
+    "https://deviantart.com.attacker.test/nerdrx", "https://user:pass@deviantart.com/nerdrx",
+    "https://deviantart.com:8111/nerdrx", "http://deviantart.com/nerdrx",
+    "https://deviantart.com/nerdrx%2fsecret", "https://deviantart.com/users/logout",
 ])
 def test_new_payload_or_unusual_destination_keeps_approval(url):
     assert not context().decision_for("web_fetch", json.dumps({"url": url})).allowed
@@ -90,11 +95,12 @@ def test_ambiguous_arguments_do_not_get_exception(content):
 
 
 @pytest.mark.parametrize("disabled", [False, True])
-def test_real_agent_loop_public_fetch_does_not_bypass_disabled_tools(monkeypatch, disabled):
+@pytest.mark.parametrize("url", ["https://www.youtube.com/@therealnerdrx", "https://www.deviantart.com/nerdrx"])
+def test_real_agent_loop_public_fetch_does_not_bypass_disabled_tools(monkeypatch, disabled, url):
     from tests.test_external_context_tool_gate import _patch_agent_loop, _collect_agent_events
     from src.prompt_security import untrusted_context_message
     executed = []
-    loop = _patch_agent_loop(monkeypatch, ["```web_fetch\nhttps://www.youtube.com/@therealnerdrx\n```"], executed)
+    loop = _patch_agent_loop(monkeypatch, ["```web_fetch\n" + url + "\n```"], executed)
 
     async def fake_execute(block, **kwargs):
         executed.append(block.tool_type)

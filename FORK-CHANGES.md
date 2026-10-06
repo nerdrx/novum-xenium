@@ -6,6 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Approve for me recognizes plain DeviantArt profile reads alongside YouTube and GitHub profiles, including after external search context. Query payloads, extra paths, Ask mode, delegated callers and disabled tools retain their existing checks. The approval and agent-loop regression suite passed 275 checks for this update.
 - Agent context budgets include native tool definitions, and trimming preserves the current user question plus complete recent tool exchanges. Large results are stored in a private per-chat SQLite FTS5 index with bounded search/exact chunk retrieval. Archives obey existing tool policies and are removed with their chats; incognito and delegated API-token turns do not store results. This is a native implementation of the storage-and-retrieval pattern, not a distribution of Context Mode.
 - NX is the default theme for fresh profiles and reset. Saved personality names remain visible when agent rounds are reconstructed after reload; underlying model provenance stays available.
 

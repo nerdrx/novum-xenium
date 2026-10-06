@@ -671,6 +671,8 @@ def _is_public_profile_url(url: str) -> bool:
         return bool(re.fullmatch(r"/@[A-Za-z0-9_.-]{3,30}/?", parsed.path))
     if parsed.hostname in {"github.com", "www.github.com"}:
         return bool(re.fullmatch(r"/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/?", parsed.path))
+    if parsed.hostname in {"deviantart.com", "www.deviantart.com"}:
+        return bool(re.fullmatch(r"/[A-Za-z0-9][A-Za-z0-9-]{0,49}/?", parsed.path))
     return False
 
 

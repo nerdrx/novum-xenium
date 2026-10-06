@@ -18254,6 +18254,95 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
   font-size: 12px;
 }
 
+.approval-mode-anchor {
+  position: relative;
+  flex-shrink: 0;
+}
+.approval-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 8px;
+  color: color-mix(in srgb, var(--fg) 70%, transparent);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.approval-mode-trigger:hover:not(:disabled),
+.approval-mode-trigger:focus-visible {
+  color: var(--fg);
+  border-color: var(--accent, var(--red));
+}
+.approval-mode-trigger:focus-visible,
+.approval-mode-option:focus-visible {
+  outline: 2px solid var(--accent, var(--red));
+  outline-offset: 2px;
+}
+.approval-mode-trigger:disabled { opacity: .5; cursor: wait; }
+.approval-mode-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 1002;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(320px, calc(100vw - 24px));
+  padding: 10px;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
+}
+.approval-mode-panel[hidden] { display: none !important; }
+.approval-mode-options { display: flex; flex-direction: column; gap: 4px; }
+.approval-mode-option {
+  display: flex;
+  flex-direction: column;
+  height: auto;
+  min-height: 44px;
+  flex-shrink: 0;
+  align-items: stretch;
+  gap: 3px;
+  padding: 7px;
+  color: var(--fg);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
+}
+.approval-mode-option[aria-checked="true"] {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  border-color: var(--border);
+}
+.approval-mode-option:disabled { opacity: .55; cursor: wait; }
+.approval-mode-option-title { font-size: 12px; font-weight: 600; }
+.approval-mode-option-detail,
+.approval-mode-scope,
+.approval-mode-error { font-size: 10px; line-height: 1.4; opacity: .7; }
+.approval-mode-error { color: var(--red); opacity: 1; }
+
+@media (max-width: 480px) {
+  .approval-mode-trigger { width: 30px; justify-content: center; padding: 0; }
+  .approval-mode-trigger span { display: none; }
+  .approval-mode-panel {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+    max-height: calc(100dvh - 120px);
+    overflow-y: auto;
+  }
+}
+
 .group-conversation-status {
   min-height: 1em;
   font-size: 11px;

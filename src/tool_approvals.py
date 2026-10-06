@@ -163,15 +163,15 @@ class PendingToolApproval:
     selected_tools: tuple[str, ...] = ()
     continuation_query: str = ""
 
-    def public_payload(self, *, reason: str | None = None) -> dict[str, Any]:
-        return {
+    def public_payload(self, *, reason: str | None = None, single_action_only: bool = False) -> dict[str, Any]:
+        payload = {
             "kind": "tool_approval",
             "approval_id": self.approval_id,
             # The browser already owns this chat id. Persisting it with the
             # resolved card lets history-derived session grants remain bound to
             # this exact chat and prevents inheritance by a forked session.
             "session_id": self.session_id,
-            "question": "Allow this task to continue?",
+            "question": "Allow this action?" if single_action_only else "Allow this task to continue?",
             "description": reason or (
                 "Untrusted context influenced this run, so continuing with "
                 "otherwise-gated actions needs your explicit approval."
@@ -213,6 +213,16 @@ class PendingToolApproval:
                 "document_version": self.document_version,
             },
         }
+        if single_action_only:
+            payload["options"] = [
+                {
+                    "label": "Allow this action",
+                    "value": TASK_APPROVAL_DECISION,
+                    "description": "Execute only the exact action shown below; ask again for the next action.",
+                },
+                payload["options"][-1],
+            ]
+        return payload
 
 
 @dataclass

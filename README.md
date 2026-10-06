@@ -48,6 +48,14 @@ Your database, chats, settings, credentials and model caches stay under `data/`.
 
 Group chats have a circular-arrow button beside Agent/Chat. Open it for **Auto conversation**, **20 / 100 replies / Until Stop**, and **Stop**. Tool approvals wait for your choice before the requesting participant continues.
 
+The shield button beside Agent/Chat selects approval behavior for your account's next agent turn, including group participants:
+
+- **Ask for approval**: approve each agent write, shell command, or internet call. Reads in the workspace remain available. Automatic URL/transcript and web-search prefetch are deferred to agent tools.
+- **Approve for me** (default): retain the existing automatic checks and task/chat approval choices when untrusted context makes an action risky.
+- **Full access**: skip automatic tool approval prompts within the current workspace/container.
+
+These modes do not add host-folder access or override disabled tools, account privileges, plan mode, or filesystem restrictions. Running turns keep their original mode. Only an interactive user can save a mode; API tokens and internal tool calls cannot grant themselves full access. Other user interactions, such as a tool asking for missing information, still appear in Full access.
+
 ChatGPT subscription chat and native tools use the existing provider connection in Settings. Image generation through a logged-in host Codex CLI is an optional extra; see [its setup](docs/codex-image-bridge.md). It is not required to start the Docker stack.
 
 ## Features

@@ -627,6 +627,9 @@ class ToolRunSecurityContext:
     # Driven by a bearer API token, not a person at a browser. Privileged
     # tools are refused outright and no approval can lift that.
     delegated_credential: bool = False
+    # Snapshot from the interactive user's server-side preference. This changes
+    # approval prompts only, never tool availability or filesystem permissions.
+    approval_mode: str = "auto"
 
     def observe_messages(self, messages: Iterable[dict]) -> None:
         """Apply server-owned chat scope and promote untrusted prompt context."""
@@ -663,7 +666,24 @@ class ToolRunSecurityContext:
                     "It requires an interactive session."
                 ),
             )
-        if self.approval_gate_bypassed:
+        if not self.delegated_credential:
+            if self.approval_mode == "full":
+                return ToolGateDecision(True)
+            if self.approval_mode != "auto":
+                capabilities = capabilities_for_action(tool_name, content)
+                effects = capabilities.effects & (
+                    (POST_EXTERNAL_BLOCKED_EFFECTS - {ToolEffect.READ_PRIVATE})
+                    | {ToolEffect.BROKERED_NETWORK_READ}
+                )
+                if not capabilities.known or effects:
+                    return ToolGateDecision(
+                        False,
+                        f"Ask for approval is enabled. Tool '{tool_name}' requires "
+                        "your approval before writes, code execution, or internet access.",
+                    )
+                # Read-only actions still retain the existing post-untrusted
+                # private-data gate. Ask must never weaken Auto's checks.
+        if self.approval_gate_bypassed and self.approval_mode == "auto":
             return ToolGateDecision(True)
         if not self.external_untrusted_context_seen:
             return ToolGateDecision(True)

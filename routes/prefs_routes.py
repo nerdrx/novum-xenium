@@ -1,16 +1,30 @@
 """User preferences API — per-user key/value store backed by a JSON file."""
 import json
 from typing import Optional
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException
 from core.atomic_io import atomic_write_json
-from src.auth_helpers import get_current_user
+from src.auth_helpers import get_current_user, require_user, is_delegated_credential
 from src.constants import USER_PREFS_FILE
 
 PREFS_FILE = USER_PREFS_FILE
 _FOREGROUND_POLICY_KEYS = (
     "foreground_fallback_enabled",
     "foreground_model_fallbacks",
+    "tool_approval_mode",
 )
+TOOL_APPROVAL_MODES = frozenset({"ask", "auto", "full"})
+
+
+def resolve_tool_approval_mode(request: Request) -> str:
+    """Snapshot browser consent; never borrow an owner's mode for a token."""
+    from src.owner_identity import is_request_sentinel_owner
+    user = get_current_user(request)
+    if (is_delegated_credential(request) or is_request_sentinel_owner(user)
+            or request.headers.get("X-Odysseus-Internal-Token")):
+        return "auto"
+    prefs = _load_for_user(user)
+    value = prefs.get("tool_approval_mode", "auto")
+    return value if isinstance(value, str) and value in TOOL_APPROVAL_MODES else "ask"
 
 
 def _load():
@@ -112,11 +126,22 @@ def setup_prefs_routes():
     async def get_pref(request: Request, key: str):
         user = get_current_user(request)
         prefs = _load_for_user(user)
-        return {"key": key, "value": prefs.get(key)}
+        value = resolve_tool_approval_mode(request) if key == "tool_approval_mode" else prefs.get(key)
+        return {"key": key, "value": value}
 
     @router.put("/{key}")
     async def set_pref(request: Request, key: str, body: dict):
         user = get_current_user(request)
+        if key == "tool_approval_mode":
+            from src.owner_identity import is_request_sentinel_owner
+            require_user(request)
+            # Internal HTTP tools still carry this header when the operator
+            # disables auth and middleware no longer stamps their identity.
+            if is_request_sentinel_owner(user) or request.headers.get("X-Odysseus-Internal-Token"):
+                raise HTTPException(403, "Approval mode requires an interactive user session")
+            value = body.get("value")
+            if not isinstance(value, str) or value not in TOOL_APPROVAL_MODES:
+                raise HTTPException(400, "Approval mode must be ask, auto, or full")
         prefs = _load_for_user(user)
         prefs[key] = body.get("value")
         _save_for_user(user, prefs)

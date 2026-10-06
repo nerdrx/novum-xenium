@@ -127,6 +127,7 @@ class ChatHandler:
         sess,
         auto_opened_docs: Optional[List[Dict[str, Any]]] = None,
         allow_tool_preprocessing: bool = True,
+        allow_external_fetch: bool = True,
     ) -> tuple:
         """
         Common preprocessing for both chat endpoints.
@@ -141,7 +142,7 @@ class ChatHandler:
         attachment_meta: List[Dict[str, Any]] = []
 
         # Extract URLs and process YouTube transcripts
-        urls = extract_urls(enhanced_message) if allow_tool_preprocessing else []
+        urls = extract_urls(enhanced_message) if allow_tool_preprocessing and allow_external_fetch else []
         youtube_transcripts: List[str] = []
 
         has_youtube = False

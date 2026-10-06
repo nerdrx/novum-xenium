@@ -48,6 +48,7 @@ from src.auth_helpers import (
     require_chat_api_token_scope,
 )
 from routes.session_routes import _verify_session_owner
+from routes.prefs_routes import resolve_tool_approval_mode
 from routes.document_helpers import _owner_session_filter
 from core.database import SessionLocal, get_session_mode, set_session_mode
 from core.database import Session as DBSession, ChatMessage as DBChatMessage
@@ -790,6 +791,7 @@ def setup_chat_routes(
         except KeyError:
             raise HTTPException(404, f"Session '{session}' not found")
         owner = effective_user(request)
+        _approval_mode = resolve_tool_approval_mode(request)
         if _clear_orphaned_session_endpoint(sess, owner=owner):
             raise HTTPException(400, "Selected model endpoint was removed. Pick another model in Settings.")
 
@@ -814,7 +816,7 @@ def setup_chat_routes(
 
         # Inline memory command
         memory_response = None
-        if not tool_policy.blocks("manage_memory"):
+        if not tool_policy.blocks("manage_memory") and _approval_mode != "ask":
             memory_response = await chat_handler.handle_memory_command(sess, message)
         if memory_response:
             return {"response": memory_response}
@@ -835,6 +837,7 @@ def setup_chat_routes(
             time_filter=time_filter,
             webhook_manager=webhook_manager,
             allow_tool_preprocessing=allow_tool_preprocessing,
+            allow_external_fetch=_approval_mode != "ask",
             defer_context_shaping=foreground_policy.enabled,
         )
 
@@ -1008,6 +1011,9 @@ def setup_chat_routes(
             form_data.get("tool_approval_decision")
             or (body or {}).get("tool_approval_decision")
         )
+        # Resolve once before detaching the stream. Model text, form fields,
+        # and later preference changes cannot elevate this in-flight turn.
+        _approval_mode = resolve_tool_approval_mode(request)
         exact_tool_approval = None
         pending_tool_approval = None
         retired_tool_approval_taint = False
@@ -1191,6 +1197,7 @@ def setup_chat_routes(
                     decision=decision,
                     owner=owner,
                     session_id=session,
+                    allow_continuation=_approval_mode != "ask",
                 )
                 tool_approval_continuation = True
                 if (
@@ -1204,7 +1211,7 @@ def setup_chat_routes(
                 if not _mark_tool_approval_resolved(
                     sess,
                     tool_approval_id,
-                    decision,
+                    "approve_task" if _approval_mode == "ask" and decision == "approve" else decision,
                 ):
                     logger.warning(
                         "Tool approval %s was consumed but its persisted card could not be marked resolved",
@@ -1347,6 +1354,8 @@ def setup_chat_routes(
         pre_context_tool_policy = build_effective_tool_policy(
             last_user_message=message,
         )
+        # Agent-mode network work must reach the shared tool gate in Ask mode,
+        # rather than running a URL fetch/search during context preprocessing.
         allow_tool_preprocessing = not pre_context_tool_policy.block_all_tool_calls
         foreground_policy = resolve_foreground_model_policy(
             owner=owner,
@@ -1374,6 +1383,7 @@ def setup_chat_routes(
             # index would be useless / unwanted noise.
             agent_mode=(chat_mode == "agent"),
             allow_tool_preprocessing=allow_tool_preprocessing,
+            allow_external_fetch=_approval_mode != "ask",
             defer_context_shaping=foreground_policy.enabled,
             continuation_context_message=(
                 pending_tool_approval.continuation_query
@@ -2370,6 +2380,7 @@ def setup_chat_routes(
                         defer_context_shaping=_foreground_policy.enabled,
                         external_untrusted_context_seen=external_untrusted_context_seen,
                         delegated_credential=_delegated_credential,
+                        approval_mode=_approval_mode,
                         exact_approval=exact_tool_approval,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):

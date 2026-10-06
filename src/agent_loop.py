@@ -3456,6 +3456,7 @@ async def stream_agent_loop(
     workload: str = "foreground",
     external_untrusted_context_seen: bool = False,
     delegated_credential: bool = False,
+    approval_mode: str = "auto",
     exact_approval: Optional[ExactToolApproval] = None,
     _is_teacher_run: bool = False,
     history_session=None,
@@ -3485,6 +3486,7 @@ async def stream_agent_loop(
             exact_approval and exact_approval.allow_remaining_actions
         ),
         delegated_credential=bool(delegated_credential),
+        approval_mode=approval_mode,
     )
     mcp_mgr = get_mcp_manager()
     prep_timings: Dict[str, float] = {}
@@ -5787,6 +5789,7 @@ async def stream_agent_loop(
                         "approval_required": True,
                         "ask_user": pending_approval.public_payload(
                             reason=security_decision.reason,
+                            single_action_only=run_security.approval_mode == "ask",
                         ),
                     }
                     logger.info(

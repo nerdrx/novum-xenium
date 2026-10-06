@@ -35,7 +35,9 @@ def describe_stream_failure(
             timeout = int(match.group(1))
 
     is_read_timeout = "read timeout" in hint or "idle read timeout" in hint
-    if is_read_timeout:
+    if hint.startswith("agent context budget cannot fit"):
+        reason = "context_budget"
+    elif is_read_timeout:
         reason = "read_timeout"
     elif any(term in hint for term in ("connecterror", "connect timeout", "cannot reach", "could not connect")):
         reason = "connect"
@@ -60,7 +62,14 @@ def describe_stream_failure(
     else:
         reason = "unknown"
 
-    if reason == "read_timeout":
+    if reason == "context_budget":
+        status = 400
+        message = (
+            "Agent context budget cannot fit the current request and tool exchange. "
+            "Shorten the request or increase the model context/input budget, then retry. "
+            "The oversized request was not sent to the model."
+        )
+    elif reason == "read_timeout":
         status = status or 504
         if timeout is not None:
             message = (

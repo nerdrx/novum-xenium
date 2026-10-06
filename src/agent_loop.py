@@ -1436,6 +1436,11 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
     if has(r"\b(search|web|google|look up|latest|news|current|weather|forecast|stock price|price of|website|url|https?://|www\.)\b"):
         domains.add("web")
     if has(
+        r"\b(find|recommend|locate|look for)\b.{0,160}\b(online|internet|websites?|sites?|services?|generators?)\b",
+        r"\b(online|internet)\b.{0,160}\b(find|search|recommend|look for)\b",
+    ):
+        domains.add("web")
+    if has(
         r"\b(wyszukaj|wyszukać|wyszukac)\b.*\b(internet|internecie|online|web)\b",
         r"\b(sprawd[zź]|znajd[zź])\b.*\b(internet|internecie|online|web)\b",
         r"\b(aktualn\w*|bieżąc\w*|biezac\w*|dzisiaj|teraz)\b.*\b(pogod\w*|temperatur\w*)\b",
@@ -1487,6 +1492,16 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
         "domains": domains,
         "retrieval_query": retrieval_query,
     }
+
+
+def _focus_web_lookup_tools(tool_names: Set[str], intent: dict, query: str) -> Set[str]:
+    """A plain lookup must not inherit unrelated domains from vector matches."""
+    if set(intent.get("domains") or ()) != {"web"}:
+        return set(tool_names)
+    if re.search(r"\b(browser|browse|navigate|click|screenshot|fill|submit|login|log in|sign in)\b", query, re.I):
+        return set(tool_names)
+    from src.tool_index import ALWAYS_AVAILABLE
+    return set(ALWAYS_AVAILABLE) | set(WEB_TOOL_NAMES) | (set(tool_names) & {"context_search", "generate_image"})
 
 
 def _turn_targets_active_document(intent: Dict[str, object], last_user: str, active_document) -> bool:
@@ -2746,7 +2761,12 @@ def _build_system_prompt(
     # MCP tool descriptions — sourced from external servers, must not be in system role.
     if mcp_mgr:
         try:
-            _mcp_desc = mcp_mgr.get_tool_descriptions_for_prompt(mcp_disabled_map or {})
+            _description_disabled = {sid: set(names) for sid, names in (mcp_disabled_map or {}).items()}
+            if relevant_tools is not None:
+                for tool in mcp_mgr.get_all_tools():
+                    if tool.get("qualified_name") not in relevant_tools:
+                        _description_disabled.setdefault(tool["server_id"], set()).add(tool["name"])
+            _mcp_desc = mcp_mgr.get_tool_descriptions_for_prompt(_description_disabled)
             if _mcp_desc:
                 _mcp_desc_message = untrusted_context_message(
                     "MCP tools",
@@ -3963,6 +3983,8 @@ async def stream_agent_loop(
     # collapsing to only ask_user/manage_memory when vector retrieval misses or
     # times out.
     if not guide_only and _relevant_tools is not None:
+        if not relevant_tools:
+            _relevant_tools = _focus_web_lookup_tools(_relevant_tools, _intent, _retrieval_query)
         for _domain in (_intent.get("domains") or set()):
             _relevant_tools.update(_DOMAIN_TOOL_MAP.get(str(_domain), set()))
         if "cookbook" in (_intent.get("domains") or set()):
@@ -4250,10 +4272,59 @@ async def stream_agent_loop(
                 fallback=context_length,
             )
             _route_context_lengths[(candidate_url, candidate_model)] = candidate_context
+            # Native schemas are serialized outside `messages`, so a large MCP
+            # registry can consume almost the entire window before history is
+            # considered. Keep the existing route order (already relevance
+            # filtered) and retain schemas called earlier in this turn first.
+            if route_tools:
+                schema_cap = max(256, min(8192, (candidate_context or 6000) // 4))
+                latest_user = max(
+                    (i for i, msg in enumerate(route_messages)
+                     if msg.get("role") == "user"
+                     and msg.get("_agent_injected") != "context"
+                     and (msg.get("metadata") or {}).get("trusted") is not False),
+                    default=-1,
+                )
+                used_names = set()
+                for msg in route_messages[latest_user + 1:]:
+                    if msg.get("role") != "assistant":
+                        continue
+                    for call in msg.get("tool_calls") or ():
+                        function = call.get("function") if isinstance(call, dict) else None
+                        if isinstance(function, dict) and function.get("name"):
+                            used_names.add(function["name"])
+                priority_names = set(forced_tools or ())
+                if relevant_tools and len(relevant_tools) <= 16:
+                    priority_names.update(relevant_tools)
+                if any(
+                    schema.get("function", {}).get("name") == "generate_image"
+                    for schema in route_tools
+                ) and _image_tool_available(mcp_mgr, disabled_tools, _mcp_disabled_map):
+                    priority_names.add("generate_image")
+                required_names = used_names | priority_names
+                selected = [
+                    schema for schema in route_tools
+                    if schema.get("function", {}).get("name") in required_names
+                ]
+                selected_tokens = estimate_tool_schema_tokens(selected)
+                for schema in route_tools:
+                    if schema in selected:
+                        continue
+                    candidate_schemas = selected + [schema]
+                    candidate_tokens = estimate_tool_schema_tokens(candidate_schemas)
+                    if candidate_tokens > schema_cap:
+                        continue
+                    selected = candidate_schemas
+                    selected_tokens = candidate_tokens
+                if len(selected) < len(route_tools):
+                    logger.info(
+                        "[agent] bounded native tool schemas model=%s: %s -> %s schemas "
+                        "(%s/%s tokens; preserved_used=%s)",
+                        candidate_model, len(route_tools), len(selected),
+                        selected_tokens, schema_cap, sorted(used_names),
+                    )
+                    route_tools[:] = selected
             soft_budget = int(get_setting("agent_input_token_budget", DEFAULT_BUDGET) or 0)
-            if soft_budget <= 0:
-                _route_trim_info[(candidate_url, candidate_model)] = {"removed_tokens": 0, "removed_messages": 0}
-                return _without_protection(route_messages)
             before_trim_tokens = estimate_tokens(route_messages)
             reserve_tokens = min(max(max_tokens or 1024, 512), 2048)
             try:
@@ -4279,7 +4350,78 @@ async def stream_agent_loop(
                 effective_budget,
                 reserve_tokens=reserve_tokens,
             )
+            # `trim_for_context` can reduce the latest user message to empty
+            # when the schema estimate alone exceeds a tiny configured budget.
+            # Never send that placeholder: fail before the provider call if the
+            # original request or the newest native tool exchange was altered.
+            latest_user_index = max(
+                (i for i, message in enumerate(route_messages)
+                 if message.get("role") == "user"
+                 and message.get("_agent_injected") != "context"
+                 and (message.get("metadata") or {}).get("trusted") is not False),
+                default=-1,
+            )
+            if latest_user_index >= 0:
+                latest_user = route_messages[latest_user_index]
+                trimmed_user = next(
+                    (message for message in reversed(trimmed_messages)
+                     if message.get("role") == "user"
+                     and message.get("_agent_injected") != "context"
+                     and (message.get("metadata") or {}).get("trusted") is not False),
+                    None,
+                )
+                if trimmed_user is None or trimmed_user.get("content") != latest_user.get("content"):
+                    raise ValueError(
+                        "Agent context budget cannot fit the complete current user request "
+                        f"for model {candidate_model} within its {candidate_context}-token window; "
+                        "reduce the request or increase the model context/input budget."
+                    )
+                latest_call_index = max(
+                    (i for i, message in enumerate(route_messages[latest_user_index + 1:], latest_user_index + 1)
+                     if message.get("role") == "assistant" and message.get("tool_calls")),
+                    default=-1,
+                )
+                if latest_call_index >= 0:
+                    latest_call = route_messages[latest_call_index]
+                    latest_tool_messages = []
+                    for message in route_messages[latest_call_index + 1:]:
+                        if message.get("role") != "tool":
+                            break
+                        latest_tool_messages.append(message)
+                    actual_call_index = next(
+                        (i for i, message in enumerate(trimmed_messages)
+                         if message.get("role") == "assistant"
+                         and message.get("tool_calls") == latest_call.get("tool_calls")),
+                        -1,
+                    )
+                    if actual_call_index < 0 or trimmed_messages[actual_call_index] != latest_call:
+                        raise ValueError(
+                            "Agent context budget cannot fit the latest complete native tool exchange "
+                            f"for model {candidate_model} within its {candidate_context}-token window; "
+                            "reduce the request or increase the model context/input budget."
+                        )
+                    actual_tool_messages = trimmed_messages[
+                        actual_call_index + 1:actual_call_index + 1 + len(latest_tool_messages)
+                    ]
+                    if [
+                        (message.get("role"), message.get("tool_call_id"))
+                        for message in actual_tool_messages
+                    ] != [
+                        (message.get("role"), message.get("tool_call_id"))
+                        for message in latest_tool_messages
+                    ]:
+                        raise ValueError(
+                            "Agent context budget cannot fit the latest complete native tool exchange "
+                            f"for model {candidate_model} within its {candidate_context}-token window; "
+                            "reduce the request or increase the model context/input budget."
+                        )
             after_trim_tokens = estimate_tokens(trimmed_messages)
+            if after_trim_tokens + reserve_tokens > effective_budget:
+                raise ValueError(
+                    "Agent context budget cannot fit the complete current user request "
+                    f"for model {candidate_model} within its {candidate_context or 'unknown'}-token window; "
+                    "reduce the request or increase the model context/input budget."
+                )
             _route_trim_info[(candidate_url, candidate_model)] = {
                 "removed_tokens": max(0, before_trim_tokens - after_trim_tokens),
                 "removed_messages": max(0, len(route_messages) - len(trimmed_messages)),
@@ -4297,6 +4439,8 @@ async def stream_agent_loop(
                 )
             return _without_protection(trimmed_messages)
         except Exception as e:
+            if isinstance(e, ValueError) and "Agent context budget cannot fit" in str(e):
+                raise
             logger.warning(
                 "[agent] Soft context trim skipped for route model=%s: %s",
                 candidate_model,
@@ -4416,6 +4560,8 @@ async def stream_agent_loop(
         return schemas
 
     def _tool_schemas_for_route(route_state):
+        if "tools" in route_state:
+            return route_state["tools"]
         route_mcp_schemas = route_state["mcp_schemas"]
         route_relevant_tools = route_state["relevant_tools"]
         if _force_answer:
@@ -4455,12 +4601,14 @@ async def stream_agent_loop(
         return _filter_route_tool_schemas(schemas)
 
     _t3 = time.time()
+    _initial_route_tools = _tool_schemas_for_route(_route_state)
     _initial_route_request_messages = _trim_route_request_messages(
         endpoint_url,
         model,
         messages,
-        _tool_schemas_for_route(_route_state),
+        _initial_route_tools,
     )
+    _route_state["tools"] = _initial_route_tools
     _initial_route_context_length = _route_context_lengths.get(
         (endpoint_url, model),
         context_length,
@@ -4859,6 +5007,8 @@ async def stream_agent_loop(
                 _route_state.get("compaction_state", {}) if round_num == 1 else {}
             ),
         }
+        if round_num == 1:
+            _active_route_state["tools"] = _route_state.get("tools", [])
         all_tool_schemas = _tool_schemas_for_route(_active_route_state)
         if round_num == 1 and not _approved_result_injected:
             _active_route_state["request_messages"] = _initial_route_request_messages

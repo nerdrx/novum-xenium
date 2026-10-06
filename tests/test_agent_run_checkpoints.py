@@ -1,9 +1,28 @@
 """Durability and safe recovery boundaries for detached agent runs."""
 import sqlite3
+import json
 
 import pytest
 
 from src import agent_runs, run_checkpoints
+
+
+@pytest.mark.asyncio
+async def test_context_budget_failure_reaches_subscriber_as_actionable_error():
+    async def stream():
+        raise ValueError("Agent context budget cannot fit the complete current user request for private-model")
+        yield  # Keep the same async-generator interface as the real agent.
+
+    run = agent_runs.start("budget-failure-test", stream(), owner="alice", persist=False)
+    await run.task
+    error = next(chunk for chunk in run.buffer if chunk.startswith("event: error"))
+    payload = json.loads(error.split("data: ", 1)[1])
+    assert run.status == "error"
+    assert payload["status"] == 400
+    assert "increase the model context/input budget" in payload["error"]
+    assert "private-model" not in payload["error"]
+    if run.evict_task:
+        run.evict_task.cancel()
 
 
 @pytest.mark.asyncio

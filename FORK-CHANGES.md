@@ -6,6 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- On-demand web tool selection recognizes requests to find online services, suppresses unrelated retrieval matches and limits MCP descriptions to selected tools. Provider requests bound native schema overhead and reject context shaping that would lose the current question or break a recent native tool exchange.
 - Chat progress distinguishes waiting for model output from receiving a response, shows elapsed time, and explains long waits without asserting an unverified cause. Background failures retain their error explanation; saved failures preserve safe, actionable provider error categories after reload.
 - Durable owner-scoped run checkpoints and explicit one-use Continue after restart, with partial output/tool outcomes, uncertain-action warnings, workspace/route revalidation and plan-mode preservation. No tool replay or restored approval grants; incognito stays ephemeral.
 - Workspace snapshots before coding tools, review diffs, stale-preview rejection, executable permission restoration and pre-restore recovery points. Bounds/exclusions and non-atomic restore limits are documented in the README.
@@ -33,6 +34,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 6 tool-context update: 374 focused regression checks passed in a network-disabled container with temporary data. Coverage includes the reported online-service query, MCP description selection, a 42-schema browser payload, current-question and native-call preservation, image-tool follow-ups, approval visibility and actionable pre-provider budget errors. Injected datetime context no longer replaces the current question during trimming. These checks validate request shaping and policy boundaries; model relevance remains a model judgment.
 
 October 6 progress/error update: 181 focused regression checks passed in a network-disabled container with temporary data, covering provider errors/fallbacks, chat lifecycle, recovery and safe error summaries. A headless Chrome check exercised the shipped background-status code and spinner against a real narrow DOM: elapsed waiting, receiving output, terminal errors, wrapping and safe text rendering passed. A live Ollama retry loaded the local model in 18.2 seconds and returned a reply; its OpenAI-compatible streaming endpoint also returned a complete response. The earlier five-minute stall was in model loading; these probes establish recovery, not the cause of that transient stall or a guarantee about future cold starts.
 

@@ -130,6 +130,30 @@ def test_polish_internet_search_request_classifies_as_web():
     assert "web" in intent["domains"]
 
 
+def test_online_generator_lookup_drops_unrelated_retrieval_tools():
+    from src.agent_loop import _focus_web_lookup_tools
+    query = "can you find me an online free nsfw image generator"
+    intent = _classify_agent_request([], query)
+    assert intent["low_signal"] is False
+    assert intent["domains"] == {"web"}
+    selected = _focus_web_lookup_tools({
+        "download_model", "search_hf_models", "scan_email_unsubscribes",
+        "mcp__builtin_browser__browser_emulate_media", "context_search",
+    }, intent, query)
+    assert {"web_search", "web_fetch", "context_search"} <= selected
+    assert not selected & {"download_model", "search_hf_models", "scan_email_unsubscribes"}
+    assert not any(name.startswith("mcp__builtin_browser__") for name in selected)
+
+
+def test_explicit_browser_and_mixed_model_requests_keep_requested_capabilities():
+    from src.agent_loop import _focus_web_lookup_tools
+    names = {"download_model", "mcp__builtin_browser__browser_click"}
+    for query in ("Use the browser to find an online generator", "Find and download a model online"):
+        intent = _classify_agent_request([], query)
+        assert _focus_web_lookup_tools(names, intent, query) == names
+    assert "web" not in _classify_agent_request([], "Find a file in my offline folder")["domains"]
+
+
 def test_insert_before_latest_user_places_context_before_last_user_turn():
     messages = [
         {"role": "user", "content": "first"},

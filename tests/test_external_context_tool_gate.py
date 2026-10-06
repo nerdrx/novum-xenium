@@ -1037,6 +1037,9 @@ def test_tainted_native_route_keeps_action_schema_for_exact_approval(monkeypatch
     )
     monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
     monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *args, **kwargs: 10)
+    # This tests approval visibility, not an unknown model's conservative
+    # 6k fallback (the complete document schema alone estimates over 4k).
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *args, **kwargs: 16384)
     seen_tools = []
 
     async def fake_stream(candidates, _messages, **kwargs):

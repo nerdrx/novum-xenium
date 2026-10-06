@@ -44,6 +44,17 @@ def test_unknown_provider_body_is_never_returned_or_persisted():
     assert secret_body not in json.dumps(failure)
 
 
+def test_context_budget_error_is_actionable_without_exposing_request_details():
+    error = "Agent context budget cannot fit the complete current user request for model private-model"
+    failure = describe_stream_failure(error)
+    assert failure["status"] == 400
+    assert failure["category"] == "context_budget"
+    assert "increase the model context/input budget" in failure["message"]
+    assert "oversized request was not sent" in failure["message"]
+    assert "private-model" not in failure["message"]
+    assert describe_stream_failure(failure["message"], failure["status"]) == failure
+
+
 def test_safe_terminal_message_is_stable_when_route_revalidates_it():
     for initial_error, status, timeout in (
         ("Read timeout", 504, 30),

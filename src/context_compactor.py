@@ -294,6 +294,7 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
     # Treat each assistant tool call and its full result batch as one trim unit.
     latest_user = max(
         (i for i, msg in enumerate(convo_msgs) if msg.get("role") == "user"
+         and msg.get("_agent_injected") != "context"
          and (msg.get("metadata") or {}).get("trusted") is not False),
         default=len(convo_msgs) - 1,
     )
@@ -349,6 +350,7 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
     prior_turns = []
     for message in convo_msgs[:latest_user]:
         if (message.get("role") == "user"
+                and message.get("_agent_injected") != "context"
                 and (message.get("metadata") or {}).get("trusted") is not False and prior_turns):
             prior_turns.append([])
         if not prior_turns:

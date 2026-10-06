@@ -23,6 +23,7 @@ import uuid
 from typing import AsyncGenerator, Dict, Optional
 
 from src import run_checkpoints
+from src.stream_errors import describe_stream_failure
 
 logger = logging.getLogger(__name__)
 
@@ -186,10 +187,14 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
     except Exception as e:
         logger.error("[agent-run] %s failed: %s", session_id, e, exc_info=True)
         run.status = "error"
+        failure = {"error": "Agent run failed before completion.", "status": 500}
+        if isinstance(e, ValueError) and str(e).startswith("Agent context budget cannot fit"):
+            summary = describe_stream_failure(e)
+            failure = {"error": summary["message"], "status": summary["status"]}
         _publish(
             run,
             "event: error\n"
-            f"data: {json.dumps({'error': 'Agent run failed before completion.', 'status': 500})}\n\n",
+            f"data: {json.dumps(failure)}\n\n",
         )
         _publish(run, "data: [DONE]\n\n")
     finally:

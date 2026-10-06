@@ -64,6 +64,18 @@ class TestSelfSummaryPrompt:
 
 
 class TestTrimForContext:
+    def test_injected_datetime_does_not_replace_current_user(self):
+        question = {"role": "user", "content": "Find me a free online image generator."}
+        messages = [
+            {"role": "system", "content": "Help the user."},
+            question,
+            {"role": "user", "content": "Current date and time. " * 1500,
+             "_agent_injected": "context"},
+        ]
+        trimmed = trim_for_context(messages, context_length=1024, reserve_tokens=256)
+        assert question in trimmed
+        assert estimate_tokens(trimmed) <= 768
+
     def test_system_truncation_preserves_internal_route_metadata(self):
         messages = [
             {

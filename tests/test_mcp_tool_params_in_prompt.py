@@ -45,6 +45,30 @@ def test_prompt_descriptions_surface_param_names_and_required():
     assert "required" in text                   # required-ness is surfaced
 
 
+def test_agent_prompt_describes_only_selected_mcp_tools():
+    from src.agent_loop import _build_system_prompt
+
+    manager = _mgr_with_tool()
+    manager._tools["srv1"].append({
+        "name": "unrelated_tool", "description": "Unrelated large tool bundle.",
+        "input_schema": {"type": "object", "properties": {}},
+    })
+    disabled = {"srv1": {"already_disabled"}}
+    messages, _ = _build_system_prompt(
+        [{"role": "user", "content": "fetch the document"}],
+        model="test-model", active_document=None, mcp_mgr=manager,
+        relevant_tools={"mcp__srv1__fetch_doc"}, mcp_disabled_map=disabled,
+        suppress_local_context=True, suppress_skills=True,
+    )
+    descriptions = "\n".join(
+        message.get("content", "") for message in messages
+        if (message.get("metadata") or {}).get("trusted") is False
+    )
+    assert "mcp__srv1__fetch_doc" in descriptions
+    assert "unrelated_tool" not in descriptions
+    assert disabled == {"srv1": {"already_disabled"}}
+
+
 def test_format_mcp_params_handles_no_params():
     from src.mcp_manager import _format_mcp_params
 

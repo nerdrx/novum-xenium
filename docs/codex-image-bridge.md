@@ -16,7 +16,7 @@ systemctl --user enable --now odysseus-codex-images
 
 The installer creates a private token at `data/credentials/codex-image-bridge.token`, preserves any existing token, and installs a user service. Review the token locally; never commit or share it. On a host without systemd, run the installer to create the token, then start `python3 scripts/codex_image_bridge.py` directly.
 
-If Codex is not on the user service's PATH, create `~/.config/odysseus/codex-images.env` containing `CODEX_CLI=/absolute/path/to/codex`. For a nonstandard native image cache, set `CODEX_IMAGE_ROOT=/absolute/path/to/generated_images` there too. Restart the bridge after changing these settings.
+The installer remembers the Codex executable found on your terminal's PATH. To override it, or if none was found, create `~/.config/odysseus/codex-images.env` containing `CODEX_CLI=/absolute/path/to/codex`. For a nonstandard native image cache, set `CODEX_IMAGE_ROOT=/absolute/path/to/generated_images` there too. Restart the bridge after changing these settings.
 
 The server binds only `127.0.0.1:8111`, checks its bearer token, and produces at most one new PNG per request. It reads only the native image cache belonging to that CLI run. Failed or image-less runs remain failures; it does not claim an earlier Gallery image is a new result.
 

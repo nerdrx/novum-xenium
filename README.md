@@ -58,6 +58,12 @@ These modes do not add host-folder access or override disabled tools, account pr
 
 ChatGPT subscription chat and native tools use the existing provider connection in Settings. Image generation through a logged-in host Codex CLI is an optional extra; see [its setup](docs/codex-image-bridge.md). It is not required to start the Docker stack.
 
+**Longer agent chats:** native tool definitions now count toward the model's context budget. Large tool results (over 6,000 characters) are indexed in a private, chat-scoped SQLite store; the model receives a short preview and can use `context_search` to retrieve matching excerpts or read exact chunks. Full tool bubbles stay visible. This follows the storage-and-retrieval approach described in [Context Mode](https://github.com/Arikazei/context-mode-app), using Python/SQLite already included in the Docker image. No Context Mode code or extra service is bundled.
+
+This does not increase the model's context window or guarantee lossless recall: each stored result is capped at 1 MiB (an explicit marker identifies omitted middle content), each chat retains up to 20 MiB of source text, and results expire after 30 days. Deleting a chat removes its archive. Incognito and delegated API-token turns do not create archives. The tool obeys disabled-tool/account policies, derives the chat and owner from the server, and treats retrieved text as untrusted data.
+
+The default theme is **NX**, matching the exported palette and synapse background. Existing saved themes remain selected; **Reset to Default** applies NX. Saved agent rounds retain the personality name, with the actual model available in the label tooltip.
+
 ## Features
 
 - **Chat + Agents** — local/API models, tools, MCP, files, shell, skills, and memory.

@@ -96,6 +96,7 @@ def _chat_stream_endpoint(
     capture_completion=False,
     capture_context=False,
     endpoint_url="https://selected.example/v1",
+    character_name=None,
 ):
     def add_message(message):
         captured.setdefault("added_messages", []).append(message)
@@ -134,7 +135,7 @@ def _chat_stream_endpoint(
         context_messages_after_trim=1,
         context_tokens_before_trim=10,
         context_tokens_after_trim=10,
-        preset=SimpleNamespace(temperature=0.2, max_tokens=128, character_name=None),
+        preset=SimpleNamespace(temperature=0.2, max_tokens=128, character_name=character_name),
     )
 
     async def fake_build_context(*args, **kwargs):
@@ -809,6 +810,7 @@ async def test_chat_stream_persists_completed_tools_before_later_terminal_error(
         "agent",
         captured,
         agent_chunks=chunks,
+        character_name="Velora",
         capture_completion=True,
     )
 
@@ -826,6 +828,7 @@ async def test_chat_stream_persists_completed_tools_before_later_terminal_error(
         "status": expected_status,
         "message": expected_message,
     }
+    assert _saved_kwargs["character_name"] == "Velora"
     assert saved_args[4]["failed"] is True
     assert saved_args[4]["tool_events"][0]["output"] == "created"
     assert captured["accumulated_usage"][0][0][1] == saved_args[4]
@@ -970,6 +973,7 @@ async def test_cancelled_agent_fallback_saves_endpoint_and_round_provenance(monk
         "agent",
         captured,
         agent_chunks=chunks,
+        character_name="Velora",
     )
     monkeypatch.setattr(
         foreground_model_routing,
@@ -1006,6 +1010,7 @@ async def test_cancelled_agent_fallback_saves_endpoint_and_round_provenance(monk
     assert saved.metadata["requested_endpoint_id"] == "account-one"
     assert saved.metadata["endpoint_id"] == "account-two"
     assert saved.metadata["model"] == "backup-model"
+    assert saved.metadata["character_name"] == "Velora"
     assert saved.metadata["round_models"] == ["selected-provider-alias", "backup-model"]
     assert saved.metadata["round_endpoint_ids"] == ["account-one", "account-two"]
     assert saved.metadata["round_endpoint_labels"] == ["Account one", "Account two"]
@@ -3348,6 +3353,7 @@ def test_agent_fallback_request_uses_candidate_context_budget(
         )
         return [route_prompt, current_user]
 
+    monkeypatch.setattr(model_context, "estimate_tool_schema_tokens", lambda tools: 0)
     monkeypatch.setattr(model_context, "budget_context_for_model", fake_context)
     monkeypatch.setattr(context_budget, "compute_input_token_budget", fake_compute)
     monkeypatch.setattr(context_budget, "budget_is_explicit", lambda value: False)

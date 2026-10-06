@@ -493,6 +493,16 @@ def _query_context_length(endpoint_url: str, model: str) -> Tuple[int, bool]:
     return DEFAULT_CONTEXT, False
 
 
+def estimate_tool_schema_tokens(tools: Optional[List[Dict]]) -> int:
+    """Reserve prompt space for serialized native tool definitions and wrappers."""
+    if not tools:
+        return 0
+    import json
+
+    # Tool JSON is punctuation-heavy; leave extra room for provider templates.
+    return int(len(json.dumps(tools, ensure_ascii=False)) * 0.4) + 16 * len(tools) + 128
+
+
 def estimate_tokens(messages: List[Dict]) -> int:
     """Rough token estimate for a list of messages.
 

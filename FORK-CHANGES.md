@@ -6,6 +6,9 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Agent context budgets include native tool definitions, and trimming preserves the current user question plus complete recent tool exchanges. Large results are stored in a private per-chat SQLite FTS5 index with bounded search/exact chunk retrieval. Archives obey existing tool policies and are removed with their chats; incognito and delegated API-token turns do not store results. This is a native implementation of the storage-and-retrieval pattern, not a distribution of Context Mode.
+- NX is the default theme for fresh profiles and reset. Saved personality names remain visible when agent rounds are reconstructed after reload; underlying model provenance stays available.
+
 - Group chats can continue sequentially for 20 replies, 100 replies, or until Stop. A compact popover in the composer contains the settings and running indicator. Auto conversation is opt-in and runs in the browser tab.
 - Group turns preserve the selected mode, workspace and tool permissions. Continuations keep the original task. Real approval/question events pause sequential turns and resume the correct participant after a human choice. Stop invalidates pending choices; tool results remain visible during streaming.
 - ChatGPT subscription requests omit unsupported generation parameters and support native function schemas, calls, and result history. New connections enable native tools. Document finetune requests still suppress schemas. Reconnect an existing upstream ChatGPT subscription provider once to save its updated native-tool capability.
@@ -21,6 +24,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 6 context/theme/personality update: 524 focused checks passed. With the local `huihui-qwen3.8:27b-local` model and 43 native tool definitions, a synthetic dense tool-output history reproduced the exact `no user query found in messages` HTTP 500 under the old message-only budget. The schema-aware budget returned HTTP 200 for that input and a further tool round. A separate live test made the model call `context_search`, retrieve an exact value absent from the preview, and answer with that value. These are bounded synthetic checks, not a guarantee of perfect recall in arbitrary conversations.
 
 The original local installation passed focused regression tests for group cancellation/limits, approval routing, native function-call transport/result history, image dispatch/errors, Markdown/emoji handling, and model compatibility. A hidden browser verified the real group controls using simulated replies. Live subscription probes verified function-call schema acceptance and result continuation on `gpt-6.1-sol`.
 

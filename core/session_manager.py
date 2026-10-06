@@ -604,6 +604,7 @@ class SessionManager:
 
             # Delete session
             db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
+            context_owner = getattr(db_session, "owner", None) or getattr(self.sessions.get(session_id), "owner", None)
             if db_session:
                 db.delete(db_session)
 
@@ -617,6 +618,12 @@ class SessionManager:
                 # Commit the document-detach / message-delete above (a no-op when
                 # the ghost had no rows) together with the session delete.
                 db.commit()
+                if context_owner:
+                    try:
+                        from src.tool_result_store import delete_results
+                        delete_results(context_owner, session_id)
+                    except Exception:
+                        logger.warning("Tool context cleanup failed for deleted session %s", session_id, exc_info=True)
                 logger.info(f"Deleted session {session_id}")
                 return True
             return False

@@ -21,6 +21,7 @@ from src.tool_security import BUILTIN_EMAIL_TOOLS, is_public_blocked_tool
 
 
 class ToolEffect(str, Enum):
+    READ_CONTEXT = "read_context"
     READ_PUBLIC = "read_public"
     READ_WORKSPACE = "read_workspace"
     READ_PRIVATE = "read_private"
@@ -74,6 +75,11 @@ def _register(
 _register(
     {"ask_user", "update_plan"},
     ToolEffect.USER_INTERACTION,
+)
+_register(
+    {"context_search"},
+    ToolEffect.READ_CONTEXT,
+    result_integrity=ResultIntegrity.EXTERNAL_UNTRUSTED,
 )
 _register(
     {

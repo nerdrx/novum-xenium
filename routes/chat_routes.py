@@ -1528,6 +1528,7 @@ def setup_chat_routes(
         # persistent memory, past chats, or other identity-linked data.
         if incognito:
             disabled_tools.update({
+                "context_search",    # no persistent tool-result archive in incognito
                 "manage_memory",      # persistent memory store
                 "search_chats",       # past chat history
                 "manage_skills",      # skill presets tied to user
@@ -2576,6 +2577,7 @@ def setup_chat_routes(
                                     "stopped": True,
                                     "model": _actual_model or _answered_by or _requested_model,
                                     "requested_model": _requested_model,
+                                    "character_name": ctx.preset.character_name,
                                     "endpoint_id": _agent_actual_endpoint_id,
                                     "endpoint_label": _agent_actual_endpoint_label,
                                     "requested_endpoint_id": _agent_requested_route.get("endpoint_id"),

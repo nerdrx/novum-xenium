@@ -684,6 +684,7 @@ def setup_session_routes(
         try:
             from core.database import ChatMessage as DbChatMessage
             session_ids = [row[0] for row in db.query(DbSession.id).all()]
+            context_scopes = db.query(DbSession.id, DbSession.owner).all()
             count = db.query(DbSession).count()
             image_ids: set[str] = set()
             filenames: set[str] = set()
@@ -717,6 +718,13 @@ def setup_session_routes(
             db.query(DbChatMessage).delete()
             db.query(DbSession).delete()
             db.commit()
+            from src.tool_result_store import delete_results
+            for context_sid, context_owner in context_scopes:
+                if context_owner:
+                    try:
+                        delete_results(context_owner, context_sid)
+                    except Exception:
+                        logger.warning("Tool context cleanup failed for deleted session %s", context_sid, exc_info=True)
             session_manager.sessions.clear()
             logger.info(f"Admin deleted all {count} sessions and {removed_images} linked images")
             return {"status": "deleted", "count": count, "images_deleted": removed_images}

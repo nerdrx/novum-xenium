@@ -2621,7 +2621,7 @@ export function addMessage(role, content, modelName, metadata) {
           const contEndpointLabel = r < roundEndpointLabels.length
             ? roundEndpointLabels[r]
             : pair.actualEndpointLabel;
-          roleEl.textContent = modelRouteLabel(
+          const modelLabel = modelRouteLabel(
             pair.requestedModel,
             contModel,
             pair.requestedEndpointLabel,
@@ -2629,7 +2629,10 @@ export function addMessage(role, content, modelName, metadata) {
             pair.requestedEndpointId,
             contEndpointId,
           );
-          if (
+          roleEl.textContent = metadata?.character_name || modelLabel;
+          if (metadata?.character_name) {
+            roleEl.title = modelLabel;
+          } else if (
             pair.requestedModel
             && contModel
             && (

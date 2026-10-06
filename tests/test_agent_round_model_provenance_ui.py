@@ -54,6 +54,13 @@ def test_saved_agent_rounds_prefer_round_model_provenance():
     assert "roundEndpointIds[r] || pair.actualEndpointId" not in _SOURCE
 
 
+def test_saved_agent_rounds_show_persona_and_keep_model_route_title():
+    assert "const modelLabel = modelRouteLabel(" in _SOURCE
+    assert "roleEl.textContent = metadata?.character_name || modelLabel;" in _SOURCE
+    assert "if (metadata?.character_name) {\n            roleEl.title = modelLabel;" in _SOURCE
+    assert "const contModel = roundModels[r] || pair.actualModel || pair.requestedModel;" in _SOURCE
+
+
 def test_metrics_cost_uses_actual_fallback_endpoint_classification():
     assert "metrics.endpoint_cost_tracked" in _SOURCE
     assert "endpointCostTracked === false" in _SOURCE

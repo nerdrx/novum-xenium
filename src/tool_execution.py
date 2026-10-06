@@ -1331,7 +1331,7 @@ async def _execute_tool_block_impl(
     elif tool in dynamic_handlers:
         first_line = content.split(chr(10))[0][:80]
         desc = f"registry: {tool} {first_line}".strip()
-        res = await _direct_fallback(tool, content, progress_cb=progress_cb)
+        res = await _direct_fallback(tool, content, progress_cb=progress_cb, session_id=session_id, owner=owner)
 
         if isinstance(res, tuple):
             desc, result = res

@@ -40,6 +40,7 @@ BUILTIN_EMAIL_TOOLS = frozenset({
 # included (SECURITY.md: email/MCP capabilities are privileged admin
 # functionality).
 NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | {
+    "context_search",
     "bash",
     "python",
     "manage_bg_jobs",
@@ -89,6 +90,7 @@ NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | {
 # Code/file discovery is covered by the dedicated read-only tools below
 # (read_file, grep, glob, ls) instead of freestyle shell.
 PLAN_MODE_READONLY_TOOLS = {
+    "context_search",
     "read_file",
     "grep",
     "glob",

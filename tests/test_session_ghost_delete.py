@@ -114,14 +114,21 @@ def test_unauthenticated_still_403(monkeypatch):
 
 # --- manager layer: delete_session clears memory-only ghosts ---------------
 
-def test_manager_deletes_memory_only_ghost(monkeypatch):
+def test_manager_deletes_memory_only_ghost(monkeypatch, tmp_path):
     # No DB row, but the session is in memory -> delete it and report success.
+    from src import tool_result_store as store
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    store.archive_result("alice", "ghost", "web_fetch", "old tool context")
+    store.archive_result("bob", "other-chat", "web_fetch", "other tool context")
+    deleted_path = store._scope_file("alice", "ghost")
     fake_db = MagicMock()
     fake_db.query.return_value.filter.return_value.first.return_value = None
     monkeypatch.setattr(SM, "SessionLocal", MagicMock(return_value=fake_db))
     mgr = _manager_with({"ghost": SimpleNamespace(id="ghost", owner="alice")})
     assert mgr.delete_session("ghost") is True
     assert "ghost" not in mgr.sessions
+    assert not deleted_path.exists()
+    assert "other tool context" in store.search_results("bob", "other-chat", "other")
 
 
 def test_manager_delete_unknown_returns_false(monkeypatch):

@@ -6,6 +6,8 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Compare preflight, retries, shuffle replacements and toolbar checks use the selected 5–300 second timeout instead of a fixed eight-second deadline. The UI shows the wait budget and local loading/queue explanation, with pending browser requests cancelled when the check closes. Server-side provider work may continue until its deadline.
+
 - Popup layering: modal auto-promotion happens only when a window opens, preventing visible dialogs from continually raising each other. Compare model/add/swap/export menus follow the live window stack; the scoreboard opens above its parent. Searchable Compare pickers also accept Enter after filtering.
 - On-demand web tool selection recognizes requests to find online services, suppresses unrelated retrieval matches and limits MCP descriptions to selected tools. Provider requests bound native schema overhead and reject context shaping that would lose the current question or break a recent native tool exchange.
 - Chat progress distinguishes waiting for model output from receiving a response, shows elapsed time, and explains long waits without asserting an unverified cause. Background failures retain their error explanation; saved failures preserve safe, actionable provider error categories after reload.
@@ -35,6 +37,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 6 Compare timeout update: 183 focused regression checks passed in a network-disabled container. A headless Chrome fixture exercised the shipped selector/helper with the timeout set to 300 seconds, verified preflight and retry request budgets, the loading/queue explanation, Escape/Skip cancellation and absence of orphan overlays. A real local Qwen probe succeeded in 19.88 seconds, with Ollama reporting 19.07 seconds to load; the prior eight-second deadline falsely rejected this cold start. This confirms model reachability and the timeout path, not arbitrary comparison or agent-task quality.
 
 October 6 popup-layering update: 30 focused frontend checks passed. A headless Chrome fixture loaded the shipped UI/Compare modules and CSS, confirmed a stable two-dialog stack, scoreboard ordering, clickable model suggestions above a parent at z-index 999999, mouse/Enter selection and desktop/mobile viewport bounds. Desktop/mobile screenshots were inspected. Model catalogs were fixture data; no chat generation or account changes were performed.
 

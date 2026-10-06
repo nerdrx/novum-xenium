@@ -4,6 +4,44 @@ import { WAVE_FRAMES } from './icons.js';
 import uiModule from '../ui.js';
 import spinnerModule from '../spinner.js';
 
+const PROBE_NETWORK_GRACE_MS = 2000;
+
+function _probeTimeoutSeconds() {
+  return Math.min(300, Math.max(5, Number.parseInt(state._timeout, 10) || 30));
+}
+
+async function probeSelectedModel(model, { withTools = false, signal } = {}) {
+  const timeoutSeconds = _probeTimeoutSeconds();
+  const controller = new AbortController();
+  let timedOut = false;
+  const abort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutSeconds * 1000 + PROBE_NETWORK_GRACE_MS);
+
+  try {
+    const res = await fetch(`${state.API_BASE}/api/probe-selected`, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        models: [{ endpoint_id: model.endpointId || '', model: model.model, endpoint: model.endpoint || '', with_tools: withTools }],
+        timeout_seconds: timeoutSeconds,
+      }),
+      signal: controller.signal,
+    });
+    const data = await res.json();
+    return (data.results || [])[0] || { status: 'fail', model: model.model, error: 'No response' };
+  } catch (e) {
+    return { status: timedOut ? 'timeout' : 'fail', model: model.model, error: timedOut ? 'Timeout' : e.name === 'AbortError' ? 'Cancelled' : (e.message || 'Request failed') };
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', abort);
+  }
+}
+
 function _clearProbeWaves() {
   const rows = document.querySelectorAll('.compare-probe-row');
   rows.forEach(r => { if (r._waveInterval) { clearInterval(r._waveInterval); r._waveInterval = null; } });
@@ -42,13 +80,7 @@ async function _checkUnprobed() {
         ok++;
         continue;
       }
-      const res = await fetch(`${state.API_BASE}/api/probe-selected`, {
-        method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models: [{ endpoint_id: m.endpointId || '', model: m.model, endpoint: m.endpoint || '' }] }),
-      });
-      const data = await res.json();
-      const result = (data.results || [])[0];
+      const result = await probeSelectedModel(m);
       if (result && result.status === 'ok') {
         state._probed.add(m.model);
         ok++;
@@ -75,4 +107,4 @@ async function _checkUnprobed() {
   }
 }
 
-export { _clearProbeWaves, _checkUnprobed };
+export { _clearProbeWaves, _checkUnprobed, probeSelectedModel };

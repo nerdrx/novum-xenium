@@ -4,7 +4,7 @@ import Storage from '../storage.js';
 import { fetchModels, _persistSelections, getExcludedModels } from './models.js';
 import { showScoreboard } from './scoreboard.js';
 import { EYE_OPEN, EYE_CLOSED, ICON_DICE, ICON_PARALLEL, ICON_SEQUENTIAL, SAVE_ICON, WAVE_FRAMES, CHAT_ICON } from './icons.js';
-import { _clearProbeWaves } from './probe.js';
+import { _clearProbeWaves, probeSelectedModel } from './probe.js';
 import uiModule from '../ui.js';
 import spinnerModule from '../spinner.js';
 import themeModule from '../theme.js';
@@ -62,6 +62,12 @@ async function showModelSelector() {
   return new Promise((resolve) => {
     let models = [];
     let _modelsLoaded = false;
+    let _probeAbortController = null;
+    let _activeProbeOverlay = null;
+
+    function _cancelProbeRequests() {
+      if (_probeAbortController) _probeAbortController.abort();
+    }
 
     const overlay = document.createElement('div');
     overlay.id = 'compare-model-overlay';
@@ -878,12 +884,18 @@ async function showModelSelector() {
     }
 
     function cleanup(result) {
+      _cancelProbeRequests();
+      if (_activeProbeOverlay) {
+        _clearProbeWaves();
+        _activeProbeOverlay.remove();
+        _activeProbeOverlay = null;
+      }
       overlay.remove();
       // Remove any body-appended picker dropdowns so they don't orphan.
       document.querySelectorAll('.cmp-picker-dropdown').forEach(d => d.remove());
       if (result) {
         state._selectedModels = selections.filter(Boolean);
-        state._timeout = Math.max(5, parseInt(timeoutInput.value) || 30);
+        state._timeout = Math.min(300, Math.max(5, parseInt(timeoutInput.value, 10) || 30));
         // Persist selections for next time (save filtered, non-null entries)
         _persistSelections();
       }
@@ -912,6 +924,9 @@ async function showModelSelector() {
         : selected;
       if (modelsToProbe.length < 1) { cleanup(true); return; }
 
+      // The selected timeout also governs preflight, retries, and replacements.
+      state._timeout = Math.min(300, Math.max(5, parseInt(timeoutInput.value, 10) || 30));
+
       // ── Skip probe if all models already probed, go straight to start ──
       const allAlreadyProbed = modelsToProbe.every(m => state._probed.has(m.model));
       if (allAlreadyProbed) { cleanup(true); return; }
@@ -920,14 +935,17 @@ async function showModelSelector() {
       startBtn.disabled = true;
       startBtn.style.opacity = '0.6';
 
+      const probeController = new AbortController();
+      _probeAbortController = probeController;
       const isBlind = state._blindMode || _shuffled;
 
       // Show probe overlay as a fixed modal
       const probeOverlay = document.createElement('div');
       probeOverlay.className = 'compare-probe-overlay';
+      _activeProbeOverlay = probeOverlay;
       const probeCard = document.createElement('div');
       probeCard.className = 'compare-probe-card';
-      probeCard.innerHTML = '<div class="compare-probe-title">Checking models...</div>';
+      probeCard.innerHTML = `<div class="compare-probe-title">Checking models...</div><div style="font-size:11px;opacity:0.65;margin:-4px 0 10px;">Waiting up to ${state._timeout}s per model. Local models may need time to load or wait in a queue.</div>`;
       let _probeSkipped = false;
       const probeList = document.createElement('div');
       probeList.className = 'compare-probe-list';
@@ -961,8 +979,10 @@ async function showModelSelector() {
       skipBtn.addEventListener('mouseleave', () => { skipBtn.style.opacity = '0.5'; });
       skipBtn.addEventListener('click', () => {
         _probeSkipped = true;
+        _cancelProbeRequests();
         _clearProbeWaves();
         probeOverlay.remove();
+        _activeProbeOverlay = null;
         cleanup(true);
       });
       probeCard.appendChild(skipBtn);
@@ -979,21 +999,22 @@ async function showModelSelector() {
       }
       document.body.appendChild(probeOverlay);
 
-      // ESC to close probe overlay (stopPropagation prevents closing model selector too)
+      // Handle this transient check before the document-level modal arbiter.
       const _probeEsc = (e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation();
-          e.preventDefault();
-          _probeSkipped = true;
-          _clearProbeWaves();
-          probeOverlay.remove();
-          document.removeEventListener('keydown', _probeEsc, false);
-          startBtn.disabled = false;
-          startBtn.innerHTML = _CMP_START_LABEL;
-          startBtn.style.opacity = '1';
-        }
+        if (e.key !== 'Escape') return;
+        e.stopPropagation();
+        e.preventDefault();
+        _probeSkipped = true;
+        _cancelProbeRequests();
+        _clearProbeWaves();
+        probeOverlay.remove();
+        _activeProbeOverlay = null;
+        startBtn.disabled = false;
+        startBtn.innerHTML = _CMP_START_LABEL;
+        startBtn.style.opacity = '1';
       };
-      document.addEventListener('keydown', _probeEsc, false);
+      window.addEventListener('keydown', _probeEsc, true);
+      probeController.signal.addEventListener('abort', () => window.removeEventListener('keydown', _probeEsc, true), { once: true });
 
       // Helper: probe a single model (skip image models — they use a different API)
       const _imageModelPrefixes = ['dall-e', 'gpt-image', 'chatgpt-image', 'stable-diffusion', 'sdxl', 'flux', 'midjourney'];
@@ -1009,19 +1030,16 @@ async function showModelSelector() {
         if (state._compareMode === 'search' && !m.model) {
           return { status: 'ok', model: m.model, skipped: true, skipReason: 'No model' };
         }
-        const res = await fetch(`${state.API_BASE}/api/probe-selected`, {
-          method: 'POST', credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ models: [{ endpoint_id: m.endpointId || '', model: m.model, endpoint: m.endpoint || '', with_tools: state._compareMode === 'agent' }] }),
+        return probeSelectedModel(m, {
+          withTools: state._compareMode === 'agent',
+          signal: probeController.signal,
         });
-        const data = await res.json();
-        return (data.results || [])[0] || { status: 'fail', error: 'No response' };
       }
 
       // Helper: update a probe row's visual state
       function _updateRow(idx, result) {
         const row = probeList.querySelector(`[data-idx="${idx}"]`);
-        if (!row) return;
+        if (!row || probeController.signal.aborted) return;
         // Stop wave animation
         if (row._waveInterval) { clearInterval(row._waveInterval); row._waveInterval = null; }
         const spinner = row.querySelector('.compare-probe-spinner');
@@ -1062,12 +1080,9 @@ async function showModelSelector() {
           errSpan.title = errText;
           errSpan.style.cssText = 'flex:1;line-height:1.4;';
           detail.appendChild(errSpan);
-          // Track timeout for retry doubling
-          if (!row._probeTimeout) row._probeTimeout = 15000;
-          if (result.error === 'Timeout') row._probeTimeout = Math.min(row._probeTimeout * 2, 120000);
           const retryBtn = document.createElement('button');
           retryBtn.className = 'compare-probe-action-btn';
-          const retryLabel = result.error === 'Timeout' ? `Retry ${Math.round(row._probeTimeout / 1000)}s` : 'Retry';
+          const retryLabel = (result.status === 'timeout' || result.error === 'Timeout') ? `Retry ${state._timeout}s` : 'Retry';
           retryBtn.textContent = retryLabel;
           retryBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -1082,7 +1097,7 @@ async function showModelSelector() {
             spinner.style.color = '';
             row._waveInterval = setInterval(() => { w2 = (w2 + 1) % waveFrames2.length; spinner.textContent = waveFrames2[w2]; }, 100);
             row.classList.remove('fail');
-            const r2 = await Promise.race([_probeOne(modelsToProbe[idx]), new Promise(r => setTimeout(() => r({ status: 'fail', error: 'Timeout' }), row._probeTimeout))]);
+            const r2 = await _probeOne(modelsToProbe[idx]);
             _updateRow(idx, r2);
           });
           const swapBtn = document.createElement('button');
@@ -1090,8 +1105,10 @@ async function showModelSelector() {
           swapBtn.textContent = 'Swap';
           swapBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            _cancelProbeRequests();
             _clearProbeWaves();
             probeOverlay.remove();
+            _activeProbeOverlay = null;
             _probeSkipped = true;
             startBtn.disabled = false;
             startBtn.innerHTML = _CMP_START_LABEL;
@@ -1104,14 +1121,9 @@ async function showModelSelector() {
       }
 
       try {
-        // Probe all in parallel (with 15s timeout per model)
-        const results = await Promise.all(modelsToProbe.map(m =>
-          Promise.race([
-            _probeOne(m),
-            new Promise(r => setTimeout(() => r({ status: 'fail', error: 'Timeout' }), 15000))
-          ])
-        ));
-        if (_probeSkipped) return;
+        // Probe all in parallel; each request shares the selected server timeout.
+        const results = await Promise.all(modelsToProbe.map(m => _probeOne(m)));
+        if (_probeSkipped || probeController.signal.aborted) return;
         let allOk = true;
         let failCount = 0;
 
@@ -1147,13 +1159,12 @@ async function showModelSelector() {
                 if (status) status.textContent = 'Swapping...';
               }
 
-              // Try up to 3 replacements with 10s timeout each
+              // Try up to 3 replacements with the selected timeout.
               let swapped = false;
               for (let attempt = 0; attempt < 3 && poolIdx < pool.length; attempt++) {
                 const replacement = pool[poolIdx++];
-                const probePromise = _probeOne({ model: replacement.id, endpoint: replacement.url, endpointId: replacement.endpointId });
-                const timeoutPromise = new Promise(r => setTimeout(() => r({ status: 'timeout', error: 'Swap timed out' }), 10000));
-                const probeResult = await Promise.race([probePromise, timeoutPromise]);
+                const probeResult = await _probeOne({ model: replacement.id, endpoint: replacement.url, endpointId: replacement.endpointId });
+                if (probeController.signal.aborted) return;
                 if (probeResult.status === 'ok') {
                   selections[i] = { model: replacement.id, endpoint: replacement.url, endpointId: replacement.endpointId, name: replacement.name };
                   usedModels.add(replacement.id);
@@ -1178,6 +1189,7 @@ async function showModelSelector() {
           // Re-check if all are ok now
           const finalToProbe = (state._compareMode === 'search') ? (state._searchSynthModels || []).filter(Boolean) : selections.filter(Boolean);
           const finalResults = await Promise.all(finalToProbe.map(m => _probeOne(m)));
+          if (probeController.signal.aborted) return;
           allOk = finalResults.every(r => r.status === 'ok');
           failCount = finalResults.filter(r => r.status !== 'ok').length;
         }
@@ -1217,7 +1229,7 @@ async function showModelSelector() {
                 fd.append('query', 'test');
                 fd.append('provider', p.id);
                 fd.append('count', '1');
-                const r = await fetch(`${state.API_BASE}/api/search/query`, { method: 'POST', body: fd, credentials: 'same-origin' });
+                const r = await fetch(`${state.API_BASE}/api/search/query`, { method: 'POST', body: fd, credentials: 'same-origin', signal: probeController.signal });
                 const d = await r.json();
                 return { status: d.error ? 'fail' : 'ok', error: d.error };
               } catch (e) {
@@ -1225,6 +1237,7 @@ async function showModelSelector() {
               }
             }));
 
+            if (probeController.signal.aborted) return;
             let searchAllOk = true;
             provResults.forEach((result, i) => {
               const row = providerRows[i];
@@ -1255,9 +1268,10 @@ async function showModelSelector() {
           // whole overlay fades out a moment later, so just leave it in place.
           probeOverlay.querySelector('.compare-probe-title').textContent = 'All ready!';
           setTimeout(() => {
+            if (probeController.signal.aborted) return;
             probeOverlay.style.transition = 'opacity 0.3s ease';
             probeOverlay.style.opacity = '0';
-            setTimeout(() => { _clearProbeWaves(); probeOverlay.remove(); cleanup(true); if (window._updateCheckBtnState) window._updateCheckBtnState(); }, 300);
+            setTimeout(() => { if (probeController.signal.aborted) return; _clearProbeWaves(); probeOverlay.remove(); cleanup(true); if (window._updateCheckBtnState) window._updateCheckBtnState(); }, 300);
           }, 400);
         } else {
           // Failed — the Skip button is replaced by the Go Back / Start Anyway row.
@@ -1277,17 +1291,18 @@ async function showModelSelector() {
           goBackBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;"><polyline points="15 18 9 12 15 6"/></svg>Go Back';
           goBackBtn.className = 'cmp-btn-secondary';
           goBackBtn.style.cssText = 'padding:5px 12px;font-size:12px;display:inline-flex;align-items:center;';
-          goBackBtn.addEventListener('click', () => { _clearProbeWaves(); probeOverlay.remove(); startBtn.disabled = false; startBtn.innerHTML = _CMP_START_LABEL; startBtn.style.opacity = '1'; });
+          goBackBtn.addEventListener('click', () => { _cancelProbeRequests(); _clearProbeWaves(); probeOverlay.remove(); _activeProbeOverlay = null; startBtn.disabled = false; startBtn.innerHTML = _CMP_START_LABEL; startBtn.style.opacity = '1'; });
           const startAnywayBtn = document.createElement('button');
           startAnywayBtn.textContent = 'Start Anyway';
           startAnywayBtn.className = 'cmp-btn-primary';
           startAnywayBtn.style.cssText = 'padding:5px 12px;font-size:12px;';
-          startAnywayBtn.addEventListener('click', () => { _clearProbeWaves(); probeOverlay.remove(); cleanup(true); });
+          startAnywayBtn.addEventListener('click', () => { _cancelProbeRequests(); _clearProbeWaves(); probeOverlay.remove(); _activeProbeOverlay = null; cleanup(true); });
           btnRow.appendChild(goBackBtn);
           btnRow.appendChild(startAnywayBtn);
           probeCard.appendChild(btnRow);
         }
       } catch (e) {
+        if (probeController.signal.aborted) return;
         // Probe failed entirely — let user start anyway
         console.error('Compare probe error:', e);
         _clearProbeWaves();

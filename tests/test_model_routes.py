@@ -982,6 +982,48 @@ def _get_route(path, method):
     raise AssertionError(f"{method} {path} not found")
 
 
+@pytest.mark.parametrize("value,expected", [
+    (300, 300), (60, 60), ("120", 120), (0, 5), (999, 300),
+    (None, 30), (True, 30), ("invalid", 30), (float("inf"), 30),
+])
+def test_comparison_probe_timeout_is_bounded(value, expected):
+    assert model_routes._comparison_probe_timeout(value) == expected
+
+
+def test_comparison_probe_passes_selected_budget_to_actual_http_call(monkeypatch):
+    db = SimpleNamespace(close=lambda: None)
+    monkeypatch.setattr(model_routes, "SessionLocal", lambda: db)
+    monkeypatch.setattr(model_routes, "require_admin", lambda request: None)
+    monkeypatch.setattr(model_routes, "_safe_detect_provider", lambda base: "openai")
+    captured = []
+
+    def post(url, **kwargs):
+        captured.append((url, kwargs))
+        return SimpleNamespace(is_success=True)
+
+    monkeypatch.setattr(model_routes.httpx, "post", post)
+    route = _get_route("/api/probe-selected", "POST")
+    result = route(_PinnedFakeRequest(), {
+        "timeout_seconds": 300,
+        "models": [{"endpoint": "https://fixture.test/v1", "model": "test-chat", "with_tools": True}],
+    })
+    assert result["results"][0]["status"] == "ok"
+    assert captured[0][1]["timeout"] == 300
+    assert captured[0][1]["json"]["tools"][0]["function"]["name"] == "test"
+
+
+def test_comparison_probe_timeout_result_reports_selected_budget(monkeypatch):
+    monkeypatch.setattr(model_routes, "_safe_detect_provider", lambda base: "openai")
+
+    def timeout(*args, **kwargs):
+        raise httpx.ReadTimeout("No response")
+
+    monkeypatch.setattr(model_routes.httpx, "post", timeout)
+    result = model_routes._probe_single_model("https://fixture.test/v1", None, "test-chat", timeout=120)
+    assert result["status"] == "timeout"
+    assert result["error"] == "Timed out (120s)"
+
+
 def _make_endpoint(**kwargs):
     base = dict(
         id="ep1",

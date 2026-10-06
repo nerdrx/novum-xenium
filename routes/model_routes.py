@@ -765,6 +765,15 @@ def _probe_single_model(base: str, api_key: str, model_id: str, timeout: int = 1
         return {"status": "fail", "error": str(e)[:80]}
 
 
+def _comparison_probe_timeout(value) -> int:
+    """Match Compare's bounded timeout, including time for local model loading."""
+    try:
+        seconds = int(value) if not isinstance(value, bool) else 30
+    except (TypeError, ValueError, OverflowError):
+        seconds = 30
+    return max(5, min(seconds, 300))
+
+
 # Hostnames / IP prefixes that indicate a local endpoint
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 _PRIVATE_NETWORKS = (
@@ -1795,8 +1804,9 @@ def setup_model_routes(model_discovery):
 
     @router.post("/probe-selected")
     def probe_selected(request: Request, request_body: dict = Body(...)):
-        """Probe specific models for compare pre-check. Body: {models: [{endpoint_id, model}]}."""
+        """Compare pre-check: {models: [{endpoint_id, model}], timeout_seconds?: 5..300}."""
         require_admin(request)
+        probe_timeout = _comparison_probe_timeout(request_body.get("timeout_seconds"))
         models_to_probe = request_body.get("models", [])
         if not models_to_probe:
             return {"results": []}
@@ -1829,7 +1839,7 @@ def setup_model_routes(model_discovery):
 
                 base = _normalize_base(ep_data["base_url"])
                 _with_tools = item.get("with_tools", False)
-                result = _probe_single_model(base, ep_data.get("api_key"), model_id, timeout=8, with_tools=_with_tools)
+                result = _probe_single_model(base, ep_data.get("api_key"), model_id, timeout=probe_timeout, with_tools=_with_tools)
                 result["model"] = model_id
                 result["endpoint_id"] = ep_id
                 results.append(result)

@@ -2413,6 +2413,13 @@ export function renderAskUserCard(payload, options) {
   card.appendChild(question);
   card.setAttribute('aria-labelledby', question.id);
 
+  if (isToolApproval && aq.description) {
+    const reason = document.createElement('div');
+    reason.className = 'ask-user-option-desc';
+    reason.textContent = String(aq.description);
+    card.appendChild(reason);
+  }
+
   if (isToolApproval && aq.action) {
     const action = document.createElement('div');
     action.className = 'ask-user-option-desc';

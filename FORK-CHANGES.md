@@ -6,6 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Lightweight Auto approval judge for uncertain public HTTPS page reads. It reuses the current model without tools/history, bounds latency and token use, fails to human approval on uncertainty/errors, and grants only the exact URL within the current run. Shell/writes/private reads, query payloads, action-like URLs, disabled tools, Ask/plan modes and API-token callers retain their gates. Reasons are visible in tool output and approval cards. The README now summarizes all fork additions separately from upstream features.
 - Approve for me recognizes plain DeviantArt profile reads alongside YouTube and GitHub profiles, including after external search context. Query payloads, extra paths, Ask mode, delegated callers and disabled tools retain their existing checks. The approval and agent-loop regression suite passed 275 checks for this update.
 - Agent context budgets include native tool definitions, and trimming preserves the current user question plus complete recent tool exchanges. Large results are stored in a private per-chat SQLite FTS5 index with bounded search/exact chunk retrieval. Archives obey existing tool policies and are removed with their chats; incognito and delegated API-token turns do not store results. This is a native implementation of the storage-and-retrieval pattern, not a distribution of Context Mode.
 - NX is the default theme for fresh profiles and reset. Saved personality names remain visible when agent rounds are reconstructed after reload; underlying model provenance stays available.
@@ -25,6 +26,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 6 lightweight judge update: 462 focused regression checks passed. Warm local `huihui-qwen3.8:27b-local` probes allowed official Python documentation and the requested DeviantArt gallery, and requested approval for an unrelated URL, each within the eight-second limit. The Qwen3.8 alias reports the Qwen35 family; the Ollama compatibility path now disables its hidden reasoning for short responses so the judge receives a verdict instead of empty content. These synthetic probes do not establish classifier accuracy for every model or action. Existing permission checks remain separate from classification.
 
 October 6 context/theme/personality update: 524 focused checks passed. With the local `huihui-qwen3.8:27b-local` model and 43 native tool definitions, a synthetic dense tool-output history reproduced the exact `no user query found in messages` HTTP 500 under the old message-only budget. The schema-aware budget returned HTTP 200 for that input and a further tool round. A separate live test made the model call `context_search`, retrieve an exact value absent from the preview, and answer with that value. These are bounded synthetic checks, not a guarantee of perfect recall in arbitrary conversations.
 

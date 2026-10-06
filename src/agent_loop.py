@@ -3491,6 +3491,9 @@ async def stream_agent_loop(
         approval_mode=approval_mode,
     )
     run_security.observe_public_sources(public_read_sources or ())
+    approval_judge_reviews = {}
+    from src.approval_judge import candidate_url, trusted_request, review_public_read, MAX_REVIEWS_PER_RUN
+    approval_judge_request = trusted_request(messages)
     mcp_mgr = get_mcp_manager()
     prep_timings: Dict[str, float] = {}
     disabled_tools = set(disabled_tools or [])
@@ -5730,6 +5733,30 @@ async def stream_agent_loop(
             blocked_by_disabled_tools = bool(
                 disabled_tools and not policy_names.isdisjoint(disabled_tools)
             )
+            judge_review = None
+            if (not security_decision.allowed and not blocked_by_tool_policy
+                    and not blocked_by_disabled_tools and not plan_mode
+                    and approval_mode == "auto" and not delegated_credential):
+                judge_url = candidate_url(block.tool_type, block.content)
+                if judge_url and approval_judge_request:
+                    judge_review = approval_judge_reviews.get(judge_url)
+                    if judge_review is None and len(approval_judge_reviews) < MAX_REVIEWS_PER_RUN:
+                        judge_review = await review_public_read(
+                            judge_url, approval_judge_request,
+                            endpoint_url=endpoint_url, model=model, headers=headers,
+                        )
+                        approval_judge_reviews[judge_url] = judge_review
+                        logger.info("[approval_judge] tool=%s decision=%s reason=%s",
+                                    block.tool_type, judge_review["decision"], judge_review["reason"])
+                    if judge_review and judge_review["decision"] == "allow":
+                        # Exact URL only, scoped to this run. The dispatcher
+                        # still applies ownership, disabled-tool and SSRF rules.
+                        run_security.observe_public_sources([{"url": judge_url}])
+                        security_decision = run_security.decision_for(block.tool_type, block.content)
+                    elif judge_review:
+                        security_decision = type(security_decision)(
+                            False, "Auto review: " + judge_review["reason"],
+                        )
             if (
                 (blocked_by_tool_policy or blocked_by_disabled_tools)
                 and not _ody_clamped_tool_allowed
@@ -6070,6 +6097,9 @@ async def stream_agent_loop(
                 )
             elif "error" in result:
                 output_text = _truncate(result["error"])
+
+            if judge_review:
+                output_text = f"Auto review ({judge_review['decision']}): {judge_review['reason']}\n\n" + output_text
 
             # Emit tool_output (include ui_event data if present)
             tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}

@@ -1068,9 +1068,10 @@ def _is_local_minimax_mlx_request(url: str, model: str) -> bool:
 
 
 def _apply_local_generation_stability(payload: Dict, url: str, model: str) -> None:
-    # Qwen 3.5 on Ollama /v1 ignores think:false. Without this, short
+    # Qwen 3.5 (including Qwen3.8 aliases) on Ollama /v1 ignores think:false. Without this, short
     # responses can exhaust their token budget and return empty content.
-    if _is_ollama_openai_compat_url(url) and "qwen3.5" in (model or "").lower():
+    if (_is_ollama_openai_compat_url(url)
+            and any(name in (model or "").lower() for name in ("qwen3.5", "qwen3.8"))):
         payload["reasoning_effort"] = "none"
     if not _is_local_minimax_mlx_request(url, model):
         return

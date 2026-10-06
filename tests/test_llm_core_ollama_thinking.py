@@ -8,6 +8,8 @@ Covers:
 import asyncio
 import json
 
+import pytest
+
 from src import llm_core
 
 
@@ -165,9 +167,10 @@ class TestThinkSuppression:
         assert payload.get("think") is False
 
 
-def test_qwen35_ollama_openai_reasoning_disabled(monkeypatch):
+@pytest.mark.parametrize("model", ["qwen3.5:9b", "huihui-qwen3.8:27b-local"])
+def test_qwen35_ollama_openai_reasoning_disabled(monkeypatch, model):
     """Qwen 3.5 needs the OpenAI reasoning control to avoid empty replies."""
     payload = _capture_payload(
-        monkeypatch, "http://127.0.0.1:11434/v1/chat/completions", "qwen3.5:9b"
+        monkeypatch, "http://127.0.0.1:11434/v1/chat/completions", model
     )
     assert payload.get("reasoning_effort") == "none"

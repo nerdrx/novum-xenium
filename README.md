@@ -14,6 +14,7 @@ Modified on October 6, 2026. The original authors, license and third-party notic
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
+  <a href="#what-this-fork-changes">Fork Changes</a> ·
   <a href="website/setup.md">Setup Guide</a> ·
   <a href="CONTRIBUTING.md">Contributing</a> ·
   <a href="ROADMAP.md">Roadmap</a>
@@ -28,6 +29,19 @@ Modified on October 6, 2026. The original authors, license and third-party notic
 </p>
 
 ---
+
+## What this fork changes
+
+NX keeps the original Docker quick start and adds these changes on top of upstream:
+
+- **Approval controls:** Ask for approval, Approve for me, or Full access within the workspace/container. Auto handles known public reads immediately and uses a small, tool-free judge for uncertain public page reads; its reason appears in the tool output or approval card.
+- **Continuous group conversations:** 20 replies, 100 replies, or Until Stop, with a compact composer popover. Participants can use tools, preserve the workspace, and pause for real approval or clarification.
+- **Longer agent workflows:** native tool schemas count toward the context budget; large outputs become searchable per-chat archives with exact chunk retrieval. Current questions and complete recent tool exchanges survive trimming.
+- **ChatGPT subscription tools:** native function calls and follow-up results, unsupported-parameter fixes, and an optional host Codex image-generation bridge with visible success/failure results.
+- **Workspace and interface:** persistent `/workspace`, improved emoji rendering, the NX palette/synapse default theme, and personality names preserved after refresh.
+- **Local model and Docker fixes:** Ollama Qwen request/context compatibility and the dependency build fix used by the Docker installation.
+
+These are changes in this fork, not promises about every provider or GPU. The [change record](FORK-CHANGES.md) lists the upstream base, test evidence, and validation limits; the [image bridge guide](docs/codex-image-bridge.md) covers that optional setup.
 
 ## Quick Start
 
@@ -51,10 +65,12 @@ Group chats have a circular-arrow button beside Agent/Chat. Open it for **Auto c
 The shield button beside Agent/Chat selects approval behavior for your account's next agent turn, including group participants:
 
 - **Ask for approval**: approve each agent write, shell command, or internet call. Reads in the workspace remain available. Automatic URL/transcript and web-search prefetch are deferred to agent tools.
-- **Approve for me** (default): automatically read canonical public YouTube/GitHub profiles and exact HTTPS links supplied by you or returned by search. Adding data to a discovered URL, unknown destinations after untrusted context, writes, and commands keep the existing approval checks. Public-address checks, DNS pinning, and redirect checks remain enforced by the fetcher. URL provenance narrows this exception; it is not a guarantee that every public GET is harmless.
+- **Approve for me** (default): automatically read canonical public YouTube/GitHub/DeviantArt profiles and exact HTTPS links supplied by you or returned by search. For uncertain public page reads, a separate tool-free review uses the current model and only your latest trusted request plus the proposed URL. An explicit `allow` authorizes that exact URL for the current run; `ask`, invalid output, or timeout shows an approval card. Public-address checks, DNS pinning, and redirect checks remain enforced by the fetcher.
 - **Full access**: skip automatic tool approval prompts within the current workspace/container.
 
 These modes do not add host-folder access or override disabled tools, account privileges, plan mode, or filesystem restrictions. Running turns keep their original mode. Only an interactive user can save a mode; API tokens and internal tool calls cannot grant themselves full access. Other user interactions, such as a tool asking for missing information, still appear in Full access.
+
+The lightweight judge adds no model download, service, or dependency. It runs only when the normal Auto rules would ask: at most six distinct candidates per run, one attempt each, eight seconds maximum, and 128 output tokens. It does not receive personas, fetched page content, tool results, or the conversation history. Query-bearing or encoded/action-like URLs, shell commands, writes, private reads, unknown tools, Ask mode, plan mode and delegated API-token runs cannot use this exception. Decisions are cached only within the run and their short reasons remain visible after refresh. Classification is a model judgment, not a guarantee that every public GET is harmless.
 
 ChatGPT subscription chat and native tools use the existing provider connection in Settings. Image generation through a logged-in host Codex CLI is an optional extra; see [its setup](docs/codex-image-bridge.md). It is not required to start the Docker stack.
 

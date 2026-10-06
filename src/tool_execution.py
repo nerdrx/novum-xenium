@@ -703,6 +703,12 @@ async def _call_mcp_tool(
     # the image renders deterministically — no dependence on the model echoing the
     # URL into its prose (which it mangles/hallucinates).
     if tool == "generate_image":
+        # The image MCP server returns provider failures as text. Mark them as
+        # failures so the UI and agent do not treat an HTTP error as success.
+        output = (result.get("stdout") or "").strip()
+        if output.startswith("Error:"):
+            result["exit_code"] = 1
+            result["error"] = output
         _promote_image_fields(result)
 
     return result

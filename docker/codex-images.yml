@@ -1,0 +1,12 @@
+# Optional Linux host-loopback access for the Codex image bridge.
+# Keep the normal Docker network and auth defaults for all other services.
+services:
+  odysseus:
+    network_mode: host
+    ports: !reset []
+    extra_hosts: !reset []
+    command: ["uvicorn", "app:app", "--host", "127.0.0.1", "--port", "${APP_PORT:-7000}"]
+    environment:
+      SEARXNG_INSTANCE: http://127.0.0.1:8080
+      CHROMADB_HOST: 127.0.0.1
+      CHROMADB_PORT: "8100"

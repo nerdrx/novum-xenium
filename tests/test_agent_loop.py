@@ -41,6 +41,7 @@ try:
         _append_tool_results,
         _insert_before_latest_user,
         _MCP_KEYWORDS,
+        _image_tool_available,
     )
     _IMPORTED_AGENT_LOOP = sys.modules.get("src.agent_loop")
 finally:
@@ -62,6 +63,61 @@ def test_import_stubs_do_not_leak_into_later_tests():
 
 def test_mcp_keyword_gate_matches_literal_mcp_requests():
     assert "mcp" in _MCP_KEYWORDS
+
+
+def test_image_capability_available_on_vague_followups_but_respects_policy(monkeypatch):
+    monkeypatch.setitem(_image_tool_available.__globals__, "get_setting", lambda *args: True)
+    manager = MagicMock()
+    manager.get_server_status.return_value = {"status": "connected"}
+    # Availability deliberately does not depend on the latest prompt or RAG.
+    assert _image_tool_available(manager, set(), {})
+    assert not _image_tool_available(None, set(), {})
+    manager.get_server_status.return_value = {"status": "disconnected"}
+    assert not _image_tool_available(manager, set(), {})
+    manager.get_server_status.return_value = {"status": "connected"}
+    for name in ("generate_image", "mcp__image_gen__generate_image"):
+        assert not _image_tool_available(manager, {name}, {})
+    assert not _image_tool_available(manager, set(), {"image_gen": {"generate_image"}})
+    from src.tool_security import plan_mode_disabled_tools
+    assert not _image_tool_available(manager, plan_mode_disabled_tools(), {})
+    monkeypatch.setitem(_image_tool_available.__globals__, "get_setting", lambda *args: False)
+    assert not _image_tool_available(manager, set(), {})
+
+
+def test_native_image_schema_dispatches_exact_prompt_and_gallery_url(monkeypatch):
+    import asyncio
+    import json
+    from src.tool_schemas import FUNCTION_TOOL_SCHEMAS, function_call_to_tool_block
+    from src import tool_execution
+
+    schema = next(s["function"] for s in FUNCTION_TOOL_SCHEMAS if s["function"]["name"] == "generate_image")
+    assert schema["parameters"]["required"] == ["prompt"]
+    arguments = {"prompt": "A chicken\nin a sunny meadow 🐔"}
+    block = function_call_to_tool_block("generate_image", json.dumps(arguments))
+    assert block.tool_type == "generate_image"
+    assert function_call_to_tool_block("generate_image", "{}") is None
+    calls = []
+
+    class Manager:
+        async def call_tool(self, name, args):
+            calls.append((name, args))
+            return {"exit_code": 0, "stdout": "Generated image for: Chicken\n/api/generated-image/test.png\nmodel: chatgpt-image-codex\nsize: 1024x1024"}
+
+    monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: Manager())
+    result = asyncio.run(tool_execution._call_mcp_tool(block.tool_type, block.content))
+    assert calls == [("mcp__image_gen__generate_image", arguments)]
+    assert result["image_url"] == "/api/generated-image/test.png"
+
+    async def failed_call(name, args):
+        return {"exit_code": 0, "stdout": "Error: Image generation failed (422): No new file was saved."}
+
+    manager = Manager()
+    manager.call_tool = failed_call
+    monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: manager)
+    failed = asyncio.run(tool_execution._call_mcp_tool(block.tool_type, block.content))
+    assert failed["exit_code"] == 1
+    assert "No new file was saved" in failed["error"]
+    assert "image_url" not in failed
 
 
 def test_polish_internet_search_request_classifies_as_web():

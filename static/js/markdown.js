@@ -490,29 +490,15 @@ function createTaskCompletedMarker() {
 /**
  * Process text and render with thinking sections
  */
-// ── Emoji → monochrome SVG (OpenMoji-black via same-origin /api/emoji proxy) ──
-// Replace colorful system/Twemoji emoji with single-color line icons tinted to
-// the surrounding text color (project rule: never colorful emoji). Operates on
-// rendered HTML: only touches text outside tags and skips <code>/<pre>.
-const _EMOJI_RE = /\p{Extended_Pictographic}/u;
+// Keep Unicode grapheme clusters intact and use the installed color emoji font.
+// Only touches rendered text outside tags, code, and existing emoji wrappers.
+const _EMOJI_RE = /\p{Extended_Pictographic}|\p{Emoji_Presentation}|\u20e3/u;
 const _emojiSeg = (typeof Intl !== 'undefined' && Intl.Segmenter)
   ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
 
-function _emojiCodepoints(emoji) {
-  // Twemoji filename rule: strip U+FE0F unless the sequence has a ZWJ (U+200D).
-  const s = emoji.indexOf('‍') >= 0 ? emoji : emoji.replace(/️/g, '');
-  const cps = [];
-  for (const ch of s) { const c = ch.codePointAt(0); if (c) cps.push(c.toString(16)); }
-  return cps.join('-');
-}
 function _emojiImg(emoji) {
-  const code = _emojiCodepoints(emoji);
-  if (!code) return emoji;
-  // Monochrome line icon: the OpenMoji black SVG is used as a CSS mask filled
-  // with the surrounding text color (currentColor), so emoji render as a single
-  // theme-tinted line glyph — never colorful (project rule). If the proxy can't
-  // supply the glyph it returns a transparent SVG, so the mask shows nothing.
-  return `<span class="emoji" role="img" aria-label="${emoji}" style="--em:url('/api/emoji/${code}.svg')"></span>`;
+  const safe = escapeHtml(emoji);
+  return `<span class="emoji" role="img" aria-label="${safe}">${safe}</span>`;
 }
 function _svgifyText(text) {
   if (!_emojiSeg) return text;
@@ -530,29 +516,33 @@ function _useSvgEmoji() {
 // `opts.shortcodes` (default true) controls the issue-#345 `:name:` → emoji
 // expansion. Chat passes it through as true; document/email body renderers pass
 // false so author-typed `:shortcode:` text stays literal (see mdToHtml callers).
-// The Unicode-emoji → monochrome-SVG pass always runs regardless, so a real 😀
-// in a document still renders as the themed line icon as it always has.
+// Keep the exported name for callers; rendered emoji now use native color glyphs.
 export function svgifyEmoji(html, opts) {
   if (!_useSvgEmoji() || !html) return html;
   const allowShortcodes = !opts || opts.shortcodes !== false;
-  // Two reasons to walk the HTML: real Unicode emoji to turn into SVG icons,
+  // Two reasons to walk the HTML: real Unicode emoji to give a color font,
   // or `:shortcode:` text the model emitted instead of an emoji (issue #345).
   const hasUnicode = _EMOJI_RE.test(html);
   const hasShortcode = allowShortcodes && hasEmojiShortcode(html);
   if (!hasUnicode && !hasShortcode) return html;
   const parts = html.split(/(<[^>]*>)/);   // odd indices = tags
   let codeDepth = 0;
+  let emojiDepth = 0;
   for (let i = 0; i < parts.length; i++) {
     if (i % 2 === 1) {
       const t = parts[i].toLowerCase();
       if (/^<(pre|code)[\s>]/.test(t)) codeDepth++;
       else if (/^<\/(pre|code)\s*>/.test(t)) codeDepth = Math.max(0, codeDepth - 1);
+      if (/^<span[\s>]/.test(t)) {
+        const classes = t.match(/\bclass\s*=\s*["']([^"']*)["']/);
+        if (emojiDepth || classes?.[1].split(/\s+/).includes('emoji')) emojiDepth++;
+      } else if (/^<\/span\s*>/.test(t) && emojiDepth) emojiDepth--;
       continue;
     }
-    if (codeDepth !== 0) continue;
+    if (codeDepth !== 0 || emojiDepth !== 0) continue;
     let seg = parts[i];
     // Expand shortcodes to Unicode first, then both they and any pre-existing
-    // Unicode emoji get rendered as the same monochrome line icons below.
+    // Unicode emoji use the same native color font below.
     if (hasShortcode) seg = replaceEmojiShortcodes(seg);
     if (_EMOJI_RE.test(seg)) seg = _svgifyText(seg);
     parts[i] = seg;

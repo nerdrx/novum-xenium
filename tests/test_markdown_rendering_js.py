@@ -127,6 +127,26 @@ def test_ordered_lists_render_as_one_unwrapped_ol(node_available):
     assert "<p>After</p>" in html
 
 
+def test_color_emoji_keep_complete_unicode_sequences(node_available):
+    emojis = ["🤔", "🥺", "👍🏽", "👨‍👩‍👧‍👦", "🇩🇪", "1️⃣"]
+    html = _run_markdown_case(" ".join(emojis))
+    assert html.count('class="emoji"') == len(emojis)
+    for emoji in emojis:
+        assert f'aria-label="{emoji}">{emoji}</span>' in html
+    assert "/api/emoji/" not in html
+
+
+def test_color_emoji_render_is_idempotent_and_skips_code(node_available):
+    html = _run_markdown_case(
+        "🥺 :thinking: `👍🏽 :fire:`",
+        "mod.svgifyEmoji(mod.svgifyEmoji(mod.mdToHtml(input)))",
+    )
+    assert html.count('class="emoji"') == 2
+    assert 'aria-label="🥺">🥺</span>' in html
+    assert 'aria-label="🤔">🤔</span>' in html
+    assert "<code>👍🏽 :fire:</code>" in html
+
+
 def test_table_separator_row_not_rendered_as_data(node_available):
     html = _run_markdown_case("| A | B |\n|---|---|\n| 1 | 2 |")
 

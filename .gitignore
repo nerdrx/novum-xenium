@@ -120,3 +120,11 @@ compound.config.json
 *.error.log
 _scratch/
 /odysseus/
+
+# Personal installation notes, workspace and host-specific overlays.
+/LOCAL-*.txt
+/workspace
+/docker.local.yml
+/docker.host-local.yml
+/config/ollama/
+/config/searxng/settings.local.yml

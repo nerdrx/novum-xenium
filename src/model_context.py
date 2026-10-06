@@ -419,8 +419,21 @@ def _query_context_length(endpoint_url: str, model: str) -> Tuple[int, bool]:
 
     # Try llama.cpp /slots endpoint first — reports actual serving context
     if is_local_endpoint(endpoint_url):
+        base = endpoint_url.split("/v1")[0] if "/v1" in endpoint_url else endpoint_url.rsplit("/", 1)[0]
+        parsed = urlparse(endpoint_url)
+        if parsed.port == 11434 or "ollama" in (parsed.hostname or ""):
+            try:
+                from src.model_capability_readers.ollama import record_from_show_payload
+                ollama_base = endpoint_url.split("/v1")[0].split("/api/")[0].rstrip("/")
+                response = httpx.post(f"{ollama_base}/api/show", json={"model": model}, timeout=REQUEST_TIMEOUT)
+                if response.is_success:
+                    record = record_from_show_payload(model, response.json())
+                    ctx = dict(record.capability.limits).get("context_tokens") if record else None
+                    if ctx:
+                        return int(ctx), True
+            except Exception as exc:
+                logger.debug("Ollama context probe failed for %s: %s", model, exc)
         try:
-            base = endpoint_url.split("/v1")[0] if "/v1" in endpoint_url else endpoint_url.rsplit("/", 1)[0]
             r = httpx.get(f"{base}/slots", timeout=REQUEST_TIMEOUT)
             if r.is_success:
                 slots = r.json()

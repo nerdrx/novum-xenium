@@ -66,5 +66,9 @@ assert patched == 3, f"expected to patch 3 setup.py files, patched {patched}"
 PY
 
 echo ">> building wheels into ${OUT}"
-pip wheel --no-deps -w "$OUT" ./basicsr-* ./gfpgan-* ./facexlib-*
+# These are pure Python wheels. CPU Torch is sufficient for setup.py and
+# avoids pulling NVIDIA runtimes into the builder on this AMD machine.
+pip install --no-cache-dir setuptools wheel numpy cython
+pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
+pip wheel --no-deps --no-build-isolation -w "$OUT" ./basicsr-* ./gfpgan-* ./facexlib-*
 ls -l "$OUT"

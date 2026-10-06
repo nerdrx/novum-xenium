@@ -683,7 +683,7 @@ Suggest changes with explanations (for review/feedback requests).""",
 <size>
 <quality>
 ```
-Generate an image. Line 1 = description, line 2 = model name, line 3 = WxH (e.g. 1024x1024), line 4 = quality.""",
+Generate a new image through the configured image provider and save it to the Gallery. Line 1 = description, line 2 = optional model name, line 3 = WxH (e.g. 1024x1024), line 4 = quality. Use this tool for image requests; do not guess browser endpoints or invent filenames. Only report success after a returned image URL. This tool creates new images; it does not edit existing images.""",
 
     "chat_with_model": "- ```chat_with_model``` — Ask a DIFFERENT AI model and relay its answer. Line 1 = model name (or 'model@endpoint'), rest = your message. Use when the user says 'ask <model>', 'what does <model> think', or wants to compare/their answer from another model.",
     "ask_teacher": "- ```ask_teacher``` — Escalate a hard question to a more capable model. Line 1 = model name or 'auto', rest = the question. Use when stuck or need expert knowledge.",
@@ -2845,6 +2845,17 @@ _ADMIN_TOOLS = {
     "send_to_session", "pipeline", "ask_teacher", "list_models",
 }
 
+
+def _image_tool_available(mcp_mgr, disabled_tools, mcp_disabled_map):
+    """Keep the image capability explicit without overriding tool policy."""
+    return bool(
+        get_setting("image_gen_enabled", False)
+        and mcp_mgr
+        and mcp_mgr.get_server_status("image_gen").get("status") == "connected"
+        and not ({"generate_image", "mcp__image_gen__generate_image"} & set(disabled_tools or ()))
+        and "generate_image" not in (mcp_disabled_map or {}).get("image_gen", set())
+    )
+
 def _build_base_prompt(
     disabled_tools,
     mcp_mgr,
@@ -4026,6 +4037,16 @@ async def stream_agent_loop(
             from src.tool_index import ALWAYS_AVAILABLE
             _relevant_tools = set(ALWAYS_AVAILABLE)
         _relevant_tools.update(forced_set)
+
+    # Image generation is an enabled product capability, not a RAG guess.
+    # Keep its real schema on follow-ups like "try again" or a new description.
+    if not guide_only and _image_tool_available(mcp_mgr, disabled_tools, _mcp_disabled_map):
+        from src.tool_index import ALWAYS_AVAILABLE
+        if _relevant_tools is None:
+            _relevant_tools = set(ALWAYS_AVAILABLE)
+        _relevant_tools.add("generate_image")
+    else:
+        disabled_tools.add("generate_image")
 
     if not guide_only and _relevant_tools is not None:
         _relevant_tools = _expand_browser_mcp_tools(_relevant_tools, mcp_mgr)

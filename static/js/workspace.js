@@ -16,7 +16,8 @@ let _modal = null;
 let _curPath = '';
 
 export function getWorkspace() {
-  return Storage.get(KEYS.WORKSPACE, '') || '';
+  // This local Docker installation mounts the persistent files folder here.
+  return Storage.get(KEYS.WORKSPACE, '/workspace') || '';
 }
 
 function _basename(p) {
@@ -58,8 +59,8 @@ export function applyMode(_mode) {
 }
 
 export function setWorkspace(path) {
-  if (path) Storage.set(KEYS.WORKSPACE, path);
-  else Storage.remove(KEYS.WORKSPACE);
+  // Save an explicit empty choice so clearing does not restore the default.
+  Storage.set(KEYS.WORKSPACE, path || '');
   syncWorkspaceIndicator(path || '');
 }
 

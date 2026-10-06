@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 _REQUIRED_NATIVE_TOOL_ARGS = {
+    "generate_image": ("prompt",),
     "web_search": ("query", "queries"),
     "web_fetch": ("url",),
     "read_file": ("path",),
@@ -32,6 +33,23 @@ _REQUIRED_NATIVE_TOOL_ARGS = {
 # OpenAI-compatible function tool schemas
 # ---------------------------------------------------------------------------
 FUNCTION_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_image",
+            "description": "Generate a new image from a text prompt using the configured image provider and save it to the Gallery. Call this tool for image requests; do not use the browser or invent a saved filename. Only report success after the tool returns an image URL. This tool creates new images; it does not edit existing images.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Complete visual description of the new image"},
+                    "model": {"type": "string", "description": "Optional image model; omit to use the configured default"},
+                    "size": {"type": "string", "description": "Optional requested WxH, e.g. 1024x1024"},
+                    "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"]}
+                },
+                "required": ["prompt"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {

@@ -9,6 +9,32 @@ import src.model_context as model_context
 from src.model_context import is_local_endpoint, estimate_tokens, _lookup_known
 
 
+@pytest.mark.parametrize("model", ["huihui-qwen3-coder:30b-local", "huihui-qwen3.8:27b-local"])
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1:11434/v1/chat/completions",
+    "http://127.0.0.1:11434/api/chat",
+    "http://127.0.0.1:11434",
+])
+def test_ollama_context_uses_profile_limit(monkeypatch, model, url):
+    import httpx
+
+    monkeypatch.setattr(model_context, "_configured_endpoint_kind", lambda _: "local")
+
+    def show(url, json=None, **kwargs):
+        assert url == "http://127.0.0.1:11434/api/show"
+        assert json == {"model": model}
+        return httpx.Response(200, json={
+            "capabilities": ["completion", "tools"],
+            "parameters": "num_ctx 16384",
+            "model_info": {"qwen3.context_length": 262144},
+        })
+
+    monkeypatch.setattr(model_context.httpx, "post", show)
+    assert model_context.get_context_length_known(
+        url, model,
+    ) == (16384, True)
+
+
 class _Column:
     def __init__(self, name):
         self.name = name

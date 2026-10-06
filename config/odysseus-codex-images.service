@@ -1,0 +1,19 @@
+[Unit]
+Description=Odysseus images through the existing Codex ChatGPT subscription
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=%h/.local/bin/odysseus-codex-images
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+Environment=OPENAI_API_KEY=
+Environment=CODEX_API_KEY=
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=-%h/.config/odysseus/codex-images.env
+TimeoutStopSec=5
+
+[Install]
+WantedBy=default.target

@@ -22,6 +22,13 @@ secrets.env~
 !secrets.env.example
 /data/
 /logs/
+/workspace/
+/workspace
+/LOCAL-*.txt
+/docker.local.yml
+/docker.host-local.yml
+/config/ollama/
+/config/searxng/settings.local.yml
 .git/
 .claude/
 .playwright-mcp/
@@ -33,6 +40,9 @@ docs/
 website/
 assets/branding/
 *.md
+!README.md
+!FORK-CHANGES.md
+!ACKNOWLEDGMENTS.md
 *.db
 *.sqlite
 *.sqlite3

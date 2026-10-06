@@ -163,3 +163,11 @@ class TestThinkSuppression:
             monkeypatch, "http://127.0.0.1:11435/v1/chat/completions", "qwen3:14b"
         )
         assert payload.get("think") is False
+
+
+def test_qwen35_ollama_openai_reasoning_disabled(monkeypatch):
+    """Qwen 3.5 needs the OpenAI reasoning control to avoid empty replies."""
+    payload = _capture_payload(
+        monkeypatch, "http://127.0.0.1:11434/v1/chat/completions", "qwen3.5:9b"
+    )
+    assert payload.get("reasoning_effort") == "none"

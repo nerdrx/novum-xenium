@@ -3696,9 +3696,9 @@ body.bg-pattern-sparkles {
       display: none;
       flex-shrink: 0;
     }
-    .overflow-menu-item.active .overflow-active-dot {
-      display: block;
-    }
+.overflow-menu-item.active .overflow-active-dot {
+  display: block;
+}
     .attach-strip {
       display: flex;
       gap: 6px;
@@ -18156,6 +18156,114 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
   }
   .doclib-card-preview {
     max-height: 40vh;
+  }
+}
+
+.fork-source-link {
+  display: block;
+  padding: 4px 12px 10px;
+  color: var(--fg);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Compact group-conversation controls beside the Agent/Chat toggle. */
+.group-conversation-anchor {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.group-conversation-toggle {
+  width: 30px;
+  height: 30px;
+  padding: 5px;
+  opacity: 0.7;
+}
+
+.group-conversation-toggle:focus-visible {
+  outline: 2px solid var(--accent, var(--red));
+  outline-offset: 2px;
+}
+
+.group-conversation-toggle.active {
+  color: var(--accent, var(--red));
+}
+
+.group-conversation-spinner {
+  width: 17px;
+  height: 17px;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: group-conversation-spin 0.8s linear infinite;
+}
+
+.group-conversation-toggle.active:not(.waiting) .group-conversation-icon {
+  display: none;
+}
+
+@keyframes group-conversation-spin {
+  to { transform: rotate(360deg); }
+}
+
+.group-conversation-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(280px, calc(100vw - 24px));
+  padding: 12px;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transform-origin: bottom right;
+  animation: overflow-menu-pop 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.group-conversation-panel[hidden],
+.group-conversation-spinner[hidden] {
+  display: none !important;
+}
+
+.group-conversation-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.group-conversation-option select {
+  margin-left: auto;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+.group-conversation-stop {
+  align-self: flex-start;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.group-conversation-status {
+  min-height: 1em;
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .group-conversation-panel,
+  .group-conversation-spinner {
+    animation: none;
   }
 }
 
@@ -40323,19 +40431,15 @@ body.theme-frosted .modal {
   #hwfit-deps-server { padding-bottom: 4px; line-height: 1; }
 }
 
-/* Emoji rendered as monochrome line icons (OpenMoji-black via /api/emoji proxy)
-   instead of colorful system glyphs — project rule: never colorful emoji. The
-   SVG is used as a mask filled with the current text color, so it tints to the
-   theme. Sized to sit on the text baseline. */
+/* Native color emoji, including joined families, skin tones, flags and keycaps. */
 .emoji {
-  height: 1.15em;
-  width: 1.15em;
-  vertical-align: -0.18em;
+  font-family: 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
+  font-variant-emoji: emoji;
+  font-weight: normal;
+  font-style: normal;
+  letter-spacing: normal;
   margin: 0 0.05em;
-  display: inline-block;
-  background-color: currentColor;
-  -webkit-mask: var(--em) center / contain no-repeat;
-          mask: var(--em) center / contain no-repeat;
+  display: inline;
 }
 
 /* Nudge the X icon in the "Clear all" button down 2px. */

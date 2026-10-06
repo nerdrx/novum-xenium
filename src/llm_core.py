@@ -1068,6 +1068,10 @@ def _is_local_minimax_mlx_request(url: str, model: str) -> bool:
 
 
 def _apply_local_generation_stability(payload: Dict, url: str, model: str) -> None:
+    # Qwen 3.5 on Ollama /v1 ignores think:false. Without this, short
+    # responses can exhaust their token budget and return empty content.
+    if _is_ollama_openai_compat_url(url) and "qwen3.5" in (model or "").lower():
+        payload["reasoning_effort"] = "none"
     if not _is_local_minimax_mlx_request(url, model):
         return
     if "temperature" in payload:
@@ -1280,6 +1284,7 @@ def _build_chatgpt_responses_payload(
     max_tokens: int,
     *,
     stream: bool = False,
+    tools: Optional[List[Dict]] = None,
 ) -> Dict:
     from src.chatgpt_subscription import build_responses_input
 
@@ -1287,16 +1292,67 @@ def _build_chatgpt_responses_payload(
     payload: Dict = {
         "model": model,
         "instructions": _chatgpt_subscription_instructions(messages),
-        "input": build_responses_input(conversation),
+        "input": _build_chatgpt_responses_input(conversation, build_responses_input),
         "stream": stream,
         "store": False,
     }
-    if not _restricts_temperature(model):
-        payload["temperature"] = temperature
-    # ChatGPT Subscription Codex API does not support max_output_tokens —
-    # passing it returns HTTP 400 "Unsupported parameter: max_output_tokens".
-    # Do not include it in the payload.
+    if tools:
+        responses_tools = []
+        for schema in tools:
+            function = schema.get("function") or {}
+            if not function.get("name"):
+                continue
+            response_tool = {
+                "type": "function",
+                "name": function["name"],
+                "parameters": function.get("parameters") or {"type": "object", "properties": {}},
+            }
+            for key in ("description", "strict"):
+                if key in function:
+                    response_tool[key] = function[key]
+            responses_tools.append(response_tool)
+        if responses_tools:
+            payload["tools"] = responses_tools
+    # ChatGPT Subscription rejects temperature and max_output_tokens for all
+    # models, regardless of the model's ordinary OpenAI API capabilities.
     return payload
+
+
+def _build_chatgpt_responses_input(messages: List[Dict], build_text_input) -> List[Dict]:
+    """Preserve function-call and result items in a Responses conversation."""
+    items: List[Dict] = []
+    for message in messages or []:
+        role = message.get("role") or "user"
+        if role == "tool":
+            call_id = message.get("tool_call_id")
+            if call_id:
+                content = message.get("content")
+                if not isinstance(content, str):
+                    content = json.dumps(content, ensure_ascii=False) if content is not None else ""
+                items.append({"type": "function_call_output", "call_id": call_id, "output": content})
+            continue
+        if role == "assistant" and message.get("tool_calls"):
+            content = message.get("content")
+            if content:
+                items.extend(build_text_input([{"role": role, "content": content}]))
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                name = function.get("name")
+                call_id = call.get("id")
+                if not name or not call_id:
+                    continue
+                arguments = function.get("arguments") or "{}"
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments, ensure_ascii=False)
+                items.append({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": arguments,
+                })
+            continue
+        items.extend(build_text_input([message]))
+    return items
 
 
 def _format_chatgpt_subscription_error(status_code: int, text: str) -> str:
@@ -2625,7 +2681,10 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
     elif provider == "chatgpt-subscription":
         target_url = _normalize_chatgpt_subscription_url(url)
         h = _provider_headers(provider, headers)
-        payload = _build_chatgpt_responses_payload(model, messages_copy, temperature, max_tokens, stream=True)
+        payload = _build_chatgpt_responses_payload(
+            model, messages_copy, temperature, max_tokens, stream=True,
+            tools=None if tool_choice_none else tools,
+        )
     else:
         target_url = _normalize_openai_chat_url(url)
         payload = {
@@ -2682,6 +2741,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         event_name = ""
         input_tokens = 0
         output_tokens = 0
+        _responses_tool_calls: Dict[int, Dict] = {}
         _responses_actual_model = ""
         _responses_model_announced = False
         try:
@@ -2733,8 +2793,61 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                                 yield _degenerate
                                 return
                             yield f'data: {json.dumps({"delta": delta})}\n\n'
+                    elif evt in ("response.output_item.added", "response.output_item.done"):
+                        item = data.get("item") or {}
+                        if item.get("type") == "function_call":
+                            output_index = data.get("output_index", len(_responses_tool_calls))
+                            _responses_tool_calls[output_index] = {
+                                "id": item.get("call_id") or item.get("id") or f"call_{output_index}",
+                                "item_id": item.get("id"),
+                                "name": item.get("name") or "",
+                                "arguments": item.get("arguments") or "",
+                            }
+                    elif evt == "response.function_call_arguments.delta":
+                        output_index = data.get("output_index")
+                        item = _responses_tool_calls.get(output_index)
+                        if item is None:
+                            item_id = data.get("item_id")
+                            item = next(
+                                (candidate for candidate in _responses_tool_calls.values()
+                                 if candidate.get("item_id") == item_id),
+                                None,
+                            )
+                        if item is not None:
+                            item["arguments"] = (item.get("arguments") or "") + (data.get("delta") or "")
+                    elif evt == "response.function_call_arguments.done":
+                        output_index = data.get("output_index")
+                        item = _responses_tool_calls.get(output_index)
+                        if item is not None and data.get("arguments") is not None:
+                            item["arguments"] = data["arguments"]
                     elif evt == "response.completed":
-                        usage = (data.get("response") or {}).get("usage") or data.get("usage") or {}
+                        response = data.get("response") or {}
+                        response_output = response.get("output") or []
+                        calls = []
+                        for output_index, item in enumerate(response_output):
+                            if not isinstance(item, dict) or item.get("type") != "function_call":
+                                continue
+                            arguments = item.get("arguments") or "{}"
+                            if not isinstance(arguments, str):
+                                arguments = json.dumps(arguments, ensure_ascii=False)
+                            calls.append({
+                                "id": item.get("call_id") or item.get("id") or f"call_{output_index}",
+                                "name": item.get("name") or "",
+                                "arguments": arguments,
+                            })
+                        if not calls:
+                            calls = [
+                                {
+                                    "id": item.get("id"),
+                                    "name": item.get("name"),
+                                    "arguments": item.get("arguments") or "{}",
+                                }
+                                for _, item in sorted(_responses_tool_calls.items())
+                                if item.get("name")
+                            ]
+                        if calls:
+                            yield f'data: {json.dumps({"type": "tool_calls", "calls": calls})}\n\n'
+                        usage = response.get("usage") or data.get("usage") or {}
                         if isinstance(usage, dict):
                             raw_input = (
                                 usage.get("input_tokens")

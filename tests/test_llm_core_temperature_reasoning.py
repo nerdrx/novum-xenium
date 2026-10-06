@@ -131,3 +131,12 @@ def test_chatgpt_subscription_payload_omits_max_output_tokens_when_zero():
     )
 
     assert "max_output_tokens" not in payload
+
+
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6-luna", "gpt-4o"])
+def test_chatgpt_subscription_payload_omits_temperature_for_all_models(model):
+    payload = llm_core._build_chatgpt_responses_payload(
+        model, [{"role": "user", "content": "Say OK"}],
+        temperature=0.2, max_tokens=37, stream=True,
+    )
+    assert "temperature" not in payload

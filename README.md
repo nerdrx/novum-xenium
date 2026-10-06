@@ -1,3 +1,9 @@
+## NX Odysseus
+
+An independent, community-maintained fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). Based on the upstream `main` branch at `934d23c0be29c9721385f34565c0ae2cbd60da04`.
+
+Modified on October 6, 2026. The original authors, license and third-party notices are preserved. This fork remains **AGPL-3.0-or-later**. See [fork changes](FORK-CHANGES.md) for the changes and validation limits. This is not an official upstream release.
+
 <p align="center">
   <img src="assets/branding/odysseus-wordmark.png" alt="Odysseus" width="238">
 </p>
@@ -25,11 +31,11 @@
 
 ## Quick Start
 
-> `dev` is the default branch and gets the newest changes first. Use [`main`](https://github.com/odysseus-dev/odysseus/tree/main) if you want the more curated branch.
+The fork's default branch is `main`. Docker builds the code from this checkout.
 
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/nerdrx/nx-odysseus.git
+cd nx-odysseus
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -37,6 +43,12 @@ docker compose up -d --build
 Open `http://localhost:7000` when the containers are healthy. The first admin password is printed in `docker compose logs odysseus`.
 
 Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration live in the [setup guide](website/setup.md).
+
+Your database, chats, settings, credentials and model caches stay under `data/`. Agent files are available as `/workspace` inside Docker and `data/agent_workspace/workspace/` on your computer. The default setup keeps authentication enabled and published ports on localhost.
+
+Group chats have a circular-arrow button beside Agent/Chat. Open it for **Auto conversation**, **20 / 100 replies / Until Stop**, and **Stop**. Tool approvals wait for your choice before the requesting participant continues.
+
+ChatGPT subscription chat and native tools use the existing provider connection in Settings. Image generation through a logged-in host Codex CLI is an optional extra; see [its setup](docs/codex-image-bridge.md). It is not required to start the Docker stack.
 
 ## Features
 

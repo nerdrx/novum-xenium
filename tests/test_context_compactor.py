@@ -6,6 +6,7 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
+from src.model_context import estimate_tokens
 
 # Mock heavy dependencies before importing
 for mod in [
@@ -107,6 +108,83 @@ class TestTrimForContext:
         assert trimmed[-1]["role"] == "user"
         assert "pasted message was too large" in trimmed[-1]["content"]
         assert "old-0" not in "\n".join(str(m.get("content", "")) for m in trimmed)
+
+    def test_keeps_latest_user_and_complete_recent_tool_batches_within_budget(self):
+        messages = [{"role": "system", "content": "You are helpful."}]
+        messages.extend(
+            {"role": "user", "content": f"old-{i} " + ("x" * 900)}
+            for i in range(8)
+        )
+        messages.append({"role": "user", "content": "LATEST_USER_REQUEST_MARKER"})
+        for round_no in range(8):
+            calls = [
+                {"id": f"r{round_no}-c{call_no}", "type": "function",
+                 "function": {"name": "web_fetch", "arguments": "{}"}}
+                for call_no in range(3)
+            ]
+            messages.append({"role": "assistant", "content": None, "tool_calls": calls})
+            messages.extend(
+                {"role": "tool", "tool_call_id": call["id"],
+                 "content": f"round-{round_no}-result " + ("result " * 450)}
+                for call in calls
+            )
+
+        budget = 2048 - 256
+        trimmed = trim_for_context(messages, context_length=2048, reserve_tokens=256)
+
+        assert estimate_tokens(trimmed) <= budget
+        assert any(
+            m.get("role") == "user" and "LATEST_USER_REQUEST_MARKER" in m.get("content", "")
+            for m in trimmed
+        )
+        assert not any("old-" in str(m.get("content", "")) for m in trimmed)
+        for i, message in enumerate(trimmed):
+            if message.get("role") == "tool":
+                assert i > 0 and trimmed[i - 1].get("role") in {"assistant", "tool"}
+            if message.get("role") == "assistant" and message.get("tool_calls"):
+                call_ids = {call["id"] for call in message["tool_calls"]}
+                tool_results = []
+                for following in trimmed[i + 1:]:
+                    if following.get("role") != "tool":
+                        break
+                    tool_results.append(following.get("tool_call_id"))
+                assert set(tool_results) == call_ids
+        assert "round-7-result" in "\n".join(str(m.get("content", "")) for m in trimmed)
+
+    def test_tight_budget_truncates_but_never_drops_latest_user_prompt(self):
+        messages = [
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "latest " + ("important " * 2000)},
+            {"role": "assistant", "content": "old reply " * 300},
+            {"role": "user", "content": "new request marker " + ("details " * 2000)},
+        ]
+
+        budget = 256 - 128
+        trimmed = trim_for_context(messages, context_length=256, reserve_tokens=128)
+
+        latest = next(m for m in trimmed if m.get("role") == "user")
+        assert "new request marker" in latest["content"]
+        assert len(latest["content"]) < len(messages[-1]["content"])
+        assert estimate_tokens(trimmed) <= budget
+        assert not any(m.get("role") == "assistant" for m in trimmed)
+
+    def test_legacy_tool_result_wrappers_do_not_replace_user_anchor(self):
+        from src.prompt_security import untrusted_context_message
+        messages = [
+            {"role": "user", "content": "MY_ACTUAL_QUESTION"},
+            {"role": "assistant", "content": "fetching pages"},
+            untrusted_context_message("tool execution results", "page data " * 3000),
+        ]
+        trimmed = trim_for_context(messages, context_length=1024, reserve_tokens=128)
+        assert any(m.get("content") == "MY_ACTUAL_QUESTION" for m in trimmed)
+        assert estimate_tokens(trimmed) <= 896
+
+    @pytest.mark.parametrize("context_length", [16, 32, 64])
+    def test_very_small_budget_keeps_nonempty_user_query(self, context_length):
+        trimmed = trim_for_context([{"role": "user", "content": "question " * 1000}],
+                                   context_length=context_length, reserve_tokens=8)
+        assert trimmed[0]["content"].strip()
+        assert estimate_tokens(trimmed) <= context_length - 8
 
 
 class TestContentAsText:

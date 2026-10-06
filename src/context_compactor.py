@@ -289,31 +289,86 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
             if estimate_tokens(trimmed) <= budget:
                 return _sanitize_tool_messages(essential_system + protected_msgs + convo_msgs)
 
-    # Still too big — drop older conversation turns BUT always keep the current
-    # user turn. If a pasted message alone exceeds the model context, truncate
-    # that message with a visible notice instead of dropping it; otherwise the
-    # model appears to "ignore" large pastes because it never receives them.
-    # Hermes-style: recent context matters more than old context.
-    PROTECT_RECENT = 10
-    current_msg = convo_msgs[-1:] if convo_msgs else []
-    prior_convo = convo_msgs[:-1] if convo_msgs else []
-    if len(prior_convo) >= PROTECT_RECENT:
-        old_msgs = prior_convo[:-(PROTECT_RECENT - 1)]
-        recent_msgs = prior_convo[-(PROTECT_RECENT - 1):] + current_msg
-        while old_msgs and estimate_tokens(essential_system + old_msgs + recent_msgs) > budget:
-            old_msgs.pop(0)
-        convo_msgs = old_msgs + recent_msgs
-    else:
-        convo_msgs = prior_convo + current_msg
-        while prior_convo and estimate_tokens(essential_system + prior_convo + current_msg) > budget:
-            prior_convo.pop(0)
-        convo_msgs = prior_convo + current_msg
+    # Keep the latest user prompt: after tool execution the final conversation
+    # messages are often tool results, not the user message that began the turn.
+    # Treat each assistant tool call and its full result batch as one trim unit.
+    latest_user = max(
+        (i for i, msg in enumerate(convo_msgs) if msg.get("role") == "user"
+         and (msg.get("metadata") or {}).get("trusted") is not False),
+        default=len(convo_msgs) - 1,
+    )
+    current_user = convo_msgs[latest_user:latest_user + 1]
+    post_user = convo_msgs[latest_user + 1:]
+    exchanges = []
+    i = 0
+    while i < len(post_user):
+        end = i + 1
+        if post_user[i].get("role") == "assistant" and post_user[i].get("tool_calls"):
+            while end < len(post_user) and post_user[end].get("role") == "tool":
+                end += 1
+        exchanges.append(post_user[i:end])
+        i = end
 
-    # If the current message itself is too large, shrink only that message.
-    if current_msg and estimate_tokens(essential_system + protected_msgs + convo_msgs) > budget:
-        prefix = essential_system + protected_msgs + convo_msgs[:-1]
-        available_for_current = max(64, budget - estimate_tokens(prefix))
-        convo_msgs[-1] = _truncate_message_to_token_budget(convo_msgs[-1], available_for_current)
+    # Protected tokens were already deducted from budget above.
+    remaining = max(0, budget - estimate_tokens(essential_system))
+    if current_user:
+        user_cost = estimate_tokens(current_user)
+        if user_cost > remaining:
+            current_user[0] = _truncate_message_to_token_budget(current_user[0], remaining)
+            while (
+                estimate_tokens(current_user) > remaining
+                and remaining >= 4
+                and isinstance(current_user[0].get("content"), str)
+                and len(current_user[0]["content"]) > 1
+            ):
+                content = current_user[0]["content"]
+                current_user[0] = dict(current_user[0], content=content[:max(1, len(content) - 64)])
+            user_cost = estimate_tokens(current_user)
+        remaining = max(0, remaining - user_cost)
+
+    kept_exchanges = []
+    for exchange in reversed(exchanges):
+        cost = estimate_tokens(exchange)
+        if cost > remaining:
+            if remaining < 4:
+                break
+            per_message = max(4, remaining // len(exchange))
+            exchange = [
+                _truncate_message_to_token_budget(message, per_message)
+                for message in exchange
+            ]
+            cost = estimate_tokens(exchange)
+        if cost > remaining:
+            break
+        kept_exchanges[:0] = exchange
+        remaining -= cost
+        if cost == 0:
+            break
+
+    # Fill remaining space with whole earlier user turns when possible.
+    prior_turns = []
+    for message in convo_msgs[:latest_user]:
+        if (message.get("role") == "user"
+                and (message.get("metadata") or {}).get("trusted") is not False and prior_turns):
+            prior_turns.append([])
+        if not prior_turns:
+            prior_turns.append([])
+        prior_turns[-1].append(message)
+    kept_prior = []
+    for turn in reversed(prior_turns):
+        cost = estimate_tokens(turn)
+        if cost > remaining:
+            if remaining < 4:
+                break
+            per_message = max(4, remaining // len(turn))
+            turn = [_truncate_message_to_token_budget(message, per_message) for message in turn]
+            cost = estimate_tokens(turn)
+        if cost > remaining:
+            break
+        kept_prior[:0] = turn
+        remaining -= cost
+
+    convo_msgs = kept_prior + current_user + kept_exchanges
 
     result = _sanitize_tool_messages(essential_system + protected_msgs + convo_msgs)
     logger.info(f"Trimmed to {estimate_tokens(result)} tokens ({len(result)} messages)")

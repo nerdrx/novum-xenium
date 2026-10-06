@@ -76,7 +76,7 @@ class WebSearchTool:
         output = text[:MAX_OUTPUT_CHARS] if len(text) > MAX_OUTPUT_CHARS else text
         if sources:
             output += "\n\n<!-- SOURCES:" + json.dumps(sources) + " -->"
-        return {"output": output, "exit_code": 0}
+        return {"output": output, "sources": sources, "exit_code": 0}
 
 class WebFetchTool:
     async def execute(self, content: str, ctx: dict) -> dict:

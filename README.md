@@ -51,7 +51,7 @@ Group chats have a circular-arrow button beside Agent/Chat. Open it for **Auto c
 The shield button beside Agent/Chat selects approval behavior for your account's next agent turn, including group participants:
 
 - **Ask for approval**: approve each agent write, shell command, or internet call. Reads in the workspace remain available. Automatic URL/transcript and web-search prefetch are deferred to agent tools.
-- **Approve for me** (default): retain the existing automatic checks and task/chat approval choices when untrusted context makes an action risky.
+- **Approve for me** (default): automatically read canonical public YouTube/GitHub profiles and exact HTTPS links supplied by you or returned by search. Adding data to a discovered URL, unknown destinations after untrusted context, writes, and commands keep the existing approval checks. Public-address checks, DNS pinning, and redirect checks remain enforced by the fetcher. URL provenance narrows this exception; it is not a guarantee that every public GET is harmless.
 - **Full access**: skip automatic tool approval prompts within the current workspace/container.
 
 These modes do not add host-folder access or override disabled tools, account privileges, plan mode, or filesystem restrictions. Running turns keep their original mode. Only an interactive user can save a mode; API tokens and internal tool calls cannot grant themselves full access. Other user interactions, such as a tool asking for missing information, still appear in Full access.

@@ -1,6 +1,6 @@
 const MODES = [
   { key: 'ask', label: 'Ask for approval', detail: 'Ask before agent writes, shell commands, and internet calls.' },
-  { key: 'auto', label: 'Approve for me', detail: 'Existing automatic checks; ask when untrusted context makes actions risky.' },
+  { key: 'auto', label: 'Approve for me', detail: 'Allow public profiles and exact user/search links. Ask before risky actions.' },
   { key: 'full', label: 'Full access', detail: 'Skip approval prompts within current workspace/container.' },
 ];
 

@@ -3457,6 +3457,7 @@ async def stream_agent_loop(
     external_untrusted_context_seen: bool = False,
     delegated_credential: bool = False,
     approval_mode: str = "auto",
+    public_read_sources: Optional[List[Dict]] = None,
     exact_approval: Optional[ExactToolApproval] = None,
     _is_teacher_run: bool = False,
     history_session=None,
@@ -3488,6 +3489,7 @@ async def stream_agent_loop(
         delegated_credential=bool(delegated_credential),
         approval_mode=approval_mode,
     )
+    run_security.observe_public_sources(public_read_sources or ())
     mcp_mgr = get_mcp_manager()
     prep_timings: Dict[str, float] = {}
     disabled_tools = set(disabled_tools or [])

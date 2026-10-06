@@ -8,11 +8,13 @@ run-local integrity gates before dispatch.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 from src.tool_approval_scopes import CHAT_SESSION_APPROVAL_CONTEXT_MARKER
 from src.tool_security import BUILTIN_EMAIL_TOOLS, is_public_blocked_tool
@@ -612,6 +614,60 @@ def messages_contain_external_untrusted_context(messages: Iterable[dict]) -> boo
     return False
 
 
+def _public_read_url(value: Any) -> str | None:
+    """Lexical candidate only; the public fetch transport owns DNS/SSRF checks."""
+    if not isinstance(value, str) or len(value) > 2048:
+        return None
+    url = value.strip()
+    if any(ord(char) < 33 or char in "\\" for char in url):
+        return None
+    try:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower()
+        if (parsed.scheme != "https" or parsed.username is not None
+                or parsed.password is not None or parsed.port not in (None, 443)
+                or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", host)
+                or re.fullmatch(r"[0-9.]+", host)
+                or host.endswith((".local", ".localhost", ".internal", ".lan", ".intranet"))):
+            return None
+        return urlunsplit(("https", parsed.netloc.lower(), parsed.path, parsed.query, ""))
+    except ValueError:
+        return None
+
+
+def _web_fetch_read_url(content: Any) -> str | None:
+    if not isinstance(content, str):
+        return None
+    raw = content.strip()
+    if raw.startswith("{"):
+        try:
+            args = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(args, dict) or set(args) - {"url", "full", "max_bytes"}:
+            return None
+        raw = args.get("url")
+    elif "\n" in raw:
+        return None
+    if not isinstance(raw, str):
+        return None
+    if "://" not in raw:
+        raw = "https://" + raw
+    return _public_read_url(raw)
+
+
+def _is_public_profile_url(url: str) -> bool:
+    """Fixed public profile routes, with no query payload or extra path."""
+    parsed = urlsplit(url)
+    if parsed.query or parsed.port is not None:
+        return False
+    if parsed.hostname in {"youtube.com", "www.youtube.com"}:
+        return bool(re.fullmatch(r"/@[A-Za-z0-9_.-]{3,30}/?", parsed.path))
+    if parsed.hostname in {"github.com", "www.github.com"}:
+        return bool(re.fullmatch(r"/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/?", parsed.path))
+    return False
+
+
 @dataclass
 class ToolRunSecurityContext:
     """Server-owned integrity state for one agent run."""
@@ -630,10 +686,39 @@ class ToolRunSecurityContext:
     # Snapshot from the interactive user's server-side preference. This changes
     # approval prompts only, never tool availability or filesystem permissions.
     approval_mode: str = "auto"
+    # Exact public links provided by the user or returned by this run's search.
+    # These are read destinations, never grants for writes or arbitrary egress.
+    public_read_urls: set[str] = field(default_factory=set)
+
+    def observe_public_sources(self, sources: Iterable[dict]) -> None:
+        for source in sources or ():
+            if len(self.public_read_urls) >= 256:
+                break
+            if isinstance(source, dict):
+                url = _public_read_url(source.get("url"))
+                if url:
+                    self.public_read_urls.add(url)
 
     def observe_messages(self, messages: Iterable[dict]) -> None:
         """Apply server-owned chat scope and promote untrusted prompt context."""
         message_list = list(messages or ())
+        for message in message_list:
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            metadata = message.get("metadata") or {}
+            if isinstance(metadata, dict) and metadata.get("trusted") is False:
+                continue
+            content = message.get("content")
+            texts = [content] if isinstance(content, str) else (
+                [part.get("text") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+                if isinstance(content, list) else []
+            )
+            for text in texts:
+                if not isinstance(text, str):
+                    continue
+                self.observe_public_sources(
+                    {"url": match.rstrip(").,;")} for match in re.findall(r'https://[^\s<>"\']+', text)
+                )
         if self.delegated_credential:
             # A delegated run has no human to grant chat-session scope, so a
             # grant sitting in this chat's history (left by the owner's own
@@ -685,6 +770,13 @@ class ToolRunSecurityContext:
                 # private-data gate. Ask must never weaken Auto's checks.
         if self.approval_gate_bypassed and self.approval_mode == "auto":
             return ToolGateDecision(True)
+        if (self.approval_mode == "auto" and not self.delegated_credential
+                and tool_name == "web_fetch"):
+            url = _web_fetch_read_url(content)
+            if url and (url in self.public_read_urls or _is_public_profile_url(url)):
+                # Execution still checks DNS, pins public IPs, and rechecks
+                # redirect hops. Exact URL matching prevents appending data.
+                return ToolGateDecision(True)
         if not self.external_untrusted_context_seen:
             return ToolGateDecision(True)
         capabilities = capabilities_for_action(tool_name, content)
@@ -709,6 +801,10 @@ class ToolRunSecurityContext:
         result: Any,
         content: Any = None,
     ) -> None:
+        if tool_name == "web_search" and tool_result_is_successful(result):
+            sources = result.get("sources")
+            if isinstance(sources, list):
+                self.observe_public_sources(sources)
         if not tool_result_should_arm_gate(tool_name, result, content):
             return
         self.external_untrusted_context_seen = True

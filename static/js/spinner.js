@@ -45,7 +45,7 @@ class Spinner {
     }
     const span = document.createElement('span');
     span.className = 'ai-spinner';
-    span.style.cssText = 'font-family: monospace; white-space: pre;';
+    span.style.cssText = 'font-family: monospace; white-space: pre-wrap; overflow-wrap: anywhere;';
     this.element = span;
     this.updateDisplay();
     return span;

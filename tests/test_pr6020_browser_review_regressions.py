@@ -119,6 +119,9 @@ export function __pr6020StreamStateSmoke() {
       globalThis.dispatchEvent = () => {{}};
       globalThis.requestAnimationFrame = () => 0;
       globalThis.cancelAnimationFrame = () => {{}};
+      Object.defineProperty(globalThis, 'navigator', {{
+        value: {{ platform: '' }}, configurable: true,
+      }});
       globalThis.fetch = async () => ({{
         ok: false,
         json: async () => ({{}}),
@@ -675,6 +678,8 @@ def test_stale_preflight_bails_before_creating_controller():
       {state_and_stop}
       function runPreflightGate(streamGeneration, _sendState, _userMsgEl) {{
         const streamSessionId = 'session-1';
+        let _pendingRecovery = null;
+        const recoveryForSend = null;
         let abortCtrl = null;
         {preflight_gate}
         return abortCtrl;

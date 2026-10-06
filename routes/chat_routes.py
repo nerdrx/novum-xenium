@@ -23,6 +23,7 @@ from src.llm_core import (
     stream_llm_with_fallback,
 )
 from src.agent_loop import stream_agent_loop
+from src.stream_errors import describe_sse_failure, describe_stream_failure
 from src import agent_runs, run_checkpoints
 from src.model_context import estimate_tokens
 from src.context_compactor import (
@@ -2217,17 +2218,19 @@ def setup_chat_routes(
                             except json.JSONDecodeError:
                                 yield chunk
                         elif chunk.startswith("event: error"):
-                            logger.warning(f"Stream error for {sess.model} on {sess.endpoint_url}: {chunk!r}")
+                            _stream_failure = describe_sse_failure(chunk)
+                            logger.warning(
+                                "Stream error for %s: %s",
+                                sess.model,
+                                _stream_failure["message"],
+                            )
                             if (
                                 not _chat_terminal_saved
                                 and (full_response.strip() or thinking_response.strip())
                             ):
-                                _failure_status = _stream_failure_status(chunk)
-                                _failure_message = (
-                                    f"Model request failed (HTTP {_failure_status})"
-                                    if _failure_status is not None
-                                    else "Model request failed"
-                                )
+                                _failure = _stream_failure
+                                _failure_status = _failure["status"]
+                                _failure_message = _failure["message"]
                                 _terminal_content = full_response.strip()
                                 _failure_note = f"[Response stopped: {_failure_message}]"
                                 _terminal_content = (
@@ -2272,10 +2275,7 @@ def setup_chat_routes(
                                     })
                                 _terminal_metrics.update({
                                     "failed": True,
-                                    "failure": {
-                                        "status": _failure_status,
-                                        "message": _failure_message,
-                                    },
+                                    "failure": _failure,
                                     "model": _actual_model or _answered_by or _requested_model,
                                     "requested_model": _requested_model,
                                     "endpoint_id": _actual_route.get("endpoint_id"),
@@ -2566,18 +2566,13 @@ def setup_chat_routes(
                                     terminal_metadata = dict(data.get("data") or {})
                                     last_metrics = terminal_metadata
                                     failure = terminal_metadata.get("failure") or {}
-                                    failure_status = _normalize_http_status(
-                                        failure.get("status")
+                                    safe_failure = describe_stream_failure(
+                                        failure.get("message"),
+                                        failure.get("status"),
+                                        failure.get("timeout_seconds"),
                                     )
-                                    failure_message = (
-                                        f"Model request failed (HTTP {failure_status})"
-                                        if failure_status is not None
-                                        else "Model request failed"
-                                    )
-                                    terminal_metadata["failure"] = {
-                                        "status": failure_status,
-                                        "message": failure_message,
-                                    }
+                                    failure_message = safe_failure["message"]
+                                    terminal_metadata["failure"] = safe_failure
                                     terminal_content = full_response.strip()
                                     failure_note = f"[Agent stopped: {failure_message}]"
                                     if terminal_content:

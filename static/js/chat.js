@@ -42,6 +42,36 @@ import { loadPanel } from './panels.js';
   const RUN_ID_ABORT_GRACE_MS = 2000; // timeout waits this long for a run-id header before hard-aborting
   const RESEARCH_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>';
 
+  function _formatStreamElapsed(startedAt, now = Date.now()) {
+    const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+    const minutes = Math.floor(seconds / 60);
+    return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+  }
+
+  function _clientTimeoutMessage(isAgent, startedAt, hasOutput) {
+    return `${isAgent ? 'Agent response' : 'Response'} stopped after ${_formatStreamElapsed(startedAt)} (client timeout). ` +
+      (hasOutput
+        ? 'Partial output was preserved.'
+        : 'No model output arrived; the cause is unknown.') +
+      (isAgent ? ' Try a faster model, reduce tool usage, or retry.' : ' Try a faster model or retry.');
+  }
+
+  function _backgroundStreamStatusText(entry, startedAt, now = Date.now()) {
+    if (entry.status === 'error') {
+      return `[Error: ${entry.error || 'Background stream encountered an error'}]`;
+    }
+    const elapsed = _formatStreamElapsed(startedAt, now);
+    const seconds = Math.floor((now - startedAt) / 1000);
+    if (entry.accumulated) {
+      return `Response streaming in background · ${elapsed} · ${entry.accumulated.length} characters received. ` +
+        'The reply will appear when this background run finishes.';
+    }
+    if (seconds >= 120) {
+      return `No model output after ${elapsed}. Cause unknown; it may be loading or processing. Stop or retry if stuck.`;
+    }
+    return `Waiting for model output · ${elapsed}. The model may be loading or processing.`;
+  }
+
   let API_BASE = '';
   let currentAbort = null;
   let isStreaming = false;
@@ -1584,21 +1614,23 @@ import { loadPanel } from './panels.js';
     let clearResponseTimeout = () => {};
     let firstTokenWaitTimers = [];
     const clearFirstTokenWaitTimers = () => {
-      firstTokenWaitTimers.forEach(t => { try { clearTimeout(t); } catch (_) {} });
+      firstTokenWaitTimers.forEach(t => { try { clearInterval(t); } catch (_) {} });
       firstTokenWaitTimers = [];
     };
     const scheduleFirstTokenWaitMessages = () => {
       clearFirstTokenWaitTimers();
-      const steps = [
-        [20000, 'Still waiting for first token'],
-        [60000, 'Large local model is pre-filling context'],
-        [120000, 'Still working - no tokens yet from the model'],
-      ];
-      firstTokenWaitTimers = steps.map(([ms, text]) => setTimeout(() => {
-        if (!accumulated && spinner && spinner.element && !(abortCtrl && abortCtrl.signal.aborted)) {
-          spinner.updateMessage(text);
+      firstTokenWaitTimers = [setInterval(() => {
+        if (accumulated || !spinner || !spinner.element || (abortCtrl && abortCtrl.signal.aborted)) {
+          clearFirstTokenWaitTimers();
+          return;
         }
-      }, ms));
+        const elapsed = _formatStreamElapsed(streamStartedAt);
+        const seconds = Math.floor((Date.now() - streamStartedAt) / 1000);
+        const text = seconds >= 120
+          ? `No model output after ${elapsed}. The cause is unknown; it may be loading or processing. Stop or retry if stuck.`
+          : `Waiting for model output · ${elapsed}. The model may be loading or processing.`;
+        if (spinner.message !== text) spinner.updateMessage(text);
+      }, 15000)];
     };
     const clearProcessingProbe = () => {
       if (processingProbeTimer) {
@@ -1617,6 +1649,7 @@ import { loadPanel } from './panels.js';
     
     let abortCtrl = null;
     let streamingTTS = false;
+    let streamStartedAt = 0;
     try {
       // Re-enable auto-scroll when user sends a message
       uiModule.setAutoScroll(true);
@@ -2053,11 +2086,12 @@ import { loadPanel } from './panels.js';
 
       // Track holder globally so stop button can access it
       currentHolder = holder;
+      streamStartedAt = Date.now();
       _activeStreams.set(streamSessionId, {
         abortCtrl,
         holder,
         query: streamQuery,
-        startedAt: Date.now(),
+        startedAt: streamStartedAt,
         lastActivity: Date.now(),
         // Resolve the mutable closure at call time: live-thinking helpers are
         // installed after the stream entry is registered.
@@ -2080,7 +2114,7 @@ import { loadPanel } from './panels.js';
       } else if (el('research-toggle').checked) {
         loadingText = 'Deep research mode active...';
       } else {
-        loadingText = 'Processing request...';
+        loadingText = 'Preparing request; waiting for model output.';
       }
 
       var roleLabel = _modelRouteLabel(modelName, modelName);
@@ -2108,7 +2142,7 @@ import { loadPanel } from './panels.js';
         spinner.updateMessage('Researching');
         setTimeout(() => spinner.updateMessage('Analyzing sources'), 1500);
       } else {
-        spinner.updateMessage('Processing request');
+        spinner.updateMessage('Preparing request; waiting for model output.');
         scheduleFirstTokenWaitMessages();
       }
       
@@ -4412,6 +4446,9 @@ import { loadPanel } from './panels.js';
           }
         } else if (bgErr) {
           bgErr.status = 'error';
+          bgErr.error = (timedOut || (abortCtrl && abortCtrl._reason === 'timeout'))
+            ? _clientTimeoutMessage(_isAgent, bgErr.startedAt || streamStartedAt, !!accumulated)
+            : (err && err.message ? err.message : String(err || 'Background stream failed'));
           if (sessionModule && sessionModule.clearStreaming) {
             sessionModule.clearStreaming(streamSessionId);
           }
@@ -4424,9 +4461,7 @@ import { loadPanel } from './panels.js';
           const abortReason = abortCtrl._reason || '';
           // Timeout-triggered aborts should remain visible instead of disappearing.
           if (timedOut || abortReason === 'timeout') {
-            const timeoutMsg = _isAgent
-              ? 'Agent response timed out. Try again, switch to a faster model, or reduce tool usage.'
-              : 'Response timed out. Try again.';
+            const timeoutMsg = _clientTimeoutMessage(_isAgent, streamStartedAt, !!accumulated);
 
             if (holder && !accumulated) {
               holder.querySelector('.body').innerHTML =
@@ -4769,6 +4804,7 @@ import { loadPanel } from './panels.js';
       } catch (_) {}
     }
     if (abortCtrl && abortNow) {
+      if (stopServer) abortCtrl._reason = 'user-stop';
       abortCtrl.abort();
       // Don't set to null here - let catch block handle it
     }
@@ -4801,7 +4837,8 @@ import { loadPanel } from './panels.js';
       const resumed = await resumeStream(sessionId, holder || null);
       if (!resumed && holder && holder.isConnected) {
         const body = holder.querySelector('.body');
-        if (body) typewriterInto(body, 'Connection lost. The existing run could not be resumed.');
+        if (body) typewriterInto(body,
+          'Connection lost. The existing run could not be resumed. Reload to check saved progress; Continue starts a new run and will not replay the old tool calls.');
       }
       if (!resumed) refreshRecoveryCheckpoint(sessionId);
     }, 200);
@@ -4974,6 +5011,7 @@ import { loadPanel } from './panels.js';
     _backgroundStreams.set(sessionId, {
       status: terminalSaved ? 'completed' : 'running',
       accumulated: currentAccumulated,
+      startedAt: active.startedAt || Date.now(),
       sourcesHtml: '',
       findingsData: null,
       abortCtrl: active.abortCtrl,
@@ -5262,12 +5300,7 @@ import { loadPanel } from './panels.js';
     if (entry.status === 'error') {
       _backgroundStreams.delete(sessionId);
       var box = document.getElementById('chat-history');
-      if (box) {
-        var errHolder = document.createElement('div');
-        errHolder.className = 'msg msg-ai';
-        errHolder.innerHTML = '<div class="body"><i style="color: var(--color-error);">[Background stream encountered an error]</i></div>';
-        box.appendChild(errHolder);
-      }
+      if (box) _appendBackgroundStreamError(box, entry.error);
       return;
     }
 
@@ -5294,7 +5327,8 @@ import { loadPanel } from './panels.js';
       _applyModelColor(holder.querySelector('.role'), meta && meta.model);
 
       var bodyDiv = holder.querySelector('.body');
-      var spinner = spinnerModule.create('Response streaming in background', 'right');
+      var startedAt = entry.startedAt || Date.now();
+      var spinner = spinnerModule.create(_backgroundStreamStatusText(entry, startedAt), 'right');
       bodyDiv.appendChild(spinner.createElement());
       spinner.start();
 
@@ -5314,9 +5348,17 @@ import { loadPanel } from './panels.js';
         if (curPoll && curPoll._docContent && documentModule) {
           documentModule.streamDocDelta(curPoll._docContent);
         }
+        var nextStatusText = _backgroundStreamStatusText(curPoll || entry, startedAt);
+        if (spinner.message !== nextStatusText) spinner.updateMessage(nextStatusText);
         if (!curPoll || curPoll.status !== 'running') {
           clearInterval(pollId);
           spinner.destroy();
+          if (curPoll && curPoll.status === 'error') {
+            _appendBackgroundStreamError(box, curPoll.error);
+            if (holder.parentNode) holder.remove();
+            _backgroundStreams.delete(sessionId);
+            return;
+          }
           if (holder.parentNode) holder.remove(); // Remove entire holder, not just spinner
           _backgroundStreams.delete(sessionId);
           // Reload session to show the completed response — but only if the user
@@ -5329,6 +5371,19 @@ import { loadPanel } from './panels.js';
         }
       }, 500);
     }
+  }
+
+  function _appendBackgroundStreamError(box, message) {
+    const errHolder = document.createElement('div');
+    errHolder.className = 'msg msg-ai';
+    const body = document.createElement('div');
+    body.className = 'body';
+    const error = document.createElement('i');
+    error.style.color = 'var(--color-error)';
+    error.textContent = `[Error: ${message || 'Background stream encountered an error'}]`;
+    body.appendChild(error);
+    errHolder.appendChild(body);
+    box.appendChild(errHolder);
   }
 
   async function refreshRecoveryCheckpoint(sessionId) {

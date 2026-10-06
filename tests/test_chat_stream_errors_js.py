@@ -20,9 +20,12 @@ def test_terminal_provider_errors_preserve_text_and_never_auto_retry():
       import {{ createTerminalStreamError, isRecoverableStreamError }} from {json.dumps(_MODULE)};
       const stringError = createTerminalStreamError({{ status: 401, error: 'invalid key' }});
       const objectError = createTerminalStreamError({{ status: 404, error: {{ message: 'model missing' }} }});
+      const explained = createTerminalStreamError({{ status: 504, error: 'Read timeout', hint: 'No data arrived. Check the model service and retry.' }});
       console.log(JSON.stringify({{
         stringMessage: stringError.message,
         objectMessage: objectError.message,
+        explainedMessage: explained.message,
+        explainedRecoverable: isRecoverableStreamError(explained),
         terminalRecoverable: isRecoverableStreamError(stringError),
         eofRecoverable: isRecoverableStreamError(new Error('Stream closed before completion')),
         networkRecoverable: isRecoverableStreamError(new TypeError('fetch failed')),
@@ -41,6 +44,8 @@ def test_terminal_provider_errors_preserve_text_and_never_auto_retry():
     assert json.loads(result.stdout) == {
         "stringMessage": "invalid key",
         "objectMessage": "model missing",
+        "explainedMessage": "Read timeout\nNo data arrived. Check the model service and retry.",
+        "explainedRecoverable": False,
         "terminalRecoverable": False,
         "eofRecoverable": True,
         "networkRecoverable": True,

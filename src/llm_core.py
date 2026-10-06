@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import HTTPException
 from typing import Optional, Dict, List, Tuple
 from src.model_context import get_context_length, DEFAULT_CONTEXT, is_local_endpoint
+from src.stream_errors import describe_stream_failure, explain_sse_failure
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,12 @@ def _call_timeout(read_timeout) -> httpx.Timeout:
 def _stream_timeout(read_timeout) -> httpx.Timeout:
     """Per-request timeout for streaming LLM calls (connect from config)."""
     return httpx.Timeout(connect=LLMConfig.CONNECT_TIMEOUT, read=float(read_timeout), write=30.0, pool=5.0)
+
+
+def _stream_read_timeout_event(timeout: httpx.Timeout) -> str:
+    seconds = timeout.read
+    failure = describe_stream_failure("Read timeout", 504, seconds)
+    return f'event: error\ndata: {json.dumps({"error": "Read timeout", "status": 504, "text": failure["message"], "timeout_seconds": seconds})}\n\n'
 
 
 # Cache for LLM responses
@@ -2633,7 +2640,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
             session_id=session_id,
             tool_choice_none=tool_choice_none,
         ):
-            yield chunk
+            yield explain_sse_failure(chunk)
 
 
 async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
@@ -2899,7 +2906,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             logger.warning(f"ChatGPT Subscription stream connect to {target_url} failed: {e}{_tail}")
             yield f'event: error\ndata: {json.dumps({"error": f"Cannot reach {_host_key(target_url)}", "status": 503})}\n\n'
         except httpx.ReadTimeout:
-            yield f'event: error\ndata: {json.dumps({"error": "Read timeout", "status": 504})}\n\n'
+            yield _stream_read_timeout_event(stream_timeout)
         except httpx.PoolTimeout:
             yield f'event: error\ndata: {json.dumps({"error": "Connection pool timeout", "status": 504})}\n\n'
         except httpx.WriteTimeout:
@@ -2993,7 +3000,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             logger.warning(f"Ollama stream connect to {target_url} failed: {e}{_tail}")
             yield f'event: error\ndata: {json.dumps({"error": f"Cannot reach {_host_key(target_url)}", "status": 503})}\n\n'
         except httpx.ReadTimeout:
-            yield f'event: error\ndata: {json.dumps({"error": "Read timeout", "status": 504})}\n\n'
+            yield _stream_read_timeout_event(stream_timeout)
         except httpx.PoolTimeout:
             yield f'event: error\ndata: {json.dumps({"error": "Connection pool timeout", "status": 504})}\n\n'
         except httpx.WriteTimeout:
@@ -3146,7 +3153,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             logger.warning(f"Anthropic stream connect to {target_url} failed: {e}{_tail}")
             yield f'event: error\ndata: {json.dumps({"error": f"Cannot reach {_host_key(target_url)}", "status": 503})}\n\n'
         except httpx.ReadTimeout:
-            yield f'event: error\ndata: {json.dumps({"error": "Read timeout", "status": 504})}\n\n'
+            yield _stream_read_timeout_event(stream_timeout)
         except httpx.PoolTimeout:
             yield f'event: error\ndata: {json.dumps({"error": "Connection pool timeout", "status": 504})}\n\n'
         except httpx.WriteTimeout:
@@ -3462,7 +3469,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         logger.warning(f"Stream connect to {target_url} failed: {e}{_tail}")
         yield f'event: error\ndata: {json.dumps({"error": f"Cannot reach {_host_key(target_url)}", "status": 503})}\n\n'
     except httpx.ReadTimeout:
-        yield f'event: error\ndata: {json.dumps({"error": "Read timeout", "status": 504})}\n\n'
+        yield _stream_read_timeout_event(stream_timeout)
     except httpx.PoolTimeout:
         yield f'event: error\ndata: {json.dumps({"error": "Connection pool timeout", "status": 504})}\n\n'
     except httpx.WriteTimeout:

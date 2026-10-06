@@ -6,6 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Chat progress distinguishes waiting for model output from receiving a response, shows elapsed time, and explains long waits without asserting an unverified cause. Background failures retain their error explanation; saved failures preserve safe, actionable provider error categories after reload.
 - Durable owner-scoped run checkpoints and explicit one-use Continue after restart, with partial output/tool outcomes, uncertain-action warnings, workspace/route revalidation and plan-mode preservation. No tool replay or restored approval grants; incognito stays ephemeral.
 - Workspace snapshots before coding tools, review diffs, stale-preview rejection, executable permission restoration and pre-restore recovery points. Bounds/exclusions and non-atomic restore limits are documented in the README.
 - Opt-in saved group task boards with one builder per task, optional enforced read-only review, human completion, serialized saves and explicit retry for interrupted work.
@@ -32,6 +33,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 6 progress/error update: 181 focused regression checks passed in a network-disabled container with temporary data, covering provider errors/fallbacks, chat lifecycle, recovery and safe error summaries. A headless Chrome check exercised the shipped background-status code and spinner against a real narrow DOM: elapsed waiting, receiving output, terminal errors, wrapping and safe text rendering passed. A live Ollama retry loaded the local model in 18.2 seconds and returned a reply; its OpenAI-compatible streaming endpoint also returned a complete response. The earlier five-minute stall was in model loading; these probes establish recovery, not the cause of that transient stall or a guarantee about future cold starts.
 
 October 6 recovery/undo/team/backup/inspector update: 553 focused regression checks passed in a network-disabled, read-only source container using temporary data. Tests cover real HTTP one-use recovery, stale workspace/model/endpoint rejection, read-only continuation, interrupted checkpoint persistence, snapshot restore/modes/limits/scopes, crash-interrupted backup retries and model/service data preservation, group ownership/save ordering/retry, and bounded approval decisions. A headless Chrome test exercised the shipped team and workspace controls with fixture APIs/model replies; builder/reviewer dispatch, human completion, diff review and restore passed, with screenshots inspected. The normal Dockerfile built successfully from the clean source context. A fresh isolated image reached login, served the new modules and allowed UID 1000 to write in its temporary `/workspace`; packaged recovery fields and pre-stream validation were checked. These tests do not measure classifier accuracy for every model or undo side effects outside the workspace.
 

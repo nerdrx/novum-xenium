@@ -143,3 +143,81 @@ def test_detach_synchronously_cancels_delayed_view_work():
     background = "_backgroundStreams.set(sessionId"
     assert cancel in detach
     assert detach.index(cancel) < detach.index(background)
+
+
+def test_background_spinner_distinguishes_waiting_from_streaming():
+    background = _between(
+        "export function checkBackgroundStream(sessionId)",
+        "async function refreshRecoveryCheckpoint",
+    )
+    assert "_backgroundStreamStatusText(entry, startedAt)" in background
+    assert "spinner.updateMessage(nextStatusText)" in background
+    assert "_backgroundStreamStatusText(curPoll || entry, startedAt)" in background
+    status_helper = _between(
+        "function _backgroundStreamStatusText(",
+        "let API_BASE =",
+    )
+    assert "Response streaming in background · ${elapsed}" in status_helper
+    assert "${entry.accumulated.length} characters received" in status_helper
+    assert "The reply will appear when this background run finishes." in status_helper
+    assert "Stop or retry if stuck." in status_helper
+
+
+def test_foreground_wait_copy_reports_elapsed_without_guessing_cause():
+    wait_messages = _between(
+        "const scheduleFirstTokenWaitMessages = () =>",
+        "const clearProcessingProbe = () =>",
+    )
+    assert "_formatStreamElapsed(streamStartedAt)" in wait_messages
+    assert "The cause is unknown" in wait_messages
+    assert "Stop or retry if stuck." in wait_messages
+    assert "Large local model is pre-filling context" not in wait_messages
+    assert "spinner.updateMessage('Preparing request; waiting for model output.')" in _CHAT
+    timeout = _between(
+        "if (timedOut || abortReason === 'timeout')",
+        "if (abortReason === 'offline')",
+    )
+    assert "_clientTimeoutMessage(_isAgent, streamStartedAt, !!accumulated)" in timeout
+    client_timeout = _between(
+        "function _clientTimeoutMessage(",
+        "function _backgroundStreamStatusText(",
+    )
+    assert "client timeout" in client_timeout
+    assert "No model output arrived; the cause is unknown." in client_timeout
+    assert "Partial output was preserved." in client_timeout
+    explicit_stop = _between(
+        "if (abortCtrl && abortNow)",
+        "// Don't set to null here",
+    )
+    assert "if (stopServer) abortCtrl._reason = 'user-stop';" in explicit_stop
+
+
+def test_background_terminal_error_keeps_provider_message():
+    catch_path = _between(
+        "if (_isBgCatch) {\n        // Error happened while backgrounded",
+        "} else {\n        // Stop streaming TTS on any error/abort",
+    )
+    assert "err && err.message ? err.message : String(err || 'Background stream failed')" in catch_path
+    assert "_clientTimeoutMessage(_isAgent, bgErr.startedAt || streamStartedAt, !!accumulated)" in catch_path
+    background = _between(
+        "if (entry.status === 'error')",
+        "if (entry.status === 'running')",
+    )
+    assert "_appendBackgroundStreamError(box, entry.error)" in background
+    running = _between(
+        "if (entry.status === 'running')",
+        "async function refreshRecoveryCheckpoint",
+    )
+    assert "_appendBackgroundStreamError(box, curPoll.error)" in running
+    error_helper = _between(
+        "function _appendBackgroundStreamError(box, message)",
+        "async function refreshRecoveryCheckpoint",
+    )
+    assert "error.textContent" in error_helper
+    detach = _between(
+        "export function detachCurrentStream(sessionId)",
+        "// _notifyStreamComplete",
+    )
+    assert "startedAt: active.startedAt || Date.now()" in detach
+    assert "Reload to check saved progress" in _CHAT
+    assert "will not replay the old tool calls" in _CHAT

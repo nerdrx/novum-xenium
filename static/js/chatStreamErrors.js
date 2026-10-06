@@ -6,7 +6,8 @@ export function createTerminalStreamError(payload = {}) {
     || (typeof rawError === 'string' ? rawError : rawError?.message)
     || `Error ${payload.status || 'unknown'}`
   );
-  const error = new Error(message);
+  const hint = typeof payload.hint === 'string' ? payload.hint : '';
+  const error = new Error(hint && hint !== message ? `${message}\n${hint}` : message);
   error.name = 'TerminalStreamError';
   error.terminalStreamError = true;
   error.status = payload.status;

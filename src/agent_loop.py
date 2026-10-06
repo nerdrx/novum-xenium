@@ -23,6 +23,7 @@ from src.llm_core import (
     _normalize_http_status,
     _normalize_usage_counts,
 )
+from src.stream_errors import describe_sse_failure
 from src.model_context import estimate_tokens
 from src.context_compactor import (
     apply_compaction_state,
@@ -3655,7 +3656,7 @@ async def stream_agent_loop(
                 },
             }
 
-        def _direct_terminal_event(terminal_status, failure_message):
+        def _direct_terminal_event(terminal_status, failure_message, failure=None):
             """Build truthful partial-history metadata for direct-path failure."""
             if not (direct_response.strip() or direct_reasoning.strip()):
                 return None
@@ -3685,7 +3686,7 @@ async def stream_agent_loop(
             )
             terminal_metadata = {
                 "failed": True,
-                "failure": {
+                "failure": failure or {
                     "status": terminal_status,
                     "message": failure_message,
                 },
@@ -3784,26 +3785,13 @@ async def stream_agent_loop(
                     # A provider/request error is terminal here too.  Do not
                     # replace it with the casual-response fallback or emit
                     # success metrics/[DONE].
-                    terminal_status = None
-                    try:
-                        error_line = next(
-                            line[6:]
-                            for line in chunk.splitlines()
-                            if line.startswith("data: ")
-                        )
-                        terminal_status = _normalize_http_status(
-                            json.loads(error_line).get("status")
-                        )
-                    except (StopIteration, json.JSONDecodeError):
-                        terminal_status = None
-                    failure_message = (
-                        f"Model request failed (HTTP {terminal_status})"
-                        if terminal_status is not None
-                        else "Model request failed"
-                    )
+                    failure = describe_sse_failure(chunk)
+                    terminal_status = failure["status"]
+                    failure_message = failure["message"]
                     terminal_event = _direct_terminal_event(
                         terminal_status,
                         failure_message,
+                        failure,
                     )
                     if terminal_event:
                         yield terminal_event
@@ -5064,33 +5052,15 @@ async def stream_agent_loop(
                 break
             # Forward error events from stream_llm to the frontend
             if chunk.startswith("event: error"):
+                stream_failure = describe_sse_failure(chunk)
                 logger.warning(
-                    "[agent-timing] stream_error round=%s elapsed=%.3fs chunk=%r",
+                    "[agent-timing] stream_error round=%s elapsed=%.3fs status=%s message=%s",
                     round_num,
                     time.time() - _round_start,
-                    chunk[:500],
+                    stream_failure["status"],
+                    stream_failure["message"],
                 )
-                terminal_status = None
-                try:
-                    error_line = next(
-                        line[6:]
-                        for line in chunk.splitlines()
-                        if line.startswith("data: ")
-                    )
-                    error_data = json.loads(error_line)
-                    terminal_status = _normalize_http_status(
-                        error_data.get("status")
-                    )
-                except Exception:
-                    pass
-                terminal_error = {
-                    "message": (
-                        f"Model request failed (HTTP {terminal_status})"
-                        if terminal_status is not None
-                        else "Model request failed"
-                    ),
-                    "status": terminal_status,
-                }
+                terminal_error = describe_sse_failure(chunk)
                 if full_response.strip() or round_reasoning.strip() or tool_events or round_texts:
                     _finalize_round_usage(include_empty=False)
                     partial_round = strip_tool_blocks(

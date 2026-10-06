@@ -2,19 +2,126 @@
 
 import json
 import logging
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from core.middleware import require_admin
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
+from core.middleware import INTERNAL_TOOL_HEADER, require_admin
 from services.memory import MemoryStoreUnreadable
-from src.auth_helpers import get_current_user
+from src.auth_helpers import get_current_user, is_delegated_credential
+from src.owner_identity import INTERNAL_TOOL_USER
 from src.settings import load_settings, save_settings, load_features, save_features
 
 logger = logging.getLogger(__name__)
 
 
+def _require_browser_admin(request: Request) -> str:
+    """Full-instance archives require an interactive admin browser session."""
+    if (request.headers.get(INTERNAL_TOOL_HEADER)
+            or is_delegated_credential(request)
+            or getattr(request.state, "current_user", None) == INTERNAL_TOOL_USER):
+        raise HTTPException(403, "Full backup requires an admin browser session")
+    require_admin(request)
+    user = get_current_user(request)
+    auth_manager = getattr(request.app.state, "auth_manager", None)
+    if not user or not auth_manager or not auth_manager.is_admin(user):
+        raise HTTPException(403, "Full backup requires an authenticated admin browser session")
+    return user
+
+
+async def _save_upload(request: Request, max_bytes: int) -> Path:
+    """Stream raw ZIP request body to disk with a hard size cap."""
+    if request.headers.get("content-type", "").split(";", 1)[0].strip() not in {
+        "application/zip", "application/octet-stream",
+    }:
+        raise HTTPException(415, "Upload the ZIP archive as application/zip")
+    try:
+        declared_size = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        declared_size = 0
+    if declared_size > max_bytes:
+        raise HTTPException(413, "Backup archive exceeds the upload limit")
+    handle = tempfile.NamedTemporaryFile(prefix="odysseus-restore-upload-", suffix=".zip", delete=False)
+    path = Path(handle.name)
+    size = 0
+    try:
+        with handle:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(413, "Backup archive exceeds the upload limit")
+                handle.write(chunk)
+        return path
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def setup_backup_routes(memory_manager, preset_manager, skills_manager) -> APIRouter:
     router = APIRouter(tags=["backup"])
+
+    @router.get("/api/backup/full")
+    async def export_full_backup(request: Request):
+        """Download a sensitive full local-data archive."""
+        _require_browser_admin(request)
+        from src.constants import DATA_DIR
+        from src.full_backup import create_backup
+        path = await run_in_threadpool(create_backup, DATA_DIR)
+        filename = f"odysseus_full_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        return FileResponse(
+            path, media_type="application/zip", filename=filename,
+            background=BackgroundTask(path.unlink, missing_ok=True),
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
+
+    @router.post("/api/backup/preview")
+    async def preview_full_backup(request: Request):
+        """Validate and summarize a full backup without touching live data."""
+        _require_browser_admin(request)
+        from src.full_backup import (
+            MAX_ARCHIVE_BYTES, extract_archive, validate_extracted_data,
+        )
+        archive_path = await _save_upload(request, MAX_ARCHIVE_BYTES)
+        try:
+            with tempfile.TemporaryDirectory(prefix="odysseus-backup-preview-") as staging:
+                preview = await run_in_threadpool(extract_archive, archive_path, staging)
+                await run_in_threadpool(validate_extracted_data, Path(staging) / "data")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        finally:
+            archive_path.unlink(missing_ok=True)
+        preview["sensitive"] = True
+        preview["restore_requires_restart"] = True
+        return preview
+
+    @router.post("/api/backup/restore")
+    async def restore_full_backup(request: Request):
+        """Validate and stage archive; activation runs before DB initialization."""
+        _require_browser_admin(request)
+        from src.constants import DATA_DIR
+        from src.full_backup import (
+            MAX_ARCHIVE_BYTES, extract_archive, stage_restore,
+            validate_extracted_data,
+        )
+        archive_path = await _save_upload(request, MAX_ARCHIVE_BYTES)
+        try:
+            with tempfile.TemporaryDirectory(prefix="odysseus-backup-check-") as staging:
+                preview = await run_in_threadpool(extract_archive, archive_path, staging)
+                await run_in_threadpool(validate_extracted_data, Path(staging) / "data")
+            preview = await run_in_threadpool(stage_restore, archive_path, DATA_DIR)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        finally:
+            archive_path.unlink(missing_ok=True)
+        return {
+            "ok": True, "restore_pending": True, "restart_required": True,
+            "message": "Restore is staged. Stop and start Odysseus to activate it; runtime caches and external Docker volumes are preserved.",
+            "files": preview["files"],
+        }
 
     @router.get("/api/export")
     async def export_data(request: Request):

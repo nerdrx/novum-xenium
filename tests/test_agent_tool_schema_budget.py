@@ -54,7 +54,14 @@ def test_candidate_budget_includes_tools_on_first_and_later_rounds(monkeypatch, 
             max_rounds=rounds, relevant_tools={"update_plan"}, _is_teacher_run=True,
         )]
 
-    asyncio.run(run())
+    events = asyncio.run(run())
+    metrics = next(json.loads(chunk[6:].strip())["data"] for chunk in events
+                   if chunk.startswith('data: ') and '"type": "metrics"' in chunk)
+    inspection = metrics["context_inspection"]
+    assert inspection["categories"]["native_tool_schemas"]["tokens"] == estimate_tool_schema_tokens([schema])
+    assert inspection["total_tokens"] == estimate_tokens(requests[-1]) + estimate_tool_schema_tokens([schema])
+    assert inspection["context_length"] == 6000
+    assert inspection["trimmed"]["removed_tokens"] > 0
     assert len(requests) == rounds
 
 

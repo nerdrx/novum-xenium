@@ -9,6 +9,7 @@ import { providerLogo } from './providers.js';
 import { PROMPT_TEMPLATES, getUserTemplates } from './presets.js';
 import { sortModelObjects } from './modelSort.js';
 import Storage from './storage.js';
+import { createGroupTeam } from './groupTeam.js';
 
 let API_BASE = '';
 let _active = false;
@@ -24,10 +25,17 @@ let _replyLimit = 20; // 0 means continue until Stop.
 let _runId = 0;
 let _running = false;
 let _waitingForUser = 0;
+let _teamModule = null;
 const GROUP_STATE_KEY = 'odysseus-group-state';
 
 export function init(apiBase) {
   API_BASE = apiBase;
+  _teamModule = createGroupTeam({
+    apiBase: API_BASE,
+    getParentSessionId: () => _parentSessionId,
+    getModels: () => _models,
+    runAssignment: runTeamAssignment,
+  });
   // Initialize Group tab inside Characters modal
   setTimeout(_initGroupTab, 500);
 }
@@ -386,6 +394,40 @@ export function setMode(m) { _mode = m; }
 
 export function isRunning() { return _running; }
 
+export async function runTeamAssignment(participantId, prompt, readOnly = false) {
+  if (!_active || _running || !prompt) return null;
+  const modelIdx = _models.findIndex(m => String(m.mid) === String(participantId));
+  const sessionId = _participantSessions[modelIdx];
+  const box = document.getElementById('chat-history');
+  if (modelIdx < 0 || !sessionId || !box) return null;
+  const run = ++_runId;
+  const ac = new AbortController();
+  const context = _requestContext(prompt);
+  ac.groupContext = {
+    ...context,
+    mode: 'agent',
+    plan_mode: readOnly ? 'true' : String(context.plan_mode || 'false'),
+    ...(readOnly ? { allow_bash: 'false' } : {}),
+  };
+  ac.groupRun = run;
+  _running = true;
+  _abortControllers = [ac];
+  _renderConversationControls();
+  const holder = _createGroupBubble(_models[modelIdx], box);
+  uiModule.scrollHistory();
+  try {
+    const ok = await _streamToHolder(modelIdx, sessionId, prompt, holder, ac);
+    if (!ok || ac.signal.aborted || run !== _runId) return null;
+    return holder.dataset.teamWorkResult || holder.dataset.raw || '[Completed; inspect the saved tool output.]';
+  } finally {
+    if (run === _runId) {
+      _running = false;
+      _abortControllers = [];
+      _renderConversationControls();
+    }
+  }
+}
+
 function _renderConversationControls() {
   const box = document.getElementById('chat-history');
   if (!_active || !box?.parentNode) return;
@@ -401,6 +443,8 @@ function _renderConversationControls() {
       '<span class="group-conversation-spinner" data-group-spinner aria-hidden="true" hidden></span></button>' +
       '<div class="group-conversation-panel" id="group-conversation-panel" role="region" aria-label="Group conversation settings" hidden>' +
       '<label class="group-conversation-option"><input type="checkbox" data-group-auto> Auto conversation</label>' +
+      '<label class="group-conversation-option"><input type="checkbox" data-group-team> Coordinate tasks</label>' +
+      '<div data-group-team-board hidden></div>' +
       '<label class="group-conversation-option">Limit <select data-group-limit><option value="20">20 replies</option><option value="100">100 replies</option><option value="0">Until Stop</option></select></label>' +
       '<button type="button" class="btn-primary group-conversation-stop" data-group-stop>Stop</button>' +
       '<span class="group-conversation-status" data-group-status role="status" aria-live="polite"></span></div>';
@@ -443,6 +487,10 @@ function _renderConversationControls() {
       _saveState();
       _renderConversationControls();
     });
+    controls.querySelector('[data-group-team]').addEventListener('change', e => {
+      _teamModule?.setEnabled(e.target.checked);
+      _renderConversationControls();
+    });
     controls.querySelector('[data-group-limit]').addEventListener('change', (e) => {
       _replyLimit = Number(e.target.value);
       _saveState();
@@ -454,6 +502,8 @@ function _renderConversationControls() {
   const toggle = controls.querySelector('[data-group-toggle]');
   const panel = controls.querySelector('#group-conversation-panel');
   controls.querySelector('[data-group-auto]').checked = _autoConversation;
+  controls.querySelector('[data-group-team]').checked = !!_teamModule?.enabled;
+  _teamModule?.mount(controls.querySelector('[data-group-team-board]'));
   controls.querySelector('[data-group-limit]').value = String(_replyLimit);
   controls.querySelector('[data-group-limit]').disabled = !_autoConversation || _running;
   controls.querySelector('[data-group-stop]').hidden = !_running;
@@ -1012,6 +1062,7 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
   }
 
   let accumulated = '';
+  const toolReports = [];
   let _buffer = '';
   let _firstToken = true;
   let completed = false;
@@ -1090,6 +1141,7 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
             outDiv.style.cssText = 'font-size:10px;opacity:0.4;padding:2px 0;font-family:monospace;max-height:60px;overflow:hidden;';
             outDiv.textContent = (json.output || '').substring(0, 200);
             bodyEl.appendChild(outDiv);
+            toolReports.push(`${json.tool || 'tool'}${json.command ? ` (${json.command})` : ''}: ${json.output || ''}`);
           }
           // Generated image
           else if (json.type === 'generated_image' && json.url) {
@@ -1137,6 +1189,7 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
   }
 
   holderEl.dataset.raw = accumulated;
+  holderEl.dataset.teamWorkResult = [accumulated, ...toolReports].filter(Boolean).join('\n\n').slice(0, 12_000);
   holderEl.dataset.groupModel = model.mid;
 
   // Save response to parent session for persistence

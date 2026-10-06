@@ -18217,6 +18217,8 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
   flex-direction: column;
   gap: 10px;
   width: min(280px, calc(100vw - 24px));
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
   padding: 12px;
   color: var(--fg);
   background: var(--panel);
@@ -18253,6 +18255,28 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
   padding: 5px 12px;
   font-size: 12px;
 }
+
+.group-team-board { display: grid; gap: 8px; font-size: 12px; }
+.group-team-field, .group-team-task { display: grid; gap: 6px; min-width: 0; }
+.group-team-heading { font-weight: 600; margin-top: 6px; }
+.group-team-person, .group-team-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.group-team-person select { margin-left: auto; }
+.group-team-task { border-top: 1px solid var(--border); padding-top: 8px; }
+.group-team-board input, .group-team-board textarea, .group-team-board select,
+.workspace-snapshot-actions select {
+  min-width: 0; max-width: 100%; padding: 5px; color: var(--fg);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.group-team-board textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.group-team-board pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
+.group-team-status { color: var(--accent); }
+.workspace-snapshots { padding: 10px; border-top: 1px solid var(--border); }
+.workspace-snapshot-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.workspace-snapshot-preview { max-height: 230px; overflow: auto; overflow-wrap: anywhere; font-size: 12px; }
+.workspace-snapshot-preview pre { white-space: pre-wrap; padding: 10px; color: var(--fg); }
+.recovery-run-card { margin: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.recovery-run-card p { margin: 8px 0; font-size: 12px; }
+.recovery-run-partial { max-height: 150px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); padding: 10px; }
 
 .approval-mode-anchor {
   position: relative;

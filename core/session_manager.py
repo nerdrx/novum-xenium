@@ -624,6 +624,17 @@ class SessionManager:
                         delete_results(context_owner, session_id)
                     except Exception:
                         logger.warning("Tool context cleanup failed for deleted session %s", session_id, exc_info=True)
+                try:
+                    from src.run_checkpoints import delete_session as delete_run_checkpoints
+                    delete_run_checkpoints(session_id, context_owner)
+                except Exception:
+                    logger.warning("Run checkpoint cleanup failed for deleted session %s", session_id, exc_info=True)
+                try:
+                    from routes.group_routes import delete_team_board
+                    from src.owner_identity import effective_storage_owner
+                    delete_team_board(session_id, effective_storage_owner(context_owner))
+                except Exception:
+                    logger.warning("Team board cleanup failed for deleted session %s", session_id, exc_info=True)
                 logger.info(f"Deleted session {session_id}")
                 return True
             return False

@@ -2449,11 +2449,17 @@
           <div class="admin-card">
             <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.6"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Data Backup</h2>
             <div class="admin-toggle-sub" style="margin-bottom:8px">Export or import your user data (memories, presets, settings, skills, preferences) as a JSON file.</div>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Full application-data ZIP includes chats, workspace, uploaded/generated files, settings, memories, and encryption key material. It excludes runtime caches/model downloads and external Docker volumes (including ChromaDB); vector indexes may need rebuilding after restore. This archive is sensitive; store it securely. Stop Odysseus before activating a staged restore.</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button class="admin-btn-add" id="adm-exportDataBtn">Export Data</button>
               <button class="admin-btn-add" id="adm-importDataBtn">Import Data</button>
+              <button class="admin-btn-add" id="adm-fullBackupBtn">Download Full Backup</button>
               <input type="file" id="adm-importFile" accept=".json" style="display:none;">
+              <button class="admin-btn-sm" id="adm-fullRestoreChoose">Preview Full Restore</button>
+              <input type="file" id="adm-fullRestoreFile" accept=".zip,application/zip" style="display:none;">
             </div>
+            <div id="adm-fullRestorePreview" style="margin-top:8px;"></div>
+            <button class="admin-btn-delete" id="adm-fullRestoreApply" style="display:none;margin-top:8px;">Stage Restore and Require Restart</button>
             <div id="adm-backupMsg" style="margin-top:6px;"></div>
           </div>
           <div class="admin-card admin-danger-card">

@@ -61,6 +61,7 @@ import { loadPanel } from './panels.js';
   let _contextHeaderData = null;
   let _contextHeaderBound = false;
   let _pendingToolApproval = null;
+  let _pendingRecovery = null;
 
   function _submitToolApprovalWhenIdle(approvalId) {
     if (
@@ -179,6 +180,8 @@ import { loadPanel } from './panels.js';
     const modelShort = String(d.model || 'Unknown').split('/').pop();
     const popup = document.createElement('div');
     popup.className = `chat-context-popup ${colorClass}`.trim();
+    popup.style.maxHeight = 'min(70vh, 560px)';
+    popup.style.overflowY = 'auto';
 
     const title = document.createElement('div');
     title.className = 'chat-context-popup-title';
@@ -211,6 +214,54 @@ import { loadPanel } from './panels.js';
       row.appendChild(b);
       popup.appendChild(row);
     });
+
+    const lastRequest = d.last_request;
+    const categories = lastRequest && lastRequest.categories;
+    if (categories && typeof categories === 'object') {
+      const detailTitle = document.createElement('div');
+      detailTitle.className = 'chat-context-popup-title';
+      detailTitle.style.marginTop = '10px';
+      detailTitle.textContent = `${lastRequest.estimated === false ? '' : 'Estimated '}Last Request`;
+      popup.appendChild(detailTitle);
+      const detailRows = [
+        ['Request tokens', lastRequest.total_tokens],
+        ['Reserved for response', lastRequest.output_reserve],
+        ['Available after reserve', lastRequest.available_tokens],
+        ['Remaining after request', lastRequest.remaining_tokens],
+        ['Instructions', categories.instructions?.tokens],
+        ['Native tool schemas', categories.native_tool_schemas?.tokens],
+        ['Memory and docs', categories.memory_docs?.tokens],
+        ['Conversation', categories.conversation?.tokens],
+        ['Tool results', categories.tool_results?.tokens],
+        ['Trimmed from request', lastRequest.trimmed?.removed_tokens],
+      ];
+      detailRows.forEach(([label, value]) => {
+        if (value == null) return;
+        const row = document.createElement('div');
+        row.className = 'chat-context-popup-row';
+        const name = document.createElement('span');
+        name.textContent = label;
+        const amount = document.createElement('span');
+        amount.textContent = Number(value).toLocaleString();
+        row.append(name, amount);
+        popup.appendChild(row);
+      });
+    }
+    const archiveStats = d.archives || categories?.archives;
+    if (archiveStats && Number(archiveStats.count || 0) > 0) {
+      const bytes = Number(archiveStats.bytes || 0);
+      const size = bytes >= 1024 * 1024
+        ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+        : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${bytes} B`;
+      const row = document.createElement('div');
+      row.className = 'chat-context-popup-row';
+      const name = document.createElement('span');
+      name.textContent = 'Archived tool results';
+      const amount = document.createElement('span');
+      amount.textContent = `${_fmtContextNumber(archiveStats.count)} · ${size}`;
+      row.append(name, amount);
+      popup.appendChild(row);
+    }
 
     if (d.can_compact) {
       const compactBtn = document.createElement('button');
@@ -1464,6 +1515,8 @@ import { loadPanel } from './panels.js';
     // able to name its run, so the Stop fires from its own header arrival
     // (see _rememberStreamRunId) even if this replacement dies before fetch.
     const streamSessionId = sessionModule.getCurrentSessionId();
+    const recoveryForSend = _pendingRecovery && _pendingRecovery.sessionId === streamSessionId
+      ? _pendingRecovery : null;
     const streamGeneration = (_streamGenerations.get(streamSessionId) || 0) + 1;
     _streamGenerations.set(streamSessionId, streamGeneration);
     const _sendState = { generation: streamGeneration, abortCtrl: null };
@@ -1830,6 +1883,7 @@ import { loadPanel } from './panels.js';
       const fd = new FormData();
       fd.append('message', approvalForSend ? '' : _finalMsgWithInject);
       fd.append('session', streamSessionId);
+      if (recoveryForSend) fd.append('recovery_run_id', recoveryForSend.runId);
       if (approvalForSend) {
         fd.append('tool_approval_id', approvalForSend.approval_id);
         fd.append('tool_approval_decision', approvalForSend.decision);
@@ -1880,7 +1934,7 @@ import { loadPanel } from './panels.js';
 	      const toggleState = Storage.loadToggleState();
 	      const isPlanMode = !!toggleState.plan_mode && !(el('research-toggle') && el('research-toggle').checked);
 	      let isAgentMode = (toggleState.mode || 'chat') === 'agent';
-      const isIncognito = isIncognitoForSend;
+	      const isIncognito = recoveryForSend ? false : isIncognitoForSend;
 	      const workspaceAgentIntent = !isIncognito && /\b(fix|debug|implement|change|update|refactor|patch|review|test|run|execute|start|launch|build|lint|typecheck|benchmark|eval|terminal[- ]bench|tbench|repo|repository|codebase|project|app|server|api|frontend|backend|bug|issue|pr|file|folder|directory|source|logs?|trace|stacktrace|traceback|docker|container|tmux|terminal|shell|git|branch|commit|diff|pytest|process|port|endpoint|computer|machine|laptop|device|system)\b/i.test(String(msg || ''));
 	      if (isPlanMode || _pendingApprovedPlan) {
 	        isAgentMode = true;
@@ -1907,7 +1961,7 @@ import { loadPanel } from './panels.js';
       if (isAgentMode) {
         fd.append('allow_web_search', el('web-toggle').checked ? 'true' : 'false');
       }
-	      if (!approvalForSend && el('research-toggle').checked) {
+	      if (!approvalForSend && !recoveryForSend && el('research-toggle').checked) {
 	        fd.append('use_research', 'true');
 	        // Research always runs in chat mode — override agent if set
 	        fd.set('mode', 'chat');
@@ -1948,6 +2002,7 @@ import { loadPanel } from './panels.js';
         }
         return;
       }
+      if (recoveryForSend && _pendingRecovery === recoveryForSend) _pendingRecovery = null;
       abortCtrl = new AbortController();
       abortCtrl._reason = '';
       _sendState.abortCtrl = abortCtrl;
@@ -2094,6 +2149,11 @@ import { loadPanel } from './panels.js';
       });
       _sendPerf.mark('chat_stream_headers');
       _sendPerf.report('headers_received');
+      if (res.ok && recoveryForSend) {
+        document.querySelectorAll('.recovery-run-card').forEach(card => {
+          if (card.dataset.recoverySession === streamSessionId && card.dataset.recoveryRun === recoveryForSend.runId) card.remove();
+        });
+      }
       
       if (!res.ok) {
         clearResponseTimeout();
@@ -4723,7 +4783,10 @@ import { loadPanel } from './panels.js';
   // parse failures — will fail identically on retry, so surfacing them
   // immediately is both more honest and avoids wasting the nudge budget.
   function _tryAutoRecover(holder, accumulated, sessionId) {
-    if (_autoNudges >= _AUTO_NUDGE_CAP) return false;
+    if (_autoNudges >= _AUTO_NUDGE_CAP) {
+      refreshRecoveryCheckpoint(sessionId);
+      return false;
+    }
     _autoNudges++;
     if (holder && accumulated) {
       holder.dataset.raw = accumulated;
@@ -4740,6 +4803,7 @@ import { loadPanel } from './panels.js';
         const body = holder.querySelector('.body');
         if (body) typewriterInto(body, 'Connection lost. The existing run could not be resumed.');
       }
+      if (!resumed) refreshRecoveryCheckpoint(sessionId);
     }, 200);
     return true;
   }
@@ -5184,7 +5248,9 @@ import { loadPanel } from './panels.js';
    * Called after history loads on session switch.
    */
   export function checkBackgroundStream(sessionId) {
-    if (!sessionId || !_backgroundStreams.has(sessionId)) return;
+    if (!sessionId) return;
+    refreshRecoveryCheckpoint(sessionId);
+    if (!_backgroundStreams.has(sessionId)) return;
     var entry = _backgroundStreams.get(sessionId);
 
     if (entry.status === 'completed') {
@@ -5263,6 +5329,67 @@ import { loadPanel } from './panels.js';
         }
       }, 500);
     }
+  }
+
+  async function refreshRecoveryCheckpoint(sessionId) {
+    if (!sessionId) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/chat/checkpoint/${encodeURIComponent(sessionId)}`, {
+        credentials: 'same-origin',
+      });
+      const box = document.getElementById('chat-history');
+      const prior = box && Array.from(box.querySelectorAll('.recovery-run-card'))
+        .find((item) => item.dataset.recoverySession === String(sessionId));
+      if (!response.ok) {
+        if (prior) prior.remove();
+        return;
+      }
+      const checkpoint = await response.json();
+      if (!checkpoint || !checkpoint.can_continue || !box ||
+          sessionModule.getCurrentSessionId() !== sessionId) return;
+      let card = prior;
+      if (!card) {
+        card = document.createElement('section');
+        card.className = 'recovery-run-card';
+        card.dataset.recoverySession = String(sessionId);
+        const title = document.createElement('strong');
+        title.textContent = 'An interrupted run can be continued';
+        const note = document.createElement('p');
+        note.className = 'recovery-run-note';
+        const partial = document.createElement('pre');
+        partial.className = 'recovery-run-partial';
+        const outcomes = document.createElement('p');
+        outcomes.className = 'recovery-run-outcomes';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'recovery-run-continue';
+        button.textContent = 'Continue';
+        button.addEventListener('click', () => {
+          if (sessionModule.getCurrentSessionId() !== sessionId) return;
+          if (isStreaming || _sendInFlight) return;
+          _pendingToolApproval = null;
+          _pendingRecovery = { runId: card.dataset.recoveryRun, sessionId };
+          const input = uiModule.el('message');
+          if (input) {
+            input.value = 'Continue the interrupted task in the saved workspace. Check whether any uncertain action already took effect before repeating it, then complete the original request.';
+            if (uiModule.autoResize) uiModule.autoResize(input);
+          }
+          const send = document.querySelector('.send-btn');
+          if (send) send.click();
+        });
+        card.append(title, note, partial, outcomes, button);
+      }
+      card.dataset.recoveryRun = String(checkpoint.run_id || '');
+      card.querySelector('.recovery-run-note').textContent = checkpoint.uncertain_tool_outcome
+        ? 'A tool action may have completed before the interruption. Its saved details are untrusted; check current state before acting.'
+        : 'Saved progress is context only. The run will not replay prior tool calls or approvals.';
+      card.querySelector('.recovery-run-partial').textContent = String(checkpoint.partial_response || '').slice(-3000);
+      const toolOutcomes = Array.isArray(checkpoint.tool_outcomes) ? checkpoint.tool_outcomes : [];
+      card.querySelector('.recovery-run-outcomes').textContent = toolOutcomes.length
+        ? `Recorded tool outcomes (untrusted): ${toolOutcomes.map((item) => String(item && (item.tool || item.command) || 'tool')).slice(-5).join(', ')}`
+        : '';
+      if (card.parentNode !== box) box.appendChild(card);
+    } catch (_) { /* a later session refresh can retry */ }
   }
 
   // Tag short single-line code blocks with .pre-compact so the CSS can

@@ -1363,7 +1363,7 @@ def test_frontend_tool_approval_uses_opaque_id_and_fixed_decisions():
     assert "const approvalForSend = _pendingToolApproval" in chat
     assert "!approvalForSend && fileHandlerModule.getPendingCount()" in chat
     assert "if (!approvalForSend) _pendingRegenAttachments = null" in chat
-    assert "!approvalForSend && el('research-toggle').checked" in chat
+    assert "!approvalForSend && !recoveryForSend && el('research-toggle').checked" in chat
     assert "approvalForSend ? (approvalForSend.draft || '') : ''" in chat
     assert "if (approvalForSend && documentSaved === false)" in chat
     assert "if (!approvalForSend) {\n          try {\n            _sendPerf.mark('doc_silent_save_begin')" in chat

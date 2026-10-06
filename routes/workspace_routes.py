@@ -4,6 +4,13 @@ from fastapi import APIRouter, Request, HTTPException, Query
 
 from src.auth_helpers import get_current_user
 from src.tool_security import owner_is_admin_or_single_user
+from src.auth_helpers import is_delegated_credential, storage_owner_for_request
+from core.middleware import INTERNAL_TOOL_HEADER
+from src.owner_identity import INTERNAL_TOOL_USER
+from routes.session_routes import _verify_session_owner
+from src.workspace_snapshots import (
+    SnapshotError, create_snapshot, list_snapshots, preview_snapshot, restore_snapshot,
+)
 
 # Cap entries returned per directory (mirrors filesystem_tools._CODENAV_MAX_HITS).
 # A huge directory shouldn't dump thousands of rows into the picker; the user can
@@ -13,6 +20,67 @@ _MAX_BROWSE_DIRS = 500
 
 def setup_workspace_routes():
     router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+
+    def snapshot_scope(request: Request, workspace: str, session_id: str):
+        if (request.headers.get(INTERNAL_TOOL_HEADER)
+                or is_delegated_credential(request)
+                or get_current_user(request) == INTERNAL_TOOL_USER):
+            raise HTTPException(status_code=403, detail="Workspace snapshots require an interactive admin session")
+        user = get_current_user(request)
+        if not owner_is_admin_or_single_user(user):
+            raise HTTPException(status_code=403, detail="Workspace snapshots are admin-only")
+        owner = storage_owner_for_request(request)
+        if not owner:
+            raise HTTPException(status_code=401, detail="Workspace snapshot owner is unavailable")
+        _verify_session_owner(request, session_id, getattr(request.app.state, "session_manager", None))
+        from src.tool_execution import vet_workspace
+        root = vet_workspace(workspace)
+        if not root or root != os.path.realpath(workspace):
+            raise HTTPException(status_code=400, detail="Workspace is no longer valid")
+        return root, owner
+
+    def snapshot_call(fn, *args):
+        try:
+            return fn(*args)
+        except SnapshotError as exc:
+            message = str(exc)
+            raise HTTPException(status_code=409 if "changed after preview" in message else 400, detail=message)
+
+    def snapshot_body(body):
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Snapshot request must be an object")
+        workspace, session_id = body.get("workspace"), body.get("session_id")
+        if not isinstance(workspace, str) or not isinstance(session_id, str):
+            raise HTTPException(status_code=400, detail="Workspace and session are required")
+        return workspace, session_id
+
+    @router.get("/snapshots")
+    def get_snapshots(request: Request, workspace: str, session_id: str):
+        root, owner = snapshot_scope(request, workspace, session_id)
+        return {"snapshots": snapshot_call(list_snapshots, root, owner, session_id)}
+
+    @router.post("/snapshots")
+    async def post_snapshot(request: Request):
+        body = await request.json()
+        workspace, session_id = snapshot_body(body)
+        root, owner = snapshot_scope(request, workspace, session_id)
+        return snapshot_call(create_snapshot, root, owner, session_id, body.get("label"))
+
+    @router.post("/snapshots/{snapshot_id}/preview")
+    async def post_snapshot_preview(request: Request, snapshot_id: str):
+        body = await request.json()
+        workspace, session_id = snapshot_body(body)
+        root, owner = snapshot_scope(request, workspace, session_id)
+        return snapshot_call(preview_snapshot, root, owner, session_id, snapshot_id)
+
+    @router.post("/snapshots/{snapshot_id}/restore")
+    async def post_snapshot_restore(request: Request, snapshot_id: str):
+        body = await request.json()
+        workspace, session_id = snapshot_body(body)
+        root, owner = snapshot_scope(request, workspace, session_id)
+        return snapshot_call(
+            restore_snapshot, root, owner, session_id, snapshot_id, body.get("expected_revision", "")
+        )
 
     @router.get("/browse")
     def browse(request: Request, path: str = Query(default="")):

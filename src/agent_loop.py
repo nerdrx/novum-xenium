@@ -3463,6 +3463,7 @@ async def stream_agent_loop(
     _is_teacher_run: bool = False,
     history_session=None,
     defer_context_shaping: bool = False,
+    incognito: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Streaming agent loop generator.
 
@@ -3475,6 +3476,8 @@ async def stream_agent_loop(
       - data: [DONE]                                        (end)
     """
 
+    from src.owner_identity import effective_storage_owner
+    snapshot_owner = effective_storage_owner(owner)
     run_security = ToolRunSecurityContext(
         external_untrusted_context_seen=(
             bool(external_untrusted_context_seen)
@@ -3489,10 +3492,11 @@ async def stream_agent_loop(
         ),
         delegated_credential=bool(delegated_credential),
         approval_mode=approval_mode,
+        workspace_snapshots_enabled=bool(workspace and snapshot_owner and session_id and not incognito),
     )
     run_security.observe_public_sources(public_read_sources or ())
     approval_judge_reviews = {}
-    from src.approval_judge import candidate_url, trusted_request, review_public_read, MAX_REVIEWS_PER_RUN
+    from src.approval_judge import candidate_action, trusted_request, review_action, MAX_REVIEWS_PER_RUN
     approval_judge_request = trusted_request(messages)
     mcp_mgr = get_mcp_manager()
     prep_timings: Dict[str, float] = {}
@@ -4232,6 +4236,7 @@ async def stream_agent_loop(
 
     _t2 = time.time()
     _route_context_lengths = {}
+    _route_trim_info = {}
 
     def _trim_route_request_messages(candidate_url, candidate_model, route_messages, route_tools=None):
         """Apply the candidate route's own context budget to its request."""
@@ -4259,6 +4264,7 @@ async def stream_agent_loop(
             _route_context_lengths[(candidate_url, candidate_model)] = candidate_context
             soft_budget = int(get_setting("agent_input_token_budget", DEFAULT_BUDGET) or 0)
             if soft_budget <= 0:
+                _route_trim_info[(candidate_url, candidate_model)] = {"removed_tokens": 0, "removed_messages": 0}
                 return _without_protection(route_messages)
             before_trim_tokens = estimate_tokens(route_messages)
             reserve_tokens = min(max(max_tokens or 1024, 512), 2048)
@@ -4286,6 +4292,10 @@ async def stream_agent_loop(
                 reserve_tokens=reserve_tokens,
             )
             after_trim_tokens = estimate_tokens(trimmed_messages)
+            _route_trim_info[(candidate_url, candidate_model)] = {
+                "removed_tokens": max(0, before_trim_tokens - after_trim_tokens),
+                "removed_messages": max(0, len(route_messages) - len(trimmed_messages)),
+            }
             if after_trim_tokens < before_trim_tokens:
                 logger.info(
                     "[agent] soft-trimmed route model=%s context: %s -> %s tokens "
@@ -4513,6 +4523,7 @@ async def stream_agent_loop(
     _pinned_fallback_route = None
     _last_route_request_messages = _initial_route_request_messages
     _last_route_context_length = _initial_route_context_length
+    _last_context_inspection = None
 
     # Loop-breaker state. Small models (e.g. deepseek-v4-flash) can get
     # stuck firing the same tool call over and over with no text — burns
@@ -4896,6 +4907,7 @@ async def stream_agent_loop(
 
         async def _candidate_request(index, candidate_url, candidate_model, candidate_headers):
             nonlocal _last_route_request_messages, _last_route_context_length
+            nonlocal _last_context_inspection
             if index == 0:
                 state = _active_route_state
             else:
@@ -4924,6 +4936,12 @@ async def stream_agent_loop(
                 context_length,
             )
             _last_route_context_length = state["context_length"]
+            from src.context_inspector import describe_request
+            _last_context_inspection = describe_request(
+                request_messages, candidate_tools, _last_route_context_length,
+                min(max(max_tokens or 1024, 512), 2048),
+            )
+            _last_context_inspection["trimmed"] = _route_trim_info.get((candidate_url, candidate_model), {})
             run_security.observe_messages(request_messages)
             state["tools"] = candidate_tools
             _candidate_request_states[index] = state
@@ -5720,6 +5738,7 @@ async def stream_agent_loop(
             security_decision = run_security.decision_for(
                 block.tool_type,
                 block.content,
+                workspace=workspace,
             )
             _ody_clamped_tool_allowed = (
                 _ody_notes_finetune_mode
@@ -5737,22 +5756,32 @@ async def stream_agent_loop(
             if (not security_decision.allowed and not blocked_by_tool_policy
                     and not blocked_by_disabled_tools and not plan_mode
                     and approval_mode == "auto" and not delegated_credential):
-                judge_url = candidate_url(block.tool_type, block.content)
-                if judge_url and approval_judge_request:
-                    judge_review = approval_judge_reviews.get(judge_url)
+                action = candidate_action(block.tool_type, block.content, workspace)
+                if action and action["kind"] == "workspace_edit" and not run_security.workspace_snapshots_enabled:
+                    action = None
+                if action and approval_judge_request:
+                    review_key = (block.tool_type, block.content, workspace)
+                    judge_review = approval_judge_reviews.get(review_key)
                     if judge_review is None and len(approval_judge_reviews) < MAX_REVIEWS_PER_RUN:
-                        judge_review = await review_public_read(
-                            judge_url, approval_judge_request,
+                        judge_review = await review_action(
+                            action, approval_judge_request,
                             endpoint_url=endpoint_url, model=model, headers=headers,
                         )
-                        approval_judge_reviews[judge_url] = judge_review
+                        if judge_review["decision"] == "allow" and action["kind"] == "workspace_edit":
+                            try:
+                                from src.workspace_snapshots import ensure_snapshot
+                                await asyncio.to_thread(ensure_snapshot, workspace, snapshot_owner, session_id, run_security.run_id)
+                            except Exception:
+                                judge_review = {"decision": "ask", "reason": "A workspace rollback snapshot could not be created."}
+                        approval_judge_reviews[review_key] = judge_review
                         logger.info("[approval_judge] tool=%s decision=%s reason=%s",
                                     block.tool_type, judge_review["decision"], judge_review["reason"])
                     if judge_review and judge_review["decision"] == "allow":
-                        # Exact URL only, scoped to this run. The dispatcher
-                        # still applies ownership, disabled-tool and SSRF rules.
-                        run_security.observe_public_sources([{"url": judge_url}])
-                        security_decision = run_security.decision_for(block.tool_type, block.content)
+                        if action["kind"] == "public_read":
+                            run_security.observe_public_sources([{"url": action["url"]}])
+                        else:
+                            run_security.authorize_reviewed_action(block.tool_type, block.content, workspace)
+                        security_decision = run_security.decision_for(block.tool_type, block.content, workspace=workspace)
                     elif judge_review:
                         security_decision = type(security_decision)(
                             False, "Auto review: " + judge_review["reason"],
@@ -6500,6 +6529,8 @@ async def stream_agent_loop(
         backend_prefill_tps=backend_prefill_tps,
     )
     metrics["requested_model"] = requested_model
+    if _last_context_inspection:
+        metrics["context_inspection"] = _last_context_inspection
     metrics["endpoint_id"] = actual_endpoint_id
     metrics["endpoint_label"] = actual_endpoint_label
     if isinstance(actual_endpoint_cost_tracked, bool):

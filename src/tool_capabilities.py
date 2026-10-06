@@ -697,6 +697,14 @@ class ToolRunSecurityContext:
     # Exact public links provided by the user or returned by this run's search.
     # These are read destinations, never grants for writes or arbitrary egress.
     public_read_urls: set[str] = field(default_factory=set)
+    reviewed_actions: set[tuple[str, str, str]] = field(default_factory=set)
+    workspace_snapshots_enabled: bool = False
+
+    def authorize_reviewed_action(self, tool_name, content, workspace):
+        from src.approval_judge import candidate_action
+        if (self.approval_mode == "auto" and not self.delegated_credential
+                and candidate_action(tool_name, content, workspace)):
+            self.reviewed_actions.add((str(tool_name), str(content), str(workspace or "")))
 
     def observe_public_sources(self, sources: Iterable[dict]) -> None:
         for source in sources or ():
@@ -747,7 +755,7 @@ class ToolRunSecurityContext:
         if messages_contain_external_untrusted_context(message_list):
             self.external_untrusted_context_seen = True
 
-    def decision_for(self, tool_name: Any, content: Any = None) -> ToolGateDecision:
+    def decision_for(self, tool_name: Any, content: Any = None, *, workspace=None) -> ToolGateDecision:
         # Checked before the bypasses below, because neither may lift it, and
         # kept independent of external_untrusted_context_seen so it holds on a
         # run where that gate never arms and raises no prompt to bypass.
@@ -778,6 +786,11 @@ class ToolRunSecurityContext:
                 # private-data gate. Ask must never weaken Auto's checks.
         if self.approval_gate_bypassed and self.approval_mode == "auto":
             return ToolGateDecision(True)
+        if (self.approval_mode == "auto" and not self.delegated_credential
+                and (str(tool_name), str(content), str(workspace or "")) in self.reviewed_actions):
+            from src.approval_judge import candidate_action
+            if candidate_action(tool_name, content, workspace):
+                return ToolGateDecision(True)
         if (self.approval_mode == "auto" and not self.delegated_credential
                 and tool_name == "web_fetch"):
             url = _web_fetch_read_url(content)

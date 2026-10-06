@@ -175,6 +175,28 @@ def delete_results(owner: str, session_id: str) -> bool:
     return existed
 
 
+def get_result_stats(owner: str, session_id: str) -> dict[str, int]:
+    """Read active archive counts for this exact owner and session only."""
+    if not isinstance(owner, str) or not owner.strip() or not isinstance(session_id, str) or not session_id.strip():
+        return {"count": 0, "bytes": 0}
+    path = _scope_file(owner, session_id)
+    if not path.is_file() or path.is_symlink():
+        return {"count": 0, "bytes": 0}
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM results "
+                "WHERE owner = ? AND session_id = ? AND created_at >= ?",
+                (owner, session_id, time.time() - _TTL_SECONDS),
+            ).fetchone()
+            return {"count": int(row[0] or 0), "bytes": int(row[1] or 0)}
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError, TypeError):
+        return {"count": 0, "bytes": 0}
+
+
 def _match_query(query: str) -> str:
     # FTS5 receives only quoted word tokens; punctuation and operators stay data.
     tokens = re.findall(r"[^\W_]+", query, flags=re.UNICODE)

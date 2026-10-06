@@ -87,6 +87,20 @@ def test_delete_removes_only_exact_owner_and_session(tmp_path, monkeypatch):
     assert "bobneedle" in store.search_results("bob", "run", "bobneedle")
 
 
+def test_context_stats_scope_owner_and_session_even_in_shared_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    shared_db = tmp_path / "shared.sqlite3"
+    monkeypatch.setattr(store, "_scope_file", lambda owner, session_id: shared_db)
+    alice = "alice result"
+    store.archive_result("alice", "run", "tool", alice)
+    store.archive_result("bob", "run", "tool", "other owner")
+    store.archive_result("alice", "other-run", "tool", "other session")
+
+    assert store.get_result_stats("alice", "run") == {"count": 1, "bytes": len(alice)}
+    assert store.get_result_stats("bob", "run") == {"count": 1, "bytes": len("other owner")}
+    assert store.get_result_stats("alice", "other-run") == {"count": 1, "bytes": len("other session")}
+
+
 def test_missing_session_and_negative_offset_are_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
     with pytest.raises(ValueError, match="session_id is required"):

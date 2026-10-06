@@ -81,6 +81,68 @@ def _history_display_content(content: Any) -> Any:
     return content
 
 
+def _clean_context_inspection(value: Any) -> Optional[Dict[str, Any]]:
+    """Expose only the numeric context summary, never stored prompt text."""
+    if not isinstance(value, dict):
+        return None
+    def _number(item):
+        try:
+            return max(0, int(item))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    def _optional_number(item):
+        return None if item is None else _number(item)
+
+    categories = {}
+    raw_categories = value.get("categories")
+    if isinstance(raw_categories, dict):
+        for key in ("instructions", "native_tool_schemas", "memory_docs", "conversation", "tool_results", "archives"):
+            raw = raw_categories.get(key)
+            if not isinstance(raw, dict):
+                continue
+            category = {field: _number(raw.get(field)) for field in ("tokens", "items", "characters")}
+            if key == "archives":
+                category["count"] = _number(raw.get("count", category["items"]))
+                category["bytes"] = _number(raw.get("bytes"))
+            categories[key] = category
+    if not categories:
+        return None
+    return {
+        "version": _number(value.get("version")),
+        "estimated": bool(value.get("estimated", True)),
+        "total_tokens": _number(value.get("total_tokens")),
+        "context_length": _optional_number(value.get("context_length")),
+        "output_reserve": _number(value.get("output_reserve")),
+        "available_tokens": _optional_number(value.get("available_tokens")),
+        "remaining_tokens": _optional_number(value.get("remaining_tokens")),
+        "trimmed": {key: _number((value.get("trimmed") or {}).get(key))
+                    for key in ("removed_tokens", "removed_messages")}
+                   if isinstance(value.get("trimmed"), dict) else {},
+        "categories": categories,
+    }
+
+
+def _latest_context_inspection(session_id: str) -> Optional[Dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(DbChatMessage.meta_data)
+            .filter(DbChatMessage.session_id == session_id, DbChatMessage.role == "assistant")
+            .order_by(DbChatMessage.timestamp.desc())
+            .first()
+        )
+        if not row or not row[0]:
+            return None
+        try:
+            metadata = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        return _clean_context_inspection(metadata.get("context_inspection")) if isinstance(metadata, dict) else None
+    finally:
+        db.close()
+
+
 def _merge_continue_rows_to_delete(db_messages, db1, db2):
     """DB rows to delete when merging the last two assistant messages.
 
@@ -692,6 +754,8 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
                 if (getattr(m, "metadata", None) or {}).get("compacted")
             )
             can_compact = used > 0
+            from src.tool_result_store import get_result_stats
+            archives = get_result_stats(effective_user(request) or "", session_id)
             return {
                 "session_id": session_id,
                 "model": session.model,
@@ -702,6 +766,8 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
                 "messages": visible_messages,
                 "context_messages": len(messages),
                 "compacted_messages": compacted_messages,
+                "last_request": _latest_context_inspection(session_id),
+                "archives": archives,
                 "can_compact": can_compact,
                 "should_compact": pct >= 70,
                 "auto_compact_threshold": 85,

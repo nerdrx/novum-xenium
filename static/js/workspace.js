@@ -14,6 +14,7 @@ const API_BASE = window.location.origin;
 const _FOLDER_SVG = '<svg class="workspace-row-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 let _modal = null;
 let _curPath = '';
+let _snapshotPreview = null;
 
 export function getWorkspace() {
   // This local Docker installation mounts the persistent files folder here.
@@ -139,6 +140,98 @@ async function _navigate(path) {
   }
 }
 
+function _snapshotContext() {
+  return { workspace: getWorkspace(), session_id: window.sessionModule?.getCurrentSessionId?.() || '' };
+}
+
+async function _snapshotRequest(url, method = 'GET', body = null) {
+  const options = { method, credentials: 'same-origin', headers: {} };
+  if (body) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${API_BASE}${url}`, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Snapshot request failed: ${res.status}`);
+  return data;
+}
+
+async function _refreshSnapshots() {
+  const ctx = _snapshotContext();
+  const select = _modal?.querySelector('#workspace-snapshot-select');
+  const note = _modal?.querySelector('#workspace-snapshot-note');
+  if (!select || !ctx.workspace || !ctx.session_id) {
+    if (select) select.innerHTML = '<option value="">Select a chat and workspace first</option>';
+    return;
+  }
+  try {
+    const data = await _snapshotRequest(`/api/workspace/snapshots?workspace=${encodeURIComponent(ctx.workspace)}&session_id=${encodeURIComponent(ctx.session_id)}`);
+    select.innerHTML = '<option value="">Choose snapshot…</option>' + data.snapshots.map(s =>
+      `<option value="${uiModule.esc(s.id)}">${uiModule.esc(new Date(s.created_at).toLocaleString())}${s.label ? ` · ${uiModule.esc(s.label)}` : ''}</option>`
+    ).join('');
+    if (note) note.textContent = data.snapshots.length ? `${data.snapshots.length} snapshots for this chat and workspace` : 'No snapshots yet';
+  } catch (e) {
+    if (note) note.textContent = e.message;
+  }
+}
+
+async function _createSnapshot() {
+  const ctx = _snapshotContext();
+  if (!ctx.workspace || !ctx.session_id) return;
+  try {
+    await _snapshotRequest('/api/workspace/snapshots', 'POST', { ...ctx, label: 'Manual snapshot' });
+    _snapshotPreview = null;
+    await _refreshSnapshots();
+    if (uiModule?.showToast) uiModule.showToast('Workspace snapshot saved');
+  } catch (e) { if (uiModule?.showError) uiModule.showError(e.message); }
+}
+
+async function _reviewSnapshot() {
+  const ctx = _snapshotContext();
+  const id = _modal?.querySelector('#workspace-snapshot-select')?.value;
+  if (!ctx.workspace || !ctx.session_id || !id) return;
+  try {
+    const preview = await _snapshotRequest(`/api/workspace/snapshots/${encodeURIComponent(id)}/preview`, 'POST', ctx);
+    _snapshotPreview = { ...preview, workspace: ctx.workspace, session_id: ctx.session_id };
+    const host = _modal.querySelector('#workspace-snapshot-preview');
+    host.replaceChildren();
+    if (!preview.changes.length) host.textContent = 'Workspace already matches this snapshot.';
+    for (const change of preview.changes) {
+      const row = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = `${change.status}: ${change.path}`;
+      const pre = document.createElement('pre');
+      pre.textContent = change.diff || '[Binary or non-text file]';
+      row.append(summary, pre); host.append(row);
+    }
+    _modal.querySelector('#workspace-snapshot-restore').disabled = !preview.changes.length;
+  } catch (e) {
+    _snapshotPreview = null;
+    if (uiModule?.showError) uiModule.showError(e.message);
+  }
+}
+
+async function _restoreSnapshot() {
+  const preview = _snapshotPreview;
+  const ctx = _snapshotContext();
+  if (!preview || preview.workspace !== ctx.workspace || preview.session_id !== ctx.session_id) {
+    if (uiModule?.showError) uiModule.showError('Chat or workspace changed; review the snapshot again');
+    return;
+  }
+  if (!window.confirm('Restore all workspace files to this snapshot? A rollback snapshot will be saved first.')) return;
+  try {
+    const result = await _snapshotRequest(`/api/workspace/snapshots/${encodeURIComponent(preview.snapshot.id)}/restore`, 'POST', { ...ctx, expected_revision: preview.revision });
+    _snapshotPreview = null;
+    _modal.querySelector('#workspace-snapshot-preview').textContent = `Restored. Rollback snapshot: ${result.rollback_snapshot_id}`;
+    _modal.querySelector('#workspace-snapshot-restore').disabled = true;
+    await _refreshSnapshots();
+    if (uiModule?.showToast) uiModule.showToast('Workspace restored');
+  } catch (e) {
+    _snapshotPreview = null;
+    if (uiModule?.showError) uiModule.showError(e.message);
+  }
+}
+
 function _getModal() {
   if (_modal) return _modal;
   _modal = document.createElement('div');
@@ -156,6 +249,16 @@ function _getModal() {
              placeholder="Type or paste a folder path, then press Enter" />
       <p class="muted workspace-note">File tools are <strong>confined</strong> to this folder. Shell commands start here but are <strong>not sandboxed</strong> and can reach outside it. A workspace scopes the tools; it is not a security boundary.</p>
       <div class="modal-body workspace-body" id="workspace-body"></div>
+      <section class="workspace-snapshots" aria-label="Workspace snapshots">
+        <div class="workspace-snapshot-actions">
+          <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-snapshot-create">Snapshot</button>
+          <select id="workspace-snapshot-select" aria-label="Workspace snapshot"><option value="">Select a chat and workspace first</option></select>
+          <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-snapshot-review">Review</button>
+          <button type="button" class="confirm-btn confirm-btn-primary" id="workspace-snapshot-restore" disabled>Restore</button>
+        </div>
+        <div class="muted" id="workspace-snapshot-note"></div>
+        <div id="workspace-snapshot-preview" class="workspace-snapshot-preview"></div>
+      </section>
       <div class="modal-footer workspace-footer">
         <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-cancel">Cancel</button>
         <button type="button" class="confirm-btn confirm-btn-primary" id="workspace-use">Use this folder</button>
@@ -164,6 +267,9 @@ function _getModal() {
   document.body.appendChild(_modal);
   _modal.querySelector('#workspace-close').addEventListener('click', closeWorkspaceBrowser);
   _modal.querySelector('#workspace-cancel').addEventListener('click', closeWorkspaceBrowser);
+  _modal.querySelector('#workspace-snapshot-create').addEventListener('click', _createSnapshot);
+  _modal.querySelector('#workspace-snapshot-review').addEventListener('click', _reviewSnapshot);
+  _modal.querySelector('#workspace-snapshot-restore').addEventListener('click', _restoreSnapshot);
   // Editable path bar: Enter navigates to a typed/pasted folder.
   _modal.querySelector('#workspace-cur-path').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -188,6 +294,7 @@ export async function openWorkspaceBrowser() {
   modal.style.display = 'flex';
   try {
     _render(await _load(getWorkspace() || ''));
+    await _refreshSnapshots();
   } catch (e) {
     if (uiModule && uiModule.showError) uiModule.showError('Could not browse folders');
   }

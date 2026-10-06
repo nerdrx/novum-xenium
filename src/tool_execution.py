@@ -921,6 +921,7 @@ async def execute_tool_block(
         decision = security_context.decision_for(
             getattr(block, "tool_type", None),
             getattr(block, "content", None),
+            workspace=workspace,
         )
         if not decision.allowed:
             logger.warning(
@@ -934,6 +935,27 @@ async def execute_tool_block(
 
     token = _active_workspace.set(workspace or None)
     try:
+        tool_name = getattr(block, "tool_type", None)
+        policy_names = email_tool_policy_names(tool_name)
+        snapshot_required = (
+            isinstance(security_context, ToolRunSecurityContext)
+            and security_context.workspace_snapshots_enabled
+            and tool_name in {"write_file", "edit_file", "apply_patch", "bash", "python"}
+            and not (disabled_tools and not policy_names.isdisjoint(disabled_tools))
+            and not (tool_policy and any(tool_policy.blocks(name) for name in policy_names))
+            and _owner_is_admin(owner)
+        )
+        snapshot = None
+        if snapshot_required:
+            try:
+                from src.workspace_snapshots import ensure_snapshot
+                from src.owner_identity import effective_storage_owner
+                snapshot = await asyncio.to_thread(
+                    ensure_snapshot, workspace, effective_storage_owner(owner), session_id, security_context.run_id,
+                )
+            except Exception:
+                logger.warning("Workspace rollback snapshot unavailable; tool blocked")
+                return blocked_tool_result(tool_name, "A rollback snapshot could not be created. Reduce the workspace size or select a smaller project, then retry.")
         output = await _execute_tool_block_impl(
             block,
             session_id=session_id,
@@ -957,6 +979,8 @@ async def execute_tool_block(
                 else None
             ),
         )
+        if snapshot:
+            output[1]["workspace_snapshot_id"] = snapshot["id"]
         if isinstance(security_context, ToolRunSecurityContext):
             security_context.observe_tool_result(
                 getattr(block, "tool_type", None),

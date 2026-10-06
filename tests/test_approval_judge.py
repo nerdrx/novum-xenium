@@ -58,7 +58,7 @@ async def test_strict_verdict_and_tool_free_current_route(monkeypatch, raw, deci
     assert call["max_retries"] == 1 and call["max_tokens"] == 128
     assert "tools" not in call and len(call["messages"]) == 2
     assert json.loads(call["messages"][1]["content"]) == {
-        "request": "find coding docs", "proposed_public_read": "https://docs.example/guide"}
+        "request": "find coding docs", "action": {"kind": "public_read", "url": "https://docs.example/guide"}}
 
 
 @pytest.mark.asyncio

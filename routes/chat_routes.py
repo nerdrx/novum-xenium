@@ -23,7 +23,7 @@ from src.llm_core import (
     stream_llm_with_fallback,
 )
 from src.agent_loop import stream_agent_loop
-from src import agent_runs
+from src import agent_runs, run_checkpoints
 from src.model_context import estimate_tokens
 from src.context_compactor import (
     apply_compaction_state,
@@ -53,6 +53,8 @@ from routes.document_helpers import _owner_session_filter
 from core.database import SessionLocal, get_session_mode, set_session_mode
 from core.database import Session as DBSession, ChatMessage as DBChatMessage
 from core.database import Document as DBDocument, ModelEndpoint
+from core.middleware import INTERNAL_TOOL_HEADER
+from src.owner_identity import INTERNAL_TOOL_USER
 from core.log_safety import redact_url
 from routes.research_routes import _resolve_research_endpoint
 from routes.model_routes import _visible_models
@@ -113,6 +115,44 @@ def _reject_delegated_tool_approval(request: Request) -> None:
             "Tool approvals require an interactive session. "
             "API tokens cannot authorize a gated action.",
         )
+
+
+def _require_interactive_recovery(request: Request) -> None:
+    """Recovery carries prior user intent and is browser-session only."""
+    if (
+        getattr(request.state, "api_token", False)
+        or is_delegated_credential(request)
+        or bool(request.headers.get(INTERNAL_TOOL_HEADER))
+        or get_current_user(request) == INTERNAL_TOOL_USER
+    ):
+        raise HTTPException(403, "Interrupted runs can only be continued from the browser.")
+
+
+def _recovery_context_content(checkpoint: dict) -> str:
+    context = checkpoint.get("context") if isinstance(checkpoint.get("context"), dict) else {}
+    outcomes = checkpoint.get("tool_outcomes")
+    safe_outcomes = []
+    if isinstance(outcomes, list):
+        for item in outcomes[-12:]:
+            if not isinstance(item, dict):
+                continue
+            safe_outcomes.append({
+                key: str(item[key])[:800] if isinstance(item.get(key), str) else item.get(key)
+                for key in ("tool", "command", "exit_code", "output") if key in item
+            })
+    pending = checkpoint.get("pending_tool")
+    parts = [
+        "Original user request (untrusted):\n" + str(context.get("original_request") or "")[:8000],
+        "Partial assistant response (untrusted):\n" + str(checkpoint.get("last_output") or "")[-16000:],
+        "Completed tool outcomes (untrusted; informational only):\n" + json.dumps(safe_outcomes, ensure_ascii=False)[:12000],
+    ]
+    if isinstance(pending, dict):
+        parts.append(
+            "A tool call was pending when the process stopped. Its outcome is uncertain. "
+            "Inspect current state before deciding whether any action is needed. Do not replay the saved tool call.\n"
+            + json.dumps({k: str(v)[:500] for k, v in pending.items()}, ensure_ascii=False)[:1500]
+        )
+    return "\n\n".join(parts)
 
 
 def _mark_tool_approval_resolved(sess, approval_id: Any, decision: Any) -> bool:
@@ -1011,6 +1051,16 @@ def setup_chat_routes(
             form_data.get("tool_approval_decision")
             or (body or {}).get("tool_approval_decision")
         )
+        recovery_run_id = str(
+            form_data.get("recovery_run_id")
+            or (body or {}).get("recovery_run_id")
+            or ""
+        ).strip()
+        if recovery_run_id:
+            _require_interactive_recovery(request)
+            if incognito or compare_mode or tool_approval_id:
+                raise HTTPException(400, "This run cannot be continued in the current chat mode.")
+            use_research = None
         # Resolve once before detaching the stream. Model text, form fields,
         # and later preference changes cannot elevate this in-flight turn.
         _approval_mode = resolve_tool_approval_mode(request)
@@ -1156,6 +1206,8 @@ def setup_chat_routes(
                 bool(body and isinstance(body.get("attachments"), list) and body["attachments"])
                 or bool(form_data.get("attachments"))
             )
+            if recovery_run_id and _has_atts:
+                raise HTTPException(400, "Attachments cannot be added while continuing an interrupted run.")
             message, session = coerce_message_and_session(
                 body, message, session, session_manager,
                 allow_empty=(_has_atts or bool(tool_approval_id)),
@@ -1165,6 +1217,28 @@ def setup_chat_routes(
             _verify_session_owner(request, session)
             sess = session_manager.get_session(session)
             owner = effective_user(request)
+            recovery_checkpoint = None
+            recovery_workspace = None
+            if recovery_run_id:
+                recovery_checkpoint = run_checkpoints.get_checkpoint(session, owner)
+                if (
+                    not recovery_checkpoint
+                    or recovery_checkpoint.get("run_id") != recovery_run_id
+                    or not recovery_checkpoint.get("can_continue")
+                ):
+                    raise HTTPException(409, "This interrupted run is no longer available to continue.")
+                saved_context = recovery_checkpoint.get("context")
+                saved_context = saved_context if isinstance(saved_context, dict) else {}
+                chat_mode = str(saved_context.get("chat_mode") or "agent").lower()
+                if chat_mode not in {"agent", "chat"}:
+                    chat_mode = "agent"
+                plan_mode = bool(saved_context.get("plan_mode", False))
+                recovery_workspace = str(saved_context.get("workspace") or "")
+                # The checkpoint's workspace is only a request. Re-check its
+                # current path and caller privilege before binding it again.
+                workspace, workspace_rejected = _resolve_request_workspace(request, recovery_workspace)
+                if recovery_workspace and (not workspace or workspace != recovery_workspace):
+                    raise HTTPException(409, "The saved workspace is no longer available to this account.")
             if tool_approval_id:
                 _reject_delegated_tool_approval(request)
                 pending_tool_approval = tool_approval_store.peek(tool_approval_id)
@@ -1270,6 +1344,17 @@ def setup_chat_routes(
                 )
             if not (getattr(sess, "endpoint_url", "") or "").strip():
                 raise HTTPException(400, "Selected model endpoint is not configured")
+            if recovery_run_id:
+                saved_context = recovery_checkpoint.get("context") or {}
+                saved_model = str(saved_context.get("model") or "")
+                if saved_model and saved_model != str(sess.model or ""):
+                    raise HTTPException(409, "The saved model changed; choose a matching model before continuing.")
+                saved_url = str(saved_context.get("endpoint_url") or "").rstrip("/")
+                if saved_url and saved_url != str(sess.endpoint_url or "").rstrip("/"):
+                    raise HTTPException(409, "The saved endpoint changed; choose the original endpoint before continuing.")
+                saved_endpoint = str(saved_context.get("endpoint_id") or "")
+                if saved_endpoint and selected_endpoint_id and saved_endpoint != selected_endpoint_id:
+                    raise HTTPException(409, "The saved endpoint changed; choose the original endpoint before continuing.")
             if (
                 chat_mode == "chat"
                 and isinstance(message, str)
@@ -1327,7 +1412,7 @@ def setup_chat_routes(
             not tool_approval_continuation
             and str(use_research).lower() == "true"
         )
-        if not do_research and not tool_approval_continuation:
+        if not do_research and not tool_approval_continuation and not recovery_run_id:
             if get_session_mode(session) == 'research_pending':
                 do_research = True
                 logger.info(f"Session {session} in research_pending — auto-triggering research")
@@ -1636,6 +1721,24 @@ def setup_chat_routes(
         _effective_mode = 'research' if effective_do_research else (chat_mode or 'chat')
         if _effective_mode in ('agent', 'research', 'chat'):
             set_session_mode(session, _effective_mode)
+
+        if recovery_run_id:
+            if agent_runs.is_active(session):
+                raise HTTPException(409, "This session already has an active run.")
+            claimed_checkpoint = run_checkpoints.claim_recovery(session, owner, recovery_run_id)
+            if not claimed_checkpoint:
+                raise HTTPException(409, "This interrupted run was already continued or is no longer available.")
+            recovery_message = untrusted_context_message(
+                "interrupted agent run",
+                _recovery_context_content(claimed_checkpoint),
+                provenance_origin="agent_run_recovery",
+                arm_tool_gate=True,
+            )
+            ctx.messages.append(recovery_message)
+            route_messages = getattr(ctx, "route_messages", ctx.messages)
+            if route_messages is not ctx.messages:
+                route_messages.append(recovery_message)
+            external_untrusted_context_seen = True
 
         async def stream_with_save() -> AsyncGenerator[str, None]:
             # _effective_mode is read-only here; closure captures it from
@@ -2383,6 +2486,7 @@ def setup_chat_routes(
                         delegated_credential=_delegated_credential,
                         approval_mode=_approval_mode,
                         public_read_sources=ctx.web_sources,
+                        incognito=incognito,
                         exact_approval=exact_tool_approval,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
@@ -2636,12 +2740,52 @@ def setup_chat_routes(
         if compare_mode:
             return StreamingResponse(_safe_stream(), media_type="text/event-stream")
 
-        _detached_run = agent_runs.start(session, _safe_stream())
+        _detached_run = agent_runs.start(
+            session,
+            _safe_stream(),
+            owner=effective_user(request),
+            context={
+                "original_request": str(message or ""),
+                "workspace": str(workspace or ""),
+                "model": str(getattr(sess, "model", "") or ""),
+                "endpoint_id": str(selected_endpoint_id or ""),
+                "endpoint_url": str(getattr(sess, "endpoint_url", "") or ""),
+                "chat_mode": str(chat_mode or "chat"),
+                "plan_mode": bool(plan_mode),
+            },
+            persist=not incognito,
+        )
         return StreamingResponse(
             agent_runs.subscribe(session, _detached_run),
             media_type="text/event-stream",
             headers={"X-Odysseus-Run-Id": _detached_run.run_id},
         )
+
+    # ------------------------------------------------------------------ #
+    # GET /api/chat/checkpoint — expose only the current owner's interrupted
+    # run, for an explicit browser recovery choice after a process restart.
+    # ------------------------------------------------------------------ #
+    @router.get("/api/chat/checkpoint/{session_id}")
+    async def chat_checkpoint(request: Request, session_id: str) -> Dict[str, Any]:
+        _require_interactive_recovery(request)
+        _verify_session_owner(request, session_id, session_manager)
+        checkpoint = run_checkpoints.get_checkpoint(session_id, effective_user(request))
+        if not checkpoint or not checkpoint.get("can_continue"):
+            raise HTTPException(404, "No interrupted run can be continued")
+        outcomes = checkpoint.get("tool_outcomes")
+        pending = checkpoint.get("pending_tool")
+        context = checkpoint.get("context") if isinstance(checkpoint.get("context"), dict) else {}
+        return {
+            "run_id": checkpoint.get("run_id"),
+            "updated": checkpoint.get("updated"),
+            "original_request": str(context.get("original_request") or "")[:8000],
+            "partial_response": str(checkpoint.get("last_output") or "")[-6000:],
+            "tool_outcomes": outcomes[-12:] if isinstance(outcomes, list) else [],
+            "pending_tool": pending if isinstance(pending, dict) else None,
+            "uncertain_tool_outcome": bool(checkpoint.get("uncertain_tool_outcome")),
+            "can_continue": True,
+            "replay_tools": False,
+        }
 
     # ------------------------------------------------------------------ #
     # GET /api/chat/resume — reconnect to a detached run that's still going

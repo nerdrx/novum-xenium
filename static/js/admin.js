@@ -2886,6 +2886,70 @@ function initBackup() {
     } catch (e) { msg.textContent = 'Import failed: ' + e.message; msg.className = 'admin-error'; }
     btn.disabled = false; btn.textContent = 'Import Data';
   });
+
+  const fullBackupBtn = el('adm-fullBackupBtn');
+  fullBackupBtn?.addEventListener('click', async () => {
+    const msg = el('adm-backupMsg');
+    fullBackupBtn.disabled = true; fullBackupBtn.textContent = 'Creating backup...';
+    try {
+      const res = await fetch('/api/backup/full', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error((await res.text()).slice(0, 240) || `HTTP ${res.status}`);
+      const blob = await res.blob();
+      const filename = (res.headers.get('Content-Disposition') || '').match(/filename="?([^";]+)"?/)?.[1] || 'odysseus_full_backup.zip';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      msg.textContent = 'Full backup downloaded. Store this sensitive archive securely.';
+      msg.className = 'admin-success';
+    } catch (e) { msg.textContent = 'Full backup failed: ' + e.message; msg.className = 'admin-error'; }
+    fullBackupBtn.disabled = false; fullBackupBtn.textContent = 'Download Full Backup';
+  });
+
+  const chooseRestore = el('adm-fullRestoreChoose');
+  const restoreFile = el('adm-fullRestoreFile');
+  const previewBox = el('adm-fullRestorePreview');
+  const applyRestore = el('adm-fullRestoreApply');
+  let validatedFile = null;
+  chooseRestore?.addEventListener('click', () => { restoreFile.value = ''; restoreFile.click(); });
+  restoreFile?.addEventListener('change', async () => {
+    validatedFile = restoreFile.files?.[0] || null;
+    applyRestore.style.display = 'none';
+    previewBox.textContent = '';
+    if (!validatedFile) return;
+    const msg = el('adm-backupMsg');
+    chooseRestore.disabled = true; chooseRestore.textContent = 'Checking archive...';
+    try {
+      const res = await fetch('/api/backup/preview', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/zip' }, body: validatedFile });
+      const result = await res.json().catch(() => null);
+      if (!res.ok || !result) throw new Error(result?.detail || `HTTP ${res.status}`);
+      previewBox.textContent = `Valid backup from ${result.created_at || 'unknown date'}: ${result.files} files, ${(result.unpacked_bytes / 1024 / 1024).toFixed(1)} MiB. ` +
+        `${result.includes_database ? 'Database included. ' : 'No database found. '}` +
+        `${result.includes_encryption_key ? 'Encryption key material included. ' : 'Encryption key material missing. '}` +
+        'Runtime caches and external Docker volumes (including ChromaDB) are excluded; indexes may need rebuilding. Stop Odysseus before activating the staged restore.';
+      previewBox.className = 'admin-toggle-sub';
+      applyRestore.style.display = 'inline-flex';
+    } catch (e) {
+      validatedFile = null;
+      previewBox.textContent = 'Backup preview failed: ' + e.message;
+      previewBox.className = 'admin-error';
+    }
+    chooseRestore.disabled = false; chooseRestore.textContent = 'Preview Full Restore';
+  });
+  applyRestore?.addEventListener('click', async () => {
+    if (!validatedFile) return;
+    if (!window.confirm('Stage this backup? Application data will be replaced when Odysseus next starts. Runtime caches and external Docker volumes are preserved and are not restored.')) return;
+    const msg = el('adm-backupMsg');
+    applyRestore.disabled = true; applyRestore.textContent = 'Staging restore...';
+    try {
+      const res = await fetch('/api/backup/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/zip' }, body: validatedFile });
+      const result = await res.json().catch(() => null);
+      if (!res.ok || !result?.ok) throw new Error(result?.detail || `HTTP ${res.status}`);
+      msg.textContent = result.message; msg.className = 'admin-success';
+      previewBox.textContent = 'Restore staged. Stop and start Odysseus to activate it. External Docker volumes and runtime caches are preserved.';
+      applyRestore.style.display = 'none'; validatedFile = null;
+    } catch (e) { msg.textContent = 'Restore staging failed: ' + e.message; msg.className = 'admin-error'; }
+    applyRestore.disabled = false; applyRestore.textContent = 'Stage Restore and Require Restart';
+  });
 }
 
 /* ── Danger Zone ── */

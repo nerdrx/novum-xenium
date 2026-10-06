@@ -11,22 +11,29 @@ completion, so reopening the session shows the finished result even if nobody
 was connected when it finished. Reconnecting mid-run replays the buffer + streams
 live (pick up where it is).
 
-Durability scope: in-memory, survives as long as the server process runs (tab
-close / navigation / refresh). It does NOT survive a server restart.
+The live SSE replay buffer stays in memory. A bounded SQLite checkpoint records
+last output and completed tool outcomes so a later process can expose interrupted
+runs for an explicit, one-use recovery decision; it never replays tools.
 """
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import AsyncGenerator, Dict, Optional
+
+from src import run_checkpoints
 
 logger = logging.getLogger(__name__)
 
 
 class _Run:
-    __slots__ = ("buffer", "subscribers", "status", "task", "evict_task", "run_id")
+    __slots__ = (
+        "buffer", "subscribers", "status", "task", "evict_task", "run_id", "owner",
+        "checkpoint_pending", "checkpoint_last_flush", "persist_checkpoint",
+    )
 
-    def __init__(self) -> None:
+    def __init__(self, owner: Optional[str] = None, persist_checkpoint: bool = True) -> None:
         self.buffer: list = []          # ordered SSE event strings (replay log)
         self.subscribers: set = set()   # one asyncio.Queue per connected client
         self.status: str = "running"    # running | done | error | stopped
@@ -35,6 +42,10 @@ class _Run:
         # Stable across every subscription/replay of this exact detached run.
         # The browser uses it to make local cost accounting replay-idempotent.
         self.run_id: str = uuid.uuid4().hex
+        self.owner = owner
+        self.checkpoint_pending = ""
+        self.checkpoint_last_flush = 0.0
+        self.persist_checkpoint = persist_checkpoint
 
 
 _RUNS: Dict[str, _Run] = {}
@@ -64,6 +75,13 @@ def _wake_run_subscribers(run: _Run) -> None:
             q.put_nowait((None, None))
         except Exception:
             pass
+
+
+def _flush_checkpoint_delta(run: _Run) -> None:
+    if run.persist_checkpoint and run.checkpoint_pending:
+        run_checkpoints.record_delta(run.run_id, run.checkpoint_pending)
+        run.checkpoint_pending = ""
+        run.checkpoint_last_flush = time.monotonic()
 
 
 def _schedule_evict(session_id: str, expected_run: Optional[_Run] = None) -> None:
@@ -133,6 +151,17 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
         if prev_task is not None and not prev_task.done():
             await asyncio.wait({prev_task})
         async for ev in agen:
+            if run.persist_checkpoint:
+                change = run_checkpoints.checkpoint_event(ev)
+                if "output_delta" in change:
+                    run.checkpoint_pending = (
+                        run.checkpoint_pending + change["output_delta"]
+                    )[-32_000:]
+                    if time.monotonic() - run.checkpoint_last_flush >= 0.5:
+                        _flush_checkpoint_delta(run)
+                elif "pending_tool" in change or "tool_outcome" in change:
+                    _flush_checkpoint_delta(run)
+                    run_checkpoints.record(run.run_id, ev)
             _publish(run, ev)
         if run.status == "running":
             run.status = "done"
@@ -166,13 +195,23 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
     finally:
         # Wake every subscriber with the end sentinel so their SSE closes.
         _wake_subscribers()
+        _flush_checkpoint_delta(run)
+        if run.persist_checkpoint:
+            run_checkpoints.finish(run.run_id, run.status)
         # Run is terminal — arm the grace timer so it (and its buffer) is
         # eventually freed even if nobody ever reconnects. subscribe() cancels
         # this on connect and re-arms on disconnect.
         _schedule_evict(session_id, run)
 
 
-def start(session_id: str, agen: AsyncGenerator[str, None]) -> _Run:
+def start(
+    session_id: str,
+    agen: AsyncGenerator[str, None],
+    *,
+    owner: Optional[str] = None,
+    context: Optional[dict] = None,
+    persist: bool = True,
+) -> _Run:
     """Start a detached run draining `agen` for a session. If a run is already in
     flight for this session (e.g. a rapid double-send), it's cancelled first."""
     prev = _RUNS.get(session_id)
@@ -187,12 +226,16 @@ def start(session_id: str, agen: AsyncGenerator[str, None]) -> _Run:
             if prev.status == "running":
                 prev.status = "stopped"
                 _wake_run_subscribers(prev)
+                if prev.persist_checkpoint:
+                    run_checkpoints.finish(prev.run_id, "stopped")
             prev.task.cancel()
             prev_task = prev.task   # new run awaits this before it starts writing
         if prev.evict_task and not prev.evict_task.done():
             prev.evict_task.cancel()
-    run = _Run()
+    run = _Run(owner, persist_checkpoint=persist)
     _RUNS[session_id] = run
+    if persist:
+        run_checkpoints.begin(run.run_id, session_id, owner, context)
     run.task = asyncio.create_task(_drain(session_id, run, agen, prev_task))
     return run
 
@@ -269,3 +312,18 @@ def stop(session_id: str, expected_run_id: Optional[str] = None) -> bool:
         run.task.cancel()
         return True
     return False
+
+
+def get_checkpoint(session_id: str, owner: Optional[str] = None) -> Optional[dict]:
+    """Read durable state for a session, scoped to its authenticated owner."""
+    return run_checkpoints.get_checkpoint(session_id, owner)
+
+
+def claim_recovery(session_id: str, owner: Optional[str], run_id: str) -> Optional[dict]:
+    """Claim an interrupted checkpoint once; this never replays tool calls."""
+    return run_checkpoints.claim_recovery(session_id, owner, run_id)
+
+
+def delete_checkpoints(session_id: str, owner: Optional[str] = None) -> None:
+    """Delete durable metadata when an owning session is permanently removed."""
+    run_checkpoints.delete_session(session_id, owner)

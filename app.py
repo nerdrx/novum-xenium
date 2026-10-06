@@ -47,6 +47,11 @@ from dotenv import load_dotenv
 # utf-8-sig reads plain UTF-8 (no BOM) identically, so this is safe everywhere.
 load_dotenv(encoding="utf-8-sig")
 
+# A browser-admin restore is staged until restart. Activate it before any
+# database engine opens files, so an instance never mixes old and new state.
+from src.full_backup import apply_pending_restore
+apply_pending_restore()
+
 import asyncio
 import logging
 import secrets
@@ -805,6 +810,9 @@ app.include_router(setup_cookbook_routes())
 
 from routes.workspace_routes import setup_workspace_routes
 app.include_router(setup_workspace_routes())
+
+from routes.group_routes import router as group_router
+app.include_router(group_router)
 
 # Hardware model fitting (cookbook "What Fits?" tab)
 from routes.hwfit_routes import setup_hwfit_routes

@@ -6,6 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Popup layering: modal auto-promotion happens only when a window opens, preventing visible dialogs from continually raising each other. Compare model/add/swap/export menus follow the live window stack; the scoreboard opens above its parent. Searchable Compare pickers also accept Enter after filtering.
 - On-demand web tool selection recognizes requests to find online services, suppresses unrelated retrieval matches and limits MCP descriptions to selected tools. Provider requests bound native schema overhead and reject context shaping that would lose the current question or break a recent native tool exchange.
 - Chat progress distinguishes waiting for model output from receiving a response, shows elapsed time, and explains long waits without asserting an unverified cause. Background failures retain their error explanation; saved failures preserve safe, actionable provider error categories after reload.
 - Durable owner-scoped run checkpoints and explicit one-use Continue after restart, with partial output/tool outcomes, uncertain-action warnings, workspace/route revalidation and plan-mode preservation. No tool replay or restored approval grants; incognito stays ephemeral.
@@ -34,6 +35,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 6 popup-layering update: 30 focused frontend checks passed. A headless Chrome fixture loaded the shipped UI/Compare modules and CSS, confirmed a stable two-dialog stack, scoreboard ordering, clickable model suggestions above a parent at z-index 999999, mouse/Enter selection and desktop/mobile viewport bounds. Desktop/mobile screenshots were inspected. Model catalogs were fixture data; no chat generation or account changes were performed.
 
 October 6 tool-context update: 374 focused regression checks passed in a network-disabled container with temporary data. Coverage includes the reported online-service query, MCP description selection, a 42-schema browser payload, current-question and native-call preservation, image-tool follow-ups, approval visibility and actionable pre-provider budget errors. Injected datetime context no longer replaces the current question during trimming. These checks validate request shaping and policy boundaries; model relevance remains a model judgment.
 

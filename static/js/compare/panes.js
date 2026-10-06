@@ -11,6 +11,7 @@ import Storage from '../storage.js';
 import uiModule from '../ui.js';
 import spinnerModule from '../spinner.js';
 import { bindMenuDismiss } from '../escMenuStack.js';
+import { topPortalZ } from '../toolWindowZOrder.js';
 
 var escapeHtml = uiModule.esc;
 
@@ -348,7 +349,7 @@ async function _addPane(anchorBtn) {
   dropdown.style.left = '-9999px';
   dropdown.style.top = '0';
   dropdown.style.maxWidth = (vw - margin * 2) + 'px';
-  dropdown.style.zIndex = '100000';
+  dropdown.style.zIndex = String(topPortalZ());
   document.body.appendChild(dropdown);
   const ddRect = dropdown.getBoundingClientRect();
   const ddW = ddRect.width;
@@ -629,7 +630,7 @@ function _showModelSwapDropdown(paneIdx, titleBtn) {
   const rect = titleBtn.getBoundingClientRect();
   const vw = window.innerWidth, vh = window.innerHeight, margin = 8;
   dropdown.style.position = 'fixed';
-  dropdown.style.zIndex = '100000';
+  dropdown.style.zIndex = String(topPortalZ());
   dropdown.style.maxWidth = (vw - margin * 2) + 'px';
   dropdown.style.overflowY = 'auto';
   dropdown.style.left = '-9999px';

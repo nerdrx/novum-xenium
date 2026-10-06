@@ -11,6 +11,7 @@
 
 // ── Submodule imports ──
 import state from './state.js';
+import { topPortalZ } from '../toolWindowZOrder.js';
 import { EVAL_PROMPTS, WAVE_FRAMES,
   ICON_DICE, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE,
   ICON_REROLL, ICON_COPY, ICON_PLAY, ICON_CODE,
@@ -1074,7 +1075,8 @@ function _toggleExportMenu(btn) {
   const r = btn.getBoundingClientRect();
   const m = document.createElement('div');
   m.className = 'compare-export-menu';
-  m.style.cssText = 'position:fixed;z-index:10001;top:' + (r.bottom + 4) + 'px;left:' + r.left + 'px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;display:flex;flex-direction:column;min-width:170px;';
+  m.style.cssText = 'position:fixed;top:' + (r.bottom + 4) + 'px;left:' + r.left + 'px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;display:flex;flex-direction:column;min-width:170px;';
+  m.style.zIndex = String(topPortalZ());
   const opts = [
     { label: 'Copy as Markdown', fn: () => _exportCopyMarkdown(btn) },
     { label: 'Download .md',     fn: () => _exportDownloadMarkdown() },

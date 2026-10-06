@@ -8,6 +8,7 @@ import { _clearProbeWaves } from './probe.js';
 import uiModule from '../ui.js';
 import spinnerModule from '../spinner.js';
 import themeModule from '../theme.js';
+import { topPortalZ } from '../toolWindowZOrder.js';
 
 const escapeHtml = uiModule.esc;
 
@@ -452,7 +453,7 @@ async function showModelSelector() {
       // both the modal's overflow clipping AND any transform on the modal-content
       // (a transformed ancestor makes position:fixed clip to it — which was why
       // the dropdown kept cropping under the next row). Coords set in _placeDropdown.
-      dropdown.style.cssText = 'display:none;position:fixed;max-height:200px;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:6px;z-index:100000;box-shadow:0 4px 12px rgba(0,0,0,0.2);';
+      dropdown.style.cssText = 'display:none;position:fixed;max-height:200px;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.2);';
       document.body.appendChild(dropdown);
 
       function renderItems(query) {
@@ -472,6 +473,7 @@ async function showModelSelector() {
         matches.forEach(m => {
           const opt = buildOption(m);
           const item = document.createElement('div');
+          item.className = 'cmp-picker-option';
           item.style.cssText = 'padding:6px 12px;cursor:pointer;font-size:0.85em;transition:background 0.08s;';
           item.textContent = opt.label;
           const isSelected = currentSel && currentSel.model === m.id && (currentSel.endpoint === m.url || !modelList.some(o => o.id === m.id && o !== m));
@@ -495,6 +497,7 @@ async function showModelSelector() {
       // a picker near the bottom of the screen would open downward and
       // either clip past the modal or extend off the viewport.
       const _placeDropdown = () => {
+        dropdown.style.zIndex = String(topPortalZ());
         const inRect = input.getBoundingClientRect();
         const vh = window.innerHeight;
         const vw = window.innerWidth;
@@ -534,7 +537,7 @@ async function showModelSelector() {
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          const first = dropdown.querySelector('div[style*="cursor:pointer"]');
+          const first = dropdown.querySelector('.cmp-picker-option');
           if (first) first.click();
         }
       });

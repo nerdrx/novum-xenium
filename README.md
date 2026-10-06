@@ -64,6 +64,8 @@ Your database, chats, settings, credentials and model caches stay under `data/`.
 
 Group chats have a circular-arrow button beside Agent/Chat. Open it for **Auto conversation**, **20 / 100 replies / Until Stop**, and **Stop**. Tool approvals wait for your choice before the requesting participant continues.
 
+Tool windows raise when opened or clicked. Popup menus follow the live window stack, including Compare model suggestions and export menus, so they remain above their parent after repeated window use. The Compare scoreboard also opens in front.
+
 The shield button beside Agent/Chat selects approval behavior for your account's next agent turn, including group participants:
 
 - **Ask for approval**: approve each agent write, shell command, or internet call. Reads in the workspace remain available. Automatic URL/transcript and web-search prefetch are deferred to agent tools.

@@ -1219,6 +1219,7 @@ if (!window._odyEscExpandGuard) {
   // cookbook can render compare UNDER it. Bumping the z-index on every
   // open guarantees most-recently-opened wins both visually AND for ESC.
   let _zCounter = 1000;
+  const _modalVisibility = new WeakMap();
   const _isVisible = (m) => !m.classList.contains('hidden') && getComputedStyle(m).display !== 'none';
   const _promote = (m) => {
     if (!m?.classList?.contains('modal') || !_isVisible(m)) return;
@@ -1235,13 +1236,22 @@ if (!window._odyEscExpandGuard) {
     _zCounter = Math.max(_zCounter, z);
     if (z !== cur) m.style.setProperty('z-index', String(z), 'important');
   };
+  const _syncModalVisibility = (m, added = false) => {
+    if (!m?.classList?.contains('modal')) return;
+    const visible = _isVisible(m);
+    const wasVisible = _modalVisibility.get(m) || false;
+    _modalVisibility.set(m, visible);
+    // Only opening a window raises it. Observing our own z-index writes
+    // otherwise makes two visible modals endlessly promote each other.
+    if (visible && (added || !wasVisible)) _promote(m);
+  };
   new MutationObserver((muts) => {
     for (const m of muts) {
-      if (m.type === 'childList') m.addedNodes.forEach(n => n.nodeType === 1 && _promote(n));
-      else if (m.type === 'attributes' && m.target?.classList?.contains('modal')) _promote(m.target);
+      if (m.type === 'childList') m.addedNodes.forEach(n => n.nodeType === 1 && _syncModalVisibility(n, true));
+      else if (m.type === 'attributes') _syncModalVisibility(m.target);
     }
   }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
-  document.querySelectorAll('.modal').forEach(_promote);
+  document.querySelectorAll('.modal').forEach(m => _syncModalVisibility(m));
 
   const pickTopModal = () => {
     const modals = [...document.querySelectorAll('.modal')].filter(_isVisible);

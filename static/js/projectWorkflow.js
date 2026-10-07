@@ -38,28 +38,78 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
   live.setAttribute("role", "status");
   live.setAttribute("aria-live", "polite");
   panel.append(live);
-  const report = el("pre");
+  const report = el("div");
   report.setAttribute("aria-label", "Project workflow results");
   panel.append(report);
   let lastReport = null;
 
   const configTitle = el("h3", "Verification checks");
-  const configHelp = el("p", "Commands are saved for this repository. Run checks manually, or opt in to automatic completion checks below. Review each argv array before saving.");
-  const configLabel = el("label", "Checks as JSON ");
+  const configHelp = el("p", "Add a check, then enter its executable and one argument per line. Arguments are passed directly; no shell parsing is used.");
+  const checkList = el("div");
+  checkList.setAttribute("aria-label", "Verification checks");
+  const addCheckButton = button("Add check");
+  const advanced = el("details");
+  const advancedSummary = el("summary", "Advanced JSON");
+  const configLabel = el("label", "Checks JSON ");
   const config = el("textarea");
   config.rows = 7;
   config.spellcheck = false;
-  config.value = JSON.stringify([
-    { name: "Tests", argv: ["python", "-m", "pytest", "-q"], required: true, timeout_seconds: 120 },
-  ], null, 2);
+  config.value = JSON.stringify([{ name: "Tests", argv: ["python", "-m", "pytest", "-q"], required: true, timeout_seconds: 120 }], null, 2);
   configLabel.append(config);
+  const applyJsonButton = button("Apply JSON to fields");
+  advanced.append(advancedSummary, configLabel, applyJsonButton);
   const autoRunLabel = el("label", " Run these checks automatically after agent edits ");
   const autoRun = el("input");
   autoRun.type = "checkbox";
   autoRun.checked = false;
   autoRunLabel.prepend(autoRun);
   const saveButton = button("Save checks");
-  panel.append(configTitle, configHelp, configLabel, autoRunLabel, saveButton);
+  panel.append(configTitle, configHelp, checkList, addCheckButton, advanced, autoRunLabel, saveButton);
+
+  const renderChecks = (checks) => {
+    checkList.replaceChildren();
+    for (const [index, check] of checks.entries()) {
+      const row = el("fieldset");
+      row.className = "project-workflow-check";
+      const legend = el("legend", check.name || `Check ${index + 1}`);
+      const nameLabel = el("label", "Name ");
+      const name = el("input"); name.value = check.name || ""; nameLabel.append(name);
+      const executableLabel = el("label", "Executable ");
+      const executable = el("input"); executable.value = check.argv?.[0] || ""; executableLabel.append(executable);
+      const argsLabel = el("label", "Arguments (one per line) ");
+      const args = el("textarea"); args.rows = 3; args.value = (check.argv || []).slice(1).join("\n"); argsLabel.append(args);
+      const timeoutLabel = el("label", "Timeout (seconds) ");
+      const timeout = el("input"); timeout.type = "number"; timeout.min = "1"; timeout.max = "600"; timeout.value = check.timeout_seconds || 120; timeoutLabel.append(timeout);
+      const requiredLabel = el("label", "Required ");
+      const required = el("input"); required.type = "checkbox"; required.checked = check.required !== false; requiredLabel.prepend(required);
+      const remove = button(`Remove ${check.name || `check ${index + 1}`}`);
+      remove.addEventListener("click", () => renderChecks(readChecks().filter((_, i) => i !== index)));
+      row.append(legend, nameLabel, executableLabel, argsLabel, timeoutLabel, requiredLabel, remove);
+      checkList.append(row);
+    }
+    config.value = JSON.stringify(checks, null, 2);
+  };
+  renderChecks(JSON.parse(config.value));
+  addCheckButton.addEventListener("click", () => renderChecks([...readChecks(), { name: "", argv: [""], required: true, timeout_seconds: 120 }]));
+  function readChecks() {
+    return [...checkList.querySelectorAll("fieldset")].map((row) => {
+      const inputs = row.querySelectorAll("input, textarea");
+      return { name: inputs[0].value.trim(), argv: [inputs[1].value, ...inputs[2].value.split("\n").filter((arg) => arg !== "")], timeout_seconds: Number(inputs[3].value), required: inputs[4].checked };
+    });
+  }
+  function validateChecks(checks) {
+    if (!Array.isArray(checks) || checks.some((check) => !check || !check.name?.trim()
+      || !Array.isArray(check.argv) || !check.argv.length || check.argv.some((arg) => typeof arg !== "string" || !arg)
+      || !Number.isInteger(check.timeout_seconds) || check.timeout_seconds < 1 || check.timeout_seconds > 600)) {
+      throw new Error("Each check needs a name, executable, and timeout from 1 to 600 seconds.");
+    }
+    return checks;
+  }
+  applyJsonButton.addEventListener("click", () => {
+    try { renderChecks(validateChecks(JSON.parse(config.value))); status("JSON applied to the check fields."); }
+    catch (error) { status(`Could not apply JSON: ${error.message}`); }
+  });
+  checkList.addEventListener("input", () => { config.value = JSON.stringify(readChecks(), null, 2); });
 
   const worktreeTitle = el("h3", "Managed worktrees");
   const worktreeList = el("ul");
@@ -85,7 +135,50 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
   const show = (value) => {
     if (!closed) {
       lastReport = value;
-      report.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+      report.replaceChildren();
+      if (value && Array.isArray(value.results)) {
+        const statusLabel = { awaiting_approval: "Awaiting approval", awaiting_input: "Awaiting input", paused: "Paused", unverified: "Unverified" };
+        const overall = statusLabel[value.status] || (value.complete ? "Verification passed" : value.results.some((result) => result.required && !result.passed) ? "Verification failed" : "Verification incomplete");
+        report.append(el("h3", overall));
+        if (value.reason) report.append(el("p", value.reason));
+        for (const result of value.results) {
+          const row = el("section");
+          const state = statusLabel[result.status] || (result.passed ? "Passed" : "Failed");
+          row.append(el("h4", `${state} · ${result.name}${result.required ? " (required)" : " (optional)"}`));
+          const output = el("pre", result.output || "No output");
+          row.append(output);
+          report.append(row);
+        }
+      } else if (value && Array.isArray(value.runs)) {
+        report.append(el("h3", "Run evidence"));
+        const labels = { done: "Finished", running: "Running", error: "Failed", stopped: "Stopped", interrupted: "Interrupted", awaiting_approval: "Awaiting approval", awaiting_input: "Awaiting your answer", paused: "Paused at a limit", unverified: "Verification incomplete" };
+        if (!value.runs.length) report.append(el("p", "No recorded runs for this chat yet."));
+        for (const run of value.runs) {
+          const section = el("section");
+          section.append(el("h4", labels[run.status] || run.status), el("p", `${run.model || "Unknown model"} · ${run.duration_seconds ?? "?"} seconds · ${(run.events || []).length} recorded events`));
+          report.append(section);
+        }
+      } else if (value && (value.instructions || value.workspace_map)) {
+        report.append(el("h3", "Project inspection"));
+        if (value.repository) report.append(el("p", `Repository: ${value.repository}`));
+        if (value.workspace_map?.length) {
+          report.append(el("h4", "Workspace map"));
+          const map = el("ul");
+          for (const path of value.workspace_map) map.append(el("li", path));
+          report.append(map);
+        }
+        if (value.instructions?.length) {
+          report.append(el("h4", "Repository guidance (review only)"));
+          for (const instruction of value.instructions) {
+            const section = el("section");
+            section.append(el("h4", instruction.path || "Guidance"), el("p", instruction.content || ""));
+            report.append(section);
+          }
+        }
+      } else {
+        const formatted = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+        report.append(el("pre", formatted));
+      }
     }
   };
   const setBusy = (isBusy, message) => {
@@ -113,7 +206,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
           try {
             const result = await api(`/api/project-workflows/worktrees/${encodeURIComponent(worktree.id)}/verify`, { method: "POST" });
             show(result);
-            status(result.required_checks_passed ? "All required checks passed." : "Required checks did not all pass.");
+            status(result.complete ? "All required checks passed." : result.reason || "Verification incomplete. Review the check results.");
           } catch (error) { status(error.message); }
           finally { setBusy(false, live.textContent); }
         });
@@ -160,6 +253,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
       show(result);
       const saved = await api(`/api/project-workflows/verification?workspace=${encodeURIComponent(selectedWorkspace)}`);
       config.value = JSON.stringify(saved.checks || [], null, 2);
+      renderChecks(saved.checks || []);
       autoRun.checked = saved.auto_run_on_completion === true;
       status("Inspection ready. Review the returned guidance and map.");
     } catch (error) { status(error.message); }
@@ -185,8 +279,12 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
     const workspace = selectedWorkspace || pathInput.value.trim();
     if (!workspace) { status("Inspect a workspace first."); return; }
     let checks;
-    try { checks = JSON.parse(config.value); }
-    catch { status("Checks must be valid JSON."); return; }
+    try {
+      checks = advanced.open ? JSON.parse(config.value) : readChecks();
+      validateChecks(checks);
+      renderChecks(checks);
+    }
+    catch (error) { status(`Could not save checks: ${error.message}`); return; }
     setBusy(true, "Saving reviewed verification checks…");
     try {
       show(await api("/api/project-workflows/verification", {

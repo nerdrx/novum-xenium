@@ -1,10 +1,14 @@
 # NX Odysseus fork changes
 
-Modified by nerdrx on October 7, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`.
+Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`.
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
 ## Included changes
+
+- Project checks now have named fields, explicit argument lines, bounded timeouts and an optional JSON editor. Removing a check preserves edits to other checks. Reports show readable verification results and distinguish waiting for approval, waiting for input, pauses and incomplete verification. Raw reports remain available for copying or download.
+- Team autosaves preserve textarea focus and cursor position. Running phases name the active participant and task; builder and reviewer chats are linked from each task. Invalid task titles do not leave the board stuck busy, and late Stop replies cannot update a different chat.
+- The approval judge can review bounded edits to common Rust, Go, C/C++, JVM, configuration and frontend source formats, plus Makefile and Dockerfile. This adds eligibility for classification rather than blanket approval. Hidden paths, excluded directories and symlink components remain rejected; execution checks and mandatory snapshots remain in place.
 
 - Harness workflow: bounded applicable repository guidance and file maps, owner-scoped managed Git worktrees, configured verification gates, and a project panel in the workspace picker.
 - Coordinated team passes execute server-side with optional task worktrees, saved work and review results, explicit interruption state, matching-child cancellation and human completion. Incognito and delegated credentials cannot launch persisted team passes.
@@ -128,3 +132,5 @@ The original local installation passed focused regression tests for group cancel
 Fork packaging validation: 215 focused checks passed, with one skipped check. A clean source-context Docker build passed using cached dependency layers; a fresh isolated app reached login and UID 1000 wrote through `/workspace` into temporary persistent data. This PC's unavailable bridge-network module required the build/smoke test to use isolated host/disabled networking. The standard bridge-network Compose configuration and the standalone GPU templates were validated without starting GPU or model downloads.
 
 Those checks do not establish every provider/model combination, desktop-native GUI launching from Docker, or GPU operation on another computer. The Codex image bridge requires a compatible CLI with native image generation enabled and an existing ChatGPT login; it does not edit existing images. Shared agent tools remain subject to the existing permissions and approval controls.
+
+October 8 polish pass: 114 focused Python checks passed in a network-disabled container with read-only source and temporary data. Headless Chrome exercised the actual team and workspace modules with fixture APIs: autosave focus, invalid task recovery, phase labels, participant links, edited-row removal, explicit argv preservation, JSON application, verification results, approval-wait evidence and close/reopen behavior. Mobile viewport bounds and screenshots were checked. These tests cover controls and request handling, not comparative model quality or live classifier decisions. No local model inference ran.

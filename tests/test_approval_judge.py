@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from src.approval_judge import candidate_url, trusted_request, review_public_read
+from src.approval_judge import candidate_action, candidate_url, trusted_request, review_public_read
 
 
 @pytest.mark.parametrize("tool,content", [
@@ -23,6 +23,32 @@ from src.approval_judge import candidate_url, trusted_request, review_public_rea
 ])
 def test_only_bounded_public_read_candidates_reach_judge(tool, content):
     assert candidate_url(tool, content) is None
+
+
+@pytest.mark.parametrize("filename", [
+    "main.rs", "main.go", "main.c", "main.h", "main.cc", "main.cpp", "main.hpp",
+    "main.cs", "Main.java", "Main.kt", "Main.swift", "main.rb", "Cargo.toml",
+    "config.yaml", "config.yml", "View.vue", "App.svelte", "icon.svg", "data.xml",
+    "settings.ini", "query.sql", "Makefile", "Dockerfile",
+])
+def test_common_source_and_config_files_are_reviewable(tmp_path, filename):
+    content = json.dumps({"path": filename, "content": "safe source text"})
+    action = candidate_action("write_file", content, str(tmp_path))
+    assert action and action["kind"] == "workspace_edit"
+    assert action["path"] == filename
+
+
+@pytest.mark.parametrize("filename", [".hidden.rs", ".env", ".env.local", "secrets.json"])
+def test_sensitive_and_hidden_paths_stay_ineligible(tmp_path, filename):
+    content = json.dumps({"path": filename, "content": "safe source text"})
+    assert candidate_action("write_file", content, str(tmp_path)) is None
+
+
+def test_symlinked_source_file_stays_ineligible(tmp_path):
+    (tmp_path / "target.rs").write_text("existing source")
+    (tmp_path / "link.rs").symlink_to(tmp_path / "target.rs")
+    content = json.dumps({"path": "link.rs", "content": "replacement"})
+    assert candidate_action("write_file", content, str(tmp_path)) is None
 
 
 def test_judge_request_excludes_page_context_and_does_not_truncate_authority():

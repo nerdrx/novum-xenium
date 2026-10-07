@@ -41643,3 +41643,10 @@ body.settings-sidebar-resize-active {
 .project-workflow-panel button:disabled { opacity: .5; cursor: wait; }
 .project-workflow-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 .project-workflow-panel li { margin: 10px 0; overflow-wrap: anywhere; }
+.project-workflow-check { min-width: 0; margin: 10px 0; padding: 10px; border: 1px solid var(--border); }
+.project-workflow-panel [aria-label="Project workflow results"] section { margin: 10px 0; padding: 8px; border-left: 3px solid var(--border); }
+.project-workflow-panel [aria-label="Project workflow results"] h3,
+.project-workflow-panel [aria-label="Project workflow results"] h4 { margin: 4px 0; }
+.group-team-chat-links { display: flex; flex-wrap: wrap; gap: .6rem; font-size: .85em; }
+
+.project-workflow-panel input[type="checkbox"] { width: auto; margin-right: 6px; }

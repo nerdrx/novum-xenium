@@ -31,6 +31,7 @@ let savedBoard = null;
 let savedRun = null;
 let isolatePosted = false;
 let restored = false;
+let progressShown = false;
 const snapshot = {id:'a'.repeat(32),created_at:new Date().toISOString(),label:'Before coding'};
 const json = (res, data) => {res.setHeader('Content-Type','application/json');res.end(JSON.stringify(data));};
 const server = http.createServer(async(req,res)=>{
@@ -44,7 +45,10 @@ const server = http.createServer(async(req,res)=>{
       savedRun={job_id:'fixture-job',status:'completed',state:{message:'Pass complete'}};
       return json(res,{run:savedRun});
     }
-    if(url.pathname.endsWith('/team/run')) return json(res,{run:savedRun});
+    if(url.pathname.endsWith('/team/run')) {
+      if(savedRun&&!progressShown){progressShown=true;return json(res,{run:{...savedRun,status:'running',state:{phase:'building',task_id:savedBoard.tasks[0].id,message:'Team pass queued'}}});}
+      return json(res,{run:savedRun});
+    }
     if(req.method==='PUT') {let body='';for await(const part of req)body+=part;savedBoard=JSON.parse(body).board;}
     return json(res,{board:savedBoard});
   }
@@ -65,12 +69,22 @@ const server = http.createServer(async(req,res)=>{
     const errors=[];page.on('pageerror',error=>errors.push(error.stack));
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(()=>window.fixtureReady);
-    await page.locator('[data-team-plan]').fill('Build and review a tiny app');
     await page.locator('[data-team-add]').click();
+    await page.locator('[data-team-title]').fill('');await page.locator('[data-team-title]').blur();
+    await page.locator('[data-team-run]').click();
+    assert.equal(await page.locator('[data-team-run]').isDisabled(),false,'invalid task does not stick in Working state');
+    const plan=page.locator('[data-team-plan]');
+    await plan.fill('Build and review a tiny app');
+    await plan.focus();
+    await page.waitForFunction(()=>document.querySelector('[data-team-message]').textContent==='Saved');
+    assert.equal(await plan.evaluate(node=>document.activeElement===node),true,'autosave keeps typing focus');
+    await plan.press('End');await plan.press('!');
+    assert.equal(await plan.inputValue(),'Build and review a tiny app!');
     await page.locator('[data-team-title]').fill('Implement the assigned app');
     await page.locator('[data-team-title]').blur();
     await page.locator('[data-team-isolate]').check();
     await page.locator('[data-team-run]').click();
+    await page.waitForFunction(()=>document.querySelector('[data-team-message]').textContent.includes('Builder is working on Implement the assigned app'));
     await page.locator('[data-team-done]').waitFor();
     assert.match(await page.locator('.group-team-worktree').textContent(),/\/tmp\/worktree-a/);
     const posted=await page.evaluate(()=>window.teamCalls[0]);
@@ -79,6 +93,8 @@ const server = http.createServer(async(req,res)=>{
     assert.equal(isolatePosted,true);
     assert.equal(posted.board.tasks[0].title,'Implement the assigned app');
     assert.match(await page.locator('.group-team-status').textContent(),/awaiting review/);
+    assert.equal(await page.getByRole('link',{name:'Open builder chat'}).getAttribute('href'),'#builder-session');
+    assert.equal(await page.getByRole('link',{name:'Open reviewer chat'}).getAttribute('href'),'#reviewer-session');
     if(process.env.UI_CAPTURE_DIR)await page.screenshot({animations:'disabled',path:path.join(process.env.UI_CAPTURE_DIR,'team.png')});
     await page.locator('[data-team-done]').click();
     assert.equal(await page.locator('.group-team-status').textContent(),'done');

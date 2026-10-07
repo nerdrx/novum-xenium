@@ -46,6 +46,25 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
   const key = id => `odysseus-group-team-enabled:${id}`;
   const worktreeKey = id => `odysseus-group-team-worktrees:${id}`;
 
+  function setMessage(value) {
+    message = value;
+    const status = root?.querySelector('[data-team-message]');
+    if (status) status.textContent = value;
+  }
+
+  function phaseMessage(run) {
+    const task = board.tasks.find(item => item.id === run.state?.task_id);
+    const title = task?.title || 'assigned task';
+    const phases = {
+      queued: 'Waiting for a team worker…',
+      preparing_worktree: `Preparing an isolated worktree for ${title}…`,
+      building: `${person(task?.owner_id)?.display || 'Builder'} is working on ${title}…`,
+      reviewing: `${person(task?.reviewer_id)?.display || 'Reviewer'} is reviewing ${title}…`,
+      review_pending: `Builder finished ${title}; preparing the review…`,
+    };
+    return phases[run.state?.phase] || run.state?.message || `Team pass ${run.status}`;
+  }
+
   function worktreePath(task) {
     return task.work_result?.match(/^Task worktree[^\n]*:\n([^\n]+)\n\n/)?.[1] || '';
   }
@@ -57,6 +76,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
   async function save() {
     if (!parentId || loading) return false;
     const saveParentId = parentId;
+    const generation = loadGeneration;
     const body = JSON.stringify({ board });
     const request = saveChain.catch(() => {}).then(async () => {
       const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(saveParentId)}/team`, {
@@ -71,13 +91,11 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
     saveChain = request;
     try {
       await request;
-      message = 'Saved';
-      render();
+      if (parentId === saveParentId && generation === loadGeneration) setMessage('Saved');
       return true;
     } catch (error) {
-      message = 'Could not save team board';
+      if (parentId === saveParentId && generation === loadGeneration) setMessage('Could not save team board. Your edits are still here; try again.');
       console.warn('[group-team] save failed', error);
-      render();
       return false;
     }
   }
@@ -116,6 +134,10 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
         ${worktreePath(task) ? `<div class="group-team-worktree"><strong>Isolated worktree:</strong> <code>${esc(worktreePath(task))}</code><br><span>Detached at selected Git HEAD; uncommitted source changes were not copied.</span></div>` : ''}
         ${task.work_result ? `<details><summary>Builder report</summary><pre>${esc(worktreeReport(task))}</pre></details>` : ''}
         ${task.review_result ? `<details><summary>Reviewer report</summary><pre>${esc(task.review_result)}</pre></details>` : ''}
+        <div class="group-team-chat-links">${[task.owner_id, task.reviewer_id].filter(Boolean).map((id, index) => {
+          const session = getParticipantSessions()?.[id];
+          return session ? `<a href="#${encodeURIComponent(session)}">Open ${index === 0 ? 'builder' : 'reviewer'} chat</a>` : '';
+        }).join(' · ')}</div>
       </div>`).join('')}
       <label class="group-team-isolation"><input type="checkbox" data-team-isolate ${isolateWorktrees ? 'checked' : ''} ${busy ? 'disabled' : ''}>
         Isolate task worktrees <span>Admin only; starts from selected Git HEAD. Uncommitted changes are not copied.</span></label>
@@ -242,8 +264,9 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const { run } = await response.json();
         if (generation !== loadGeneration || parentId !== id || !run) break;
-        message = run.status === 'stopping' ? 'Stop requested…' : (run.state?.message || `Team pass ${run.status}`);
         await refreshBoard(id);
+        if (generation !== loadGeneration || parentId !== id) break;
+        message = run.status === 'stopping' ? 'Stop requested…' : phaseMessage(run);
         if (!['running', 'stopping'].includes(run.status)) {
           busy = false;
           if (run.status === 'interrupted') message = 'Server restarted during this pass. Inspect the working task; retry only when its outcome is clear.';
@@ -253,7 +276,10 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
           render(); return;
         }
         render();
-      } catch (error) { message = 'Reconnecting to server team pass…'; render(); }
+      } catch (error) {
+        if (generation !== loadGeneration || parentId !== id) break;
+        message = 'Reconnecting to server team pass…'; render();
+      }
       await new Promise(resolve => setTimeout(resolve, 800));
     }
     if (parentId === id && poll === pollGeneration) { busy = false; render(); }
@@ -276,12 +302,16 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
 
   async function stopRun() {
     if (!parentId || !jobId) return;
+    const stoppedParent = parentId, generation = loadGeneration;
     try {
-      await fetch(`${apiBase}/api/groups/${encodeURIComponent(parentId)}/team/stop`, {
+      const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(parentId)}/team/stop`, {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job_id: jobId }),
       });
-    } catch (_) { message = 'Could not send Stop; reconnect to check the run.'; render(); }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (parentId !== stoppedParent || loadGeneration !== generation) return;
+      setMessage('Stop requested; waiting for the server to finish cleanup…');
+    } catch (_) { if (parentId === stoppedParent && loadGeneration === generation) setMessage('Could not send Stop; reconnect to check the run.'); }
   }
 
   async function runPass() {
@@ -297,27 +327,33 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
     if (String(requestContext.incognito || 'false').toLowerCase() === 'true') {
       message = 'Server-owned team passes are unavailable in incognito sessions'; render(); return;
     }
+    if (board.tasks.some(task => !task.title.trim() || !person(task.owner_id) || person(task.owner_id).role !== 'builder')) {
+      setMessage('Each task needs a title and one builder'); return;
+    }
+    const id = parentId, generation = loadGeneration;
+    clearTimeout(saveTimer);
     busy = true; message = 'Starting server team pass'; render();
     try {
-      if (board.tasks.some(task => !task.title.trim() || !person(task.owner_id) || person(task.owner_id).role !== 'builder')) {
-        message = 'Each task needs a title and one builder'; render(); return;
-      }
-      const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(parentId)}/team/run`, {
+      await saveChain.catch(() => {});
+      if (parentId !== id || generation !== loadGeneration) return;
+      const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(id)}/team/run`, {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ board, participant_sessions: getParticipantSessions(), request_context: requestContext,
           isolate_worktrees: isolateWorktrees }),
       });
       if (!response.ok) throw new Error(`Team pass failed (${response.status})`);
       const data = await response.json();
+      if (parentId !== id || generation !== loadGeneration) return;
       jobId = data.run?.job_id;
       if (!jobId) throw new Error('Server did not return a team job');
-      await pollRun(parentId, jobId, loadGeneration);
+      await pollRun(id, jobId, generation);
     } catch (error) {
+      if (parentId !== id || generation !== loadGeneration) return;
       message = error.message || 'Could not start team pass';
       console.warn('[group-team] run failed', error);
       busy = false; render();
     } finally {
-      render();
+      if (parentId === id && generation === loadGeneration) render();
     }
   }
 

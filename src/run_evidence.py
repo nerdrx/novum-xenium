@@ -55,8 +55,16 @@ def record(run_id, event):
         item = json.loads(raw)
         if not isinstance(item, dict):
             return
-        kind = "error" if "error" in item or item.get("type") in {"agent_terminal", "chat_terminal"} else item.get("type")
-        if kind not in {"tool_start", "tool_output", "error", "verification"}:
+        kind = item.get("type")
+        if item.get("error") or (kind in {"agent_terminal", "chat_terminal"}
+                                 and isinstance(item.get("data"), dict) and item["data"].get("failed")):
+            kind = "error"
+        elif kind == "ask_user":
+            ask = item.get("ask_user") or {}
+            kind = "awaiting_approval" if isinstance(ask, dict) and ask.get("kind") == "tool_approval" else "awaiting_input"
+        elif kind in {"budget_exceeded", "rounds_exhausted", "loop_breaker_triggered", "intent_nudge_exhausted"}:
+            kind = "paused"
+        if kind not in {"tool_start", "tool_output", "error", "verification", "awaiting_approval", "awaiting_input", "paused"}:
             return
         entry = {"type": kind, "at": time.time()}
         # No command/output/error text: it can contain credentials and private files.
@@ -76,6 +84,15 @@ def record(run_id, event):
 def finish(run_id, status):
     try:
         with _db() as db:
+            if status == "done":
+                row = db.execute("SELECT events FROM runs WHERE id=?", (run_id,)).fetchone()
+                events = json.loads(row["events"]) if row else []
+                terminal = next((item for item in reversed(events)
+                                 if item.get("type") in {"error", "awaiting_approval", "awaiting_input", "paused"}), None)
+                if terminal:
+                    status = "error" if terminal["type"] == "error" else terminal["type"]
+                elif any(item.get("type") == "verification" and item.get("passed") is False for item in events):
+                    status = "unverified"
             db.execute("UPDATE runs SET status=?,finished=COALESCE(finished,?) WHERE id=?",
                        (status, time.time(), run_id))
     except (sqlite3.Error, OSError):

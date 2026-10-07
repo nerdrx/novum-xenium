@@ -15,6 +15,13 @@ _SENSITIVE_PATH = re.compile(
     r"(?:^|/)(?:api|admin|auth|authorize|oauth|login|logout|settings|delete|remove|"
     r"unsubscribe|webhook|collect|track|upload|send|execute|token|secret)(?:/|$)", re.I,
 )
+_REVIEWABLE_SOURCE_SUFFIXES = (
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".html", ".md", ".txt",
+    ".json", ".gd", ".rs", ".go", ".c", ".h", ".cc", ".hh", ".cpp",
+    ".hpp", ".cxx", ".hxx", ".cs", ".java", ".kt", ".kts", ".swift",
+    ".rb", ".toml", ".yaml", ".yml", ".vue", ".svelte", ".svg", ".xml",
+    ".ini", ".sql",
+)
 
 
 def candidate_url(tool, content):
@@ -71,13 +78,25 @@ def candidate_action(tool, content, workspace=None):
                 return None
             if not isinstance(args.get("path"), str):
                 return None
+            requested_path = os.path.abspath(
+                args["path"] if os.path.isabs(args["path"])
+                else os.path.join(root, args["path"])
+            )
+            if os.path.commonpath([requested_path, root]) != root:
+                return None
+            cursor = root
+            for part in os.path.relpath(requested_path, root).split(os.sep):
+                cursor = os.path.join(cursor, part)
+                if os.path.islink(cursor):
+                    return None
             path = _resolve_tool_path_in_workspace(root, args["path"])
             relative = os.path.relpath(path, root)
             from src.workspace_snapshots import _excluded_rel
             if (relative == "." or any(part.startswith(".") or part in {"node_modules", "vendor", "venv", "bin"}
                                       for part in relative.split(os.sep))
                     or _excluded_rel(relative)
-                    or not relative.endswith((".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".html", ".md", ".txt", ".json", ".gd"))
+                    or not (os.path.basename(relative).casefold() in {"makefile", "dockerfile"}
+                            or relative.lower().endswith(_REVIEWABLE_SOURCE_SUFFIXES))
                     or os.path.islink(path) or os.path.isdir(path)):
                 return None
             if tool == "write_file" and not isinstance(args.get("content"), str):

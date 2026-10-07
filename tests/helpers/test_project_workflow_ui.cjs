@@ -69,7 +69,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname.startsWith('/api/chat/evidence/')) {
     calls.push({method: req.method, path: url.pathname});
-    return json(res, {evidence: 'fixture evidence', session: url.pathname.split('/').pop()});
+    return json(res, {runs: [{status: 'awaiting_approval', model: 'fixture model', duration_seconds: 3, events: []}]});
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
@@ -101,19 +101,45 @@ const server = http.createServer(async (req, res) => {
     await panel.getByRole('button', {name: 'Create worktree'}).click();
     await panel.getByRole('button', {name: 'Use this worktree'}).waitFor();
     assert.equal(await panel.getByRole('button', {name: 'Use this worktree'}).isEnabled(), true);
-    await panel.locator('input[type="checkbox"]').check();
+    const checks = panel.getByLabel('Verification checks');
+    await panel.getByRole('button', {name: 'Add check'}).click();
+    await checks.getByLabel('Name').fill('Safe argv');
+    await checks.getByLabel('Executable').fill('python');
+    await checks.getByLabel('Arguments (one per line)').fill('-m\npytest -q');
+    await panel.getByRole('button', {name: 'Add check'}).click();
+    await checks.getByLabel('Name').first().fill('Edited check');
+    await checks.getByRole('button', {name: 'Remove check 2'}).click();
+    assert.equal(await checks.getByLabel('Name').inputValue(), 'Edited check', 'removal preserves unsaved sibling edits');
+    assert.equal(await checks.getByLabel('Timeout (seconds)').getAttribute('max'), '600');
+    await panel.locator('details > summary').click();
+    await panel.getByLabel('Checks JSON').fill(JSON.stringify([{name: 'JSON check', argv: ['python', '-m', 'pytest -q'], timeout_seconds: 120, required: true}]));
+    await panel.getByRole('button', {name: 'Apply JSON to fields'}).click();
+    assert.equal(await checks.getByLabel('Name').inputValue(), 'JSON check');
+    await panel.locator('details > summary').click();
+    await panel.getByRole('checkbox', {name: /automatically after agent edits/}).check();
     await panel.getByRole('button', {name: 'Save checks'}).click();
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [role="status"]')?.textContent.includes('gate completion'));
     assert.equal(savedConfig.auto_run_on_completion, true);
     assert.equal(savedConfig.workspace, '/workspace');
+    assert.deepEqual(savedConfig.checks[0].argv, ['python', '-m', 'pytest -q'], 'arguments stay explicit argv entries');
 
     await panel.getByRole('button', {name: 'Run checks'}).click();
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('check passed'));
+    assert.equal(await panel.getByLabel('Project workflow results').locator('pre').textContent(), 'check passed');
     await panel.getByRole('button', {name: 'Check capabilities'}).click();
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('python'));
     await panel.getByRole('button', {name: 'Run evidence'}).click();
-    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('fixture evidence'));
+    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('Awaiting approval'));
 
+    await page.screenshot({path: '/tmp/nx-mint-project-desktop.png', fullPage: true});
+    await page.setViewportSize({width: 390, height: 844});
+    await page.waitForFunction(() => {
+      const r = document.querySelector('#workspace-modal .modal-content').getBoundingClientRect();
+      return r.top >= -1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1;
+    });
+    await panel.getByRole('button', {name: 'Save checks'}).scrollIntoViewIfNeeded();
+    await page.screenshot({path: '/tmp/nx-mint-project-mobile.png', fullPage: true});
+    await page.setViewportSize({width: 1000, height: 850});
     await page.locator('#workspace-close').click();
     await page.locator('#workspace-open').click();
     await page.locator('.workspace-project-tools > summary').click();

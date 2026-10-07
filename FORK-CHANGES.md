@@ -6,6 +6,8 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Browser selection follow-up: navigation, snapshots and tab access receive priority whenever enabled browser schemas are selected, including retrieved URL requests without forced tools. Tight context budgets no longer depend on the MCP server listing navigation before Close. Disabled-tool filters and execution approvals remain in place.
+
 - Context budgeting follow-up: forced/retrieved tool bundles are bounded rather than exempt, explicit input caps constrain discovery, and browser navigation/inspection are prioritized when requested. Previously used native schemas retain bounded room for subsequent tools. Trimming allocates space for the current question and latest native exchange before a long persona prefix. Unknown windows are labeled unknown instead of zero, and budget errors explain the full assembled prompt rather than blaming a short user message.
 
 - Hermes-inspired native improvements: bounded skill metadata with on-demand procedures/tool activation; usage counted on procedure read, finite confidence and account-threshold publication, draft guidance labeled unverified; multiple owner-scoped recall excerpts per chat, followed by exact message reads in bounded pages with source links/timestamps. Existing personal memory, scheduler, audits and groups are retained. The [comparison](docs/hermes-comparison.md) documents overlap and limits; no Hermes runtime is required.
@@ -41,6 +43,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 7 retrieved-browser selection repair: 292 focused checks passed. Six strengthened cases failed before the repair: they cover whole-family retrieval with no forced tools, Close listed before navigation, and small input caps. A disabled-entry-point regression also passes. With the installed Playwright MCP 0.0.83 server's actual 31 schemas, the production request allocator selected Navigate, Snapshot and Tabs first within a 1,500-token discovery cap, retained the exact URL request and left disabled web tools excluded. An isolated headless MCP client successfully navigated to and read the public zVram repository. Provider responses in the allocator checks are fixtures; the headless page read tests browser execution directly, not a live model's tool choice. The ten older foreground-suite assertion failures noted below were not rerun or repaired by this change.
 
 October 7 browser/context budget repair: 283 focused checks passed in a network-disabled, read-only container. New cases reproduce 38 browser schemas with 13 forced/retrieved tools, unknown and known windows, deliberately small input caps, long persona prompts, preserved native exchanges and impossible-budget rejection before provider calls. Existing skill activation across fallback routes, image tools, ownership and approval gates also pass. The wider foreground suite remains at 92 passed and ten previously documented error-message/tiny-window assertion failures; no new failures remain there. Provider replies are fixtures, so these checks establish request construction and boundaries, not live model tool choice.
 

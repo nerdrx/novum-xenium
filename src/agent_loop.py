@@ -4277,7 +4277,13 @@ async def stream_agent_loop(
                     turn_tokens = estimate_tokens(route_messages[latest_user:]) if latest_user >= 0 else 0
                     available = max(selected_tokens, effective_budget - reserve_tokens - turn_tokens)
                     schema_cap = min(selected_tokens + schema_cap, available)
-                browser_requested = any(name.startswith(_BROWSER_MCP_PREFIX) for name in (forced_tools or ()))
+                # Retrieval can select the browser without an explicit forced
+                # tool list. Rank its usable entry points before server order,
+                # after route/disabled-tool filtering has already run.
+                browser_requested = any(
+                    schema.get("function", {}).get("name", "").startswith(_BROWSER_MCP_PREFIX)
+                    for schema in route_tools
+                )
                 browser_core = {
                     _BROWSER_MCP_PREFIX + "browser_navigate": 0,
                     _BROWSER_MCP_PREFIX + "browser_snapshot": 1,

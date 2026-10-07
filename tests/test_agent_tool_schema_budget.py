@@ -179,18 +179,24 @@ def test_no_tools_have_no_schema_reservation():
 
 @pytest.mark.parametrize("context,configured", [(0, 6000), (6000, 6000), (128000, 3000), (0, 3000)])
 @pytest.mark.parametrize("selection", ["forced", "retrieved"])
-def test_browser_bundle_respects_actual_budget(monkeypatch, context, configured, selection):
+@pytest.mark.parametrize("core_first", [True, False])
+def test_browser_bundle_respects_actual_budget(monkeypatch, context, configured, selection, core_first):
     import src.model_context as model_context
     schemas = _browser_schemas(38)
     for schema, action in zip(schemas, ["navigate", "snapshot", "tabs"]):
         schema["function"]["name"] = "mcp__builtin_browser__browser_" + action
     forced = {schema["function"]["name"] for schema in schemas[:13]}
     assert estimate_tool_schema_tokens(schemas[:13]) > 1500
+    if not core_first:
+        # MCP registration order is not relevance order. A retrieved whole
+        # family must still offer navigation/read tools under a small cap.
+        schemas = schemas[3:] + schemas[:3]
+        schemas[0]["function"]["name"] = "mcp__builtin_browser__browser_close"
     requests = []
     _configure(monkeypatch, schemas, requests)
     monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: context)
     monkeypatch.setattr(loop, "get_setting", lambda key, default=None: configured if key == "agent_input_token_budget" else default)
-    question = "couldnt you just use the browser?"
+    question = "https://github.com/nerdrx/zVram check this out"
 
     async def run():
         return [event async for event in loop.stream_agent_loop(
@@ -199,7 +205,8 @@ def test_browser_bundle_respects_actual_budget(monkeypatch, context, configured,
              {"role": "user", "content": "https://github.com/nerdrx/zVram check this out"},
              {"role": "assistant", "content": "Old reply. " * 1500},
              {"role": "user", "content": question}],
-            forced_tools=forced if selection == "forced" else None, relevant_tools=forced,
+            forced_tools=forced if selection == "forced" else None,
+            relevant_tools={schema["function"]["name"] for schema in schemas},
             max_rounds=1, _is_teacher_run=True,
         )]
 
@@ -238,3 +245,30 @@ def test_impossibly_small_explicit_budget_fails_before_provider(monkeypatch, con
     with pytest.raises(ValueError, match="Agent context budget cannot fit"):
         asyncio.run(run())
     assert requests == []
+
+
+def test_browser_priority_does_not_restore_disabled_entry_points(monkeypatch):
+    schemas = _browser_schemas(38)
+    disabled = {
+        "mcp__builtin_browser__browser_navigate",
+        "mcp__builtin_browser__browser_snapshot",
+    }
+    for schema, name in zip(schemas[-2:], sorted(disabled)):
+        schema["function"]["name"] = name
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6.1-sol",
+            [{"role": "user", "content": "Use the browser to read this repository."}],
+            relevant_tools={schema["function"]["name"] for schema in schemas},
+            forced_tools=disabled, disabled_tools=disabled,
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    assert disabled.isdisjoint(
+        schema["function"]["name"] for schema in requests[0]["kwargs"]["tools"]
+    )

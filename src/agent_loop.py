@@ -4500,8 +4500,8 @@ async def stream_agent_loop(
                 coding_requested = bool(
                     workspace and _looks_like_workspace_coding_request(_retrieval_query or _last_user)
                 )
-                coding_core = {"read_file": 0, "edit_file": 1, "bash": 2, "python": 3,
-                               "grep": 4, "write_file": 5, "apply_patch": 6}
+                coding_core = {"read_file": 0, "edit_file": 1, "bash": 2, "grep": 3,
+                               "write_file": 4, "apply_patch": 5, "python": 6}
 
                 def schema_priority(schema):
                     name = schema.get("function", {}).get("name", "")

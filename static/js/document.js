@@ -616,7 +616,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   async function _downloadFilledPdf() {
     if (!activeDocId) return;
     _dismissDocKb();   // export shouldn't leave the keyboard up
-    await _saveActiveDocBeforeExport();
+    if (!await _saveActiveDocBeforeExport()) return;
     try {
       const r = await fetch(`${API_BASE}/api/document/${activeDocId}/export-pdf`);
       if (!r.ok) {
@@ -648,30 +648,38 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     //    user typed but the existing 2s autosave hasn't fired.
     //  - PDF view: there may be a pending debounced _pdfPaneSaveTimer that
     //    hasn't flushed the user's input changes yet.
+    const reportFailure = () => {
+      if (uiModule) uiModule.showError('Could not save your edits before export. Your edits are still here; retry the export when saving works.');
+      else alert('Could not save your edits before export. Your edits are still here; retry the export when saving works.');
+      return false;
+    };
     if (_pdfPaneSaveTimer) {
       clearTimeout(_pdfPaneSaveTimer);
-      await _savePdfPaneToMarkdown();
+      if (!await _savePdfPaneToMarkdown()) return reportFailure();
     }
     const ta = document.getElementById('doc-editor-textarea');
     const doc = docs.get(activeDocId);
-    if (!ta || !doc || !activeDocId) return;
+    if (!ta || !doc || !activeDocId) return true;
     const live = ta.value;
-    if (live === doc.content) return;
+    if (live === doc.content) return true;
     try {
-      await fetch(`${API_BASE}/api/document/${activeDocId}`, {
+      const res = await fetch(`${API_BASE}/api/document/${activeDocId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: live }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       doc.content = live;
+      return true;
     } catch (e) {
       console.warn('Pre-export save failed:', e);
+      return reportFailure();
     }
   }
 
   async function _openExportPdfModal() {
     if (!activeDocId) return;
-    await _saveActiveDocBeforeExport();
+    if (!await _saveActiveDocBeforeExport()) return;
 
     const overlay = document.createElement('div');
     overlay.className = 'modal pdf-export-overlay';
@@ -1942,6 +1950,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       _setPdfSaveStatus('idle');
       return true;
     }
+    const previousContent = doc.content;
     doc.content = md;
     const ta = document.getElementById('doc-editor-textarea');
     if (ta) ta.value = md;
@@ -1955,6 +1964,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       });
       if (!res.ok) {
         const t = await res.text().catch(() => res.statusText);
+        doc.content = previousContent;
         _setPdfSaveStatus('error', `Save failed: ${res.status}`);
         console.warn('PDF-pane save HTTP error:', res.status, t);
         return false;
@@ -1962,6 +1972,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       _setPdfSaveStatus('saved');
       return true;
     } catch (e) {
+      doc.content = previousContent;
       _setPdfSaveStatus('error', e.message || 'Save failed');
       console.warn('PDF-pane save failed:', e);
       return false;

@@ -219,6 +219,7 @@ def test_browser_toggle_alias_blocks_before_mcp_dispatch(monkeypatch):
     calls = [
         ToolBlock("mcp__builtin_browser__browser_navigate", '{"url":"https://example.com"}'),
         ToolBlock("mcp__builtin_browser__browser_snapshot", "{}"),
+        ToolBlock("mcp__builtin_browser__browser_future_action", "{}"),
     ]
 
     async def run():

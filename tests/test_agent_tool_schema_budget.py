@@ -274,6 +274,129 @@ def test_browser_priority_does_not_restore_disabled_entry_points(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("disabled_editors", [
+    set(),
+    {"edit_file"},
+    {"write_file"},
+    {"apply_patch"},
+    {"edit_file", "write_file", "apply_patch"},
+])
+def test_workspace_coding_budget_keeps_file_editing_tools(monkeypatch, disabled_editors):
+    import src.model_context as model_context
+
+    schemas = loop.FUNCTION_TOOL_SCHEMAS
+    names = {schema["function"]["name"] for schema in schemas}
+    assert {"read_file", "edit_file", "bash", "write_file", "apply_patch"} <= names
+    requests = []
+    _configure(monkeypatch, [], requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 0)
+    question = "Read the project code, fix the bug, and run its focused test suite."
+    messages = [
+        {"role": "system", "content": "Current instructions. " * 300},
+        {"role": "user", "content": "Older task. " * 1800},
+        {"role": "assistant", "content": "Earlier result. " * 1800},
+        {"role": "user", "content": question},
+    ]
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "unknown-context-model", messages,
+            relevant_tools=names,
+            disabled_tools=disabled_editors,
+            workspace="/workspace/project",
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    request = requests[0]
+    selected = request["kwargs"]["tools"]
+    selected_names = {schema["function"]["name"] for schema in selected}
+    assert {"read_file", "bash"} <= selected_names
+    if "edit_file" not in disabled_editors:
+        assert "edit_file" in selected_names
+    assert selected_names.isdisjoint(disabled_editors)
+    assert any(message.get("role") == "user" and message.get("content") == question
+               for message in request["messages"])
+    assert estimate_tool_schema_tokens(selected) <= 1500
+    assert estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(selected) + 1024 <= 6000
+
+
+def test_workspace_coding_budget_compacts_large_native_history_before_schema_selection(monkeypatch):
+    import src.model_context as model_context
+
+    schemas = loop.FUNCTION_TOOL_SCHEMAS
+    names = {schema["function"]["name"] for schema in schemas}
+    assert {"read_file", "edit_file", "bash", "grep", "glob"} <= names
+    requests = []
+    _configure(monkeypatch, [], requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 0)
+    question = "Read the project code, fix the bug, and run its focused test suite."
+    messages = [
+        {"role": "system", "content": "Current instructions. " * 300},
+        {"role": "user", "content": question},
+    ]
+    # Model several earlier inspection rounds, then a latest read whose body
+    # is large enough that the normal context compactor must shorten it.
+    for index, tool_name in enumerate(("read_file", "bash", "grep", "glob")):
+        call_id = f"old-call-{index}"
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": "{}"},
+                }],
+            },
+            {"role": "tool", "tool_call_id": call_id, "content": "Earlier repository output. " * 300},
+        ])
+    latest_id = "latest-read-call"
+    latest_exchange = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": latest_id,
+                "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path":"src/module.py"}'},
+            }],
+        },
+        {"role": "tool", "tool_call_id": latest_id, "content": "Latest source body. " * 6000},
+    ]
+    messages.extend(latest_exchange)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "unknown-context-model", messages,
+            relevant_tools=names,
+            workspace="/workspace/project",
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    request = requests[0]
+    selected = request["kwargs"]["tools"]
+    selected_names = {schema["function"]["name"] for schema in selected}
+    assert {"read_file", "edit_file", "bash"} <= selected_names
+    assert any(message.get("role") == "user" and message.get("content") == question
+               for message in request["messages"])
+    latest_call = next(message for message in request["messages"]
+                       if message.get("role") == "assistant"
+                       and any(call.get("id") == latest_id for call in message.get("tool_calls", [])))
+    latest_result = next(message for message in request["messages"]
+                         if message.get("role") == "tool" and message.get("tool_call_id") == latest_id)
+    assert latest_result["content"] != latest_exchange[-1]["content"]
+    assert latest_call["tool_calls"][0]["id"] == latest_id
+    assert latest_result["tool_call_id"] == latest_id
+    used_schemas = [schema for schema in schemas
+                    if schema["function"]["name"] in {"read_file", "bash", "grep", "glob"}]
+    assert estimate_tool_schema_tokens(selected) <= estimate_tool_schema_tokens(used_schemas) + 1500
+    assert estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(selected) + 1024 <= 6000
+
+
 @pytest.mark.parametrize("browser_disabled", ["enabled", "tools", "alias"])
 def test_url_request_selects_browser_when_retrieval_misses_it(monkeypatch, browser_disabled):
     from types import SimpleNamespace

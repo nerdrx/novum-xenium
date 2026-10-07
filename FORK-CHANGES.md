@@ -1,10 +1,12 @@
 # NX Odysseus fork changes
 
-Modified by nerdrx on October 6, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`.
+Modified by nerdrx on October 7, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`.
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
 ## Included changes
+
+- GitHub coding workflow: workspace coding requests prioritize read/edit/shell tools, and later schema allocation budgets against compacted messages rather than raw inspection output. Large reads no longer silently remove unused editors before history compaction. Disabled tools and existing request/native-exchange checks remain enforced. Docker includes ripgrep. Mandatory workspace snapshots allow 8 MiB per file and 64 MiB overall while retaining 2,000-file and 20-snapshot limits.
 
 - URL-routing and toggle clarity: supplied links deterministically select enabled browser entry points when native search/fetch is off or retrieval misses the browser. The magnifying-glass tooltip and explainer now name both search and page fetching. The global `builtin_browser` disable switch applies to all qualified browser actions in schema selection and execution, including tools introduced by later MCP releases.
 
@@ -45,6 +47,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 7 GitHub coding update: 465 focused checks passed, including disabled file editors and large prior/latest native read outputs within the conservative 6,000-token input budget. The new large-history regression fails against the preceding allocator because `edit_file` disappears. A real subscription `gpt-6.1-sol` run cloned this public fork into an isolated workspace, edited a future-browser-action regression through `edit_file`, reviewed the diff and ran its 19 tests successfully. It needed a separate continuation after reaching the bounded round limit; on the rebuilt application image that continuation reran the tests and created local commit `d1ccedd09d1ef4578e9bba91bd172bfeb579323f`. Provider calls and tool execution used the production agent loop via a saved-file harness, not the browser UI. The harness handled its post-restart Git ownership mismatch with a repository-specific command override. Public checkout/edit/test/local commit are verified; private checkout, GitHub push and PR creation from Odysseus remain untested and need separately configured credentials. No local LLM or teacher was invoked. Normal Docker build succeeded; live source hashes, ripgrep availability and the login page were verified. The test's useful one-line regression is included in this update.
 
 October 7 URL-routing and toggle update: 447 focused checks passed, including retrieval returning no browser tools, search/fetch disabled, exact browser actions disabled, global browser-alias exclusion, dispatcher rejection before MCP execution and existing email aliases. The retrieval-miss case failed before the selection repair. A bounded live `gpt-6.1-sol` probe used the production agent request allocator, real installed browser schemas and the exact public zVram link request with native search/fetch disabled. Even when tool-index initialization timed out, it selected Navigate/Snapshot/Tabs and the real subscription model emitted a Navigate call. That probe did not execute the call or test a complete repository review; browser navigation and page reading were independently verified in the preceding update. JavaScript syntax passed; the explainer, accessible tooltip and module cache version were updated. The ten previously documented wider foreground-suite failures remain outside this focused run.
 

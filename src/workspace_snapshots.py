@@ -18,8 +18,8 @@ from src.constants import DATA_DIR
 
 _ROOT = Path(DATA_DIR) / "workspace_snapshots"
 _MAX_FILES = 2_000
-_MAX_FILE_BYTES = 2 * 1024 * 1024
-_MAX_TOTAL_BYTES = 20 * 1024 * 1024
+_MAX_FILE_BYTES = 8 * 1024 * 1024
+_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_SNAPSHOTS = 20
 _MAX_PREVIEW_BYTES = 512 * 1024
 _EXCLUDED_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".cache", "dist", "build"}

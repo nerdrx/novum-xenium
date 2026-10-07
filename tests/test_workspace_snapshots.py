@@ -90,6 +90,31 @@ def test_size_limit_rejects_large_workspace(ws, monkeypatch):
         snapshots.create_snapshot(str(ws), "alice", "chat-1")
 
 
+def test_repository_assets_above_old_limits_survive_source_restore(ws):
+    # A normal web repository can include several bundled assets over 2 MiB
+    # and exceed 20 MiB overall without dependencies or Git history.
+    for index in range(6):
+        (ws / f"asset-{index}.bin").write_bytes(b"x" * (4 * 1024 * 1024))
+    source = ws / "source.py"
+    source.write_text("before\n")
+    saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    source.write_text("after\n")
+    preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
+    assert [change["path"] for change in preview["changes"]] == ["source.py"]
+    snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
+    assert source.read_text() == "before\n"
+    assert all((ws / f"asset-{index}.bin").stat().st_size == 4 * 1024 * 1024
+               for index in range(6))
+
+
+def test_total_snapshot_budget_still_rejects_oversized_tree(ws, monkeypatch):
+    monkeypatch.setattr(snapshots, "_MAX_TOTAL_BYTES", 5)
+    (ws / "a.txt").write_text("four")
+    (ws / "b.txt").write_text("four")
+    with pytest.raises(snapshots.SnapshotError, match="size limit"):
+        snapshots.create_snapshot(str(ws), "alice", "chat-1")
+
+
 def test_automatic_checkpoint_is_once_per_turn(ws):
     path = ws / "a.txt"
     path.write_text("before")

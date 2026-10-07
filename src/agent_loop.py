@@ -4282,8 +4282,17 @@ async def stream_agent_loop(
                 # Leave bounded room for the next skill/tool when the actual
                 # input budget can still hold this turn and its output reserve.
                 if used_names:
-                    turn_tokens = estimate_tokens(route_messages[latest_user:]) if latest_user >= 0 else 0
-                    available = max(selected_tokens, effective_budget - reserve_tokens - turn_tokens)
+                    # Budget against compacted history, not raw read output.
+                    # Otherwise a few inspections remove all unused editors
+                    # before the normal message compactor can make room.
+                    discovery_cap = min(selected_tokens + schema_cap,
+                                        max(selected_tokens, effective_budget - reserve_tokens))
+                    bounded_messages = trim_for_context(
+                        route_messages, max(1, effective_budget - discovery_cap),
+                        reserve_tokens=reserve_tokens,
+                    )
+                    available = max(selected_tokens, effective_budget - reserve_tokens
+                                    - estimate_tokens(bounded_messages))
                     schema_cap = min(selected_tokens + schema_cap, available)
                 # Retrieval can select the browser without an explicit forced
                 # tool list. Rank its usable entry points before server order,
@@ -4297,14 +4306,21 @@ async def stream_agent_loop(
                     _BROWSER_MCP_PREFIX + "browser_snapshot": 1,
                     _BROWSER_MCP_PREFIX + "browser_tabs": 2,
                 }
+                coding_requested = bool(
+                    workspace and _looks_like_workspace_coding_request(_retrieval_query or _last_user)
+                )
+                coding_core = {"read_file": 0, "edit_file": 1, "bash": 2, "grep": 3,
+                               "write_file": 4, "apply_patch": 5}
 
                 def schema_priority(schema):
                     name = schema.get("function", {}).get("name", "")
+                    if coding_requested and name in coding_core:
+                        return (0, coding_core[name])
                     if browser_requested and name in browser_core:
-                        return (0, browser_core[name])
+                        return (1, browser_core[name])
                     if name in _runtime_skill_tools:
-                        return (1, 0)
-                    return (2 if name in priority_names else 3, 0)
+                        return (2, 0)
+                    return (3 if name in priority_names else 4, 0)
 
                 for schema in sorted(route_tools, key=schema_priority):
                     if schema in selected:

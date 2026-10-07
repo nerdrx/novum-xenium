@@ -112,8 +112,9 @@ def main():
         errors, tool_calls, done, run_id = [], 0, False, None
         stop_requested = False
         try:
-            with request("/api/chat/stream", {"message": case["prompt"], "session": session,
+            with request("/api/chat_stream", {"message": case["prompt"], "session": session,
                          "mode": "agent", "allow_bash": "true", "allow_web_search": "false",
+                         "selected_endpoint_id": args.endpoint_id,
                          "workspace": f"{args.app_workspace_root.rstrip('/')}/{batch}/{case['name']}"}) as response:
                 run_id = response.headers.get("X-Odysseus-Run-Id")
                 current_event = "message"

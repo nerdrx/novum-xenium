@@ -124,6 +124,7 @@ KNOWN_CONTEXT_WINDOWS = {
     'claude-3-haiku': 200000,
 
     # --- OpenAI ---
+    'gpt-6.1-sol': 272000,
     'gpt-5': 400000,
     'gpt-4.1': 1047576,
     'gpt-4.1-mini': 1047576,

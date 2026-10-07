@@ -184,6 +184,9 @@ class TestLookupKnown:
     def test_gpt4o(self):
         assert _lookup_known("gpt-4o") == 128000
 
+    def test_gpt_6_1_sol_context(self):
+        assert _lookup_known("gpt-6.1-sol") == 272000
+
     def test_deepseek_r1(self):
         assert _lookup_known("deepseek-r1") == 64000
 
@@ -291,6 +294,11 @@ class TestGetContextLength:
 
         endpoint = "http://100.117.136.97:34521/v1/chat/completions"
         assert model_context.get_context_length(endpoint, "gpt-4o") == 128000
+
+    def test_gpt_6_1_sol_known_context_scales_budget(self, monkeypatch):
+        monkeypatch.setattr(model_context, "_configured_endpoint_kind", lambda _: "proxy")
+        endpoint = "https://api.openai.com/v1/chat/completions"
+        assert model_context.budget_context_for_model(endpoint, "gpt-6.1-sol") == 272000
 
     def test_configured_proxy_unknown_model_reads_catalog_context(self, monkeypatch):
         # A model missing from the known table (e.g. a new OpenRouter model)

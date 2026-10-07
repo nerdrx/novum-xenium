@@ -1,0 +1,24 @@
+# Optional worker: set ODYSSEUS_EXECUTOR_TOKEN to a long random secret in .env.
+# Start with: docker compose -f docker-compose.yml -f docker.executor.yml up -d --build
+services:
+  odysseus:
+    environment:
+      - ODYSSEUS_EXECUTOR_URL=http://executor:9100
+      - ODYSSEUS_EXECUTOR_TOKEN=${ODYSSEUS_EXECUTOR_TOKEN:?Set a random executor token}
+      - ODYSSEUS_EXECUTOR_ROOT=/workspace
+  executor:
+    build: ./scripts/executor
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      - ODYSSEUS_EXECUTOR_TOKEN=${ODYSSEUS_EXECUTOR_TOKEN:?Set a random executor token}
+    volumes:
+      - ${APP_DATA_DIR:-./data}/agent_workspace/workspace:/workspace:z
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=256m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: 2
+    restart: unless-stopped

@@ -23,7 +23,7 @@ import time
 import uuid
 from typing import AsyncGenerator, Dict, Optional
 
-from src import run_checkpoints
+from src import run_checkpoints, run_evidence
 from src.stream_errors import describe_stream_failure
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,8 @@ _EVICT_GRACE_S = 180
 
 def _publish(run: _Run, ev: str) -> None:
     """Append one SSE event and fan it out to every live subscriber."""
+    if run.persist_checkpoint:
+        run_evidence.record(run.run_id, ev)
     run.buffer.append(ev)
     seq = len(run.buffer) - 1
     for q in list(run.subscribers):
@@ -216,6 +218,7 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
             _flush_checkpoint_delta(run)
             if run.persist_checkpoint:
                 run_checkpoints.finish(run.run_id, run.status)
+                run_evidence.finish(run.run_id, run.status)
         finally:
             if run.deleted_scope is not None:
                 _mark_deleted_run_drained(*run.deleted_scope)
@@ -257,6 +260,7 @@ def start(
                     _wake_run_subscribers(prev)
                     if prev.persist_checkpoint:
                         run_checkpoints.finish(prev.run_id, "stopped")
+                        run_evidence.finish(prev.run_id, "stopped")
                 prev.task.cancel()
                 prev_task = prev.task   # new run awaits this before it starts writing
             if prev.evict_task and not prev.evict_task.done():
@@ -265,6 +269,7 @@ def start(
         _RUNS[session_id] = run
         if persist:
             run_checkpoints.begin(run.run_id, session_id, owner, context)
+            run_evidence.begin(run.run_id, session_id, owner, context)
         run.task = asyncio.create_task(_drain(session_id, run, agen, prev_task))
     return run
 
@@ -352,7 +357,17 @@ def stop(session_id: str, expected_run_id: Optional[str] = None) -> bool:
                 _wake_run_subscribers(run)
                 if run.persist_checkpoint:
                     run_checkpoints.finish(run.run_id, "stopped")
+                    run_evidence.finish(run.run_id, "stopped")
                 _schedule_evict(session_id, run)
+            async def _cleanup_owned() -> None:
+                try:
+                    from src.agent_tools.subprocess_tools import stop_owned
+                    await stop_owned(session_id, run.run_id)
+                    from src import bg_jobs
+                    await asyncio.to_thread(bg_jobs.kill_run, session_id, run.run_id)
+                except Exception:
+                    logger.exception("failed to clean up run-owned commands")
+            asyncio.create_task(_cleanup_owned())
             run.task.cancel()
             if never_started and run.deleted_scope is not None:
                 _mark_deleted_run_drained(*run.deleted_scope)
@@ -438,3 +453,4 @@ def claim_recovery(session_id: str, owner: Optional[str], run_id: str) -> Option
 def delete_checkpoints(session_id: str, owner: Optional[str] = None) -> None:
     """Delete durable metadata when an owning session is permanently removed."""
     run_checkpoints.delete_session(session_id, owner)
+    run_evidence.delete_session(session_id, owner)

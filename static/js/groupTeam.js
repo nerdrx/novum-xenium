@@ -25,11 +25,12 @@ export function buildReviewPrompt(board, task) {
     'Inspect available evidence and report findings, gaps, and verification limits. Do not edit files, run mutating tools, or mark this task done. A human will verify the work.';
 }
 
-export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAssignment, onBusy }) {
+export function createGroupTeam({ apiBase, getParentSessionId, getModels, getParticipantSessions = () => [], getRequestContext = () => ({}) }) {
   let root = null;
   let parentId = null;
   let board = { plan: '', participants: [], tasks: [] };
   let enabled = false;
+  let isolateWorktrees = false;
   let busy = false;
   let loading = false;
   let message = '';
@@ -37,10 +38,21 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
   let taskSerial = 0;
   let saveChain = Promise.resolve();
   let loadGeneration = 0;
+  let jobId = null;
+  let pollGeneration = 0;
 
   const models = () => (getModels() || []).map(m => ({ ...m, mid: String(m.mid) }));
   const person = id => board.participants.find(p => p.id === id);
   const key = id => `odysseus-group-team-enabled:${id}`;
+  const worktreeKey = id => `odysseus-group-team-worktrees:${id}`;
+
+  function worktreePath(task) {
+    return task.work_result?.match(/^Task worktree[^\n]*:\n([^\n]+)\n\n/)?.[1] || '';
+  }
+
+  function worktreeReport(task) {
+    return task.work_result?.replace(/^Task worktree[^\n]*:\n[^\n]+\n\n/, '') || '';
+  }
 
   async function save() {
     if (!parentId || loading) return false;
@@ -101,12 +113,16 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
         ${task.status === 'awaiting_review' ? `<button type="button" data-team-done="${i}" ${busy ? 'disabled' : ''}>Mark done</button>` : ''}
         ${task.status === 'working' ? `<button type="button" data-team-retry="${i}" title="Re-running may repeat an action that already completed" ${busy ? 'disabled' : ''}>Retry task</button>` : ''}
         <button type="button" data-team-remove="${i}" aria-label="Remove task ${i + 1}" ${busy ? 'disabled' : ''}>×</button>
-        ${task.work_result ? `<details><summary>Builder report</summary><pre>${esc(task.work_result)}</pre></details>` : ''}
+        ${worktreePath(task) ? `<div class="group-team-worktree"><strong>Isolated worktree:</strong> <code>${esc(worktreePath(task))}</code><br><span>Detached at selected Git HEAD; uncommitted source changes were not copied.</span></div>` : ''}
+        ${task.work_result ? `<details><summary>Builder report</summary><pre>${esc(worktreeReport(task))}</pre></details>` : ''}
+        ${task.review_result ? `<details><summary>Reviewer report</summary><pre>${esc(task.review_result)}</pre></details>` : ''}
       </div>`).join('')}
+      <label class="group-team-isolation"><input type="checkbox" data-team-isolate ${isolateWorktrees ? 'checked' : ''} ${busy ? 'disabled' : ''}>
+        Isolate task worktrees <span>Admin only; starts from selected Git HEAD. Uncommitted changes are not copied.</span></label>
       <div class="group-team-actions">
         <button type="button" data-team-add ${busy || board.tasks.length >= 32 ? 'disabled' : ''}>Add task</button>
         <button type="button" data-team-run ${busy || !board.tasks.length ? 'disabled' : ''}>${busy ? 'Working…' : 'Run one work + review pass'}</button>
-      </div><span data-team-message role="status">${esc(message || 'Automated pass stops for human verification.')}</span>
+      </div>${busy ? '<button type="button" data-team-stop>Stop team pass</button>' : ''}<span data-team-message role="status">${esc(message || 'Automated pass stops for human verification.')}</span>
     </div>`;
     const plan = root.querySelector('[data-team-plan]');
     plan?.addEventListener('input', event => { board.plan = event.target.value; scheduleSave(); });
@@ -150,6 +166,11 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
       board.tasks.splice(Number(button.dataset.teamRemove), 1);
       render(); scheduleSave();
     }));
+    root.querySelector('[data-team-isolate]')?.addEventListener('change', event => {
+      isolateWorktrees = event.target.checked;
+      if (parentId) localStorage.setItem(worktreeKey(parentId), String(isolateWorktrees));
+      render();
+    });
     root.querySelector('[data-team-add]')?.addEventListener('click', () => {
       const owner = board.participants.find(p => p.role === 'builder');
       if (!owner) { message = 'Assign a builder first'; render(); return; }
@@ -159,6 +180,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
       render(); scheduleSave();
     });
     root.querySelector('[data-team-run]')?.addEventListener('click', runPass);
+    root.querySelector('[data-team-stop]')?.addEventListener('click', stopRun);
   }
 
   function defaultBoard(items) {
@@ -172,17 +194,24 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
     const id = getParentSessionId();
     if (!id) {
       loadGeneration++;
+      pollGeneration++;
       parentId = null;
+      jobId = null;
+      busy = false;
       loading = false;
       return;
     }
     if (id === parentId) { render(); return; }
+    pollGeneration++;
+    jobId = null;
+    busy = false;
     const generation = ++loadGeneration;
     parentId = id;
     loading = true;
     const currentModels = models();
     board = defaultBoard(currentModels);
     enabled = localStorage.getItem(key(parentId)) === 'true';
+    isolateWorktrees = localStorage.getItem(worktreeKey(parentId)) === 'true';
     try {
       const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(parentId)}/team`, { credentials: 'same-origin' });
       if (response.ok) {
@@ -194,6 +223,65 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
     if (generation !== loadGeneration || parentId !== id) return;
     loading = false;
     render();
+    await attachRun(id, generation);
+  }
+
+  async function refreshBoard(id) {
+    const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(id)}/team`, { credentials: 'same-origin' });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (parentId === id && data.board) board = data.board;
+  }
+
+  async function pollRun(id, currentJob, generation) {
+    const poll = ++pollGeneration;
+    busy = true; render();
+    while (parentId === id && poll === pollGeneration) {
+      try {
+        const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(id)}/team/run?job_id=${encodeURIComponent(currentJob)}`, { credentials: 'same-origin' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const { run } = await response.json();
+        if (generation !== loadGeneration || parentId !== id || !run) break;
+        message = run.status === 'stopping' ? 'Stop requested…' : (run.state?.message || `Team pass ${run.status}`);
+        await refreshBoard(id);
+        if (!['running', 'stopping'].includes(run.status)) {
+          busy = false;
+          if (run.status === 'interrupted') message = 'Server restarted during this pass. Inspect the working task; retry only when its outcome is clear.';
+          else if (run.status === 'completed') message = 'Pass complete. Verify the work, then mark tasks done.';
+          else if (run.status === 'stopped') message = 'Stopped. Inspect any working task before retrying.';
+          else if (run.status === 'failed') message = `Pass failed: ${run.state?.message || 'check the task before retrying'}`;
+          render(); return;
+        }
+        render();
+      } catch (error) { message = 'Reconnecting to server team pass…'; render(); }
+      await new Promise(resolve => setTimeout(resolve, 800));
+    }
+    if (parentId === id && poll === pollGeneration) { busy = false; render(); }
+  }
+
+  async function attachRun(id, generation) {
+    try {
+      const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(id)}/team/run`, { credentials: 'same-origin' });
+      if (!response.ok) return;
+      const { run } = await response.json();
+      if (generation !== loadGeneration || parentId !== id || !run) return;
+      jobId = run.job_id;
+      if (['running', 'stopping'].includes(run.status)) return pollRun(id, jobId, generation);
+      if (run.status === 'interrupted') {
+        message = 'Server restarted during this pass. Inspect the working task; retry only when its outcome is clear.';
+        render();
+      }
+    } catch (_) {}
+  }
+
+  async function stopRun() {
+    if (!parentId || !jobId) return;
+    try {
+      await fetch(`${apiBase}/api/groups/${encodeURIComponent(parentId)}/team/stop`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId }),
+      });
+    } catch (_) { message = 'Could not send Stop; reconnect to check the run.'; render(); }
   }
 
   async function runPass() {
@@ -202,35 +290,34 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
       message = 'A task has an uncertain result. Retry it explicitly or remove it before continuing.';
       render(); return;
     }
-    busy = true; message = 'Building assigned tasks'; onBusy?.(true); render();
+    const requestContext = getRequestContext(board) || {};
+    if (isolateWorktrees && !requestContext.workspace) {
+      message = 'Choose a Git workspace before isolating team tasks'; render(); return;
+    }
+    if (String(requestContext.incognito || 'false').toLowerCase() === 'true') {
+      message = 'Server-owned team passes are unavailable in incognito sessions'; render(); return;
+    }
+    busy = true; message = 'Starting server team pass'; render();
     try {
-      for (const task of board.tasks) {
-        if (task.status !== 'pending') continue;
-        if (!task.title.trim() || !person(task.owner_id) || person(task.owner_id).role !== 'builder') {
-          message = 'Each task needs a title and one builder'; render(); return;
-        }
-        task.status = 'working';
-        if (!await save()) { message = 'Could not save task state; no work was started'; render(); return; }
-        const output = await runAssignment(task.owner_id, buildWorkPrompt(board, task), false);
-        if (typeof output !== 'string' || !output.trim()) { message = 'Work pass stopped; task remains open'; render(); return; }
-        task.work_result = output.slice(0, 12_000);
-        task.status = 'awaiting_review';
-        if (!await save()) { message = 'Could not save builder result; review is paused'; render(); return; }
+      if (board.tasks.some(task => !task.title.trim() || !person(task.owner_id) || person(task.owner_id).role !== 'builder')) {
+        message = 'Each task needs a title and one builder'; render(); return;
       }
-      message = 'Reviewing assigned work'; render();
-      for (const task of board.tasks) {
-        if (task.status !== 'awaiting_review' || !task.reviewer_id) continue;
-        const reviewer = person(task.reviewer_id);
-        if (!reviewer || reviewer.role !== 'reviewer' || reviewer.id === task.owner_id) continue;
-        const review = await runAssignment(task.reviewer_id, buildReviewPrompt(board, task), true);
-        if (typeof review !== 'string' || !review.trim()) { message = 'Review pass stopped; human verification is still required'; render(); return; }
-      }
-      message = 'Pass complete. Verify the work, then mark tasks done.';
+      const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(parentId)}/team/run`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ board, participant_sessions: getParticipantSessions(), request_context: requestContext,
+          isolate_worktrees: isolateWorktrees }),
+      });
+      if (!response.ok) throw new Error(`Team pass failed (${response.status})`);
+      const data = await response.json();
+      jobId = data.run?.job_id;
+      if (!jobId) throw new Error('Server did not return a team job');
+      await pollRun(parentId, jobId, loadGeneration);
     } catch (error) {
-      message = 'Team pass stopped; human verification is required';
+      message = error.message || 'Could not start team pass';
       console.warn('[group-team] run failed', error);
+      busy = false; render();
     } finally {
-      busy = false; onBusy?.(false); render();
+      render();
     }
   }
 
@@ -242,6 +329,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
       render();
     },
     getBoard() { return board; },
+    get isolateWorktrees() { return isolateWorktrees; },
     setBoard(value) { board = value; render(); },
     retryTask(taskId) {
       const task = board.tasks.find(item => item.id === taskId);
@@ -250,6 +338,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
     },
     save,
     runPass,
+    stopRun,
     get enabled() { return enabled; },
   };
 }

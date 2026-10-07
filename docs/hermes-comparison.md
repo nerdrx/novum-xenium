@@ -54,3 +54,11 @@ The deeper recall follow-up passed 117 focused checks in a network-disabled, rea
 A synthetic saved skill containing a long procedure reduced the skill-related prompt context from 11,710 to 948 characters (91.9%). Both prompts were assembled from the production code against the same fixture; the full procedure remained available by explicit read. This measures context size, not intelligence, model throughput or task success.
 
 The wider foreground-routing suite had eleven failures on the previous commit, reproduced using its original agent-loop and test files. This update fixes its skill-activation/schema-budget failure. At that point ten older error-message and context-budget assertions remained, so that wider run was not fully green. The reliability follow-up above repairs them; the historical 208 focused checks remain a separate result.
+
+## Harness follow-up
+
+The next pass adds repository guidance and compact maps, managed detached Git worktrees, explicit project verification checks, run-owned Stop cleanup, server-owned coordinated task passes, offline capability preflight and bounded run metadata. An optional worker container separates shell execution from application data. The workspace picker contains the new project controls.
+
+Worktrees separate file edits, not host permissions. Coordinated task passes survive tab closure; ordinary auto-conversation is still separate. Restarted team work requires inspection and an explicit retry. Verification checks must be configured and automatic completion checks are opt-in. Capability metadata does not prove a model will choose the right tool, and the small coding evaluation is a regression baseline rather than a benchmark ranking.
+
+Group Team can opt into one managed worktree per task. Builder and reviewer use the same persisted task path; interrupted passes retain their mappings. Checkouts start from HEAD and need a human merge.

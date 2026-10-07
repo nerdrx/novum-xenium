@@ -6,7 +6,7 @@ This guide covers the NX controls and their operating boundaries. The main page 
 
 ## Working on a repository
 
-Use a separate checkout inside your selected workspace, describe a bounded change, and ask the agent to inspect, edit and run the relevant tests. Review the diff and actual test output before publishing.
+Open **Workspace → Project tools, checks and run evidence**. Inspect the repository, create a managed worktree and select **Use this worktree**. Describe a bounded change, then review the diff and actual test output before publishing. Dirty or ignored work is preserved when removing a worktree.
 
 The standard Docker workspace is `/workspace` inside the container and `data/agent_workspace/workspace/` on the host. File tools stay within the selected folder; the shell starts there but is not an operating-system sandbox. Native writes use pinned POSIX directory descriptors and preserve existing mode, owner/group and supported user/ACL metadata. They fail if those safety APIs or metadata preservation are unavailable; Docker uses Linux, including Docker on Windows/macOS. Multi-file patches validate first but remain non-atomic on later I/O failure: inspect the workspace diff when warned. Agent writes and shell tools require a bounded snapshot, so use a sparse source checkout when a repository contains large benchmark captures or generated artifacts.
 
@@ -42,7 +42,7 @@ This is a bounded repetition check, not a judgment of whether every action is us
 
 ## Restart recovery
 
-after a process interruption, open the chat and click **Continue** on its recovery card. The server retains bounded partial text and tool outcomes in owner-scoped checkpoints. Continue is one-use, rechecks the saved workspace/model/endpoint and preserves read-only plan mode. Saved evidence is untrusted context; tools and old approvals are never replayed automatically. In-memory runs still reconnect normally without a restart. Stop also works when pressed before the detached run starts. Incognito does not store checkpoints. Persistent tmux shell commands can continue after the agent is stopped; interrupt those commands in their terminal before restoring files.
+after a process interruption, open the chat and click **Continue** on its recovery card. The server retains bounded partial text and tool outcomes in owner-scoped checkpoints. Continue is one-use, rechecks the saved workspace/model/endpoint and preserves read-only plan mode. Saved evidence is untrusted context; tools and old approvals are never replayed automatically. In-memory runs still reconnect normally without a restart. Stop also works when pressed before the detached run starts. Incognito does not store checkpoints. Stop tracks commands in the persistent tmux pane and terminates their owned descendants while preserving shell state. Deliberately detached or reparented processes may need separate cleanup. Inspect remaining writers before restoring files.
 
 ## Coding undo
 
@@ -50,7 +50,7 @@ open the workspace picker to **Create snapshot**, choose one, **Review changes**
 
 ## Coordinated teams
 
-open the group controls and enable **Coordinate tasks**. Enter the shared plan, assign builders/reviewers, and run one work + review pass. Each task has one builder; optional reviewers use enforced read-only plan mode. Results remain **awaiting review** until you **Mark done**. A stopped or refreshed **working** task blocks another pass until explicit **Retry task**; verify prior side effects before retrying. Boards persist on the server. Ordinary Until Stop conversations remain available separately; team passes run in the browser and stop for human verification.
+open the group controls and enable **Coordinate tasks**. Enter the shared plan, assign builders/reviewers, and run one work + review pass. Each task has one builder; optional reviewers use enforced read-only plan mode. Results remain **awaiting review** until you **Mark done**. A stopped or refreshed **working** task blocks another pass until explicit **Retry task**; verify prior side effects before retrying. Boards persist on the server. Ordinary Until Stop conversations remain available separately; coordinated task passes run on the server and stop for human verification. Closing the tab does not cancel them. A process restart marks unfinished passes interrupted; inspect the saved work before explicitly retrying.
 
 ## Context inspector
 
@@ -81,3 +81,38 @@ The default theme is **NX**, matching the exported palette and synapse backgroun
 ## Chat titles
 
 Ordinary and group chats use the first request as an immediate title. Older model/time placeholders show a request-based title when available; their stored names are not bulk rewritten. Naming calls can refine generated titles after a reply. A title you explicitly set is kept, even if it equals a model name or `Chat`.
+
+## Project guidance and checks
+
+Agent turns in a Git workspace receive bounded repository guidance, build/test hints and a compact file map. Root instructions and instructions along the selected folder's ancestry apply; unrelated nested rules are not loaded as global rules. Repository text cannot grant permissions or override your request. The map is a starting point, not a replacement for inspecting source.
+
+Verification commands are explicit argv arrays you review and save for the repository. A required check must pass before the verification gate says complete. Checks can run manually against a managed worktree; automatic checks after agent edits are opt-in. Saved results are tied to the worktree's commit and dirty content, so changing files makes previous results stale. A check that changes the worktree cannot certify that changed state; rerun against the final files. Timeouts and Stop terminate registered verifier processes. No checks configured means unverified, not passed.
+
+## Separate shell execution
+
+The default shell still runs in the application container. For a separate execution container, set a random `ODYSSEUS_EXECUTOR_TOKEN` of at least 32 characters in `.env`, then use:
+
+```sh
+docker compose -f docker-compose.yml -f docker.executor.yml up -d --build
+```
+
+The worker mounts only the standard `/workspace` code folder. It receives no model keys, application data, Docker socket or SSH identity. Its root filesystem is read-only, privileges are dropped, and process, memory and CPU limits apply. Bash and Python commands run there; native file tools and browser tools remain in the app. Shell state is not shared with the application's tmux terminal. Network access remains available for package downloads. The container is a practical separation boundary, not a claim that arbitrary hostile code is harmless.
+
+Select a workspace inside `/workspace`; a different mount requires matching `ODYSSEUS_EXECUTOR_ROOT` and worker volume configuration. A missing worker fails the command without retrying it inside the app. Existing host-network installation overrides need an explicit reachable worker URL; the optional file above targets the normal Docker network.
+
+## Preflight, run evidence and coding evaluations
+
+**Check capabilities** reports configured providers, tool declarations, backend state and known context information. Unknown stays unknown; registry context values are advisory. This offline check does not start models or prove provider reachability. Existing explicit provider tests remain available in Settings.
+
+**Run evidence** shows recent run status, elapsed time, tool names and exit codes. It retains up to 20 runs per chat and 256 metadata events per run. Prompts, commands, tool output, endpoint URLs and credentials are not copied into this metadata log. Full content remains in the chat's existing history and recovery storage. Deleting the chat deletes its evidence.
+
+The small same-model coding evaluation in `scripts/harness_eval.py` checks repair, implementation and a change across multiple files. Use a disposable app and a shared fixture workspace. Supply a browser cookie through `NX_EVAL_COOKIE` when authentication is enabled, select one model/endpoint, and run:
+
+```sh
+python scripts/harness_eval.py --workspace-root /path/to/fixtures \
+  --app-workspace-root /workspace/fixtures --model MODEL --endpoint-id ENDPOINT_ID
+```
+
+The report requires real tool calls, a completed stream and independent file assertions. A stopped run, approval question, exhausted budget or failed file test fails the task. These small tasks are a regression baseline, not a general coding leaderboard.
+
+Group Team also offers **Isolate task worktrees** for an admin or single-user Git workspace. Each task starts from the selected repository HEAD; its builder and reviewer share that task checkout. Uncommitted source changes are not copied. Task paths survive retries and server restarts. Inspect and merge the resulting work yourself; no automatic merge runs.

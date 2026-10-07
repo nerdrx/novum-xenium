@@ -48,7 +48,8 @@ export function init(apiBase) {
     apiBase: API_BASE,
     getParentSessionId: () => _parentSessionId,
     getModels: () => _models,
-    runAssignment: runTeamAssignment,
+    getRequestContext: board => _requestContext([board.plan, ...board.tasks.map(task => task.title)].join('\n')),
+    getParticipantSessions: () => Object.fromEntries(_models.map((model, i) => [String(model.mid), _participantSessions[i]])),
   });
   // Initialize Group tab inside Characters modal
   _initGroupTab();

@@ -6,6 +6,11 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Harness workflow: bounded applicable repository guidance and file maps, owner-scoped managed Git worktrees, configured verification gates, and a project panel in the workspace picker.
+- Coordinated team passes execute server-side with optional task worktrees, saved work and review results, explicit interruption state, matching-child cancellation and human completion. Incognito and delegated credentials cannot launch persisted team passes.
+- Stop tracks foreground process groups and background jobs by exact run identity. Separate shell execution is available through an optional restricted worker container.
+- Offline capability preflight, bounded owner-scoped run metadata, and a repeatable same-model coding evaluation with independent file assertions.
+
 - Usability pass: ordinary and group chats get a title from the first request immediately. Older model/time and group placeholders show request-derived titles without rewriting their stored names or making bulk model calls. Explicit create/rename titles carry provenance and are preserved, including during asynchronous naming.
 - Workspace folders support keyboard activation, loading states and retries; stale navigation replies are ignored. Snapshot controls show the active workspace, prevent duplicate saves and invalidate a restore preview when another snapshot is selected. Disabled actions look disabled; Escape closes the picker and returns focus.
 - Approval mode shows loading/saving state, retries failed loading and preserves keyboard focus after a failed save. Participant choices initialize immediately, report provider errors or an empty model list and retry without caching the failure.

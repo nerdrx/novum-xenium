@@ -18270,6 +18270,10 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
 .group-team-board textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 .group-team-board pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
 .group-team-status { color: var(--accent); }
+.group-team-isolation { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: start; }
+.group-team-isolation span { grid-column: 2; opacity: .75; }
+.group-team-worktree { overflow-wrap: anywhere; padding: 6px; border-left: 2px solid var(--accent); }
+.group-team-worktree span { opacity: .75; }
 .workspace-snapshots { padding: 10px; border-top: 1px solid var(--border); }
 .workspace-snapshot-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .workspace-snapshot-actions button:disabled, .workspace-footer button:disabled {
@@ -41628,3 +41632,14 @@ body.settings-sidebar-resize-active {
     display: none;
   }
 }
+
+/* Project controls stay in the existing workspace picker. */
+.workspace-project-tools { padding: 12px; border-top: 1px solid var(--border); max-height: 50vh; overflow: auto; }
+.workspace-project-tools summary { cursor: pointer; }
+.project-workflow-panel h2 { font-size: 1rem; }
+.project-workflow-panel label { display: block; margin: 8px 0; }
+.project-workflow-panel input, .project-workflow-panel textarea { width: 100%; box-sizing: border-box; color: var(--text-color); background: var(--bg-color); border: 1px solid var(--border); padding: 8px; }
+.project-workflow-panel button { margin: 4px; padding: 6px 10px; cursor: pointer; }
+.project-workflow-panel button:disabled { opacity: .5; cursor: wait; }
+.project-workflow-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.project-workflow-panel li { margin: 10px 0; overflow-wrap: anywhere; }

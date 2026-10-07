@@ -12,10 +12,11 @@ The aim is a self-hosted workhorse for coding, research and agent teams. Give it
 
 The original Odysseus already has chat, agents, MCP, documents, email, notes, tasks, calendar, model comparison, deep research and a gallery. NX builds on that.
 
-- **Working on projects.** A persistent workspace, read/edit/run tools that stay available through long inspections, and snapshots you can review and restore. Docker includes ripgrep. Large repos can use a sparse checkout.
+- **Working on projects.** A persistent workspace, repository guidance and a compact map, managed Git worktrees, and snapshots you can review and restore. Save the checks a project needs and see whether they actually passed. Docker includes ripgrep. Large repos can use a sparse checkout.
 - **Keeping longer tasks usable.** Tool definitions count toward the context budget. Large outputs are archived and searchable, with exact chunks available when needed. The context inspector shows where the space goes.
 - **Remembering useful things.** Skills load their procedures on demand. Agents can search past chats and open the actual matching messages, with timestamps and links back to the source.
-- **Agents working together.** Group chats can keep talking for 20 replies, 100 replies or Until Stop. Shared task boards add a builder, optional read-only reviewers and a human decision on whether the task is done.
+- **Agents working together.** Group chats can keep talking for 20 replies, 100 replies or Until Stop. Shared task boards add a builder, optional read-only reviewers and a human decision on whether the task is done. Coordinated task passes run on the server, so closing the tab does not stop them.
+- **Checking the harness.** An offline preflight shows declared model capabilities, configured backends and missing pieces. Run evidence keeps timing, tool outcomes and interruption state without copying prompts, commands or secrets. A small coding evaluation checks actual files, not completion claims.
 - **Knowing what's happening.** Waiting and streaming have clearer status messages. Repeated reads and failed retries pause with an explanation, keeping the edits and tool history. Interrupted runs can continue from saved progress after a restart.
 - **Choosing how much to approve.** Ask for approval, Approve for me or Full access within the workspace/container. A small judge handles eligible uncertain actions and shows its reason.
 - **ChatGPT and images.** Native subscription tool calls, fixes for unsupported request parameters, proper image-provider settings and an optional host Codex image bridge.
@@ -79,7 +80,7 @@ A few limits matter:
 
 - Full access skips approvals within the current setup. It doesn't mount more host folders or override account permissions and disabled tools. The shell isn't an operating-system sandbox.
 - Native file mutation and snapshot restore require safe POSIX file APIs; the standard Docker install has them, including Docker on Windows/macOS. Native platforms lacking those APIs can inspect files and snapshots but cannot run these mutations. Multi-file patches and snapshot restores can be partial after an I/O failure; inspect the reported recovery point or workspace diff.
-- Stopping an agent does not reliably interrupt a command already running in its persistent tmux shell. Interrupt that command separately before restoring its files.
+- Stop cancels owned foreground process groups, background jobs and commands tracked in the persistent tmux pane. The pane keeps its shell state. Deliberately detached or reparented processes may need separate cleanup; Stop cannot undo side effects.
 - Snapshots cover included workspace files, up to 2,000 files, 8 MiB per file and 64 MiB total. Stop concurrent file writers before restoring. Snapshots don't undo external services, running processes or shell effects outside the workspace. Use sparse checkouts for large repos.
 - Retrieval doesn't enlarge a model's context window or guarantee perfect recall. Requests and output limits are budgeted separately for each provider route.
 - Auto-conversation runs in the browser tab. Backups contain private application data and credentials, so keep them private.

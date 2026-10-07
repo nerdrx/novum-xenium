@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import uuid
 import tempfile
@@ -580,6 +581,7 @@ async def _exec_shell(command: str, timeout: int = EXEC_TIMEOUT) -> Dict[str, An
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(Path.home()),
+            start_new_session=not IS_WINDOWS,
         )
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         stdout = stdout_b.decode(errors="replace")[:MAX_OUTPUT]
@@ -588,7 +590,10 @@ async def _exec_shell(command: str, timeout: int = EXEC_TIMEOUT) -> Dict[str, An
     except asyncio.TimeoutError:
         if proc:
             try:
-                proc.kill()
+                if not IS_WINDOWS:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
                 await proc.wait()
             except ProcessLookupError:
                 pass
@@ -641,7 +646,10 @@ async def _generate_pty(cmd: str, timeout: int, request: Request):
     try:
         while not process_done.is_set():
             if deadline and loop.time() > deadline:
-                proc.kill()
+                if not IS_WINDOWS:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
                 await proc.wait()
                 yield f"data: {json.dumps({'stream': 'stderr', 'data': f'Command timed out after {timeout}s'})}\n\n"
                 yield f"data: {json.dumps({'exit_code': -1})}\n\n"
@@ -649,7 +657,10 @@ async def _generate_pty(cmd: str, timeout: int, request: Request):
 
             # Check client disconnect
             if await request.is_disconnected():
-                proc.kill()
+                if not IS_WINDOWS:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
                 await proc.wait()
                 return
 
@@ -713,7 +724,10 @@ async def _generate_pty(cmd: str, timeout: int, request: Request):
 
     except Exception as e:
         try:
-            proc.kill()
+            if not IS_WINDOWS:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
             await proc.wait()
         except ProcessLookupError:
             pass

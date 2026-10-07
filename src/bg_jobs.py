@@ -24,6 +24,7 @@ import json
 import os
 import shlex
 import subprocess
+import signal
 import time
 import uuid
 from pathlib import Path
@@ -139,9 +140,15 @@ def launch(command: str, session_id: str, cwd: Optional[str] = None,
         **detached_popen_kwargs(),  # detach from the request lifecycle (setsid / DETACHED_PROCESS)
     )
 
+    try:
+        from src import agent_runs
+        run_id = agent_runs.get_run_id(session_id)
+    except Exception:
+        run_id = None
     rec = {
         "id": job_id,
         "session_id": session_id,
+        "run_id": run_id,
         "command": command,
         "status": "running",       # running | done | failed
         "pid": proc.pid,
@@ -233,6 +240,14 @@ def refresh() -> Dict[str, Dict[str, Any]]:
 def _kill(pid: Optional[int]) -> None:
     # Cross-platform process-tree teardown (POSIX killpg / Windows taskkill /T).
     kill_process_tree(pid)
+    if pid and os.name == "posix":
+        # Jobs launch in a new session, so this group is ours. Escalate after a
+        # short grace period to ensure explicit Stop leaves no command running.
+        time.sleep(0.15)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            pass
 
 
 def pending_followups() -> List[Dict[str, Any]]:
@@ -281,6 +296,39 @@ def kill(job_id: str) -> Optional[Dict[str, Any]]:
         rec["followed_up"] = True
         _save(jobs)
     return rec
+
+
+def kill_session(session_id: str) -> int:
+    """Stop every active background job belonging to one chat session."""
+    jobs = _load()
+    now = time.time()
+    stopped = 0
+    for rec in jobs.values():
+        if rec.get("session_id") != session_id or rec.get("status") != "running":
+            continue
+        _kill(rec.get("pid"))
+        rec.update(status="failed", exit_code=-1, ended_at=now, killed=True, followed_up=True)
+        stopped += 1
+    if stopped:
+        _save(jobs)
+    return stopped
+
+
+def kill_run(session_id: str, run_id: str) -> int:
+    """Stop only background jobs created by one exact detached agent run."""
+    jobs = _load()
+    now = time.time()
+    stopped = 0
+    for rec in jobs.values():
+        if (rec.get("session_id") != session_id or rec.get("run_id") != run_id
+                or rec.get("status") != "running"):
+            continue
+        _kill(rec.get("pid"))
+        rec.update(status="failed", exit_code=-1, ended_at=now, killed=True, followed_up=True)
+        stopped += 1
+    if stopped:
+        _save(jobs)
+    return stopped
 
 
 def result_text(rec: Dict[str, Any]) -> str:

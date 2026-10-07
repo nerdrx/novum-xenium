@@ -813,6 +813,12 @@ app.include_router(setup_workspace_routes())
 
 from routes.group_routes import router as group_router
 app.include_router(group_router)
+from routes.project_routes import setup_project_routes
+app.include_router(setup_project_routes())
+from routes.harness_routes import setup_harness_routes
+app.include_router(setup_harness_routes(session_manager))
+from src.run_evidence import recover_interrupted
+recover_interrupted()
 
 # Hardware model fitting (cookbook "What Fits?" tab)
 from routes.hwfit_routes import setup_hwfit_routes

@@ -6,6 +6,7 @@
 // to that folder (see routes/chat_routes.py + src/tool_execution.py).
 
 import Storage, { KEYS } from './storage.js';
+import { mountProjectWorkflow } from './projectWorkflow.js';
 import uiModule from './ui.js';
 import { makeWindowDraggable } from './windowDrag.js';
 
@@ -21,6 +22,7 @@ let _snapshotLoading = false;
 let _snapshotBusy = '';
 let _snapshotViewVersion = 0;
 let _opener = null;
+let _projectCleanup = null;
 
 export function getWorkspace() {
   // This local Docker installation mounts the persistent files folder here.
@@ -358,12 +360,23 @@ function _getModal() {
         <div class="muted" id="workspace-snapshot-note" role="status"></div>
         <div id="workspace-snapshot-preview" class="workspace-snapshot-preview"></div>
       </section>
+      <details class="workspace-project-tools"><summary>Project tools, checks and run evidence</summary><div id="workspace-project-tools"></div></details>
       <div class="modal-footer workspace-footer">
         <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-cancel">Cancel</button>
         <button type="button" class="confirm-btn confirm-btn-primary" id="workspace-use">Use this folder</button>
       </div>
     </div>`;
   document.body.appendChild(_modal);
+  _modal.querySelector('.workspace-project-tools').addEventListener('toggle', event => {
+    _projectCleanup?.(); _projectCleanup = null;
+    if (event.target.open) _projectCleanup = mountProjectWorkflow(
+      _modal.querySelector('#workspace-project-tools'), getWorkspace(), {
+        fetcher: fetch,
+        onSelectWorkspace: path => { setWorkspace(path); closeWorkspaceBrowser(); },
+        getSessionId: () => Storage.get(KEYS.CURRENT_SESSION, '')
+      }
+    );
+  });
   _modal.querySelector('#workspace-close').addEventListener('click', closeWorkspaceBrowser);
   _modal.querySelector('#workspace-cancel').addEventListener('click', closeWorkspaceBrowser);
   document.addEventListener('keydown', event => {
@@ -407,6 +420,8 @@ export async function openWorkspaceBrowser() {
 }
 
 export function closeWorkspaceBrowser() {
+  _projectCleanup?.(); _projectCleanup = null;
+  if (_modal) _modal.querySelector(".workspace-project-tools").open = false;
   ++_snapshotViewVersion;
   _browseController?.abort();
   _browseController = null;

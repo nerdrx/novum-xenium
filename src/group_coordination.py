@@ -12,6 +12,7 @@ from src.constants import DATA_DIR
 _MAX_PLAN = 8_000
 _MAX_TASKS = 32
 _MAX_RESULT = 12_000
+_MAX_REVIEW = 12_000
 _STATUSES = {"pending", "working", "awaiting_review", "done"}
 _ROLES = {"builder", "reviewer"}
 
@@ -58,6 +59,7 @@ def validate_board(raw):
         reviewer_id = item.get("reviewer_id") or ""
         status = item.get("status", "pending")
         result = item.get("work_result", "")
+        review_result = item.get("review_result", "")
         if (not isinstance(task_id, str) or not task_id or len(task_id) > 80 or task_id in task_ids
                 or not isinstance(title, str) or not title.strip() or len(title) > 500
                 or not isinstance(owner_id, str) or not isinstance(reviewer_id, str)
@@ -66,14 +68,17 @@ def validate_board(raw):
                     reviewer_id not in by_id or by_id[reviewer_id]["role"] != "reviewer"
                     or reviewer_id == owner_id
                 )
-                or not isinstance(result, str)):
+                or not isinstance(result, str) or not isinstance(review_result, str)):
             raise ValueError("Invalid task assignment")
         task_ids.add(task_id)
-        clean_tasks.append({
+        clean_task = {
             "id": task_id, "title": title.strip(), "owner_id": owner_id,
             "reviewer_id": reviewer_id, "status": status,
             "work_result": result[:_MAX_RESULT],
-        })
+        }
+        if "review_result" in item:
+            clean_task["review_result"] = review_result[:_MAX_REVIEW]
+        clean_tasks.append(clean_task)
     return {"plan": plan, "participants": clean_people, "tasks": clean_tasks}
 
 
@@ -86,6 +91,17 @@ class GroupCoordinationStore:
                 "CREATE TABLE IF NOT EXISTS group_team_boards ("
                 "session_id TEXT NOT NULL, owner TEXT NOT NULL, board TEXT NOT NULL, updated REAL NOT NULL, "
                 "PRIMARY KEY(session_id, owner))"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS group_team_runs ("
+                "job_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner TEXT NOT NULL, "
+                "status TEXT NOT NULL, state TEXT NOT NULL, updated REAL NOT NULL)"
+            )
+            # A process restart cannot resume an in-flight model call safely.
+            # Keep its partial board and make the interrupted state explicit.
+            db.execute(
+                "UPDATE group_team_runs SET status='interrupted', updated=? WHERE status IN ('running','stopping')",
+                (time.time(),),
             )
         if os.name == "posix":
             os.chmod(self.path, 0o600)
@@ -125,3 +141,45 @@ class GroupCoordinationStore:
                 "DELETE FROM group_team_boards WHERE session_id=? AND owner=?",
                 (session_id, str(owner or "")),
             )
+            db.execute(
+                "DELETE FROM group_team_runs WHERE session_id=? AND owner=?",
+                (session_id, str(owner or "")),
+            )
+
+    def create_run(self, job_id, session_id, owner, state):
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO group_team_runs(job_id,session_id,owner,status,state,updated) VALUES(?,?,?,'running',?,?)",
+                (job_id, session_id, str(owner or ""), json.dumps(state), time.time()),
+            )
+
+    def update_run(self, job_id, owner, status, state):
+        with self._connect() as db:
+            db.execute(
+                "UPDATE group_team_runs SET status=?,state=?,updated=? WHERE job_id=? AND owner=?",
+                (status, json.dumps(state, ensure_ascii=False), time.time(), job_id, str(owner or "")),
+            )
+
+    def get_run(self, session_id, owner, job_id=None):
+        with self._connect() as db:
+            if job_id:
+                row = db.execute(
+                    "SELECT job_id,status,state,updated FROM group_team_runs WHERE session_id=? AND owner=? AND job_id=?",
+                    (session_id, str(owner or ""), job_id),
+                ).fetchone()
+            else:
+                row = db.execute(
+                    "SELECT job_id,status,state,updated FROM group_team_runs WHERE session_id=? AND owner=? ORDER BY updated DESC LIMIT 1",
+                    (session_id, str(owner or "")),
+                ).fetchone()
+        if row is None:
+            return None
+        return {"job_id": row[0], "status": row[1], "state": json.loads(row[2]), "updated": row[3]}
+
+    def active_run(self, session_id, owner):
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT job_id FROM group_team_runs WHERE session_id=? AND owner=? AND status IN ('running','stopping') LIMIT 1",
+                (session_id, str(owner or "")),
+            ).fetchone()
+        return row[0] if row else None

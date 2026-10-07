@@ -2785,6 +2785,12 @@ def setup_chat_routes(
     # GET /api/chat/checkpoint — expose only the current owner's interrupted
     # run, for an explicit browser recovery choice after a process restart.
     # ------------------------------------------------------------------ #
+    @router.get("/api/chat/evidence/{session_id}")
+    async def chat_evidence(request: Request, session_id: str):
+        _verify_session_owner(request, session_id)
+        from src.run_evidence import list_runs
+        return {"runs": list_runs(session_id, effective_user(request))}
+
     @router.get("/api/chat/checkpoint/{session_id}")
     async def chat_checkpoint(request: Request, session_id: str) -> Dict[str, Any]:
         _require_interactive_recovery(request)
@@ -3004,4 +3010,7 @@ def setup_chat_routes(
 
         return StreamingResponse(stream_rewrite(), media_type="text/event-stream")
 
+    from src.group_runs import set_assignment_runner
+    from src.group_chat_runner import create_assignment_runner
+    set_assignment_runner(create_assignment_runner(chat_stream, session_manager))
     return router

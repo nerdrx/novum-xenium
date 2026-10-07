@@ -2800,6 +2800,17 @@ def _build_system_prompt(
         else:
             merged.append(msg)
 
+    _project_message = None
+    if workspace and not suppress_local_context:
+        try:
+            from src.project_workflows import project_prompt_context
+            from src.owner_identity import effective_storage_owner
+            _project_context = project_prompt_context(effective_storage_owner(owner), workspace, max_chars=4000)
+            if _project_context:
+                _project_message = untrusted_context_message("repository guidance and map", _project_context)
+        except (ValueError, OSError):
+            pass  # Ordinary folders need not contain a Git repository.
+
     # Insert the document message right before the last user message so it's
     # close to the user's request and survives context trimming independently.
     # Same treatment for the matched-skills block — user-editable skill
@@ -2817,9 +2828,13 @@ def _build_system_prompt(
         _mcp_desc_message,
         _skills_message,
         _datetime_message,
+        _project_message,
     ):
         if injected:
             injected["_agent_injected"] = "context"
+    if _project_message:
+        merged.insert(last_user_idx, _project_message)
+        last_user_idx += 1
     if _doc_message:
         merged.insert(last_user_idx, _doc_message)
         last_user_idx += 1  # the document message is now at last_user_idx
@@ -6874,6 +6889,44 @@ async def stream_agent_loop(
     ):
         _final_delta = full_response.strip()
         yield f"data: {json.dumps({'delta': _final_delta})}\n\n"
+
+    # User-configured checks are a deterministic gate, not a model's claim.
+    _project_verification = None
+    if (workspace and not plan_mode and not guide_only and not delegated_credential and not incognito
+            and not _awaiting_user and not _progress_paused and not _exhausted_rounds
+            and any(event.get("tool") in {"write_file", "edit_file", "apply_patch", "bash", "python"}
+                    for event in tool_events)):
+        from src.project_workflows import run_workspace_verification, verification_plan
+        from src.owner_identity import effective_storage_owner
+        from src import agent_runs
+        try:
+            _verification_plan = await asyncio.to_thread(verification_plan, effective_storage_owner(owner), workspace)
+            if _verification_plan and _verification_plan.get("auto_run"):
+                yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'verification', 'command': 'Running saved project checks'})}\n\n"
+            _project_verification = await run_workspace_verification(
+                effective_storage_owner(owner), workspace, session_id=session_id,
+                run_id=agent_runs.get_run_id(session_id) if session_id else None,
+            )
+        except (ValueError, OSError) as exc:
+            _project_verification = {"complete": False, "reason": str(exc)[:300]}
+        if _project_verification is not None:
+            _passed = _project_verification.get("complete") is True
+            _checks = _project_verification.get("results", [])
+            _required_failed = any(check.get("required", True) and check.get("passed") is not True for check in _checks)
+            _summary = ("All configured required checks passed." if _passed else
+                        "Required checks failed; this work is not verified." if _required_failed else
+                        "No required checks are configured; this work is not verified." if _checks else
+                        str(_project_verification.get("reason") or "Project verification is not configured."))
+            _gate_note = "\n\n[Project verification: " + _summary + "]"
+            full_response += _gate_note
+            yield f"data: {json.dumps({'delta': _gate_note})}\n\n"
+            yield f"data: {json.dumps({'type': 'verification', 'passed': _passed, 'status': 'passed' if _passed else 'unverified'})}\n\n"
+            if _checks:
+                _verification_event = {"tool": "verification", "desc": "Configured project checks",
+                    "command": "Saved project verification commands", "exit_code": 0 if _passed else 1,
+                    "output": json.dumps(_project_verification, ensure_ascii=False)}
+                tool_events.append(_verification_event)
+                yield f"data: {json.dumps({'type': 'tool_output', **_verification_event})}\n\n"
 
     # --- Final metrics ---
     total_duration = time.time() - total_start

@@ -16,12 +16,20 @@ window.sessionModule={getCurrentSessionId:()=> 'fixture-chat'};
 window.teamCalls=[];
 const team=createGroupTeam({apiBase:'',getParentSessionId:()=> 'fixture-chat',
  getModels:()=>[{mid:'builder',display:'Builder'},{mid:'reviewer',display:'Reviewer'}],
- runAssignment:async(id,prompt,readonly)=>{window.teamCalls.push({id,readonly});return 'Verified fixture report';}});
+ getParticipantSessions:()=>({builder:'builder-session',reviewer:'reviewer-session'}),
+ getRequestContext:()=>({mode:'agent',workspace:'/workspace'})});
+const nativeFetch=window.fetch.bind(window);
+window.fetch=(url,options={})=>{
+ if(url.includes('/team/run')&&options.method==='POST')window.teamCalls.push(JSON.parse(options.body));
+ return nativeFetch(url,options);
+};
 await team.mount(document.getElementById('team'));team.setEnabled(true);
 document.getElementById('workspace-open').onclick=()=>workspace.openWorkspaceBrowser();
 window.fixtureReady=true;
 </script></body></html>`;
 let savedBoard = null;
+let savedRun = null;
+let isolatePosted = false;
 let restored = false;
 const snapshot = {id:'a'.repeat(32),created_at:new Date().toISOString(),label:'Before coding'};
 const json = (res, data) => {res.setHeader('Content-Type','application/json');res.end(JSON.stringify(data));};
@@ -29,6 +37,14 @@ const server = http.createServer(async(req,res)=>{
   const url = new URL(req.url,'http://localhost');
   if(url.pathname==='/') return res.end(html);
   if(url.pathname.startsWith('/api/groups/')) {
+    if(url.pathname.endsWith('/team/run')&&req.method==='POST') {
+      let body='';for await(const part of req)body+=part;
+      const payload=JSON.parse(body);savedBoard=payload.board;isolatePosted=payload.isolate_worktrees;
+      savedBoard.tasks=savedBoard.tasks.map(task=>({...task,status:'awaiting_review',work_result:'Task worktree (detached at selected Git HEAD; uncommitted source changes were not copied):\n/tmp/worktree-a\n\nVerified fixture report',review_result:'Review complete'}));
+      savedRun={job_id:'fixture-job',status:'completed',state:{message:'Pass complete'}};
+      return json(res,{run:savedRun});
+    }
+    if(url.pathname.endsWith('/team/run')) return json(res,{run:savedRun});
     if(req.method==='PUT') {let body='';for await(const part of req)body+=part;savedBoard=JSON.parse(body).board;}
     return json(res,{board:savedBoard});
   }
@@ -53,9 +69,15 @@ const server = http.createServer(async(req,res)=>{
     await page.locator('[data-team-add]').click();
     await page.locator('[data-team-title]').fill('Implement the assigned app');
     await page.locator('[data-team-title]').blur();
+    await page.locator('[data-team-isolate]').check();
     await page.locator('[data-team-run]').click();
     await page.locator('[data-team-done]').waitFor();
-    assert.deepEqual(await page.evaluate(()=>window.teamCalls),[{id:'builder',readonly:false},{id:'reviewer',readonly:true}]);
+    assert.match(await page.locator('.group-team-worktree').textContent(),/\/tmp\/worktree-a/);
+    const posted=await page.evaluate(()=>window.teamCalls[0]);
+    assert.deepEqual(posted.participant_sessions,{builder:'builder-session',reviewer:'reviewer-session'});
+    assert.equal(posted.isolate_worktrees,true);
+    assert.equal(isolatePosted,true);
+    assert.equal(posted.board.tasks[0].title,'Implement the assigned app');
     assert.match(await page.locator('.group-team-status').textContent(),/awaiting review/);
     if(process.env.UI_CAPTURE_DIR)await page.screenshot({animations:'disabled',path:path.join(process.env.UI_CAPTURE_DIR,'team.png')});
     await page.locator('[data-team-done]').click();
@@ -74,6 +96,6 @@ const server = http.createServer(async(req,res)=>{
     assert.equal(restored,true);
     assert.equal(await page.locator('#workspace-snapshot-restore').isDisabled(),true);
     assert.deepEqual(errors,[]);
-    console.log('PASS: headless DOM team assignment, read-only review, human completion, snapshot preview/restore');
+    console.log('PASS: headless DOM server-owned team pass, human completion, snapshot preview/restore');
   } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});

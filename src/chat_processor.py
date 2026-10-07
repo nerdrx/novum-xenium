@@ -508,18 +508,10 @@ class ChatProcessor:
                 logger.debug(f"Skills index unavailable: {e}")
                 idx = []
             if idx:
-                by_cat: Dict[str, list] = {}
-                for s in idx:
-                    by_cat.setdefault(s.get("category") or "general", []).append(s)
-                lines = ["[Available skills — call manage_skills(action='view', name='...') to load one when relevant]"]
-                for cat in sorted(by_cat):
-                    lines.append(f"  {cat}:")
-                    for s in sorted(by_cat[cat], key=lambda x: x["name"]):
-                        desc = s.get("description") or ""
-                        lines.append(f"    - {s['name']}: {desc}" if desc else f"    - {s['name']}")
+                from services.memory.skills import format_skill_index
                 preface.append(untrusted_context_message(
                     "available skills index",
-                    "\n".join(lines),
+                    format_skill_index(idx),
                 ))
 
         return preface, rag_sources, web_sources

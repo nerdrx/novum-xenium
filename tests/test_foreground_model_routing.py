@@ -3580,7 +3580,7 @@ def test_skill_activation_reaches_later_fallback_request_and_pinned_round(monkey
             }]
 
         def get_relevant_skills(self, *args, **kwargs):
-            return []
+            return self.load()
 
     monkeypatch.setattr(skills_module, "SkillsManager", FakeSkillsManager)
     monkeypatch.setattr(tool_policy, "known_tool_names", lambda: {"manage_skills", "grep"})
@@ -3633,6 +3633,8 @@ def test_skill_activation_reaches_later_fallback_request_and_pinned_round(monkey
         )
     )
 
+    first_request = requests_by_round[0][1][0]
+    assert "grep" not in {schema["function"]["name"] for schema in first_request["kwargs"]["tools"]}
     round_two_candidates, round_two_requests = requests_by_round[1]
     assert round_two_candidates == [primary, backup]
     primary_schema_names = {

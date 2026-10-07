@@ -80,6 +80,10 @@ async def do_manage_skills(content: str, owner: Optional[str] = None) -> Dict:
         md = sm.read_skill_md(name, owner=owner)
         if md is None:
             return {"error": f"Skill {name!r} not found", "exit_code": 1}
+        try:
+            sm.record_use(name, owner=owner)
+        except Exception:
+            logger.debug("Skill usage counter unavailable", exc_info=True)
         return {"results": md}
 
     if action == "view_ref":

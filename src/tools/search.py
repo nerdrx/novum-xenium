@@ -5,9 +5,16 @@ Holds the search_chats tool.
 ``src.tool_implementations`` re-exports these for backward compatibility.
 """
 import logging
+import re
 from typing import Dict
 
 logger = logging.getLogger(__name__)
+
+_MARKDOWN_PUNCTUATION = re.compile(r"([\\`*_{}\[\]()#+\-.!|>])")
+
+
+def _escape_markdown(value: str) -> str:
+    return _MARKDOWN_PUNCTUATION.sub(r"\\\1", value)
 
 
 async def do_search_chats(query: str, limit: int = 20, owner: str | None = None) -> Dict:
@@ -22,27 +29,36 @@ async def do_search_chats(query: str, limit: int = 20, owner: str | None = None)
     try:
         from src.session_search import search_session_messages
 
-        results = search_session_messages(query, limit=limit, owner=owner)
+        search_limit = max(1, min(int(limit or 20), 100))
+        results = search_session_messages(query, limit=search_limit, owner=owner)
         if not results:
-            return {"results": f"No chats found matching \"{query}\"."}
+            return {"results": f'No chats found matching "{_escape_markdown(query[:120])}".'}
 
-        # Group by session to avoid duplicate links
-        seen_sessions = {}
+        # Keep several distinct evidence messages per session, in search order.
+        sessions = {}
         for result in results:
-            if result.session_id not in seen_sessions:
-                seen_sessions[result.session_id] = result
+            matches = sessions.setdefault(result.session_id, [])
+            if len(matches) < 3 and all(match.message_id != result.message_id for match in matches):
+                matches.append(result)
 
-        lines = [f"Found {len(seen_sessions)} session(s) matching \"{query}\":\n"]
-        for sid, result in seen_sessions.items():
-            lines.append(f"- [**{result.session_name}**](#session-{sid})")
+        lines = [f'Found {len(sessions)} session(s) matching "{_escape_markdown(query[:120])}":\n']
+        for sid, matches in sessions.items():
+            result = matches[0]
+            safe_name = _escape_markdown(result.session_name[:120])
+            lines.append(f"- [**{safe_name}**](#session-{sid})")
             lines.append(f"  Open: [Open chat](#session-{sid})")
-            lines.append(f"  Match ({result.role}): {result.content_snippet}")
-            if result.context_before:
-                before = result.context_before[-1]
-                lines.append(f"  Before ({before['role']}): {before['content'][:180]}")
-            if result.context_after:
-                after = result.context_after[0]
-                lines.append(f"  After ({after['role']}): {after['content'][:180]}")
+            for match in matches:
+                timestamp = match.timestamp or "unknown"
+                lines.append(
+                    f"  Match ({match.role}, id: {match.message_id}, time: {timestamp}): "
+                    f"{match.content_snippet[:240]}"
+                )
+                if match.context_before:
+                    before = match.context_before[-1]
+                    lines.append(f"  Before ({before['role']}): {before['content'][:180]}")
+                if match.context_after:
+                    after = match.context_after[0]
+                    lines.append(f"  After ({after['role']}): {after['content'][:180]}")
             lines.append("")
 
         return {"results": "\n".join(lines)}

@@ -206,3 +206,50 @@ def test_skill_index_is_owner_scoped_across_prompt_cache_hits(tmp_path, monkeypa
     assert "Bob private procedure" in bob_text
     assert "alice-only" not in bob_text
     assert "Alice private procedure" not in bob_text
+
+
+def test_skill_procedure_is_loaded_only_by_view(tmp_path, monkeypatch):
+    import asyncio
+    from services.memory.skills import SkillsManager
+    data_dir = tmp_path / "data"
+    sm = SkillsManager(str(data_dir))
+    sm.add_skill(name="receipt-render", title="receipt render", description="render safe receipt",
+                 when_to_use="render safe receipt", procedure=["PRIVATE_PROCEDURE_BODY" * 100],
+                 pitfalls=["PRIVATE_PITFALL"], status="published", owner="alice")
+    _patch_prefs(monkeypatch, data_dir)
+    from src.agent_loop import _build_system_prompt
+    messages = [{"role": "user", "content": "render safe receipt"}]
+    output, _ = _build_system_prompt(messages=messages, model="test-model", active_document=None,
+                                    mcp_mgr=None, owner="alice")
+    text = "\n".join(str(m.get("content") or "") for m in output)
+    assert "receipt-render" in text
+    assert "PRIVATE_PROCEDURE_BODY" not in text
+    assert "PRIVATE_PITFALL" not in text
+    assert sm.load(owner="alice")[0].get("uses", 0) == 0
+    from src.tools.system import do_manage_skills
+    result = asyncio.run(do_manage_skills('{"action":"view","name":"receipt-render"}', owner="alice"))
+    assert "PRIVATE_PROCEDURE_BODY" in result["results"]
+    assert sm.load(owner="alice")[0]["uses"] == 1
+    assert "results" not in asyncio.run(do_manage_skills('{"action":"view","name":"receipt-render"}', owner="bob"))
+
+
+def test_disabled_skill_tool_has_no_skill_discovery_context(tmp_path, monkeypatch):
+    data_dir = _seed_index_skill(tmp_path)
+    _patch_prefs(monkeypatch, data_dir)
+    from src.agent_loop import _build_system_prompt
+    output, _ = _build_system_prompt(messages=[{"role":"user", "content":"clean inbox"}],
+        model="test-model", active_document=None, mcp_mgr=None, disabled_tools={"manage_skills"})
+    assert not any("inbox-bomb" in str(m.get("content") or "") for m in output)
+
+
+def test_skill_prompt_index_is_bounded_and_searchable():
+    from services.memory.skills import format_skill_index
+    skills = [{"name": f"skill-{i}", "description": "long description " * 100,
+               "category":"general", "status":"draft"} for i in range(100)]
+    text = format_skill_index(skills)
+    assert len(text) <= 4000
+    assert "manage_skills action=search" in text
+    assert "unverified" in text
+    assert "skill-0" in text
+    assert "skill-99" not in text
+    assert format_skill_index([]) == ""

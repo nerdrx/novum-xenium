@@ -6,6 +6,8 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Hermes-inspired native improvements: bounded skill metadata with on-demand procedures/tool activation; usage counted on procedure read, finite confidence and account-threshold publication, draft guidance labeled unverified; multiple owner-scoped recall excerpts per chat with message IDs/timestamps. Existing personal memory, scheduler, audits and groups are retained. The [comparison](docs/hermes-comparison.md) documents overlap and limits; no Hermes runtime is required.
+
 - Compare preflight, retries, shuffle replacements and toolbar checks use the selected 5–300 second timeout instead of a fixed eight-second deadline. The UI shows the wait budget and local loading/queue explanation, with pending browser requests cancelled when the check closes. Server-side provider work may continue until its deadline.
 
 - Popup layering: modal auto-promotion happens only when a window opens, preventing visible dialogs from continually raising each other. Compare model/add/swap/export menus follow the live window stack; the scoreboard opens above its parent. Searchable Compare pickers also accept Enter after filtering.
@@ -37,6 +39,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 7 skills/recall update: 208 focused checks passed in a network-disabled, read-only container. A same-fixture prompt comparison reduced skill-related context from 11,710 to 948 characters (91.9%); procedures remain available by explicit read. Tests cover owner scope, counters, disabled tools, confidence/publication settings, distinct recall matches and on-demand native tool activation across fallback rounds. The broader foreground-routing baseline reproduced eleven prior failures; this update fixes the skill-activation failure, leaving ten existing error-message/context-budget assertion failures. Full details and validation limits are in the comparison document.
 
 October 6 Compare timeout update: 183 focused regression checks passed in a network-disabled container. A headless Chrome fixture exercised the shipped selector/helper with the timeout set to 300 seconds, verified preflight and retry request budgets, the loading/queue explanation, Escape/Skip cancellation and absence of orphan overlays. A real local Qwen probe succeeded in 19.88 seconds, with Ollama reporting 19.07 seconds to load; the prior eight-second deadline falsely rejected this cold start. This confirms model reachability and the timeout path, not arbitrary comparison or agent-task quality.
 

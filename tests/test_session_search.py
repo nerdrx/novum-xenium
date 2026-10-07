@@ -273,7 +273,10 @@ def test_search_chats_formats_shared_results(monkeypatch):
     from src import session_search
     from src.tool_implementations import do_search_chats
 
+    received = {}
+
     def fake_search(query, limit=20, owner=None, include_archived=False, context_messages=1, db=None):
+        received.update(query=query, limit=limit, owner=owner)
         return [
             SessionSearchResult(
                 message_id="m2",
@@ -293,6 +296,47 @@ def test_search_chats_formats_shared_results(monkeypatch):
     out = asyncio.run(do_search_chats("session search", owner="alice"))
 
     assert "Design notes" in out["results"]
-    assert "Match (assistant): We discussed session search." in out["results"]
+    assert "Match (assistant, id: m2, time: 2026-01-01T12:00:00): We discussed session search." in out["results"]
     assert "Before (user): Can you find old chats?" in out["results"]
     assert "After (user): That helps." in out["results"]
+    assert "id: m2, time: 2026-01-01T12:00:00" in out["results"]
+    assert received == {"query": "session search", "limit": 20, "owner": "alice"}
+
+
+def test_search_chats_keeps_three_distinct_hits_and_bounds_output(monkeypatch):
+    from src import session_search
+    from src.tools.search import do_search_chats
+
+    results = [
+        SessionSearchResult(
+            message_id=message_id,
+            session_id="safe-session-id",
+            session_name="Plan [1] *draft*",
+            role="user",
+            content="",
+            content_snippet=f"fact {index} " + ("x" * 400),
+            timestamp=f"2026-01-01T12:0{index}:00",
+            context_before=[{"role": "assistant", "content": "before " + ("b" * 200)}],
+            context_after=[{"role": "assistant", "content": "after " + ("a" * 200)}],
+        )
+        for index, message_id in enumerate(("m1", "m2", "m2", "m3", "m4"))
+    ]
+    received = {}
+
+    def fake_search(query, limit=20, owner=None):
+        received.update(query=query, limit=limit, owner=owner)
+        return results
+
+    monkeypatch.setattr(session_search, "search_session_messages", fake_search)
+
+    out = asyncio.run(do_search_chats("q" * 200, limit=500, owner="alice"))
+    rendered = out["results"]
+
+    assert rendered.count("  Match (") == 3
+    assert all(f"id: m{i}, time:" in rendered for i in range(1, 4))
+    assert "id: m4" not in rendered
+    assert r"Plan \[1\] \*draft\*" in rendered
+    assert "q" * 121 not in rendered
+    assert "x" * 241 not in rendered
+    assert "b" * 181 not in rendered
+    assert received == {"query": "q" * 200, "limit": 100, "owner": "alice"}

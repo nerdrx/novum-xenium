@@ -8,6 +8,7 @@ we ask the LLM to distill the approach into a reusable skill.
 
 import json
 import logging
+import math
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,47 @@ def _has_duplicate_title(skills, title: str) -> bool:
         if isinstance(existing, str) and existing.lower() == wanted:
             return True
     return False
+
+
+def _bounded_confidence(value) -> Optional[float]:
+    """Return finite confidence in [0, 1], rejecting malformed model output."""
+    if isinstance(value, bool):
+        return None
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    return confidence if math.isfinite(confidence) and 0.0 <= confidence <= 1.0 else None
+
+
+def _auto_publish_policy(owner: Optional[str]) -> tuple[bool, Optional[float]]:
+    """Resolve this owner's publish preference and confidence threshold.
+
+    An invalid explicit user threshold fails closed to draft. Missing values
+    use the configured global threshold, with 0.85 as the safe fallback.
+    """
+    try:
+        from routes.prefs_routes import _load_for_user
+        prefs = _load_for_user(owner) or {}
+    except Exception:
+        return False, None
+
+    enabled = bool(prefs.get("auto_approve_skills", True))
+    try:
+        from src.settings import get_setting
+        default_threshold = get_setting("skill_autosave_min_confidence", 0.85)
+    except Exception:
+        default_threshold = 0.85
+    default_threshold = _bounded_confidence(default_threshold)
+    if default_threshold is None:
+        default_threshold = 0.85
+
+    user_threshold = prefs.get("skill_min_confidence")
+    if user_threshold is None:
+        threshold = default_threshold
+    else:
+        threshold = _bounded_confidence(user_threshold)
+    return enabled, threshold
 
 
 def _extract_json_object(text: str) -> Optional[dict]:
@@ -240,12 +282,12 @@ async def maybe_extract_skill(
             logger.debug("[skill-extract] LLM returned object with no title, dropping")
             return None
 
-        # Honour the model's own reliability/reusability estimate — low-
-        # confidence extractions are usually one-offs or shaky procedures.
-        try:
-            _conf = float(data.get("confidence", 0.7))
-        except (TypeError, ValueError):
-            _conf = 0.7
+        # Reject malformed/out-of-range confidence rather than letting NaN
+        # bypass comparisons and publish a skill without a meaningful score.
+        _conf = _bounded_confidence(data.get("confidence", 0.7))
+        if _conf is None:
+            logger.debug("[skill-extract] invalid confidence, dropping")
+            return None
         if _conf < MIN_CONFIDENCE:
             logger.debug(
                 "[skill-extract] '%s' below confidence floor (%.2f < %.2f) — dropped",
@@ -259,19 +301,12 @@ async def maybe_extract_skill(
             logger.debug("[skill-extract] '%s' already exists — dropped as duplicate", title)
             return None
 
-        # Auto-publish gate: if the user has `auto_approve_skills` on, the
-        # newly-extracted skill is created `published` immediately rather
-        # than waiting for the next audit batch. The audit still runs later
-        # and can demote it back to `draft` (or delete) on failure. Default
-        # ON matches the UI label "Auto-approve skills".
+        # Auto-publish only when the extracted score meets this owner's
+        # configured confidence threshold. Valid lower scores remain drafts.
         _initial_status = "draft"
-        try:
-            from routes.prefs_routes import _load_for_user as _load_prefs
-            _prefs = _load_prefs(owner) or {}
-            if _prefs.get("auto_approve_skills", True):
-                _initial_status = "published"
-        except Exception:
-            pass
+        _auto_approve, _publish_threshold = _auto_publish_policy(owner)
+        if _auto_approve and _publish_threshold is not None and _conf >= _publish_threshold:
+            _initial_status = "published"
 
         entry = skills_manager.add_skill(
             title=title,
@@ -280,7 +315,7 @@ async def maybe_extract_skill(
             steps=data.get("steps", []),
             tags=data.get("tags", []),
             source="learned",
-            confidence=data.get("confidence", 0.7),
+            confidence=_conf,
             session_id=getattr(session, "session_id", None),
             owner=owner,
             status=_initial_status,

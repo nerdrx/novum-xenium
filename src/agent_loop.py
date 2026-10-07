@@ -691,7 +691,7 @@ Generate a new image through the configured image provider and save it to the Ga
     "list_models": "- ```list_models``` — Show all available AI models across all endpoints. Use when user asks what models are available.",
     "manage_session": "- ```manage_session``` — Rename, archive, delete, fork, switch, or `list` chats (the UI calls them 'chats'; 'session' is internal). Line 1 = action (list/switch/rename/archive/unarchive/delete/important/unimportant/truncate/fork), Line 2 = exact chat id from `list_sessions` (or `current` where supported). For delete/archive/truncate, always list first and reuse the exact id; never invent placeholder ids. `switch`/`open` returns a clickable anchor link the user can tap to open the chat — use for \"open my X chat\".",
     "manage_memory": "- ```manage_memory``` — Manage the user's persistent memory (facts about the USER themselves, their preferences, context that persists across chats). Line 1 = action (list/add/edit/delete/search), rest = content. Use when user says 'remember this' about themselves, states identity facts like 'my name is <name>' / 'call me <name>' / 'I live in <place>', or asks about stored memories. DO NOT use for info about another person (their address, phone, email, birthday) — that goes in `manage_contact`. If the user pastes an address/phone with a name and says 'save this for <person>', use `manage_contact add` with the address arg, NOT manage_memory.",
-    "manage_skills": "- ```manage_skills``` — Skill registry (SKILL.md format). Args (JSON): {\"action\": \"list|view|view_ref|search|add|edit|patch|publish|delete\", ...}. `list` returns the index of available skills (published + teacher-escalation drafts); `view name=foo` fetches the full SKILL.md; `view_ref name=foo path=...` loads a reference file under the skill directory. For `add`, provide an explicit kebab-case `name` and only report the exact returned name, because storage may normalize or dedupe it. Use this BEFORE doing domain work — there may already be a procedure (published or draft) that prescribes the correct steps. Drafts written by the teacher loop are authoritative guidance even though they're not yet published.",
+    "manage_skills": "- ```manage_skills``` — Skill registry (SKILL.md format). Args (JSON): {\"action\": \"list|view|view_ref|search|add|edit|patch|publish|delete\", ...}. `list` returns the index of available skills (published + teacher-escalation drafts); `view name=foo` fetches the full SKILL.md; `view_ref name=foo path=...` loads a reference file under the skill directory. For `add`, provide an explicit kebab-case `name` and only report the exact returned name, because storage may normalize or dedupe it. Use this BEFORE doing domain work — there may already be a procedure (published or draft) that prescribes the correct steps. Drafts written by the teacher loop are unverified suggestions: inspect them and verify the result.",
     "manage_tasks": "- ```manage_tasks``` — Create and manage scheduled background tasks (recurring AI jobs). Args (JSON): {\"action\": \"list|create|edit|delete|pause|resume|run\", ...}",
     "manage_endpoints": "- ```manage_endpoints``` — Add, remove, or configure AI model API endpoints. Args (JSON): {\"action\": \"list|add|delete|enable|disable\", ...}. Use when user wants to add a new AI provider.",
     "manage_mcp": "- ```manage_mcp``` — Manage MCP (Model Context Protocol) tool servers — external tools that extend your capabilities. Args (JSON): {\"action\": \"list|add|delete|reconnect|list_tools\", ...}",
@@ -2633,13 +2633,9 @@ def _build_system_prompt(
             'that open draft is the target: use update_document/edit_document on it instead of creating another document.'
         )
 
-    # Inject relevant skills based on the user's last message. The
-    # SkillsManager does a Jaccard token-match over published skills'
-    # name + description + when_to_use + procedure, returning the top
-    # few. If the teacher wrote a procedure for "open my X chat" last
-    # time the student failed, this is where the student finds it
-    # before deciding which tool to call.
-    if not suppress_local_context and not suppress_skills:
+    # Suggest relevant skill names, then let the agent load the procedure only
+    # when needed. Matching metadata is not evidence of successful execution.
+    if not suppress_local_context and not suppress_skills and "manage_skills" not in (disabled_tools or []):
         try:
             last_user = _extract_last_user_message(messages)
             # Respect the user's skills-enabled toggle (mirrors memory_enabled).
@@ -2676,47 +2672,29 @@ def _build_system_prompt(
                 except (TypeError, ValueError):
                     _skill_max_injected = 3
                 _skill_max_injected = max(0, min(12, _skill_max_injected))
+                from src.tool_policy import known_tool_names
+                allowed_tools = known_tool_names() - set(disabled_tools or [])
+                eligible_skills = [s for s in sm.load(owner=owner)
+                                   if all(t in allowed_tools for t in (s.get("requires_toolsets") or []))
+                                   and not any(t in allowed_tools for t in (s.get("fallback_for_toolsets") or []))]
                 relevant_skills = sm.get_relevant_skills(
                     last_user,
-                    skills=sm.load(owner=owner),
+                    skills=eligible_skills,
                     threshold=0.25,
                     max_items=_skill_max_injected,
                     min_confidence=_skill_min_conf,
                 ) if _skill_max_injected > 0 else []
                 lines = [""]
                 if relevant_skills:
-                    # Bump the "uses" counter on every skill we actually surface
-                    # to the agent — otherwise every skill shows "0 times" no
-                    # matter how often it's been matched and applied.
-                    for _sk in relevant_skills:
-                        try:
-                            sm.record_use(_sk.get('name', ''), owner=owner)
-                        except Exception:
-                            pass
-                    lines.append("## Relevant skills for this request")
-                    lines.append("These skills are matched to your current request. Each is a "
-                                 "procedure proven to work. Follow them step by step. To see "
-                                 "the full SKILL.md (more detail, pitfalls, verification "
-                                 "steps), call `manage_skills` with action='view' and the "
-                                 "skill name.")
+                    lines.append("## Suggested skills for this request")
+                    lines.append("Inspect a relevant procedure with manage_skills action=view "
+                                 "name=<name> before using it. These are metadata matches, "
+                                 "not evidence that the procedure has been verified.")
                     for sk in relevant_skills:
-                        src_tag = ""
-                        if sk.get("source") == "teacher-escalation":
-                            tm = sk.get("teacher_model") or "teacher"
-                            src_tag = f" _(learned from {tm})_"
-                        lines.append(f"\n### {sk.get('name','?')}{src_tag}")
-                        if sk.get("description"):
-                            lines.append(sk["description"])
-                        if sk.get("when_to_use"):
-                            lines.append(f"_When to use:_ {sk['when_to_use']}")
-                        proc = sk.get("procedure") or []
-                        if proc:
-                            lines.append("Procedure:")
-                            for i, step in enumerate(proc, 1):
-                                lines.append(f"  {i}. {step}")
-                        pitfalls = sk.get("pitfalls") or []
-                        if pitfalls:
-                            lines.append("Pitfalls: " + "; ".join(pitfalls))
+                        name = " ".join(str(sk.get("name") or "?").split())[:96]
+                        description = " ".join(str(sk.get("description") or "").split())[:180]
+                        badge = " (draft, unverified)" if sk.get("status") == "draft" else ""
+                        lines.append(f"- `{name}`{badge}: {description}")
                 # SECURITY: do NOT concatenate the skills block into the
                 # trusted system role. Skill content (name, description,
                 # when_to_use, procedure, pitfalls) is user-editable via
@@ -2940,30 +2918,17 @@ def _build_base_prompt(
     # The caller wraps it in untrusted_context_message and ships it as a
     # user-role message — same treatment as the matched-skills block.
     skill_index_block = ""
-    if not suppress_local_context and not suppress_skills:
+    if not suppress_local_context and not suppress_skills and "manage_skills" not in (disabled or []):
         try:
             from services.memory.skills import SkillsManager
             from src.constants import DATA_DIR
             _sm = SkillsManager(DATA_DIR)
-            active_tools = list(set(TOOL_SECTIONS.keys()) - set(disabled or []))
+            from src.tool_policy import known_tool_names
+            active_tools = list(known_tool_names() - set(disabled or []))
             skill_idx = _sm.index_for(owner=owner, active_toolsets=active_tools)
             if skill_idx:
-                lines = ["## Available skills",
-                         "Procedures the assistant should consult before doing domain work. "
-                         "Fetch the full procedure with `manage_skills` action=view name=<name> "
-                         "when one looks relevant. Entries tagged `(draft)` were written by the "
-                         "teacher-escalation loop after a prior failure — treat them as authoritative "
-                         "guidance; if you follow one and it works, that's a good signal the procedure "
-                         "is correct."]
-                by_cat: dict[str, list] = {}
-                for s in skill_idx:
-                    by_cat.setdefault(s["category"], []).append(s)
-                for cat in sorted(by_cat):
-                    lines.append(f"\n**{cat}**")
-                    for s in by_cat[cat]:
-                        badge = " *(draft)*" if s.get("status") == "draft" else ""
-                        lines.append(f"- `{s['name']}` — {s['description']}{badge}")
-                skill_index_block = "\n\n" + "\n".join(lines)
+                from services.memory.skills import format_skill_index
+                skill_index_block = format_skill_index(skill_idx)
         except Exception as _e:
             # Skill index is a soft enhancement — never fail prompt assembly on it.
             logger.debug(f"Skill-index injection skipped: {_e}")
@@ -4073,13 +4038,8 @@ async def stream_agent_loop(
     if not guide_only and _relevant_tools is not None:
         _relevant_tools = _expand_browser_mcp_tools(_relevant_tools, mcp_mgr)
 
-    # The skill index injected by _build_system_prompt tells the model to
-    # call `manage_skills action=view`, and Jaccard-matched skills are pasted
-    # into the prompt as procedures to follow — but neither path goes through
-    # tool selection, so the model can be handed a procedure naming tools
-    # (grep, read_file, ...) that aren't in its schema list. Keep the schemas
-    # in lockstep: manage_skills is callable whenever any skill is indexed,
-    # and a matched skill's declared requires_toolsets ride along with it.
+    # Discovery requires only manage_skills. Declared execution tools are added
+    # after a successful view/view_ref, when the procedure is actually loaded.
     if not guide_only and _relevant_tools is not None and not _low_signal_turn:
         try:
             from services.memory.skills import SkillsManager
@@ -4090,24 +4050,8 @@ async def stream_agent_loop(
                 _skills_on = (_load_prefs(owner) or {}).get("skills_enabled", True)
             except Exception:
                 pass
-            _sm = SkillsManager(DATA_DIR)
-            _owner_skills = _sm.load(owner=owner) if _skills_on else []
-            if _owner_skills:
+            if _skills_on and SkillsManager(DATA_DIR).load(owner=owner):
                 _relevant_tools.add("manage_skills")
-                if _retrieval_query:
-                    # Validate against every known executable tool, not just
-                    # TOOL_SECTIONS — code-nav tools (grep/glob/ls) ship as
-                    # schemas without a prompt-prose section.
-                    from src.tool_policy import known_tool_names
-                    _known = known_tool_names()
-                    for _sk in _sm.get_relevant_skills(
-                        _retrieval_query, skills=_owner_skills,
-                        threshold=0.25, max_items=3,
-                    ):
-                        _relevant_tools.update(
-                            t for t in (_sk.get("requires_toolsets") or [])
-                            if t in _known
-                        )
         except Exception as _e:
             logger.debug(f"[tool-rag] skill-aware tool include skipped: {_e}")
 
@@ -4293,7 +4237,7 @@ async def stream_agent_loop(
                         function = call.get("function") if isinstance(call, dict) else None
                         if isinstance(function, dict) and function.get("name"):
                             used_names.add(function["name"])
-                priority_names = set(forced_tools or ())
+                priority_names = set(forced_tools or ()) | _runtime_skill_tools
                 if relevant_tools and len(relevant_tools) <= 16:
                     priority_names.update(relevant_tools)
                 if any(
@@ -6107,7 +6051,7 @@ async def stream_agent_loop(
                             if _sk.get("name") == _ms_name:
                                 _new = {
                                     t for t in (_sk.get("requires_toolsets") or [])
-                                    if t in _known and t not in _relevant_tools
+                                    if t in _known and t not in _relevant_tools and t not in disabled_tools
                                 }
                                 if _new:
                                     _relevant_tools.update(_new)

@@ -54,6 +54,32 @@ def _to_float(x, default: float = 0.0) -> float:
         return default
 
 
+def format_skill_index(skills: List[Dict]) -> str:
+    """Bound prompt discovery metadata; procedures remain available on demand."""
+    if not skills:
+        return ""
+    header = (
+        "## Available skills\n"
+        "Use manage_skills action=view name=<name> to load a relevant procedure. "
+        "Drafts are unverified suggestions, not proof that a method works.\n"
+    )
+    footer = "\nMore skills omitted: use manage_skills action=search with a specific query."
+    lines = [header]
+    size = len(header)
+    for skill in skills:
+        name = " ".join(str(skill.get("name") or "").split())[:96]
+        description = " ".join(str(skill.get("description") or "").split())[:180]
+        category = " ".join(str(skill.get("category") or "general").split())[:40]
+        draft = " (draft)" if skill.get("status") == "draft" else ""
+        line = f"- `{name}` [{category}]{draft}: {description}\n"
+        if size + len(line) + len(footer) > 4000:
+            lines.append(footer)
+            break
+        lines.append(line)
+        size += len(line)
+    return "".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # SkillsManager
 # ---------------------------------------------------------------------------

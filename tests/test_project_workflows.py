@@ -115,6 +115,49 @@ def test_workspace_verification_persists_and_invalidates_on_edits(repo):
     assert status["complete"] is False
 
 
+@pytest.mark.parametrize("change", [
+    {"argv": [sys.executable, "-c", "raise SystemExit(1)"]},
+    {"required": False},
+    {"timeout_seconds": 121},
+    {"name": "renamed check"},
+])
+def test_verification_config_changes_invalidate_saved_evidence(repo, change):
+    created = workflows.create_worktree("alice", str(repo))
+    original = {"name": "check", "argv": [sys.executable, "-c", "pass"]}
+    workflows.save_verification_config("alice", str(repo), [original])
+    report = asyncio.run(workflows.run_verification("alice", created["id"]))
+    assert report["complete"] is True
+
+    workflows.save_verification_config("alice", str(repo), [{**original, **change}])
+    status = workflows.get_workspace_verification_status("alice", created["path"])
+
+    assert status["state"] == "stale"
+    assert status["complete"] is False
+    assert "checks changed" in status["reason"]
+    assert status["previous_report"]["complete"] is True
+    # Invalidating the current gate must retain the prior report as evidence.
+    stored = workflows._read_json(
+        workflows._store_dir("alice") / f"verification-{created['id']}.json", {}
+    )
+    assert stored["complete"] is True
+
+
+def test_equivalent_verification_check_defaults_keep_evidence_current(repo):
+    created = workflows.create_worktree("alice", str(repo))
+    workflows.save_verification_config("alice", str(repo), [{
+        "name": "check", "argv": [sys.executable, "-c", "pass"],
+    }])
+    report = asyncio.run(workflows.run_verification("alice", created["id"]))
+    assert report["complete"] is True
+
+    workflows.save_verification_config("alice", str(repo), [{
+        "name": "check", "argv": [sys.executable, "-c", "pass"],
+        "required": True, "timeout_seconds": 120,
+    }])
+    status = workflows.get_workspace_verification_status("alice", created["path"])
+    assert status["complete"] is True
+
+
 def test_verification_does_not_certify_worktree_changed_by_check(repo):
     created = workflows.create_worktree("alice", str(repo))
     workflows.save_verification_config("alice", str(repo), [{

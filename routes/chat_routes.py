@@ -345,6 +345,9 @@ _RECENT_BROWSER_CONTEXT_RE = re.compile(
     re.I,
 )
 _BROWSER_MCP_TOOLS = {
+    # `tool_policy_names` maps every qualified browser MCP tool to this server
+    # alias, so privilege/toggle checks cover new tools the package exposes.
+    "builtin_browser",
     "mcp__builtin_browser__browser_navigate",
     "mcp__builtin_browser__browser_snapshot",
     "mcp__builtin_browser__browser_click",

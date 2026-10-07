@@ -6,6 +6,8 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Document autosaves remain tied to the edited document across tab switches and pane closure. Late document loads cannot select an older request, and save replies preserve edits made while the request was in flight.
+- Verification reports become stale when the configured checks change, retaining the prior report as history. Health input loading uses the existing aggregate deadline without blocking the event loop; image-only endpoints report reachability separately from untested generation. Browser-disabled settings cover the full MCP server, including newly added tools.
 - PDF exports stop if the pending save fails, preserve editor text and offer a retry rather than exporting stale server content.
 - Docker packages the tested Browser MCP CLI and uses system Chromium; startup prefers that installed CLI and keeps npx as the native-install fallback. Locked-down cache-only startup accepts the local executable.
 - Subscription-backed endpoint diagnostics resolve account credentials through the normal endpoint resolver. Reconnect-required failures remain controlled categories without exposing tokens or exception text.

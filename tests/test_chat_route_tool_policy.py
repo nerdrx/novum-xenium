@@ -96,6 +96,23 @@ def test_agent_loop_expands_browser_mcp_tools_from_connected_server():
     assert "_relevant_tools = _expand_browser_mcp_tools(_relevant_tools, mcp_mgr)" in source
 
 
+def test_browser_privilege_denylist_covers_new_dynamic_mcp_tools():
+    """Server-wide browser denial must include tools added by MCP package updates."""
+    tree = ast.parse(_CHAT_ROUTES.read_text(encoding="utf-8"))
+    browser_tools = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_BROWSER_MCP_TOOLS"
+                for target in node.targets)
+    )
+    from src.tool_security import tool_policy_names
+
+    # browser_tabs is part of the current Playwright MCP tool surface but is
+    # intentionally absent from this app-owned name list.
+    assert tool_policy_names("mcp__builtin_browser__browser_tabs") & browser_tools
+
+
 def test_disabled_tools_respects_missing_vs_explicit_toggles():
     """Bash still defers to privileges, but web is an explicit per-turn opt-in.
     """

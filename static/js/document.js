@@ -24,7 +24,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   let _isEditingTabTitle = false;
   let _autoDetectDebounce = null;
   let _autoTitleDebounce = null;
-  let _autoSaveDebounce = null;
+  const _autoSaveTimers = new Map(); // docId -> pending autosave timer
   let _lastAutoSaveErrorAt = 0;
   let _animationInProgress = false;
   let _animationCancel = null;      // function to cancel current animation
@@ -121,12 +121,22 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
   // Multi-document state
   let activeDocId = null;           // currently visible doc
+  let _documentLoadGeneration = 0;
   let _lastSessionId = '';          // session context for "+" button
   const docs = new Map();           // docId -> { id, title, language, content, version, sessionId }
   let _emailSendInFlight = false;
 
   const _docOpenKey = (sessionId) => 'odysseus-doc-open-' + sessionId;
   const _docMinimizedKey = (sessionId) => 'odysseus-doc-minimized-' + sessionId;
+
+  function _scheduleDocAutosave(delay = 2000, docId = activeDocId) {
+    if (!docId) return;
+    clearTimeout(_autoSaveTimers.get(docId));
+    _autoSaveTimers.set(docId, setTimeout(() => {
+      _autoSaveTimers.delete(docId);
+      saveDocument({ silent: true, docId });
+    }, delay));
+  }
 
   function _markDocVisibleState(sessionId, state) {
     if (!sessionId) return;
@@ -3201,8 +3211,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     }
     if (added) {
       _renderComposeAttachments();
-      clearTimeout(_autoSaveDebounce);
-      _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+      _scheduleDocAutosave(800);
     }
   }
 
@@ -3296,8 +3305,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
   function _afterOdysseusAttachmentsAdded(count, label) {
     _renderComposeAttachments();
-    clearTimeout(_autoSaveDebounce);
-    _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+    _scheduleDocAutosave(800);
     if (uiModule) uiModule.showToast(count > 1 ? `Attached ${count} items` : `Attached ${label || 'item'}`);
   }
 
@@ -3525,8 +3533,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     _hlDebounce = setTimeout(syncHighlighting, 80);
     clearTimeout(_autoTitleDebounce);
     _autoTitleDebounce = setTimeout(() => autoTitleFromContent(ta.value), 600);
-    clearTimeout(_autoSaveDebounce);
-    _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+    _scheduleDocAutosave(800);
   }
 
   function _insertMarkdownImages(uploadedFiles) {
@@ -4475,6 +4482,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
   function switchToDoc(docId) {
     if (!docs.has(docId)) return;
+    // A direct tab switch supersedes any document fetch that is still pending.
+    _documentLoadGeneration++;
     _hideLoadingOverlay();
     if (_diffModeActive) exitDiffMode(true);
 
@@ -4698,8 +4707,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       setTimeout(attemptAutoDetect, 100);
       setTimeout(() => autoTitleFromContent(content), 300);
       // Auto-save
-      clearTimeout(_autoSaveDebounce);
-      _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 2000);
+      _scheduleDocAutosave(2000, doc.id);
     } catch (e) {
       console.error('Failed to auto-create document from input:', e);
     } finally {
@@ -5576,8 +5584,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         _syncEmailHeaderSummary();
         saveCurrentToMap();
         _persistEmailLocalDraftSoon();
-        clearTimeout(_autoSaveDebounce);
-        _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+        _scheduleDocAutosave(800);
       });
       document.getElementById(id)?.addEventListener('focus', () => _setEmailHeaderCollapsed(false, { manual: false }));
     });
@@ -5652,8 +5659,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         if (ccToggle) ccToggle.style.display = '';
         _syncEmailHeaderSummary();
         saveCurrentToMap();
-        clearTimeout(_autoSaveDebounce);
-        _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+        _scheduleDocAutosave(800);
       });
     });
 
@@ -5860,8 +5866,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         _autoDetectDebounce = setTimeout(attemptAutoDetect, AUTO_DETECT_DELAY);
         clearTimeout(_autoTitleDebounce);
         _autoTitleDebounce = setTimeout(() => autoTitleFromContent(ta.value), 600);
-        clearTimeout(_autoSaveDebounce);
-        _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 2000);
+        _scheduleDocAutosave(2000);
         const doc = activeDocId && docs.get(activeDocId);
         if (doc && doc.language === 'email') _persistEmailLocalDraftSoon();
       });
@@ -7073,8 +7078,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         const d = docs.get(doc.id);
         if (d) d.content = typed;
         syncHighlighting();
-        clearTimeout(_autoSaveDebounce);
-        _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+        _scheduleDocAutosave(800, doc.id);
       }
       textarea = document.getElementById('doc-editor-textarea');
       if (textarea) textarea.focus();
@@ -7145,8 +7149,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       const textarea = document.getElementById('doc-editor-textarea');
       if (textarea) await _streamEmailBodyText(textarea, body);
     }
-    clearTimeout(_autoSaveDebounce);
-    _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+    _scheduleDocAutosave(800, docId);
   }
 
   function _buildEmailContentFromFields(fields, body) {
@@ -7228,8 +7231,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     if (activeDocId === docId) {
       _showEmailFields(doc, { applyLocalDraft: false });
     }
-    clearTimeout(_autoSaveDebounce);
-    _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+    _scheduleDocAutosave(800, docId);
     return true;
   }
 
@@ -7246,6 +7248,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
   export async function loadDocument(docId) {
     _closeNotesForDocumentOpen();
+    const generation = ++_documentLoadGeneration;
     // If already in tabs, just switch
     if (docs.has(docId)) {
       _ensureDocPaneMounted();
@@ -7256,10 +7259,12 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       const res = await fetch(`${API_BASE}/api/document/${docId}`);
       if (!res.ok) throw new Error(res.status === 404 ? 'Not found' : `HTTP ${res.status}`);
       const doc = await res.json();
+      if (generation !== _documentLoadGeneration) return;
       addDocToTabs(doc, doc.session_id);
       _ensureDocPaneMounted();
       switchToDoc(doc.id);
     } catch (e) {
+      if (generation !== _documentLoadGeneration) return;
       console.error('Failed to load document:', e);
       if (uiModule) {
         const msg = e.message === 'Not found'
@@ -9411,14 +9416,16 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   }
 
   /** Save manual edits */
-  export async function saveDocument({ silent = false, forceVersion = false } = {}) {
-    if (!activeDocId) return false;
+  export async function saveDocument({ silent = false, forceVersion = false, docId = activeDocId } = {}) {
+    if (!docId) return false;
     const textarea = document.getElementById('doc-editor-textarea');
-    if (!textarea) return false;
-    const savingDocId = activeDocId;
-    saveCurrentToMap();
+    const savingDocId = docId;
+    clearTimeout(_autoSaveTimers.get(savingDocId));
+    _autoSaveTimers.delete(savingDocId);
+    if (activeDocId === savingDocId && textarea) saveCurrentToMap();
     const localDoc = docs.get(savingDocId);
-    const contentToSave = localDoc?.content ?? textarea.value;
+    if (!localDoc) return false;
+    const contentToSave = localDoc.content;
 
     try {
       const res = await fetch(`${API_BASE}/api/document/${savingDocId}`, {
@@ -9449,12 +9456,17 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       }
       if (!res.ok) throw new Error(`Document save failed: HTTP ${res.status}`);
       const doc = await res.json();
-      const badge = document.getElementById('doc-version-badge');
+      const badge = activeDocId === savingDocId ? document.getElementById('doc-version-badge') : null;
       if (badge) { const _v = doc.version_count || 1; badge.textContent = `v${_v}`; badge.style.display = _v > 1 ? '' : 'none'; }
       // Update map
       if (docs.has(savingDocId)) {
-        docs.get(savingDocId).version = doc.version_count || 1;
-        docs.get(savingDocId).content = contentToSave;
+        if (activeDocId === savingDocId) saveCurrentToMap();
+        const latestDoc = docs.get(savingDocId);
+        latestDoc.version = doc.version_count || 1;
+        // An edit may land while this PUT is in flight. Keep that newer
+        // content and queue one more write instead of rolling it back to the
+        // snapshot this request sent.
+        if (latestDoc.content !== contentToSave) _scheduleDocAutosave(0, savingDocId);
       }
       _syncDocIndicator();
       if (!silent && uiModule) uiModule.showToast(forceVersion ? 'New version saved' : 'Document saved');

@@ -348,7 +348,8 @@ def email_health(accounts: List[Dict[str, Any]],
 # ── Provider endpoints ──
 
 def providers_health(endpoints: List[Dict[str, Any]],
-                     *, probe: Optional[Callable] = None) -> Dict[str, Any]:
+                     *, probe: Optional[Callable] = None,
+                     ping: Optional[Callable] = None) -> Dict[str, Any]:
     """Probe each enabled model endpoint's model list, concurrently.
 
     `endpoints` is a list of plain dicts so this stays decoupled from the ORM
@@ -362,6 +363,8 @@ def providers_health(endpoints: List[Dict[str, Any]],
         return _svc("providers", DISABLED, "No model endpoints configured.")
     if probe is None:
         from routes.model_routes import _probe_endpoint as probe
+    if ping is None:
+        from routes.model_routes import _ping_endpoint as ping
 
     def _label(ep: Dict[str, Any]) -> str:
         return ep.get("name") or _safe_url(ep.get("base_url")) or "endpoint"
@@ -376,6 +379,20 @@ def providers_health(endpoints: List[Dict[str, Any]],
                 base_url, api_key = resolve_endpoint_runtime(
                     SimpleNamespace(**ep), owner=ep.get("owner")
                 )
+            if str(ep.get("model_type") or "llm").strip().lower() == "image":
+                # Image endpoints need not expose a text-chat model catalog.
+                # Probe only read-only endpoint reachability; do not claim the
+                # image-generation path itself was exercised.
+                result = ping(base_url, api_key, timeout=_PROBE_TIMEOUT) or {}
+                status_code = _safe_http_status(result.get("status_code"))
+                if result.get("reachable"):
+                    return {"name": name, "ok": True, "model_count": None,
+                            "error": None, "check": "reachability_only",
+                            "generation_tested": False, "http_status": status_code}
+                return {"name": name, "ok": False, "model_count": None,
+                        "error": _classify_ping_result(result),
+                        "check": "reachability_only",
+                        "generation_tested": False, "http_status": status_code}
             models = probe(base_url, api_key,
                            timeout=_PROBE_TIMEOUT) or []
         except Exception as e:
@@ -392,6 +409,34 @@ def providers_health(endpoints: List[Dict[str, Any]],
                           "model_count": 0, "error": "timeout"}
                     for i, r in enumerate(raw)]
     return _rollup_items("providers", "endpoint(s)", per_endpoint, key="endpoints")
+
+
+def _safe_http_status(value: Any) -> Optional[int]:
+    try:
+        code = int(value)
+    except (TypeError, ValueError):
+        return None
+    return code if 100 <= code <= 599 else None
+
+
+def _classify_ping_result(result: Dict[str, Any]) -> str:
+    """Classify a reachability result without returning its error text."""
+    status = _safe_http_status(result.get("status_code"))
+    if status in (401, 403):
+        return "auth_or_protocol_error"
+    if status is not None:
+        return "http_error"
+    message = str(result.get("error") or "").lower()
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if "connection refused" in message:
+        return "connection_refused"
+    if any(token in message for token in ("getaddrinfo", "name or service not known",
+                                          "nodename nor servname", "dns")):
+        return "dns_error"
+    if "ssl" in message or "certificate" in message:
+        return "tls_error"
+    return "network_error" if message else "error"
 
 
 def _rollup_items(name: str, noun: str, items: List[Dict[str, Any]],
@@ -452,6 +497,7 @@ def _gather_inputs() -> Dict[str, Any]:
                 ModelEndpoint.is_enabled == True).all()  # noqa: E712
             endpoints = [{"name": r.name, "base_url": r.base_url,
                           "api_key": r.api_key,
+                          "model_type": getattr(r, "model_type", None) or "llm",
                           "provider_auth_id": r.provider_auth_id,
                           "owner": r.owner} for r in rows]
         finally:
@@ -482,33 +528,47 @@ async def collect_service_health(rag_manager: Any = None,
                                  memory_vector: Any = None) -> Dict[str, Any]:
     """Run every probe and return {overall, services, timestamp}.
 
-    Bounded end-to-end: in-process ChromaDB flags are read synchronously; the
-    four network subsystems run concurrently, each under `_SUBSYSTEM_DEADLINE`,
-    with an overall `_AGGREGATE_DEADLINE` backstop. Per-item probes inside
-    providers/email are themselves bounded by `_FANOUT_BUDGET`.
+    Bounded end-to-end: config gathering runs off-loop; in-process ChromaDB
+    flags are read synchronously; the four network subsystems run concurrently,
+    each under `_SUBSYSTEM_DEADLINE`, within the overall `_AGGREGATE_DEADLINE`.
+    Provider/email item probes are bounded by `_FANOUT_BUDGET`.
     """
     from datetime import datetime, timezone
 
-    inputs = _gather_inputs()
+    deadline = time.monotonic() + _AGGREGATE_DEADLINE
+    inputs_timed_out = False
+    try:
+        inputs = await asyncio.wait_for(
+            asyncio.to_thread(_gather_inputs),
+            timeout=max(0, deadline - time.monotonic()),
+        )
+    except asyncio.TimeoutError:
+        inputs_timed_out = True
+        inputs = {"settings": {}, "integrations": [], "accounts": [], "endpoints": []}
     settings = inputs["settings"]
 
     # ChromaDB is in-process and synchronous (just reads flags).
     chroma = chromadb_health(rag_manager, memory_vector)
 
     names = ["searxng", "ntfy", "email", "providers"]
-    coros = [
-        _run_subsystem("searxng", searxng_health, settings),
-        _run_subsystem("ntfy", ntfy_health, inputs["integrations"], settings),
-        _run_subsystem("email", email_health, inputs["accounts"]),
-        _run_subsystem("providers", providers_health, inputs["endpoints"]),
-    ]
-    try:
-        results = await asyncio.wait_for(asyncio.gather(*coros),
-                                         timeout=_AGGREGATE_DEADLINE)
-    except asyncio.TimeoutError:
-        # Hard backstop — should not normally fire given per-subsystem deadlines.
+    if inputs_timed_out:
         results = [_svc(n, DOWN, _detail_for("timeout"), error="timeout")
                    for n in names]
+    else:
+        coros = [
+            _run_subsystem("searxng", searxng_health, settings),
+            _run_subsystem("ntfy", ntfy_health, inputs["integrations"], settings),
+            _run_subsystem("email", email_health, inputs["accounts"]),
+            _run_subsystem("providers", providers_health, inputs["endpoints"]),
+        ]
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*coros), timeout=max(0, deadline - time.monotonic())
+            )
+        except asyncio.TimeoutError:
+            # Hard backstop — should not normally fire given per-subsystem deadlines.
+            results = [_svc(n, DOWN, _detail_for("timeout"), error="timeout")
+                       for n in names]
 
     services = [chroma, *results]
     return {

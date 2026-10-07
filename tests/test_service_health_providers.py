@@ -77,6 +77,70 @@ def test_providers_report_session_reconnect_requirement_separately(monkeypatch):
     assert "secret-bearing detail" not in repr(s)
 
 
+def test_image_provider_health_uses_reachability_only_probe():
+    calls = []
+
+    def no_chat_catalog(*_args, **_kwargs):
+        pytest.fail("image-only endpoints must not require a chat model catalog")
+
+    def ping(base, key, timeout):
+        calls.append((base, key, timeout))
+        return {"reachable": True, "status_code": 200, "error": None}
+
+    result = sh.providers_health(
+        [{"name": "Image bridge", "base_url": "http://image.local/v1",
+          "api_key": "image-key-secret", "model_type": "image"}],
+        probe=no_chat_catalog,
+        ping=ping,
+    )
+
+    endpoint = result["meta"]["endpoints"][0]
+    assert result["status"] == sh.OK
+    assert endpoint["check"] == "reachability_only"
+    assert endpoint["generation_tested"] is False
+    assert endpoint["model_count"] is None
+    assert endpoint["http_status"] == 200
+    assert calls == [("http://image.local/v1", "image-key-secret", sh._PROBE_TIMEOUT)]
+    assert "image-key-secret" not in repr(result)
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_image_provider_health_reports_auth_http_status_without_response_body(status_code):
+    result = sh.providers_health(
+        [{"name": "Image bridge", "base_url": "http://image.local/v1",
+          "api_key": "image-key-secret", "model_type": "image"}],
+        ping=lambda *_a, **_k: {
+            "reachable": False,
+            "status_code": status_code,
+            "error": "secret response body image-key-secret",
+        },
+    )
+
+    endpoint = result["meta"]["endpoints"][0]
+    assert endpoint["error"] == "auth_or_protocol_error"
+    assert endpoint["http_status"] == status_code
+    assert "image-key-secret" not in repr(result)
+    assert "secret response body" not in repr(result)
+
+
+def test_image_provider_health_classifies_unreachable_without_leaking_error():
+    result = sh.providers_health(
+        [{"name": "Image bridge", "base_url": "http://image.local/v1",
+          "api_key": "image-key-secret", "model_type": "image"}],
+        ping=lambda *_a, **_k: {
+            "reachable": False,
+            "status_code": None,
+            "error": "failed https://user:pass@image.local/v1?token=image-key-secret",
+        },
+    )
+
+    endpoint = result["meta"]["endpoints"][0]
+    assert result["status"] == sh.DOWN
+    assert endpoint["error"] == "network_error"
+    assert "image-key-secret" not in repr(result)
+    assert "user:pass" not in repr(result)
+
+
 def test_providers_degraded_some_empty():
     def probe(base, key, timeout):
         return ["m1"] if "good" in base else []

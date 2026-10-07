@@ -731,6 +731,24 @@ def get_verification_config(owner: str, workspace: str) -> dict[str, Any]:
     return config
 
 
+def _verification_checks_fingerprint(checks: Any) -> str:
+    """Fingerprint effective check definitions, including runner defaults."""
+    effective = []
+    if isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, dict):
+                effective.append(check)
+                continue
+            effective.append({
+                "name": check.get("name", "Check"),
+                "argv": check.get("argv"),
+                "required": check.get("required", True),
+                "timeout_seconds": check.get("timeout_seconds", 120),
+            })
+    encoded = json.dumps(effective, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return _digest(encoded, 64)
+
+
 def create_worktree(owner: str, workspace: str) -> dict[str, Any]:
     if _managed_record_for_workspace(owner, workspace):
         raise ProjectWorkflowError("Cannot create a managed worktree from another managed worktree")
@@ -828,6 +846,7 @@ async def run_verification(owner: str, identifier: str, *, session_id: str | Non
     checks = config.get("checks", []) if isinstance(config, dict) else []
     if not checks:
         raise ProjectWorkflowError("Save verification checks before running them")
+    checks_fingerprint = _verification_checks_fingerprint(checks)
     owner_key = _run_owner_key(session_id, run_id)
     head, dirty_fingerprint = await _worktree_fingerprint_async(worktree, owner_key)
     results = []
@@ -859,6 +878,7 @@ async def run_verification(owner: str, identifier: str, *, session_id: str | Non
     required = [result for result in results if result["required"]]
     report = {
         "worktree_id": identifier,
+        "verification_checks_fingerprint": checks_fingerprint,
         "head": after_head,
         "dirty_fingerprint": after_fingerprint,
         "checked_head": checked_head,
@@ -919,6 +939,12 @@ def get_workspace_verification_status(owner: str, workspace: str) -> dict[str, A
     saved = _read_json(_store_dir(owner) / f"verification-{record['id']}.json", {})
     if not isinstance(saved, dict):
         saved = {}
+    if (saved.get("verification_checks_fingerprint")
+            != _verification_checks_fingerprint(config.get("checks"))):
+        return {"managed": True, "configured": True, "worktree_id": record["id"],
+                "state": "stale" if saved else "not_run", "complete": False,
+                "reason": "Verification checks changed; rerun them on the current configuration.",
+                **({"previous_report": saved} if saved else {})}
     head, fingerprint = _worktree_fingerprint(record["path"])
     if saved.get("head") != head or saved.get("dirty_fingerprint") != fingerprint:
         return {"managed": True, "configured": True, "worktree_id": record["id"],

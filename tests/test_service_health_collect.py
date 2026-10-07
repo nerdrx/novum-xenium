@@ -58,6 +58,7 @@ def test_gather_inputs_preserves_session_auth_and_owner(monkeypatch):
     row = SimpleNamespace(
         name="ChatGPT Subscription", base_url="https://chatgpt.com/backend-api/codex",
         api_key=None, provider_auth_id="auth-1", owner="alice",
+        model_type="image",
     )
 
     class Query:
@@ -84,6 +85,7 @@ def test_gather_inputs_preserves_session_auth_and_owner(monkeypatch):
     endpoint = sh._gather_inputs()["endpoints"][0]
     assert endpoint["provider_auth_id"] == "auth-1"
     assert endpoint["owner"] == "alice"
+    assert endpoint["model_type"] == "image"
 
 
 # ── _safe_url: strip userinfo / query / fragment ──
@@ -176,3 +178,29 @@ def test_collect_aggregate_deadline_yields_controlled_result(monkeypatch):
     net = [s for s in out["services"] if s["name"] != "chromadb"]
     assert all(s["status"] == sh.DOWN and s["meta"].get("error") == "timeout"
                for s in net)
+
+
+def test_collect_deadline_also_bounds_input_gather(monkeypatch):
+    import asyncio
+    import time
+
+    monkeypatch.setattr(sh, "_AGGREGATE_DEADLINE", 0.05)
+
+    def slow_inputs():
+        time.sleep(0.25)
+        return {"settings": {}, "integrations": [], "accounts": [], "endpoints": []}
+
+    monkeypatch.setattr(sh, "_gather_inputs", slow_inputs)
+    elapsed = []
+
+    async def collect():
+        started = time.monotonic()
+        result = await sh.collect_service_health(None, None)
+        elapsed.append(time.monotonic() - started)
+        return result
+
+    out = asyncio.run(collect())
+
+    assert elapsed[0] < 0.15
+    assert all(service["status"] == sh.DOWN and service["meta"].get("error") == "timeout"
+               for service in out["services"] if service["name"] != "chromadb")

@@ -32,6 +32,8 @@ Modified on October 6, 2026. The original authors, license and third-party notic
 
 ## What this fork changes
 
+Image Generation settings include configured image providers, including the optional Codex subscription bridge. Saved selections stay visible, authenticated auto-detection works for the bridge, and its quality setting is labeled as visual guidance.
+
 NX keeps the original Docker quick start and adds these changes on top of upstream:
 
 - **Approval controls:** Ask for approval, Approve for me, or Full access within the workspace/container. Auto handles known public reads immediately and uses a small, tool-free judge for bounded public reads, workspace inspections, and reversible coding edits; its reason appears in the tool output or approval card.

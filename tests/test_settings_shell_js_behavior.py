@@ -21,6 +21,7 @@ _LEAF_HELPER = _REPO / "tests" / "helpers" / "test_settings_shell.js"
 _COORDINATOR_HELPER = (
     _REPO / "tests" / "helpers" / "test_settings_shell_coordinator.mjs"
 )
+_IMAGE_PICKER_HELPER = _REPO / "tests" / "helpers" / "test_image_settings_picker.mjs"
 _HAS_NODE = shutil.which("node") is not None
 _STYLE = _REPO / "static" / "style.css"
 
@@ -114,4 +115,23 @@ def test_settings_shell_real_esm_coordinator():
         "navigationCallback": True,
         "directOpen": True,
         "directClose": True,
+    }
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_image_settings_picker_behavior():
+    proc = _run_node(str(_IMAGE_PICKER_HELPER))
+
+    assert proc.returncode == 0, (
+        "Image settings picker behavior failed:\n"
+        f"STDERR:\n{proc.stderr}\n"
+        f"STDOUT:\n{proc.stdout}"
+    )
+
+    assert json.loads(proc.stdout.strip()) == {
+        "bridgeAndMixedModels": True,
+        "duplicateEndpointQualification": True,
+        "disabledEndpointExcluded": True,
+        "savedModelSurvivesRefreshAndSave": True,
+        "emptyAndUnknownBackendMessages": True,
     }

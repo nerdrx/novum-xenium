@@ -937,6 +937,45 @@ async def do_ui_control(content: str, session_id: Optional[str] = None, owner: O
 # Image generation
 # ---------------------------------------------------------------------------
 
+async def _auto_detect_image_model(owner: Optional[str] = None) -> str:
+    """Discover image providers with their configured auth and owner scope."""
+    for candidate in ("gpt-image-1.5", "gpt-image-1", "dall-e-3"):
+        try:
+            await asyncio.to_thread(_resolve_model, candidate, owner=owner)
+            return candidate
+        except ValueError:
+            continue
+    from src.database import SessionLocal, ModelEndpoint
+    from src.auth_helpers import owner_filter
+    import httpx
+    db = SessionLocal()
+    try:
+        query = db.query(ModelEndpoint).filter(
+            ModelEndpoint.is_enabled == True, ModelEndpoint.model_type == "image",
+        )
+        if owner:
+            query = owner_filter(query, ModelEndpoint, owner)
+        for endpoint in query.all():
+            try:
+                base, key = resolve_endpoint_runtime(endpoint, owner=owner)
+                response = await asyncio.to_thread(
+                    httpx.get, build_models_url(base), headers=build_headers(key, base), timeout=3,
+                )
+                response.raise_for_status()
+                data = response.json()
+                entries = data if isinstance(data, list) else (data.get("data") or [])
+                model = next((entry["id"] for entry in entries
+                              if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+                              and entry["id"].strip()), None)
+                if model:
+                    return f"{model}@{endpoint.name}"
+            except Exception:
+                continue
+    finally:
+        db.close()
+    return ""
+
+
 async def do_generate_image(content: str, session_id: Optional[str] = None, owner: Optional[str] = None) -> Dict:
     """Generate an image using an image-capable model (e.g. gpt-image-1).
 
@@ -974,51 +1013,10 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
     if quality == "medium" and _settings.get("image_quality"):
         quality = _settings["image_quality"]
 
-    # Auto-detect best available image model if still not set
     if not model_spec:
-        for candidate in ("gpt-image-1.5", "gpt-image-1", "dall-e-3"):
-            try:
-                await asyncio.to_thread(_resolve_model, candidate, owner=owner)
-                model_spec = candidate
-                break
-            except ValueError:
-                continue
-        # Fallback: find any locally registered image-type endpoint
+        model_spec = await _auto_detect_image_model(owner)
         if not model_spec:
-            try:
-                from src.database import SessionLocal, ModelEndpoint
-                from src.auth_helpers import owner_filter
-                import httpx as _req
-                _idb = SessionLocal()
-                try:
-                    _img_q = _idb.query(ModelEndpoint).filter(
-                        ModelEndpoint.is_enabled == True,
-                        ModelEndpoint.model_type == "image",
-                    )
-                    if owner:
-                        _img_q = owner_filter(_img_q, ModelEndpoint, owner)
-                    _img_eps = _img_q.all()
-                    for _iep in _img_eps:
-                        _ibase = _iep.base_url.rstrip("/")
-                        if not _ibase.endswith("/v1"):
-                            _ibase += "/v1"
-                        try:
-                            _r = _req.get(_ibase + "/models", timeout=3)
-                            _r.raise_for_status()
-                            _data = _r.json()
-                            _ditems = _data if isinstance(_data, list) else (_data.get("data") or [])
-                            _mids = [m.get("id") for m in _ditems if isinstance(m, dict) and m.get("id")]
-                            if _mids:
-                                model_spec = _mids[0]
-                                break
-                        except Exception:
-                            continue
-                finally:
-                    _idb.close()
-            except Exception:
-                pass
-        if not model_spec:
-            return {"error": "No image model found. Configure one in Admin → Image Generation."}
+            return {"error": "No image model found. Configure one in Settings → AI → Image Generation."}
 
     async def _resolve_image_model(model_name: str):
         def _call():

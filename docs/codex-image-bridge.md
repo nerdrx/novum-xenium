@@ -36,7 +36,11 @@ In Odysseus Settings, add an image provider with:
 - API key: the local bridge token
 - Model: `chatgpt-image-codex`
 
-Select that provider for image generation. Generated images are stored by Odysseus in its persistent Gallery. The bridge generates new images only.
+Open **Settings → AI → Image Generation**. The **Model** picker lists `chatgpt-image-codex` together with its configured provider name; select it and enable image generation. The backend description identifies the Codex subscription bridge. Enabled image-only providers and recognized image models on mixed providers appear here; ordinary ChatGPT text models do not become image backends automatically. Provider names disambiguate duplicate model IDs. Saved models that are unavailable remain visible instead of being silently cleared by a quality/toggle change. Reopening the AI panel refreshes provider choices.
+
+**Auto-detect** uses the configured endpoint credentials to discover image models, including the authenticated bridge. This does not install a bridge or transfer Codex credentials into Odysseus. Model discovery can fail while the service is offline; a saved model is configuration, not a live connection check.
+
+Quality and size are visual guidance for the Codex bridge, not guaranteed rendering controls or per-image prices. Generated images are stored by Odysseus in its persistent Gallery. The bridge generates new images only.
 
 ## Stop or inspect
 

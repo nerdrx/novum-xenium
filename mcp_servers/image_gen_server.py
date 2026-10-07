@@ -57,7 +57,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
         import httpx
         from src.settings import load_settings, get_setting
-        from src.ai_interaction import _resolve_model
+        from src.ai_interaction import _resolve_model, _auto_detect_image_model
 
         if not get_setting("image_gen_enabled", True):
             return [TextContent(type="text", text="Error: Image generation is disabled by the administrator.")]
@@ -69,17 +69,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if quality == "medium" and _settings.get("image_quality"):
             quality = _settings["image_quality"]
 
-        # Auto-detect best available image model
         if not model_spec:
-            for candidate in ("gpt-image-1.5", "gpt-image-1", "dall-e-3"):
-                try:
-                    await asyncio.to_thread(_resolve_model, candidate)
-                    model_spec = candidate
-                    break
-                except ValueError:
-                    continue
+            model_spec = await _auto_detect_image_model()
             if not model_spec:
-                return [TextContent(type="text", text="Error: No image model found. Configure one in Admin.")]
+                return [TextContent(type="text", text="Error: No image model found. Configure one in Settings → AI → Image Generation.")]
 
         try:
             url, model_id, headers = await asyncio.to_thread(_resolve_model, model_spec, model_type="image")
@@ -101,7 +94,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             size = "1024x1024"
 
         payload = {"model": model_id, "prompt": prompt, "n": 1, "size": size}
-        if is_gpt_image:
+        if is_gpt_image or model_id == "chatgpt-image-codex":
             payload["quality"] = quality if quality in ("low", "medium", "high", "auto") else "medium"
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)) as client:

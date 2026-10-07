@@ -35,7 +35,7 @@ from src.prompt_security import untrusted_context_message
 from src.tool_security import (
     blocked_tools_for_owner,
     delegated_credential_blocked_tools,
-    email_tool_policy_names,
+    tool_policy_names,
     plan_mode_disabled_tools,
 )
 from src.tool_policy import GUIDE_ONLY_DIRECTIVE, WEB_TOOL_NAMES, ToolPolicy
@@ -3964,6 +3964,14 @@ async def stream_agent_loop(
             _relevant_tools.add("ui_control")
         if "web" in (_intent.get("domains") or set()):
             _relevant_tools.update(WEB_TOOL_NAMES)
+            # A supplied URL needs page access even when vector retrieval
+            # misses the browser and the separate search/fetch toggle is off.
+            # This selects schemas only; disabled tools and approvals still gate them.
+            if re.search(r"https?://[^\s<>]+", _last_user, re.I):
+                _relevant_tools.update(
+                    _BROWSER_MCP_PREFIX + "browser_" + action
+                    for action in ("navigate", "snapshot", "tabs")
+                )
             _blocked_web_tools = sorted(WEB_TOOL_NAMES & disabled_tools)
             if _blocked_web_tools:
                 logger.info(
@@ -4529,7 +4537,12 @@ async def stream_agent_loop(
         # the exact call that the server will seal for user approval.  Schema
         # visibility is not authority: both the loop and dispatcher still gate
         # execution, and only a one-use server record can cross that boundary.
-        return schemas
+        return [
+            schema for schema in schemas
+            if tool_policy_names(
+                schema.get("function", {}).get("name") or schema.get("name", "")
+            ).isdisjoint(disabled_tools)
+        ]
 
     def _tool_schemas_for_route(route_state):
         if "tools" in route_state:
@@ -5836,7 +5849,7 @@ async def stream_agent_loop(
                 _ody_notes_finetune_mode
                 and block.tool_type in {"manage_notes", "manage_calendar", "manage_tasks"}
             )
-            policy_names = email_tool_policy_names(block.tool_type)
+            policy_names = tool_policy_names(block.tool_type)
             blocked_by_tool_policy = bool(
                 tool_policy
                 and any(tool_policy.blocks(name) for name in policy_names)

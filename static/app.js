@@ -1745,7 +1745,7 @@ function initializeEventListeners() {
   }
 
   const TOOL_TOGGLE_TOAST_LABELS = {
-    web: 'Web search',
+    web: 'Search & fetch',
     bash: 'Shell',
   };
 
@@ -1909,7 +1909,7 @@ function initializeEventListeners() {
   const SPLASH_COUNT_KEY = 'odysseus-tool-splash-counts';
   const SPLASH_MAX = 2;
   const _toolSplashes = {
-    web: { role: 'Web Search', text: 'Searches the web for relevant information to include in the response. Results are fetched and summarized before the AI answers.' },
+    web: { role: 'Search & Fetch', text: 'Enables web search and page fetching in Agent mode. In Chat mode, adds web results before the reply. Turning this off blocks both search and fetch tools. Browser access is separate and follows its own permissions.' },
     bash: { role: 'Shell Access', text: 'Gives the AI access to a sandboxed shell for running commands, installing packages, and executing scripts. Use with caution.' },
     builder: { role: 'Tool Builder', text: 'Create custom mini-apps and tools the AI can use. Describe what you need and the AI will build a tool you can reuse across conversations.' },
     research: { role: 'Deep Research', text: 'Multi-round web search with source analysis. Takes longer but produces comprehensive, well-sourced answers. Your next message will trigger a deep research cycle.' },

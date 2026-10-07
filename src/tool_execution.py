@@ -24,7 +24,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from src.tool_security import (
     BUILTIN_EMAIL_TOOLS,
-    email_tool_policy_names,
+    tool_policy_names,
     is_public_blocked_tool,
     owner_is_admin_or_single_user,
 )
@@ -936,7 +936,7 @@ async def execute_tool_block(
     token = _active_workspace.set(workspace or None)
     try:
         tool_name = getattr(block, "tool_type", None)
-        policy_names = email_tool_policy_names(tool_name)
+        policy_names = tool_policy_names(tool_name)
         snapshot_required = (
             isinstance(security_context, ToolRunSecurityContext)
             and security_context.workspace_snapshots_enabled
@@ -1045,9 +1045,10 @@ async def _execute_tool_block_impl(
 
     # The block/disable gates below must match every policy-equivalent
     # spelling of the tool name (bare email names alias their mcp__email__
-    # form — see email_tool_policy_names), not just the spelling the model
+    # form, and browser MCP names alias the builtin_browser toggle), not just
+    # the spelling the model
     # happened to emit.
-    policy_names = email_tool_policy_names(tool)
+    policy_names = tool_policy_names(tool)
 
     # Misformatted tool call detection: model put JSON inside ```python``` (or
     # similar) without naming the tool. Common with MiniMax-style outputs.

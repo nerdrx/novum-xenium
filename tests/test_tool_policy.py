@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import src.agent_loop as al
 from src.agent_tools import ToolBlock
 from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
+from src.tool_security import email_tool_policy_names, tool_policy_names
 from src.tool_policy import (
     WEB_TOOL_NAMES,
     build_effective_tool_policy,
@@ -203,6 +204,45 @@ def test_executor_policy_backstop_blocks_tools():
     assert desc == "bash: BLOCKED"
     assert result["exit_code"] == 1
     assert "forbade" in result["error"]
+
+
+def test_browser_toggle_alias_blocks_before_mcp_dispatch(monkeypatch):
+    import src.tool_execution as execution
+
+    dispatched = []
+
+    async def fake_mcp(name, arguments, **kwargs):
+        dispatched.append(name)
+        return {"output": "should not run", "exit_code": 0}
+
+    monkeypatch.setattr(execution, "_call_mcp_tool", fake_mcp)
+    calls = [
+        ToolBlock("mcp__builtin_browser__browser_navigate", '{"url":"https://example.com"}'),
+        ToolBlock("mcp__builtin_browser__browser_snapshot", "{}"),
+    ]
+
+    async def run():
+        return [
+            await execute_tool_block(
+                call,
+                disabled_tools={"builtin_browser"},
+                security_context=NO_TOOL_SECURITY_CONTEXT,
+            )
+            for call in calls
+        ]
+
+    results = asyncio.run(run())
+    assert dispatched == []
+    assert all(
+        desc.endswith(": BLOCKED") and result["exit_code"] == 1
+        for desc, result in results
+    )
+    assert email_tool_policy_names("mcp__email__delete_email") == {
+        "mcp__email__delete_email", "delete_email",
+    }
+    assert tool_policy_names("mcp__builtin_browser__browser_navigate") == {
+        "mcp__builtin_browser__browser_navigate", "builtin_browser",
+    }
 
 
 def test_agent_loop_blocks_guide_only_fenced_tool_before_start(monkeypatch):

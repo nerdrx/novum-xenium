@@ -272,3 +272,48 @@ def test_browser_priority_does_not_restore_disabled_entry_points(monkeypatch):
     assert disabled.isdisjoint(
         schema["function"]["name"] for schema in requests[0]["kwargs"]["tools"]
     )
+
+
+@pytest.mark.parametrize("browser_disabled", ["enabled", "tools", "alias"])
+def test_url_request_selects_browser_when_retrieval_misses_it(monkeypatch, browser_disabled):
+    from types import SimpleNamespace
+    from src.tool_index import ALWAYS_AVAILABLE
+
+    schemas = _browser_schemas(38)
+    core_names = {"mcp__builtin_browser__browser_" + action
+                  for action in ("navigate", "snapshot", "tabs")}
+    for schema, name in zip(schemas[-3:], sorted(core_names)):
+        schema["function"]["name"] = name
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *a, **k: 0)
+    monkeypatch.setattr("src.tool_index.get_tool_index", lambda: SimpleNamespace(
+        get_tools_for_query=lambda *a: set(ALWAYS_AVAILABLE) | {"web_fetch", "web_search", "download_model"},
+    ))
+    question = "https://github.com/nerdrx/zVram\r\n\r\ncheck this out"
+    disabled = {"web_fetch", "web_search"}
+    if browser_disabled == "tools":
+        disabled.update(core_names)
+    elif browser_disabled == "alias":
+        disabled.add("builtin_browser")
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6.1-sol",
+            [{"role": "user", "content": question}],
+            disabled_tools=disabled, max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    request = requests[0]
+    tools = request["kwargs"]["tools"]
+    names = {schema["function"]["name"] for schema in tools}
+    assert disabled.isdisjoint(names)
+    if browser_disabled == "enabled":
+        assert core_names <= names
+    else:
+        assert not names & core_names
+    assert "download_model" not in names
+    assert any(msg.get("content") == question for msg in request["messages"])
+    assert estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(tools) + 1024 <= 6000

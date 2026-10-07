@@ -93,6 +93,8 @@ ChatGPT subscription chat and native tools use the existing provider connection 
 
 **Tools on demand:** ordinary requests to find an online service select web search/fetch instead of unrelated model-download tools or the complete browser bundle. MCP descriptions follow the selected tools, and native schemas are bounded against the actual model window on every provider route. The current question and recent native tool-call structure must survive trimming; a request that cannot fit stops with an explicit context-budget error before reaching the model.
 
+**Web access controls:** the magnifying-glass toggle enables **Search & fetch** in Agent mode and adds web results in Chat mode. Turning it off blocks the native search and page-fetch tools. Browser MCP access is separate: an Agent request containing a URL selects enabled browser entry points even when search is off or retrieval misses them. Browser permissions, disabled tools and approval rules still apply; turning the browser off blocks all its MCP actions.
+
 This does not increase the model's context window or guarantee lossless recall: each stored result is capped at 1 MiB (an explicit marker identifies omitted middle content), each chat retains up to 20 MiB of source text, and results expire after 30 days. Deleting a chat removes its archive. Incognito and delegated API-token turns do not create archives. The tool obeys disabled-tool/account policies, derives the chat and owner from the server, and treats retrieved text as untrusted data.
 
 The default theme is **NX**, matching the exported palette and synapse background. Existing saved themes remain selected; **Reset to Default** applies NX. Saved agent rounds retain the personality name, with the actual model available in the label tooltip.

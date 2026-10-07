@@ -200,7 +200,7 @@ def plan_mode_disabled_tools() -> Set[str]:
 
 
 def email_tool_policy_names(tool_name: str) -> frozenset:
-    """All policy-equivalent spellings of a tool name.
+    """All policy-equivalent spellings of a built-in email tool name.
 
     A bare built-in email tool name and its MCP-qualified mcp__email__<name>
     form dispatch to the same email server tool, but policy sources spell
@@ -219,6 +219,14 @@ def email_tool_policy_names(tool_name: str) -> frozenset:
         if bare in BUILTIN_EMAIL_TOOLS:
             return frozenset((tool_name, bare))
     return frozenset((tool_name,))
+
+
+def tool_policy_names(tool_name: str) -> frozenset:
+    """Return the spellings every execution and visibility policy must match."""
+    names = set(email_tool_policy_names(tool_name))
+    if isinstance(tool_name, str) and tool_name.startswith("mcp__builtin_browser__"):
+        names.add("builtin_browser")
+    return frozenset(names)
 
 
 def is_public_blocked_tool(tool_name: Optional[str]) -> bool:

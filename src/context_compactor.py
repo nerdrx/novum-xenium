@@ -310,6 +310,26 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
         exchanges.append(post_user[i:end])
         i = end
 
+    # Reserve the current request and latest native exchange before allocating
+    # space to the preset prompt. A fixed 2,000-character system prefix can
+    # otherwise consume a small budget and erase even a one-line user request.
+    latest_native = next(
+        (exchange for exchange in reversed(exchanges)
+         if exchange[0].get("role") == "assistant" and exchange[0].get("tool_calls")),
+        [],
+    )
+    required_tail = estimate_tokens(current_user + latest_native)
+    if essential_system and required_tail <= budget:
+        system_allowance = max(0, budget - required_tail - estimate_tokens(essential_system[1:]))
+        if estimate_tokens(essential_system[:1]) > system_allowance:
+            leading = essential_system[0]
+            content = leading.get("content")
+            if isinstance(content, str):
+                max_chars = max(0, int((system_allowance - 4) / 0.3))
+                notice = "\n[System prompt truncated for context limits]"
+                shortened = content[:max(0, max_chars - len(notice))] + notice if max_chars >= len(notice) else content[:max_chars]
+                essential_system[0] = dict(leading, content=shortened)
+
     # Protected tokens were already deducted from budget above.
     remaining = max(0, budget - estimate_tokens(essential_system))
     if current_user:

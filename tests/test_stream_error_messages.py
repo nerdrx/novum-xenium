@@ -50,6 +50,7 @@ def test_context_budget_error_is_actionable_without_exposing_request_details():
     assert failure["status"] == 400
     assert failure["category"] == "context_budget"
     assert "increase the model context/input budget" in failure["message"]
+    assert "tool definitions, not just your latest message" in failure["message"]
     assert "oversized request was not sent" in failure["message"]
     assert "private-model" not in failure["message"]
     assert describe_stream_failure(failure["message"], failure["status"]) == failure

@@ -29,6 +29,29 @@ from src.context_compactor import (
 )
 
 
+@pytest.mark.parametrize("with_exchange", [False, True])
+def test_large_preset_cannot_displace_current_request_or_latest_exchange(with_exchange):
+    request = {"role": "user", "content": "couldnt you just use the browser?"}
+    tail = [request]
+    if with_exchange:
+        tail += [
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "open", "type": "function", "function": {
+                    "name": "browser_navigate", "arguments": '{"url":"https://github.com/nerdrx/zVram"}',
+                },
+            }]},
+            {"role": "tool", "tool_call_id": "open", "content": "Opened project page.",
+             "metadata": {"trusted": False}},
+        ]
+    messages = [{"role": "system", "content": "Long persona instructions. " * 1000}] + tail
+    original_system = messages[0]["content"]
+    result = trim_for_context(messages, 800, reserve_tokens=512)
+    assert result[-len(tail):] == tail
+    assert estimate_tokens(result) + 512 <= 800
+    assert messages[0]["content"] == original_system
+    assert "Current user message omitted" not in result[0]["content"]
+
+
 class TestCompactThreshold:
     def test_value(self):
         assert COMPACT_THRESHOLD == 0.85

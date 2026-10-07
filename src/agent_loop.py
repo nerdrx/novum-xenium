@@ -4216,12 +4216,28 @@ async def stream_agent_loop(
                 fallback=context_length,
             )
             _route_context_lengths[(candidate_url, candidate_model)] = candidate_context
+            window_description = f"{candidate_context}-token window" if candidate_context else "unknown context window"
+            soft_budget = int(get_setting("agent_input_token_budget", DEFAULT_BUDGET) or 0)
+            before_trim_tokens = estimate_tokens(route_messages)
+            reserve_tokens = min(max(max_tokens or 1024, 512), 2048)
+            try:
+                hard_max = int(get_setting("agent_input_token_hard_max", DEFAULT_HARD_MAX) or DEFAULT_HARD_MAX)
+            except (TypeError, ValueError):
+                hard_max = DEFAULT_HARD_MAX
+            if hard_max <= 0:
+                hard_max = DEFAULT_HARD_MAX
+            effective_budget = compute_input_token_budget(
+                soft_budget, candidate_context, _budget_is_explicit(soft_budget), hard_max=hard_max,
+            )
             # Native schemas are serialized outside `messages`, so a large MCP
             # registry can consume almost the entire window before history is
             # considered. Keep the existing route order (already relevance
             # filtered) and retain schemas called earlier in this turn first.
             if route_tools:
-                schema_cap = max(256, min(8192, (candidate_context or 6000) // 4))
+                # Preserve the existing quarter-window allowance, while also
+                # respecting deliberate input caps smaller than that window.
+                schema_cap = max(0, min(8192, (candidate_context or effective_budget) // 4,
+                                        effective_budget // 3, effective_budget - reserve_tokens))
                 latest_user = max(
                     (i for i, msg in enumerate(route_messages)
                      if msg.get("role") == "user"
@@ -4245,13 +4261,38 @@ async def stream_agent_loop(
                     for schema in route_tools
                 ) and _image_tool_available(mcp_mgr, disabled_tools, _mcp_disabled_map):
                     priority_names.add("generate_image")
-                required_names = used_names | priority_names
+                # A selected/forced tool is a relevance preference, not a
+                # licence for its whole MCP family to exceed the schema cap.
+                # Only schemas in an existing native exchange must survive.
+                required_names = used_names
                 selected = [
                     schema for schema in route_tools
                     if schema.get("function", {}).get("name") in required_names
                 ]
                 selected_tokens = estimate_tool_schema_tokens(selected)
-                for schema in route_tools:
+                # A previously used large schema may exceed the discovery cap.
+                # Leave bounded room for the next skill/tool when the actual
+                # input budget can still hold this turn and its output reserve.
+                if used_names:
+                    turn_tokens = estimate_tokens(route_messages[latest_user:]) if latest_user >= 0 else 0
+                    available = max(selected_tokens, effective_budget - reserve_tokens - turn_tokens)
+                    schema_cap = min(selected_tokens + schema_cap, available)
+                browser_requested = any(name.startswith(_BROWSER_MCP_PREFIX) for name in (forced_tools or ()))
+                browser_core = {
+                    _BROWSER_MCP_PREFIX + "browser_navigate": 0,
+                    _BROWSER_MCP_PREFIX + "browser_snapshot": 1,
+                    _BROWSER_MCP_PREFIX + "browser_tabs": 2,
+                }
+
+                def schema_priority(schema):
+                    name = schema.get("function", {}).get("name", "")
+                    if browser_requested and name in browser_core:
+                        return (0, browser_core[name])
+                    if name in _runtime_skill_tools:
+                        return (1, 0)
+                    return (2 if name in priority_names else 3, 0)
+
+                for schema in sorted(route_tools, key=schema_priority):
                     if schema in selected:
                         continue
                     candidate_schemas = selected + [schema]
@@ -4268,25 +4309,6 @@ async def stream_agent_loop(
                         selected_tokens, schema_cap, sorted(used_names),
                     )
                     route_tools[:] = selected
-            soft_budget = int(get_setting("agent_input_token_budget", DEFAULT_BUDGET) or 0)
-            before_trim_tokens = estimate_tokens(route_messages)
-            reserve_tokens = min(max(max_tokens or 1024, 512), 2048)
-            try:
-                hard_max = int(
-                    get_setting("agent_input_token_hard_max", DEFAULT_HARD_MAX)
-                    or DEFAULT_HARD_MAX
-                )
-            except (TypeError, ValueError):
-                hard_max = DEFAULT_HARD_MAX
-            if hard_max <= 0:
-                hard_max = DEFAULT_HARD_MAX
-            budget_is_explicit = _budget_is_explicit(soft_budget)
-            effective_budget = compute_input_token_budget(
-                soft_budget,
-                candidate_context,
-                budget_is_explicit,
-                hard_max=hard_max,
-            )
             schema_tokens = estimate_tool_schema_tokens(route_tools)
             effective_budget = max(1, effective_budget - schema_tokens)
             trimmed_messages = trim_for_context(
@@ -4317,7 +4339,7 @@ async def stream_agent_loop(
                 if trimmed_user is None or trimmed_user.get("content") != latest_user.get("content"):
                     raise ValueError(
                         "Agent context budget cannot fit the complete current user request "
-                        f"for model {candidate_model} within its {candidate_context}-token window; "
+                        f"for model {candidate_model} within its {window_description}; "
                         "reduce the request or increase the model context/input budget."
                     )
                 latest_call_index = max(
@@ -4341,7 +4363,7 @@ async def stream_agent_loop(
                     if actual_call_index < 0 or trimmed_messages[actual_call_index] != latest_call:
                         raise ValueError(
                             "Agent context budget cannot fit the latest complete native tool exchange "
-                            f"for model {candidate_model} within its {candidate_context}-token window; "
+                            f"for model {candidate_model} within its {window_description}; "
                             "reduce the request or increase the model context/input budget."
                         )
                     actual_tool_messages = trimmed_messages[
@@ -4356,14 +4378,14 @@ async def stream_agent_loop(
                     ]:
                         raise ValueError(
                             "Agent context budget cannot fit the latest complete native tool exchange "
-                            f"for model {candidate_model} within its {candidate_context}-token window; "
+                            f"for model {candidate_model} within its {window_description}; "
                             "reduce the request or increase the model context/input budget."
                         )
             after_trim_tokens = estimate_tokens(trimmed_messages)
             if after_trim_tokens + reserve_tokens > effective_budget:
                 raise ValueError(
                     "Agent context budget cannot fit the complete current user request "
-                    f"for model {candidate_model} within its {candidate_context or 'unknown'}-token window; "
+                    f"for model {candidate_model} within its {window_description}; "
                     "reduce the request or increase the model context/input budget."
                 )
             _route_trim_info[(candidate_url, candidate_model)] = {

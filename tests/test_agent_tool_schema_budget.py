@@ -148,7 +148,8 @@ def test_native_browser_schema_budget_keeps_question_and_latest_tool_exchange(mo
     assert request["messages"][-3:] == exchange
     sent_schemas = request["kwargs"]["tools"]
     assert used_name in {schema["function"]["name"] for schema in sent_schemas}
-    assert model_context.estimate_tool_schema_tokens(sent_schemas) <= 4_000
+    used_schema_tokens = model_context.estimate_tool_schema_tokens([schemas[17]])
+    assert model_context.estimate_tool_schema_tokens(sent_schemas) <= 4_000 + used_schema_tokens
     assert model_context.estimate_tokens(request["messages"]) + model_context.estimate_tool_schema_tokens(sent_schemas) + 2_048 <= 16_000
 
 
@@ -174,3 +175,66 @@ def test_current_user_that_cannot_fit_fails_before_model_call(monkeypatch):
 
 def test_no_tools_have_no_schema_reservation():
     assert estimate_tool_schema_tokens(None) == estimate_tool_schema_tokens([]) == 0
+
+
+@pytest.mark.parametrize("context,configured", [(0, 6000), (6000, 6000), (128000, 3000), (0, 3000)])
+@pytest.mark.parametrize("selection", ["forced", "retrieved"])
+def test_browser_bundle_respects_actual_budget(monkeypatch, context, configured, selection):
+    import src.model_context as model_context
+    schemas = _browser_schemas(38)
+    for schema, action in zip(schemas, ["navigate", "snapshot", "tabs"]):
+        schema["function"]["name"] = "mcp__builtin_browser__browser_" + action
+    forced = {schema["function"]["name"] for schema in schemas[:13]}
+    assert estimate_tool_schema_tokens(schemas[:13]) > 1500
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: context)
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: configured if key == "agent_input_token_budget" else default)
+    question = "couldnt you just use the browser?"
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6.1-sol",
+            [{"role": "system", "content": "Current instructions. " * 500},
+             {"role": "user", "content": "https://github.com/nerdrx/zVram check this out"},
+             {"role": "assistant", "content": "Old reply. " * 1500},
+             {"role": "user", "content": question}],
+            forced_tools=forced if selection == "forced" else None, relevant_tools=forced,
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    request = requests[0]
+    selected = request["kwargs"]["tools"]
+    names = {schema["function"]["name"] for schema in selected}
+    from src.context_budget import compute_input_token_budget, budget_is_explicit
+    limit = compute_input_token_budget(configured, context, budget_is_explicit(configured))
+    assert "mcp__builtin_browser__browser_navigate" in names
+    if limit >= 5100:
+        assert "mcp__builtin_browser__browser_snapshot" in names
+    assert estimate_tool_schema_tokens(selected) <= max(256, min(8192, (context or limit) // 4, limit // 3))
+    assert any(m["role"] == "user" and m["content"] == question for m in request["messages"])
+    assert estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(selected) + 1024 <= limit
+
+
+@pytest.mark.parametrize("context", [0, 128000])
+def test_impossibly_small_explicit_budget_fails_before_provider(monkeypatch, context):
+    import src.model_context as model_context
+    schemas = _browser_schemas(38)
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: context)
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: 100 if key == "agent_input_token_budget" else default)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6.1-sol", [{"role": "user", "content": "Use the browser."}],
+            forced_tools={schema["function"]["name"] for schema in schemas[:13]},
+            relevant_tools={schema["function"]["name"] for schema in schemas},
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    with pytest.raises(ValueError, match="Agent context budget cannot fit"):
+        asyncio.run(run())
+    assert requests == []

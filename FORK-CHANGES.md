@@ -6,6 +6,8 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Context budgeting follow-up: forced/retrieved tool bundles are bounded rather than exempt, explicit input caps constrain discovery, and browser navigation/inspection are prioritized when requested. Previously used native schemas retain bounded room for subsequent tools. Trimming allocates space for the current question and latest native exchange before a long persona prefix. Unknown windows are labeled unknown instead of zero, and budget errors explain the full assembled prompt rather than blaming a short user message.
+
 - Hermes-inspired native improvements: bounded skill metadata with on-demand procedures/tool activation; usage counted on procedure read, finite confidence and account-threshold publication, draft guidance labeled unverified; multiple owner-scoped recall excerpts per chat, followed by exact message reads in bounded pages with source links/timestamps. Existing personal memory, scheduler, audits and groups are retained. The [comparison](docs/hermes-comparison.md) documents overlap and limits; no Hermes runtime is required.
 
 - Compare preflight, retries, shuffle replacements and toolbar checks use the selected 5–300 second timeout instead of a fixed eight-second deadline. The UI shows the wait budget and local loading/queue explanation, with pending browser requests cancelled when the check closes. Server-side provider work may continue until its deadline.
@@ -39,6 +41,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 7 browser/context budget repair: 283 focused checks passed in a network-disabled, read-only container. New cases reproduce 38 browser schemas with 13 forced/retrieved tools, unknown and known windows, deliberately small input caps, long persona prompts, preserved native exchanges and impossible-budget rejection before provider calls. Existing skill activation across fallback routes, image tools, ownership and approval gates also pass. The wider foreground suite remains at 92 passed and ten previously documented error-message/tiny-window assertion failures; no new failures remain there. Provider replies are fixtures, so these checks establish request construction and boundaries, not live model tool choice.
 
 October 7 deeper recall update: 117 focused checks passed in a network-disabled, read-only container using temporary data. Real SQLite checks cover exact text reconstruction across pages, owner/legacy isolation, archived and non-transcript exclusions, malformed arguments, native/text tool transport, disabled tools and approval/delegated gates. A four-round production agent-loop test searches, opens a message, reads its next page and receives an exact detail absent from the excerpt; provider replies are fixtures, with Full access selected for that test. No new provider, dependency, database migration or Docker configuration is needed. This verifies retrieval and request shaping, not model judgment or the truth of historical statements.
 

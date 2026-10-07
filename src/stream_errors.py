@@ -66,7 +66,8 @@ def describe_stream_failure(
         status = 400
         message = (
             "Agent context budget cannot fit the current request and tool exchange. "
-            "Shorten the request or increase the model context/input budget, then retry. "
+            "This includes instructions, history and tool definitions, not just your latest message. "
+            "Reduce enabled tools or older context, or increase the model context/input budget, then retry. "
             "The oversized request was not sent to the model."
         )
     elif reason == "read_timeout":

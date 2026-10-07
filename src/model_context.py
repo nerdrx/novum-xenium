@@ -257,7 +257,8 @@ def _get_context_length_cached(endpoint_url: str, model: str) -> Tuple[int, bool
     # the same model id, so always re-query them instead of serving stale cache.
     if not is_local and (ctx != DEFAULT_CONTEXT or configured_kind in ("api", "proxy")):
         _context_cache[cache_key] = (ctx, known)
-    logger.info(f"Context length for {model}: {ctx}")
+    logger.info("Context length for %s: %s (%s)", model, ctx,
+                "discovered" if known else "unverified fallback; auto budget stays conservative")
     return ctx, known
 
 

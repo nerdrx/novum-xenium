@@ -151,6 +151,22 @@ def test_executable_mode_round_trips(ws):
     assert path.stat().st_mode & 0o777 == 0o755
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are unavailable")
+def test_preview_shows_mode_change_alongside_content_diff(ws):
+    path = ws / "script.sh"
+    path.write_text("before\n")
+    path.chmod(0o644)
+    saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    path.write_text("after\n")
+    path.chmod(0o755)
+
+    preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
+
+    diff = preview["changes"][0]["diff"]
+    assert "-after\n+before\n" in diff
+    assert "mode 0755 -> 0644" in diff
+
+
 def test_restore_refuses_hardlink_target(ws, tmp_path):
     path = ws / "script.sh"
     path.write_text("saved")

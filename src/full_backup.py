@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import stat
 import tempfile
+import threading
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -31,6 +32,9 @@ SKIP_DIRS = {
 }
 
 _DISCARD_ON_RESTORE = {"tmp", "temp"}
+_RESTORE_STAGE_LOCK = threading.Lock()
+
+
 def _is_sqlite(path: Path) -> bool:
     return path.suffix.lower() in {".db", ".sqlite", ".sqlite3"} and not path.name.endswith(("-wal", "-shm", "-journal"))
 
@@ -223,27 +227,34 @@ def validate_extracted_data(data_root: str | Path) -> None:
 
 def stage_restore(archive_path: str | Path, data_dir: str | Path = DATA_DIR) -> dict:
     """Extract to an ignored staging directory and arm the startup restore."""
-    root = Path(data_dir).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    marker = root / ".odysseus-restore-pending.json"
-    if marker.exists():
-        raise ValueError("A restore is already pending; restart the application first")
-    restore_id = uuid.uuid4().hex
-    stage = root / f".odysseus-restore-stage-{restore_id}"
-    stage.mkdir(mode=0o700)
-    try:
-        preview = extract_archive(archive_path, stage)
-        _write_marker(marker, {"version": 1, "id": restore_id, "status": "pending"})
-        return preview
-    except Exception:
-        shutil.rmtree(stage, ignore_errors=True)
-        raise
+    with _RESTORE_STAGE_LOCK:
+        root = Path(data_dir).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        marker = root / ".odysseus-restore-pending.json"
+        if marker.exists():
+            raise ValueError("A restore is already pending; restart the application first")
+        restore_id = uuid.uuid4().hex
+        stage = root / f".odysseus-restore-stage-{restore_id}"
+        stage.mkdir(mode=0o700)
+        try:
+            preview = extract_archive(archive_path, stage)
+            _write_marker(marker, {"version": 1, "id": restore_id, "status": "pending"})
+            return preview
+        except Exception:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
 
 
 def _write_marker(marker: Path, data: dict) -> None:
-    temporary = marker.with_suffix(".tmp")
-    temporary.write_text(json.dumps(data), encoding="utf-8")
-    os.replace(temporary, marker)
+    fd, temporary = tempfile.mkstemp(prefix=".odysseus-restore-marker-", suffix=".tmp", dir=marker.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, marker)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _control(path: Path) -> bool:

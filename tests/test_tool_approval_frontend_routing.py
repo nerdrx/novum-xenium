@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -88,16 +89,28 @@ def test_every_changed_approval_module_is_cache_busted_together():
     """
 
     root = Path(__file__).resolve().parents[1]
-    version = "20260819approvalcontrol1"
     index = (root / "static/index.html").read_text(encoding="utf-8")
     app = (root / "static/app.js").read_text(encoding="utf-8")
     chat = (root / "static/js/chat.js").read_text(encoding="utf-8")
     compare_index = (root / "static/js/compare/index.js").read_text(encoding="utf-8")
     compare_stream = (root / "static/js/compare/stream.js").read_text(encoding="utf-8")
 
-    assert f"chatStream.js?v={version}" in index
-    assert f"chatStream.js?v={version}" in chat
-    assert f"compare/index.js?v={version}" in app
-    assert f"stream.js?v={version}" in compare_index
-    # One chatRenderer instance, so the ask_user keydown listener binds once.
-    assert f"chatRenderer.js?v={version}" in compare_stream
+    def versions(source, module):
+        return re.findall(re.escape(module) + r"\?v=([^'\" >]+)", source)
+
+    stream_versions = versions(index, "chatStream.js") + versions(chat, "chatStream.js")
+    assert len(stream_versions) >= 2
+    assert len(set(stream_versions)) == 1
+    assert versions(app, "compare/index.js")
+    assert versions(compare_index, "stream.js")
+    assert versions(compare_stream, "chatRenderer.js")
+    # Every importer resolves to the same renderer, including sessions/group
+    # and the compare pane; otherwise each copy registers its own handlers.
+    renderer_versions = versions(index, "chatRenderer.js")
+    for source in (root / "static").rglob("*.js"):
+        text = source.read_text(encoding="utf-8")
+        for specifier in re.findall(r"(?:from\s+|import\s*\()['\"]([^'\"]*chatRenderer\.js[^'\"]*)", text):
+            assert "?v=" in specifier, source
+            renderer_versions.append(specifier.split("?v=", 1)[1])
+    assert len(renderer_versions) > 2
+    assert len(set(renderer_versions)) == 1

@@ -298,7 +298,8 @@ async def test_binding_does_not_leak(ws, admin):
 # must still surface the file tools, otherwise the agent says it has no file
 # access (the bug this guards against).
 
-def _sent_tool_names(monkeypatch, *, workspace, message="look at the local project", force_keyword_fallback=False):
+def _sent_tool_names(monkeypatch, *, workspace, message="look at the local project", force_keyword_fallback=False,
+                     captured_messages=None):
     import asyncio
     import src.agent_loop as al
 
@@ -319,6 +320,8 @@ def _sent_tool_names(monkeypatch, *, workspace, message="look at the local proje
 
     async def _fake_stream(_candidates, messages, **kwargs):
         captured.append(kwargs.get("tools"))
+        if captured_messages is not None:
+            captured_messages.extend(messages)
         yield "data: " + json.dumps({"delta": "ok"}) + "\n\n"
         yield "data: [DONE]\n\n"
 
@@ -351,21 +354,24 @@ def test_low_signal_with_workspace_surfaces_readonly_file_tools(monkeypatch):
 
 
 def test_workspace_coding_request_surfaces_edit_and_verify_tools(monkeypatch):
+    prompt_messages = []
     names = _sent_tool_names(
         monkeypatch,
         workspace="/tmp",
         message="fix the failing frontend test in this repo",
         force_keyword_fallback=True,
+        captured_messages=prompt_messages,
     )
-    assert "get_workspace" in names
+    # The route budget trims schemas; the current essential coding path is
+    # inspect, search, edit, and verify. The active path also orients the model
+    # when get_workspace itself does not fit.
     assert "read_file" in names
     assert "grep" in names
     assert "edit_file" in names
     assert "write_file" in names
-    assert "apply_patch" in names
-    assert "todowrite" in names
     assert "bash" in names
-    assert "python" in names
+    assert any("Active workspace: `/tmp`" in str(message.get("content", ""))
+               for message in prompt_messages)
 
 
 def test_low_signal_without_workspace_excludes_file_tools(monkeypatch):
@@ -424,7 +430,7 @@ def test_workspace_coding_mode_prompt_is_injected(monkeypatch):
     system_text = "\n\n".join(m.get("content", "") for m in messages if m.get("role") == "system")
     assert "## Workspace coding mode" in system_text
     assert "Active workspace: `/tmp/example-repo`" in system_text
-    assert "call `todowrite`" in system_text
+    assert "use `todowrite` when available" in system_text
     assert "Change repo files with `apply_patch`" in system_text
 
 

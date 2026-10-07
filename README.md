@@ -78,10 +78,10 @@ A few limits matter:
 
 - Full access skips approvals within the current setup. It doesn't mount more host folders or override account permissions and disabled tools. The shell isn't an operating-system sandbox.
 - Snapshots cover included workspace files, up to 2,000 files, 8 MiB per file and 64 MiB total. They don't undo external services, running processes or shell effects outside the workspace. Use sparse checkouts for large repos.
-- Retrieval doesn't enlarge a model's context window or guarantee perfect recall. Ten older foreground-suite assertion failures are still listed in the validation notes.
+- Retrieval doesn't enlarge a model's context window or guarantee perfect recall. Requests and output limits are budgeted separately for each provider route.
 - Auto-conversation runs in the browser tab. Backups contain private application data and credentials, so keep them private.
 
-Keep authentication enabled if you expose the app beyond localhost. More deployment details are in the [security notes](website/setup.md#security-notes).
+Keep `AUTH_ENABLED=true` for any network-accessible deployment. Keep `LOCALHOST_BYPASS=false` outside local development. More deployment details are in the [security notes](website/setup.md#security-notes).
 
 ## Help improve it
 

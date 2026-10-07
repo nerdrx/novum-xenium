@@ -277,6 +277,12 @@ def preview_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: s
                             and current_modes.get(name, 0o644) != saved_modes.get(name, 0o644))
             if before == after and not mode_changed:
                 continue
+            mode_diff = (
+                f"mode {current_modes[name]:04o} -> {saved_modes.get(name, 0o644):04o}"
+                if mode_changed else ""
+            )
+            if mode_diff:
+                preview_budget = max(0, preview_budget - len(mode_diff))
             status = "added" if before is None else "deleted" if after is None else "modified"
             def display(data):
                 if data is None: return None
@@ -292,9 +298,8 @@ def preview_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: s
                     ))
                     diff = raw_diff[:min(8000, preview_budget)]
                     preview_budget -= len(diff)
-            if mode_changed and not diff:
-                diff = f"mode {current_modes[name]:04o} -> {saved_modes.get(name, 0o644):04o}"
-                preview_budget = max(0, preview_budget - len(diff))
+            if mode_diff:
+                diff = f"{diff}\n{mode_diff}" if diff else mode_diff
             changes.append({
                 "path": name, "status": status,
                 "current_hash": hashlib.sha256(before).hexdigest() if before is not None else None,

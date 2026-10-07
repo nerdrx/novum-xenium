@@ -44,24 +44,25 @@ ALLOWED_CALLERS = frozenset({
 
 def _grep_files(pattern: str) -> set[str]:
     """Return the set of repo-relative .py file paths whose body matches
-    `pattern`. Skips tests, the override module itself, and worktree
-    scratch dirs."""
+    `pattern`. Skips tests, ignored runtime data (which can contain cloned
+    repos), the override module itself, and worktree scratch dirs."""
     rx = re.compile(pattern)
     hits: set[str] = set()
-    for path in REPO.rglob("*.py"):
-        rel = path.relative_to(REPO).as_posix()
-        if rel.startswith("tests/"):
-            continue
-        if rel == "src/tls_overrides.py":  # definition site, not a caller
-            continue
-        if rel.startswith(".claude/") or "/.claude/" in rel:
-            continue
-        try:
-            body = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        if rx.search(body):
-            hits.add(rel)
+    for current, dirs, names in os.walk(REPO):
+        dirs[:] = [name for name in dirs if name not in {".git", ".claude", "data", "tests"}]
+        for name in names:
+            if not name.endswith(".py"):
+                continue
+            path = Path(current) / name
+            rel = path.relative_to(REPO).as_posix()
+            if rel == "src/tls_overrides.py":  # definition site, not a caller
+                continue
+            try:
+                body = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if rx.search(body):
+                hits.add(rel)
     return hits
 
 

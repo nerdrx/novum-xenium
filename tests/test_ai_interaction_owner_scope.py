@@ -22,13 +22,33 @@ def test_model_listing_and_image_fallback_are_owner_scoped():
     # list_models moved to agent_tools.model_interaction_tools (#3629).
     list_body = _source(model_interaction_tools.list_models)
     image_body = _source(ai_interaction.do_generate_image)
+    discovery_body = _source(ai_interaction._auto_detect_image_model)
 
     assert "owner: Optional[str] = None" in list_body
     assert "owner_filter(query, ModelEndpoint, owner)" in list_body
-    # _resolve_model is offloaded to a worker thread (#4589) but stays owner-scoped.
-    assert "asyncio.to_thread(_resolve_model, candidate, owner=owner)" in image_body
-    assert "owner_filter(_img_q, ModelEndpoint, owner)" in image_body
+    # Discovery moved to a helper; verify both its owner-scoped provider query
+    # and the caller's owner forwarding rather than pinning the old code layout.
+    assert "asyncio.to_thread(_resolve_model, candidate, owner=owner)" in discovery_body
+    assert "owner_filter(query, ModelEndpoint, owner)" in discovery_body
+    assert "model_spec = await _auto_detect_image_model(owner)" in image_body
     assert "asyncio.to_thread(_resolve_model, model_spec, owner=owner)" in image_body
+
+
+@pytest.mark.asyncio
+async def test_image_fallback_forwards_request_owner(monkeypatch):
+    seen = []
+
+    async def no_model(owner=None):
+        seen.append(owner)
+        return ""
+
+    monkeypatch.setattr(ai_interaction, "_auto_detect_image_model", no_model)
+    monkeypatch.setattr("src.settings.load_settings", lambda: {})
+
+    result = await ai_interaction.do_generate_image("a test image", owner="alice")
+
+    assert seen == ["alice"]
+    assert "No image model found" in result["error"]
 
 
 # chat_with_model, list_models and ask_teacher moved to the registry (#3629)

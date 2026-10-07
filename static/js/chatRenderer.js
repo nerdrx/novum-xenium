@@ -447,11 +447,9 @@ function stripExecutedFence(match, tag, inline, body) {
 
 async function loadExecFenceRegex() {
   try {
-    // Shared with admin.js, and — more to the point — with the other copies of
-    // this module: chatRenderer.js is imported under three different ?v= query
-    // strings, so it is instantiated three times per load and used to issue
-    // three identical /api/tools requests. appConfig.js is imported by one
-    // specifier from all of them, so they now share a single fetch.
+    // Share the tool registry with admin.js through appConfig's single fetch.
+    // Keep every renderer import on the same versioned URL so state and event
+    // handlers belong to one module instance.
     const data = await getTools();
     const tags = (data.tools || [])
       .map((t) => t.id)
@@ -1416,7 +1414,7 @@ document.addEventListener('click', function(e) {
       if (open) open(id);
     }).catch(() => {});
   } else if (kind === 'research') {
-    import('./research/panel.js').then(mod => {
+    import('./research/panel.js?v=20261007quality1').then(mod => {
       const open = mod.openPanel || (mod.default && mod.default.openPanel);
       if (open) open(id);
     }).catch(() => {});

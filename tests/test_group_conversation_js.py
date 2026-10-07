@@ -8,7 +8,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize('scenario', ['limit', 'concurrent', 'stop', 'stale', 'toggle', 'single', 'parallel', 'http-error', 'sse-error', 'early-eof', 'sync-error', 'context', 'approval', 'deny', 'ask-stop', 'ask-stale', 'question', 'tool-events'])
+@pytest.mark.parametrize('scenario', ['limit', 'concurrent', 'stop', 'stale', 'toggle', 'single', 'parallel', 'http-error', 'sse-error', 'early-eof', 'sync-error', 'context', 'approval', 'deny', 'ask-stop', 'ask-stale', 'question', 'tool-events', 'guard-persisted', 'guard-legacy', 'intent-stop', 'budget-stop', 'rounds-stop'])
 def test_group_conversation(scenario):
     if not shutil.which('node'):
         pytest.skip('node is not installed')

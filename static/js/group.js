@@ -3,7 +3,7 @@
 
 import uiModule from './ui.js';
 import markdownModule from './markdown.js';
-import chatRenderer from './chatRenderer.js';
+import chatRenderer from './chatRenderer.js?v=20261007quality1';
 import spinnerModule from './spinner.js';
 import { providerLogo } from './providers.js';
 import { PROMPT_TEMPLATES, getUserTemplates } from './presets.js';
@@ -947,7 +947,8 @@ async function _sendParallel(msg, box, run, ac) {
   ));
   if (run !== _runId || ac.signal.aborted) return;
   if (results.some(result => result.status === 'rejected' || !result.value)) {
-    uiModule.showToast('Group conversation stopped: a participant did not complete a reply');
+    const paused = holders.find(holder => holder.dataset.groupPauseReason);
+    uiModule.showToast(paused ? `Group conversation stopped: ${paused.dataset.groupPauseReason}` : 'Group conversation stopped: a participant did not complete a reply');
     return;
   }
 
@@ -984,7 +985,7 @@ async function _sendRoundRobin(msg, box, run, ac) {
     const succeeded = await _streamToHolder(idx, _participantSessions[idx], prompt, wrap, ac);
     if (run !== _runId || ac.signal.aborted) return;
     if (!succeeded) {
-      uiModule.showToast('Group conversation stopped: a participant did not complete a reply');
+      uiModule.showToast(wrap.dataset.groupPauseReason ? `Group conversation stopped: ${wrap.dataset.groupPauseReason}` : 'Group conversation stopped: a participant did not complete a reply');
       return;
     }
 
@@ -1067,6 +1068,8 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
   let _firstToken = true;
   let completed = false;
   let failed = false;
+  let paused = false;
+  let pauseNotice = '';
   let question = null;
   const bodyEl = holderEl.querySelector('.body');
   const textEl = document.createElement('div');
@@ -1128,6 +1131,13 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
           else if (json.type === 'ask_user') {
             question = json.data;
           }
+          else if (['loop_breaker_triggered', 'intent_nudge_exhausted', 'budget_exceeded', 'rounds_exhausted'].includes(json.type)) {
+            paused = true;
+            const reason = json.message || json.reason || (json.type === 'budget_exceeded'
+              ? `Tool limit reached (${json.used}/${json.limit} calls)` : `Round limit reached (${json.rounds} rounds)`);
+            holderEl.dataset.groupPauseReason = reason;
+            if (!json.persisted_in_text) pauseNotice = `\n\n[Agent paused: ${reason}]`;
+          }
           else if (json.type === 'tool_start') {
             const toolDiv = document.createElement('div');
             toolDiv.className = 'agent-tool-event';
@@ -1175,6 +1185,7 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
     delete holderEl._spinner;
   }
   if (abortCtrl.signal.aborted) return false;
+  accumulated += pauseNotice;
 
   // Final render with footer
   if (accumulated) {
@@ -1206,7 +1217,7 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
     });
     if (!saved.ok) throw new Error('Could not save a participant reply');
   }
-  if (question && completed && !failed) {
+  if (question && completed && !failed && !paused) {
     const answer = await _waitForGroupChoice(question, holderEl, sessionId, abortCtrl);
     if (!answer || abortCtrl.signal.aborted || abortCtrl.groupRun !== _runId) return false;
     const resumed = _createGroupBubble(model, holderEl.parentNode);
@@ -1215,7 +1226,7 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
     holderEl.dataset.raw = [accumulated, resumed.dataset.raw].filter(Boolean).join('\n\n');
     return succeeded;
   }
-  return completed && !failed && (!!accumulated.trim() || !!bodyEl.querySelector('.agent-tool-event') || !!bodyEl.querySelector('img'));
+  return completed && !failed && !paused && (!!accumulated.trim() || !!bodyEl.querySelector('.agent-tool-event') || !!bodyEl.querySelector('img'));
 }
 
 // Only real ask_user SSE events create approvals; assistant prose never does.

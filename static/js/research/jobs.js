@@ -208,7 +208,21 @@ export async function cancelJob(id) {
   const job = _jobs.find(j => j.id === id);
   if (!job) return;
   if (job.status === 'queued') { job.status = 'cancelled'; _notify(); return; }
-  try { await fetch(`${_apiBase}/api/research/cancel/${id}`, { method: 'POST', credentials: 'same-origin' }); } catch {}
+  try {
+    const res = await fetch(`${_apiBase}/api/research/cancel/${id}`, {
+      method: 'POST', credentials: 'same-origin',
+    });
+    const result = res.ok ? await res.json().catch(() => null) : null;
+    if (result?.cancelled !== true) {
+      job.errorMsg = 'Cancellation was not confirmed; the research may still be running.';
+      _notify();
+      return;
+    }
+  } catch {
+    job.errorMsg = 'Cancellation request failed; the research may still be running.';
+    _notify();
+    return;
+  }
   _finishJob(job, 'cancelled');
 }
 
@@ -270,6 +284,15 @@ function _makeJob(query, settings) {
 }
 
 async function _launchJob(job) {
+  // A queued job can be cancelled while waiting behind another sequential
+  // job. Skip it here too, since the original queue snapshot is stale.
+  if (job.status !== 'queued' || job._launching) return;
+  job._launching = true;
+  try { await _launchJobRequest(job); }
+  finally { job._launching = false; }
+}
+
+async function _launchJobRequest(job) {
   const body = { query: job.query, ...job.settings };
   let data;
   try {
@@ -279,14 +302,40 @@ async function _launchJob(job) {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
+      if (job.status !== 'queued') return;
       const txt = await res.text();
+      if (job.status !== 'queued') return;
       try { job.errorMsg = JSON.parse(txt).detail || txt; } catch { job.errorMsg = txt; }
       job.status = 'error';
       _notify();
       return;
     }
     data = await res.json();
+    // The request may have been in flight when the user cancelled. The server
+    // already created a session, so stop it instead of reviving the job.
+    if (job.status !== 'queued') {
+      if (data.session_id) {
+        try {
+          const res = await fetch(`${_apiBase}/api/research/cancel/${data.session_id}`, {
+            method: 'POST', credentials: 'same-origin',
+          });
+          const result = res.ok ? await res.json().catch(() => null) : null;
+          if (result?.cancelled !== true) {
+            job.errorMsg = 'Cancellation was not confirmed; the research may still be running.';
+            _notify();
+          }
+        } catch {
+          job.errorMsg = 'Cancellation request failed; the research may still be running.';
+          _notify();
+        }
+      } else {
+        job.errorMsg = 'Could not identify the created session to confirm cancellation.';
+        _notify();
+      }
+      return;
+    }
   } catch (e) {
+    if (job.status !== 'queued') return;
     job.errorMsg = e.message;
     job.status = 'error';
     _notify();
@@ -316,7 +365,7 @@ function _connectStream(job) {
       if (d.model && !job.modelName) job.modelName = d.model;
       if (d.final) {
         if (d.error) job.errorMsg = d.error;
-        _finishJob(job, d.status === 'done' ? 'done' : d.status === 'cancelled' ? 'cancelled' : 'error');
+        _finishJob(job, _terminalStatus(d.status));
         if (d.status === 'done') _fetchResult(job);
         return;
       }
@@ -339,12 +388,16 @@ async function _pollFallback(job) {
     job.progress = d.progress || {};
     if (d.avg_duration) job.avgDuration = d.avg_duration;
     if (d.status !== 'running') {
-      _finishJob(job, d.status === 'done' ? 'done' : 'error');
+      _finishJob(job, _terminalStatus(d.status));
       if (d.status === 'done') _fetchResult(job);
       return;
     }
     setTimeout(() => _pollFallback(job), 2000);
   } catch { _finishJob(job, 'error'); }
+}
+
+function _terminalStatus(status) {
+  return status === 'done' ? 'done' : status === 'cancelled' ? 'cancelled' : 'error';
 }
 
 function _finishJob(job, status) {

@@ -6,6 +6,7 @@ and the real startup-shell coordinator then run together under Node.
 """
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,9 +23,6 @@ _IMPORT_REWRITES = {
     "import Storage from './storage.js';": "import Storage from './storage.mjs';",
     "import uiModule, { autoResize, styledPrompt } from './ui.js';": (
         "import uiModule, { autoResize, styledPrompt } from './ui.mjs';"
-    ),
-    "import chatRenderer from './chatRenderer.js?v=20260815toolapproval4';": (
-        "import chatRenderer from './chatRenderer.mjs';"
     ),
     "import { providerLogo } from './providers.js';": (
         "import { providerLogo } from './providers.mjs';"
@@ -306,6 +304,11 @@ def results(tmp_path_factory):
 
     module_dir = tmp_path_factory.mktemp("session-bootstrap-js")
     source = _SESSIONS.read_text(encoding="utf-8")
+    source, count = re.subn(
+        r"import chatRenderer from '\./chatRenderer\.js(?:\?[^']*)?';",
+        "import chatRenderer from './chatRenderer.mjs';", source, count=1,
+    )
+    assert count == 1, "sessions must import the shipped renderer"
     for original, replacement in _IMPORT_REWRITES.items():
         assert original in source, f"sessions import changed: {original}"
         source = source.replace(original, replacement, 1)

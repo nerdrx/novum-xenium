@@ -36,17 +36,17 @@ The lightweight judge adds no model download, service, or dependency. It runs on
 
 Repeated unchanged reads, plans and failed retries can pause an agent turn before it uses all its rounds. The guard checks individual tool results across rounds; adding narration or rearranging the calls does not reset it. Three rounds containing repeats within the last eight monitored rounds trigger the pause, with history bounded to 64 signatures. File reads distinguish offsets, normalize paths and ignore limit changes when the returned page is identical.
 
-Changed results and successful edits reset the counter. Background-job polling, approval cards and questions are excluded. The pause explains which tools repeated and how often, and stays in the saved reply after refresh. It does not roll back edits, replay tools or automatically switch to a teacher model. Review the latest output and send a different next step to continue.
+Changed results and successful edits reset the counter. Background-job polling, approval cards and questions are excluded. The pause explains which tools repeated and how often, and stays in the saved reply after refresh. It does not roll back edits, replay tools or automatically switch to a teacher model. Review the latest output and send a different next step to continue. Group auto-conversation also stops at these pauses; task boards keep incomplete work open instead of treating a partial reply as a finished assignment.
 
 This is a bounded repetition check, not a judgment of whether every action is useful. It cannot detect a hung tool before that tool returns, and successful shell commands or unknown read-only MCP tools still rely on the existing exact-call backstop and round limit.
 
 ## Restart recovery
 
-after a process interruption, open the chat and click **Continue** on its recovery card. The server retains bounded partial text and tool outcomes in owner-scoped checkpoints. Continue is one-use, rechecks the saved workspace/model/endpoint and preserves read-only plan mode. Saved evidence is untrusted context; tools and old approvals are never replayed automatically. In-memory runs still reconnect normally without a restart. Incognito does not store checkpoints.
+after a process interruption, open the chat and click **Continue** on its recovery card. The server retains bounded partial text and tool outcomes in owner-scoped checkpoints. Continue is one-use, rechecks the saved workspace/model/endpoint and preserves read-only plan mode. Saved evidence is untrusted context; tools and old approvals are never replayed automatically. In-memory runs still reconnect normally without a restart. Stop also works when pressed before the detached run starts. Incognito does not store checkpoints.
 
 ## Coding undo
 
-open the workspace picker to create a **Snapshot**, choose one, **Review** the changes, then **Restore**. Agent write/patch/shell/Python tools save one baseline per turn before execution. A stale preview is rejected; restore saves another recovery point first. Snapshots retain the newest 20 per chat/workspace, up to 2,000 files, 8 MiB per file and 64 MiB total. Dependencies, hidden directories, secrets, symlinks and special files are excluded. An oversized workspace must be reduced before protected tools can run. Restore covers included workspace files and permissions; shell actions outside that folder, processes, databases, external services and excluded files are not undone. A mid-restore failure reports the recovery snapshot rather than claiming an atomic rollback. Snapshot files remain in private app data after chat deletion.
+open the workspace picker to create a **Snapshot**, choose one, **Review** the changes, then **Restore**. Agent write/patch/shell/Python tools save one baseline per turn before execution. A stale preview is rejected; restore saves another recovery point first. Snapshots retain the newest 20 per chat/workspace, up to 2,000 files, 8 MiB per file and 64 MiB total. Dependencies, hidden directories, secrets, symlinks and special files are excluded. An oversized workspace must be reduced before protected tools can run. Review shows both text and executable-permission changes. Restore covers included workspace files and permissions; shell actions outside that folder, processes, databases, external services and excluded files are not undone. A mid-restore failure reports the recovery snapshot rather than claiming an atomic rollback. Snapshot files remain in private app data after chat deletion.
 
 ## Coordinated teams
 
@@ -54,7 +54,7 @@ open the group controls and enable **Coordinate tasks**. Enter the shared plan, 
 
 ## Context inspector
 
-click the context ring in the chat header after an agent reply. The last assembled request shows estimates for instructions, native tools, memory/documents, conversation and tool outputs, plus output reserve and trimmed tokens. Archived results are stored separately and consume no prompt tokens until retrieved. Provider tokenization can differ from these estimates.
+click the context ring in the chat header after an agent reply. The last assembled request shows estimates for instructions, native tools, memory/documents, conversation and tool outputs, plus output reserve and trimmed tokens. Archived results are stored separately and consume no prompt tokens until retrieved. The displayed output reserve matches the limit sent to the selected provider route. Small windows can reduce that limit to keep the assembled request within budget. Provider tokenization can differ from these estimates.
 
 ## Application backups
 

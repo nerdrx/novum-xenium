@@ -1,3 +1,4 @@
+import re
 """Regression coverage for indirect prompt-injection tool gating."""
 
 import asyncio
@@ -1376,7 +1377,9 @@ def test_frontend_tool_approval_uses_opaque_id_and_fixed_decisions():
     assert "/test-approval`" in skills
     assert "approval_id: approval.approval_id" in skills
     assert "['approve', 'Allow once'" in skills
-    assert index.count("app.js?v=20261007imageprovider1") == 2
+    app_urls = re.findall(r'(?:(?:src|href)=")[^" ]*/(app\.js\?v=[^" ]+)', index)
+    assert len(app_urls) == 2
+    assert len(set(app_urls)) == 1
     assert "app.js?v=20260808startupshell1" not in index
     approval_module_sources = [
         (root / path).read_text()

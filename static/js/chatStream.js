@@ -161,7 +161,7 @@ export function handleUIControl(uiData) {
       // the 12s active-poll.
       var rsid = uiData.research_session_id || uiData.session_id;
       if (rsid) {
-        import('./research/jobs.js').then(function(mod) {
+        import('./research/jobs.js?v=20261007quality1').then(function(mod) {
           var fn = mod.adoptSession || (mod.default && mod.default.adoptSession);
           if (fn) fn(rsid);
         }).catch(function(){});

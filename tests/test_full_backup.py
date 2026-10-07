@@ -1,7 +1,10 @@
 import io
 import json
 import stat
+import threading
+import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -127,6 +130,63 @@ def test_stage_is_non_mutating_then_restore_roundtrips(tmp_path):
     assert (data / "sessions.json").read_text() == "restored chats"
     assert (data / "agent_workspace/work.txt").read_text() == "workspace"
     assert not (data / ".odysseus-restore-pending.json").exists()
+
+
+def test_concurrent_restore_staging_arms_one_existing_stage(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    archives = []
+    for value in ("first", "second"):
+        archive = tmp_path / f"{value}.zip"
+        archive.write_bytes(_zip_with([("data/value.txt", value.encode())]))
+        archives.append(archive)
+
+    original_extract = full_backup.extract_archive
+    first_extract_started = threading.Event()
+    release_first_extract = threading.Event()
+    calls_lock = threading.Lock()
+    calls = 0
+
+    def pause_first_extract(archive, destination):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+            first = calls == 1
+        if first:
+            first_extract_started.set()
+            assert release_first_extract.wait(timeout=2)
+        return original_extract(archive, destination)
+
+    monkeypatch.setattr(full_backup, "extract_archive", pause_first_extract)
+    start = threading.Barrier(2)
+
+    def stage(archive):
+        start.wait(timeout=2)
+        try:
+            return full_backup.stage_restore(archive, data)
+        except Exception as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(stage, archive) for archive in archives]
+        assert first_extract_started.wait(timeout=2)
+        try:
+            # Give the competing request time to reach the pending-marker check.
+            time.sleep(0.05)
+        finally:
+            release_first_extract.set()
+        results = [future.result(timeout=3) for future in futures]
+
+    successes = [result for result in results if isinstance(result, dict)]
+    failures = [result for result in results if isinstance(result, ValueError)]
+    assert len(successes) == len(failures) == 1
+    assert calls == 1
+
+    marker = json.loads((data / ".odysseus-restore-pending.json").read_text())
+    stages = list(data.glob(".odysseus-restore-stage-*"))
+    active_stage = data / f".odysseus-restore-stage-{marker['id']}"
+    assert stages == [active_stage]
+    assert (active_stage / "data" / "value.txt").read_text() in {"first", "second"}
 
 
 def test_startup_recovers_interrupted_swap_before_retrying_restore(tmp_path):

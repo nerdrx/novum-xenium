@@ -1,4 +1,5 @@
 """Durability and safe recovery boundaries for detached agent runs."""
+import asyncio
 import sqlite3
 import json
 
@@ -55,6 +56,55 @@ async def test_run_manager_persists_completed_tool_outcome(tmp_path, monkeypatch
         "endpoint_id": "ep-1",
     }
     assert agent_runs.get_checkpoint(session_id, "bob") is None
+
+
+@pytest.mark.asyncio
+async def test_stop_before_drain_starts_terminalizes_checkpoint(tmp_path, monkeypatch):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "stopped.db"))
+    monkeypatch.setattr(run_checkpoints, "_STORE", store)
+
+    async def stream():
+        yield 'data: {"delta":"should not run"}\n\n'
+
+    session_id = "stop-before-drain-test"
+    run = agent_runs.start(session_id, stream(), owner="alice")
+    assert agent_runs.stop(session_id, run.run_id) is True
+    await asyncio.gather(run.task, return_exceptions=True)
+
+    assert run.status == "stopped"
+    assert agent_runs.get_checkpoint(session_id, "alice")["status"] == "stopped"
+    assert run.buffer == []
+    if run.evict_task:
+        run.evict_task.cancel()
+    agent_runs._RUNS.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_stop_before_drain_wakes_subscriber_without_checkpoint(tmp_path, monkeypatch):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "incognito.db"))
+    monkeypatch.setattr(run_checkpoints, "_STORE", store)
+
+    async def stream():
+        yield 'data: {"delta":"should not run"}\n\n'
+
+    session_id = "incognito-stop-before-drain-test"
+    run = agent_runs.start(session_id, stream(), owner="alice", persist=False)
+    queue = asyncio.Queue()
+    run.subscribers.add(queue)
+
+    assert agent_runs.stop(session_id, "stale-run-id") is False
+    assert run.status == "running"
+    assert queue.empty()
+
+    assert agent_runs.stop(session_id, run.run_id) is True
+    assert await asyncio.wait_for(queue.get(), timeout=0.1) == (None, None)
+    await asyncio.gather(run.task, return_exceptions=True)
+
+    assert run.status == "stopped"
+    assert store.get(session_id, "alice") is None
+    if run.evict_task:
+        run.evict_task.cancel()
+    agent_runs._RUNS.pop(session_id, None)
 
 
 def test_restart_marks_interrupted_and_one_use_claim_is_owner_scoped(tmp_path):

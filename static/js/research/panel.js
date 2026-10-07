@@ -1,7 +1,7 @@
 /**
  * Deep Research side panel — open/close, form, job rendering, library.
  */
-import * as jobs from './jobs.js?v=20260630researchthumb';
+import * as jobs from './jobs.js?v=20261007quality1';
 import themeModule from '../theme.js';
 import createResearchSynapse from '../researchSynapse.js';
 import spinnerModule from '../spinner.js';
@@ -929,6 +929,7 @@ function _buildJobCard(job) {
     const userMaxR = job.settings?.max_rounds || 0;
     const phaseMaxR = userMaxR || 0;  // 0 = formatPhase shows "Round X" without total
     const phase = jobs.formatPhase(job.progress, phaseMaxR);
+    const errMsg = job.errorMsg ? `<div class="research-job-error">${_esc(job.errorMsg)}</div>` : '';
     const round = job.progress?.round || 0;
     const barCap = userMaxR || 8;
     const pct = Math.min(100, Math.round((round / barCap) * 100));
@@ -941,6 +942,7 @@ function _buildJobCard(job) {
         <button class="research-job-cancel" title="Cancel research">${_cancelIcon}</button>
       </div>
       <div class="research-job-phase">${phase}</div>
+      ${errMsg}
       <div class="research-job-synapse-host${_synapseMinimized ? ' synapse-collapsed' : ''}" data-synapse-host="${job.id}"></div>
       <div class="research-progress-bar"><div class="research-progress-fill" style="width:${pct}%"></div></div>
     `;

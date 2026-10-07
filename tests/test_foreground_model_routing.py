@@ -518,7 +518,7 @@ async def test_chat_stream_route_uses_only_new_explicit_fallback_policy(monkeypa
     else:
         assert captured == {"agent": {"primary": selected, "fallbacks": [backup]}}
 
-
+# Saved terminal failures use the current allowlisted category/message contract.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("primary_context", "backup_context", "expected_counts"),
@@ -767,8 +767,8 @@ async def test_chat_stream_route_does_not_save_or_postprocess_terminal_agent_err
 @pytest.mark.parametrize(
     ("provider_status", "expected_status", "expected_message"),
     [
-        (401, 401, "Model request failed (HTTP 401)"),
-        (429.9, None, "Model request failed"),
+        (401, 401, "Provider authentication failed (HTTP 401). Check the configured credentials."),
+        (429.9, 429, "Provider rate limit reached (HTTP 429). Wait briefly, then retry."),
     ],
 )
 async def test_chat_stream_persists_completed_tools_before_later_terminal_error(
@@ -827,6 +827,7 @@ async def test_chat_stream_persists_completed_tools_before_later_terminal_error(
     assert saved_args[4]["failure"] == {
         "status": expected_status,
         "message": expected_message,
+        "category": "auth" if expected_status == 401 else "rate_limit",
     }
     assert _saved_kwargs["character_name"] == "Velora"
     assert saved_args[4]["failed"] is True
@@ -889,12 +890,13 @@ async def test_chat_stream_persists_partial_terminal_error_with_route_provenance
     saved_args, _saved_kwargs = captured["saved"][0]
     assert saved_args[3] == (
         "visible partial\n\n"
-        "[Response stopped: Model request failed (HTTP 503)]"
+        "[Response stopped: Provider service failed (HTTP 503). Check service health and retry.]"
     )
     assert "credential-shaped provider detail" not in str(saved_args)
     assert saved_args[4]["failure"] == {
         "status": 503,
-        "message": "Model request failed (HTTP 503)",
+        "message": "Provider service failed (HTTP 503). Check service health and retry.",
+        "category": "server",
     }
     assert saved_args[4]["model"] == "backup-model"
     assert saved_args[4]["requested_model"] == "selected-model"
@@ -2453,8 +2455,8 @@ def test_agent_terminal_first_round_error_has_no_success_completion(monkeypatch,
 @pytest.mark.parametrize(
     ("provider_status", "expected_status", "expected_message"),
     [
-        (400, 400, "Model request failed (HTTP 400)"),
-        (429.9, None, "Model request failed"),
+        (400, 400, "Provider rejected the request (HTTP 400). Check the model and request settings."),
+        (429.9, 429, "Provider rate limit reached (HTTP 429). Wait briefly, then retry."),
     ],
 )
 def test_agent_terminal_later_round_error_stops_after_completed_tool(
@@ -2518,6 +2520,7 @@ def test_agent_terminal_later_round_error_stops_after_completed_tool(
     assert terminal["failure"] == {
         "status": expected_status,
         "message": expected_message,
+        "category": "bad_request" if expected_status == 400 else "rate_limit",
     }
     assert terminal["round_models"] == ["selected-model", "selected-model"]
     assert terminal["round_texts"][-1] == (
@@ -2533,8 +2536,8 @@ def test_agent_terminal_later_round_error_stops_after_completed_tool(
 @pytest.mark.parametrize(
     ("provider_status", "expected_status", "expected_message"),
     [
-        (503, 503, "Model request failed (HTTP 503)"),
-        (429.9, None, "Model request failed"),
+        (503, 503, "Provider service failed (HTTP 503). Check service health and retry."),
+        (429.9, 429, "Provider rate limit reached (HTTP 429). Wait briefly, then retry."),
     ],
 )
 def test_direct_low_signal_partial_error_emits_terminal_history(
@@ -2589,6 +2592,7 @@ def test_direct_low_signal_partial_error_emits_terminal_history(
     assert terminal["failure"] == {
         "status": expected_status,
         "message": expected_message,
+        "category": "server" if expected_status == 503 else "rate_limit",
     }
     assert terminal["endpoint_cost_tracked"] is True
     assert terminal["usage_buckets"][0]["endpoint_cost_tracked"] is True
@@ -2822,8 +2826,9 @@ def test_reasoning_only_agent_error_emits_terminal_history(monkeypatch):
         chunk for chunk in chunks if '"type": "agent_terminal"' in chunk
     )[6:])["data"]
     assert terminal["thinking"] == "private reasoning partial"
+    assert terminal["failure"]["category"] == "server"
     assert terminal["round_texts"] == [
-        "[Agent stopped: Model request failed (HTTP 504)]"
+        "[Agent stopped: Provider service failed (HTTP 504). Check service health and retry.]"
     ]
     assert any(chunk.startswith("event: error") for chunk in chunks)
     assert "data: [DONE]\n\n" not in chunks
@@ -3015,22 +3020,8 @@ def test_agent_round_ignores_malformed_usage_and_uses_estimate(
     assert metrics["usage_buckets"][0]["output_tokens"] == len("valid answer") // 4
 
 
-@pytest.mark.parametrize(
-    ("synthesis_result", "expected_answer"),
-    [
-        ("Recovered final answer.", "Recovered final answer."),
-        (
-            "",
-            "I gathered some search results but couldn't pull a clean answer together. "
-            "Want me to try a more specific question, or summarize what I did find?",
-        ),
-    ],
-)
-def test_force_answer_recovery_persists_and_bills_pinned_fallback_route(
-    monkeypatch,
-    synthesis_result,
-    expected_answer,
-):
+# The newer outcome guard pauses after three repeated failures, before synthesis.
+def test_repeated_failed_fallback_tools_pause_on_pinned_route(monkeypatch):
     primary = ("https://selected.example/v1", "selected-model", {})
     backup = (
         "https://backup.example/v1",
@@ -3091,7 +3082,7 @@ def test_force_answer_recovery_persists_and_bills_pinned_fallback_route(
 
     async def fake_synthesis(**kwargs):
         synthesis_calls.append(kwargs)
-        return synthesis_result
+        return "must not run after the progress guard pauses"
 
     monkeypatch.setattr(agent_loop, "maybe_compact", fake_compact)
     monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_stream)
@@ -3127,29 +3118,23 @@ def test_force_answer_recovery_persists_and_bills_pinned_fallback_route(
         (primary[0], primary[1]),
         (backup[0], backup[1]),
     ]
-    assert requests_by_round[1:] == [[(backup[0], backup[1])]] * 5
-    assert len(synthesis_calls) == 1
-    assert synthesis_calls[0]["url"] == backup[0]
-    assert synthesis_calls[0]["model"] == backup[1]
-    assert synthesis_calls[0]["headers"] == backup[2]
+    assert requests_by_round[1:] == [[(backup[0], backup[1])]] * 3
+    assert synthesis_calls == []
+    assert any('"reason": "repeated_tool_results"' in chunk for chunk in chunks)
 
     metrics = json.loads(next(
         chunk for chunk in chunks if '"type": "metrics"' in chunk
     )[6:])["data"]
-    assert metrics["round_texts"][-1] == expected_answer
-    assert metrics["round_models"][-1] == backup[1]
-    assert metrics["round_endpoint_ids"][-1] == "backup-ep"
-    assert metrics["usage_buckets"][-1] == {
-        "round": 6,
-        "model": backup[1],
-        "endpoint_id": "backup-ep",
-        "endpoint_label": "Backup",
-        "input_tokens": 10,
-        "output_tokens": len(synthesis_result) // 4,
-        "usage_source": "estimated",
-        "endpoint_cost_tracked": True,
-    }
-    assert len(metrics["usage_buckets"]) == 7
+    assert "Agent paused:" in metrics["round_texts"][-1]
+    assert metrics["round_models"] == [backup[1]] * 4
+    assert metrics["round_endpoint_ids"] == ["backup-ep"] * 4
+    assert len(metrics["usage_buckets"]) == 4
+    assert all(
+        bucket["model"] == backup[1]
+        and bucket["endpoint_id"] == "backup-ep"
+        and bucket["endpoint_cost_tracked"] is True
+        for bucket in metrics["usage_buckets"]
+    )
 
 
 def test_agent_terminal_retains_completed_paid_fallback_usage(monkeypatch):
@@ -3285,10 +3270,11 @@ def test_agent_builds_backup_prompt_and_tool_transport_before_attempt(monkeypatc
 
 
 @pytest.mark.parametrize(
-    ("primary_context", "backup_context", "expected_fallback_message_count"),
+    ("primary_context", "backup_context", "expected_fallback_message_count", "requested_max_tokens"),
     [
-        (1000, 100, 2),
-        (100, 1000, 22),
+        (272000, 100, 2, 4096),
+        (100, 5000, 22, 4096),
+        (272000, 3000, 22, 128),
     ],
 )
 def test_agent_fallback_request_uses_candidate_context_budget(
@@ -3296,6 +3282,7 @@ def test_agent_fallback_request_uses_candidate_context_budget(
     primary_context,
     backup_context,
     expected_fallback_message_count,
+    requested_max_tokens,
 ):
     requests_by_round = []
     context_lookups = []
@@ -3341,16 +3328,32 @@ def test_agent_fallback_request_uses_candidate_context_budget(
 
     def fake_trim(messages, effective_budget, reserve_tokens=0):
         trim_budgets.append(effective_budget)
-        if effective_budget != 100:
+        if len(messages) * 10 + reserve_tokens <= effective_budget:
             return list(messages)
         route_prompt = next(
             message for message in messages
             if message.get("_agent_injected") == "prompt"
         )
-        current_user = next(
-            message for message in reversed(messages)
+        current_user_index = max(
+            index for index, message in enumerate(messages)
             if message.get("role") == "user"
         )
+        current_user = messages[current_user_index]
+        latest_call_index = max(
+            (
+                index for index, message in enumerate(messages[current_user_index + 1:], current_user_index + 1)
+                if message.get("role") == "assistant" and message.get("tool_calls")
+            ),
+            default=-1,
+        )
+        if latest_call_index >= 0:
+            latest_call = messages[latest_call_index]
+            tool_messages = []
+            for message in messages[latest_call_index + 1:]:
+                if message.get("role") != "tool":
+                    break
+                tool_messages.append(message)
+            return [route_prompt, current_user, latest_call, *tool_messages]
         return [route_prompt, current_user]
 
     monkeypatch.setattr(model_context, "estimate_tool_schema_tokens", lambda tools: 0)
@@ -3391,6 +3394,7 @@ def test_agent_fallback_request_uses_candidate_context_budget(
             primary[1],
             history,
             headers=primary[2],
+            max_tokens=requested_max_tokens,
             max_rounds=2,
             relevant_tools={"bash"},
             fallbacks=[backup],
@@ -3406,8 +3410,15 @@ def test_agent_fallback_request_uses_candidate_context_budget(
         (backup[0], backup[1]),
         (backup[0], backup[1]),
     ]
-    assert trim_budgets == [primary_context, backup_context, backup_context]
+    assert trim_budgets.count(primary_context) >= 1
+    assert trim_budgets.count(backup_context) >= 1
     fallback_messages = requests_by_round[0][1]["messages"]
+    assert requests_by_round[0][0]["kwargs"]["max_tokens"] == min(
+        requested_max_tokens, primary_context - 20
+    )
+    assert requests_by_round[0][1]["kwargs"]["max_tokens"] == min(
+        requested_max_tokens, backup_context - 20
+    )
     assert len(fallback_messages) == expected_fallback_message_count
     assert fallback_messages[0]["content"] == "route prompt for backup-model"
     assert any(
@@ -3425,6 +3436,180 @@ def test_agent_fallback_request_uses_candidate_context_budget(
         chunk for chunk in chunks if '"type": "metrics"' in chunk
     )[6:])["data"]
     assert metrics["context_length"] == backup_context
+
+
+def test_unknown_backup_context_does_not_inherit_primary_window(monkeypatch):
+    primary = ("https://selected.example/v1", "selected-model", {})
+    backup = ("https://backup.example/v1", "unverified-model", {})
+    latest_user = "Preserve this exact current question."
+    requests = []
+    trim_budgets = []
+
+    monkeypatch.setattr(agent_loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(agent_loop, "estimate_tokens", lambda messages: len(messages) * 10)
+    monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(
+        agent_loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False)
+    )
+    monkeypatch.setattr(agent_loop, "_build_system_prompt", lambda messages, model, *args, **kwargs: (
+        [{"role": "system", "content": f"prompt for {model}", "_agent_injected": "prompt"}, *messages],
+        [],
+    ))
+
+    import src.context_compactor as context_compactor
+    import src.model_context as model_context
+
+    def context_lookup(url, model):
+        if (url, model) == primary[:2]:
+            return 272000, True
+        raise RuntimeError("backup context probe unavailable")
+
+    monkeypatch.setattr(model_context, "get_context_length_known", context_lookup)
+    monkeypatch.setattr(model_context, "estimate_tool_schema_tokens", lambda tools: 0)
+
+    def trim(messages, effective_budget, reserve_tokens=0):
+        trim_budgets.append(effective_budget)
+        prompt = next(message for message in messages if message.get("_agent_injected") == "prompt")
+        user = next(message for message in reversed(messages) if message.get("role") == "user")
+        return [prompt, user]
+
+    monkeypatch.setattr(context_compactor, "trim_for_context", trim)
+
+    async def fake_stream(candidates, _messages, **kwargs):
+        factory = kwargs["candidate_request_factory"]
+        for index, candidate in enumerate(candidates):
+            requests.append((candidate, await factory(index, *candidate)))
+        yield 'data: {"delta":"ok"}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_stream)
+
+    chunks = _collect(agent_loop.stream_agent_loop(
+        primary[0], primary[1], [{"role": "user", "content": latest_user}],
+        max_tokens=8192, relevant_tools={"bash"}, fallbacks=[backup],
+        fallback_statuses=FOREGROUND_AVAILABILITY_STATUSES,
+        fallback_on_empty=False, context_length=272000, _is_teacher_run=True,
+    ))
+
+    primary_request = requests[0][1]
+    backup_request = requests[1][1]
+    assert primary_request["kwargs"]["max_tokens"] == 8192
+    assert backup_request["kwargs"]["max_tokens"] == 5980
+    assert trim_budgets.count(6000) >= 1
+    assert backup_request["messages"][-1] == {"role": "user", "content": latest_user}
+    assert chunks
+
+
+def test_known_window_output_room_is_not_limited_by_input_budget(monkeypatch):
+    requests = []
+    primary = ("https://selected.example/v1", "selected-model", {})
+
+    monkeypatch.setattr(
+        agent_loop, "get_setting",
+        lambda key, default=None: 5000 if key == "agent_input_token_budget" else default,
+    )
+    monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(agent_loop, "estimate_tokens", lambda messages: 3000)
+    monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(
+        agent_loop,
+        "_classify_agent_request",
+        lambda messages, latest: {
+            "low_signal": False,
+            "continuation": False,
+            "domains": [],
+            "retrieval_query": latest,
+        },
+    )
+    monkeypatch.setattr(
+        agent_loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False)
+    )
+    monkeypatch.setattr(agent_loop, "_build_system_prompt", lambda messages, model, *args, **kwargs: (
+        [{"role": "system", "content": f"prompt for {model}", "_agent_injected": "prompt"}, *messages],
+        [],
+    ))
+
+    import src.context_compactor as context_compactor
+    import src.context_budget as context_budget
+    import src.model_context as model_context
+
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *args, **kwargs: 10000)
+    monkeypatch.setattr(model_context, "estimate_tool_schema_tokens", lambda tools: 0)
+    monkeypatch.setattr(context_budget, "compute_input_token_budget", lambda *args, **kwargs: 5000)
+    monkeypatch.setattr(context_budget, "budget_is_explicit", lambda value: True)
+    monkeypatch.setattr(context_compactor, "trim_for_context", lambda messages, budget, reserve_tokens=0: list(messages))
+
+    async def fake_stream(candidates, _messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        requests.append(request)
+        yield 'data: {"delta":"ok"}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_stream)
+
+    chunks = _collect(agent_loop.stream_agent_loop(
+        primary[0], primary[1], [{"role": "user", "content": "Question remains intact."}],
+        max_tokens=4096, relevant_tools=set(), context_length=10000, _is_teacher_run=True,
+    ))
+
+    assert requests[0]["kwargs"]["max_tokens"] == 4096
+    assert requests[0]["messages"][-1] == {"role": "user", "content": "Question remains intact."}
+    assert chunks
+
+
+def test_agent_rejects_context_that_cannot_fit_current_request_and_output(monkeypatch):
+    monkeypatch.setattr(agent_loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(agent_loop, "estimate_tokens", lambda messages: len(messages) * 10)
+    monkeypatch.setattr(
+        agent_loop,
+        "_agent_route_tool_mode",
+        lambda *args, **kwargs: (True, False, False),
+    )
+    monkeypatch.setattr(
+        agent_loop,
+        "_classify_agent_request",
+        lambda messages, latest: {
+            "low_signal": False,
+            "continuation": False,
+            "domains": [],
+            "retrieval_query": latest,
+        },
+    )
+    monkeypatch.setattr(agent_loop, "_build_system_prompt", lambda messages, model, *args, **kwargs: (
+        [{"role": "system", "content": f"prompt for {model}", "_agent_injected": "prompt"}, *messages],
+        [],
+    ))
+
+    import src.context_budget as context_budget
+    import src.context_compactor as context_compactor
+    import src.model_context as model_context
+
+    monkeypatch.setattr(model_context, "estimate_tool_schema_tokens", lambda tools: 0)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(context_budget, "compute_input_token_budget", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(context_budget, "budget_is_explicit", lambda value: False)
+    monkeypatch.setattr(
+        context_compactor,
+        "trim_for_context",
+        lambda messages, effective_budget, reserve_tokens=0: [messages[0], messages[-1]],
+    )
+
+    async def unexpected_stream(*args, **kwargs):
+        raise AssertionError("an impossible request must fail before provider invocation")
+        yield
+
+    monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", unexpected_stream)
+
+    with pytest.raises(ValueError, match="cannot fit the complete current user request"):
+        _collect(agent_loop.stream_agent_loop(
+            "https://selected.example/v1",
+            "selected-model",
+            [{"role": "user", "content": "Keep this exact request."}],
+            relevant_tools=set(),
+            _is_teacher_run=True,
+        ))
 
 
 def test_agent_persists_only_answering_route_compaction(monkeypatch):

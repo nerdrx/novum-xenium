@@ -1242,8 +1242,8 @@ def _workspace_coding_rules(workspace: Optional[str]) -> str:
         f"- Active workspace: `{workspace}`. Treat relative paths as relative to this folder.\n"
         "- This mode is for coding, debugging, shell, file, build, benchmark, and repo tasks. Do not use personal-assistant tools like email, calendar, notes, memory, documents, gallery, or UI panels for workspace work.\n"
         "- Work from the real filesystem and command output. Inspect before editing.\n"
-        "- Start by orienting with `get_workspace` plus `grep`/`glob`/`ls`/`read_file`; prefer targeted reads over dumping whole files.\n"
-        "- For multi-step coding work, call `todowrite` and keep the task list current.\n"
+        "- Use `get_workspace` when its tool is available; otherwise use the active workspace path above. Orient with available `grep`/`glob`/`ls`/`read_file` tools and prefer targeted reads over dumping whole files.\n"
+        "- For multi-step coding work, use `todowrite` when available and keep the task list current.\n"
         "- Change repo files with `apply_patch` for related source edits, `edit_file` for one exact replacement, or `write_file` for new/full files. Do not use `create_document`, shell redirects, heredocs, or `sed -i` to modify repo files.\n"
         "- For code repair tasks, find the canonical helper, parser, validator, service, or boundary function responsible for the behavior and patch it there when possible. Hidden tests often call helpers directly.\n"
         "- If output is huge, use `rg`, `grep`, `head`, `tail`, focused `sed -n`, or scripts that summarize only relevant parts. Do not flood the context with full logs or full files.\n"
@@ -4294,6 +4294,7 @@ async def stream_agent_loop(
 
     _t2 = time.time()
     _route_context_lengths = {}
+    _route_output_token_budgets = {}
     _route_trim_info = {}
 
     def _trim_route_request_messages(candidate_url, candidate_model, route_messages, route_tools=None):
@@ -4303,6 +4304,30 @@ async def stream_agent_loop(
             # Route markers remain internal for later prompt rebuilding;
             # protection metadata is only needed during trimming.
             return [{k: v for k, v in message.items() if k != "_protected"} for message in items]
+
+        def _minimum_required_tail_tokens(items):
+            latest_user_index = max(
+                (i for i, message in enumerate(items)
+                 if message.get("role") == "user"
+                 and message.get("_agent_injected") != "context"
+                 and (message.get("metadata") or {}).get("trusted") is not False),
+                default=-1,
+            )
+            required = []
+            if latest_user_index >= 0:
+                required.append(items[latest_user_index])
+                latest_call_index = max(
+                    (i for i, message in enumerate(items[latest_user_index + 1:], latest_user_index + 1)
+                     if message.get("role") == "assistant" and message.get("tool_calls")),
+                    default=-1,
+                )
+                if latest_call_index >= 0:
+                    required.append(items[latest_call_index])
+                    for message in items[latest_call_index + 1:]:
+                        if message.get("role") != "tool":
+                            break
+                        required.append({**message, "content": ""})
+            return estimate_tokens(required)
 
         try:
             from src.context_compactor import trim_for_context
@@ -4317,13 +4342,18 @@ async def stream_agent_loop(
             candidate_context = budget_context_for_model(
                 candidate_url,
                 candidate_model,
-                fallback=context_length,
+                # The caller's context length belongs to the selected route;
+                # a failed probe on a backup route must stay conservative.
+                fallback=(
+                    context_length
+                    if candidate_url == endpoint_url and candidate_model == model
+                    else 0
+                ),
             )
             _route_context_lengths[(candidate_url, candidate_model)] = candidate_context
             window_description = f"{candidate_context}-token window" if candidate_context else "unknown context window"
             soft_budget = int(get_setting("agent_input_token_budget", DEFAULT_BUDGET) or 0)
             before_trim_tokens = estimate_tokens(route_messages)
-            reserve_tokens = min(max(max_tokens or 1024, 512), 2048)
             try:
                 hard_max = int(get_setting("agent_input_token_hard_max", DEFAULT_HARD_MAX) or DEFAULT_HARD_MAX)
             except (TypeError, ValueError):
@@ -4333,6 +4363,26 @@ async def stream_agent_loop(
             effective_budget = compute_input_token_budget(
                 soft_budget, candidate_context, _budget_is_explicit(soft_budget), hard_max=hard_max,
             )
+            try:
+                requested_output_tokens = int(max_tokens) if max_tokens is not None else 1024
+            except (TypeError, ValueError, OverflowError):
+                requested_output_tokens = 1024
+            if requested_output_tokens <= 0:
+                requested_output_tokens = 1024
+            minimum_required_tail_tokens = _minimum_required_tail_tokens(route_messages)
+            reserve_tokens = min(requested_output_tokens, 2048)
+            if candidate_context:
+                reserve_tokens = min(
+                    reserve_tokens,
+                    effective_budget - minimum_required_tail_tokens,
+                )
+                if reserve_tokens < 1:
+                    raise ValueError(
+                        "Agent context budget cannot fit the complete current user request "
+                        f"for model {candidate_model} within its {candidate_context}-token window; "
+                        "reduce the request or increase the model context/input budget."
+                    )
+            _route_output_token_budgets[(candidate_url, candidate_model)] = requested_output_tokens
             # Native schemas are serialized outside `messages`, so a large MCP
             # registry can consume almost the entire window before history is
             # considered. Keep the existing route order (already relevance
@@ -4340,8 +4390,12 @@ async def stream_agent_loop(
             if route_tools:
                 # Preserve the existing quarter-window allowance, while also
                 # respecting deliberate input caps smaller than that window.
-                schema_cap = max(0, min(8192, (candidate_context or effective_budget) // 4,
-                                        effective_budget // 3, effective_budget - reserve_tokens))
+                schema_cap = max(0, min(
+                    8192,
+                    (candidate_context or effective_budget) // 4,
+                    effective_budget // 3,
+                    effective_budget - reserve_tokens - minimum_required_tail_tokens,
+                ))
                 latest_user = max(
                     (i for i, msg in enumerate(route_messages)
                      if msg.get("role") == "user"
@@ -4427,6 +4481,20 @@ async def stream_agent_loop(
                         continue
                     selected = candidate_schemas
                     selected_tokens = candidate_tokens
+                forced_schema_names = {
+                    schema.get("function", {}).get("name", "")
+                    for schema in route_tools
+                    if schema.get("function", {}).get("name", "") in (forced_tools or ())
+                }
+                selected_names = {
+                    schema.get("function", {}).get("name", "") for schema in selected
+                }
+                if forced_schema_names and not (forced_schema_names & selected_names):
+                    raise ValueError(
+                        "Agent context budget cannot fit the requested tool schemas "
+                        f"for model {candidate_model} within its {window_description}; "
+                        "reduce enabled tools or increase the model context/input budget."
+                    )
                 if len(selected) < len(route_tools):
                     logger.info(
                         "[agent] bounded native tool schemas model=%s: %s -> %s schemas "
@@ -4436,6 +4504,17 @@ async def stream_agent_loop(
                     )
                     route_tools[:] = selected
             schema_tokens = estimate_tool_schema_tokens(route_tools)
+            if candidate_context:
+                reserve_tokens = min(
+                    reserve_tokens,
+                    effective_budget - minimum_required_tail_tokens - schema_tokens,
+                )
+                if reserve_tokens < 1:
+                    raise ValueError(
+                        "Agent context budget cannot fit the complete current user request "
+                        f"for model {candidate_model} within its {window_description}; "
+                        "reduce the request or increase the model context/input budget."
+                    )
             effective_budget = max(1, effective_budget - schema_tokens)
             trimmed_messages = trim_for_context(
                 route_messages,
@@ -4508,12 +4587,22 @@ async def stream_agent_loop(
                             "reduce the request or increase the model context/input budget."
                         )
             after_trim_tokens = estimate_tokens(trimmed_messages)
-            if after_trim_tokens + reserve_tokens > effective_budget:
+            # The configured input budget caps prompt size; it is not the
+            # model's total context window. On known routes, output may use any
+            # remaining native context after the shaped prompt and schemas.
+            available_output_tokens = (
+                candidate_context - schema_tokens - after_trim_tokens
+                if candidate_context
+                else effective_budget - after_trim_tokens
+            )
+            if available_output_tokens < 1:
                 raise ValueError(
                     "Agent context budget cannot fit the complete current user request "
                     f"for model {candidate_model} within its {window_description}; "
                     "reduce the request or increase the model context/input budget."
                 )
+            output_token_budget = min(requested_output_tokens, available_output_tokens)
+            _route_output_token_budgets[(candidate_url, candidate_model)] = output_token_budget
             _route_trim_info[(candidate_url, candidate_model)] = {
                 "removed_tokens": max(0, before_trim_tokens - after_trim_tokens),
                 "removed_messages": max(0, len(route_messages) - len(trimmed_messages)),
@@ -5169,7 +5258,10 @@ async def stream_agent_loop(
             from src.context_inspector import describe_request
             _last_context_inspection = describe_request(
                 request_messages, candidate_tools, _last_route_context_length,
-                min(max(max_tokens or 1024, 512), 2048),
+                _route_output_token_budgets.get(
+                    (candidate_url, candidate_model),
+                    min(max(max_tokens or 1024, 512), 2048),
+                ),
             )
             _last_context_inspection["trimmed"] = _route_trim_info.get((candidate_url, candidate_model), {})
             run_security.observe_messages(request_messages)
@@ -5179,6 +5271,10 @@ async def stream_agent_loop(
                 "messages": request_messages,
                 "kwargs": {
                     "tools": candidate_tools or None,
+                    "max_tokens": _route_output_token_budgets.get(
+                        (candidate_url, candidate_model),
+                        max_tokens,
+                    ),
                     "tool_choice_none": state["ody_doc_finetune_mode"],
                     "temperature": (
                         _ody_qwen_temperature_cap(_requested_temperature)

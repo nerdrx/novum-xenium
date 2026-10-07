@@ -4,6 +4,20 @@ import pytest
 from src.embeddings import EmbeddingClient
 
 
+@pytest.mark.parametrize("configured", [None, "", "https://embeddings.test/v1/embeddings"])
+def test_embedding_url_defaults_when_unconfigured(monkeypatch, configured):
+    monkeypatch.setenv("LLM_HOST", "localhost")
+    if configured is None:
+        monkeypatch.delenv("EMBEDDING_URL", raising=False)
+    else:
+        monkeypatch.setenv("EMBEDDING_URL", configured)
+    client = EmbeddingClient()
+    try:
+        assert client.url == (configured or "http://localhost:11434/v1/embeddings")
+    finally:
+        client._client.close()
+
+
 class _FakeEmbeddingHttpClient:
     def __init__(self, handler):
         self.handler = handler

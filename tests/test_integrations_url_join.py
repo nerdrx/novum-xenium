@@ -92,7 +92,7 @@ DISCORD_INTEGRATION = {
 
 
 @pytest.mark.asyncio
-async def test_api_call_root_path_has_no_trailing_slash():
+async def test_api_call_root_path_has_no_trailing_slash(monkeypatch):
     mock_resp = MagicMock()
     mock_resp.status_code = 204
     mock_resp.headers = {"content-type": "text/plain"}
@@ -102,6 +102,9 @@ async def test_api_call_root_path_has_no_trailing_slash():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
     mock_client.request = AsyncMock(return_value=mock_resp)
+    # Keep the real SSRF guard, but make its DNS dependency deterministic and
+    # offline for this URL-joining test.
+    monkeypatch.setattr("src.url_safety._default_resolver", lambda _host: ["8.8.8.8"])
 
     with (
         patch.object(integrations, "_find_integration", return_value=DISCORD_INTEGRATION),

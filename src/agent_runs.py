@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class _Run:
     __slots__ = (
         "buffer", "subscribers", "status", "task", "evict_task", "run_id", "owner",
-        "checkpoint_pending", "checkpoint_last_flush", "persist_checkpoint",
+        "checkpoint_pending", "checkpoint_last_flush", "persist_checkpoint", "drain_started",
     )
 
     def __init__(self, owner: Optional[str] = None, persist_checkpoint: bool = True) -> None:
@@ -47,6 +47,7 @@ class _Run:
         self.checkpoint_pending = ""
         self.checkpoint_last_flush = 0.0
         self.persist_checkpoint = persist_checkpoint
+        self.drain_started = False
 
 
 _RUNS: Dict[str, _Run] = {}
@@ -135,6 +136,7 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
                  prev_task: Optional[asyncio.Task] = None) -> None:
     """Pull every event from the wrapped generator into the run buffer, fanning
     each out to live subscribers. Runs to completion regardless of subscribers."""
+    run.drain_started = True
     subscribers_woken = False
 
     def _wake_subscribers() -> None:
@@ -314,6 +316,14 @@ def stop(session_id: str, expected_run_id: Optional[str] = None) -> bool:
     if not expected_run_id or run is None or run.run_id != expected_run_id:
         return False
     if run and run.task and not run.task.done():
+        if not run.drain_started:
+            # A task cancelled before its coroutine first runs never enters
+            # _drain's cancellation/finally handlers.
+            run.status = "stopped"
+            _wake_run_subscribers(run)
+            if run.persist_checkpoint:
+                run_checkpoints.finish(run.run_id, "stopped")
+            _schedule_evict(session_id, run)
         run.task.cancel()
         return True
     return False

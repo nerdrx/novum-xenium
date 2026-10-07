@@ -101,6 +101,15 @@ globalThis.fetch = async (url, options = {}) => {
       kind: scenario === 'question' ? 'question' : 'tool_approval', approval_id: 'approval-1', question: 'Allow?', options: ['Yes', 'No'] } })}\n\ndata: [DONE]\n\n`;
   }
   if (scenario === 'tool-events') text = 'data: {"type":"tool_start","tool":"bash","command":"pwd"}\n\ndata: {"delta":"Done"}\n\ndata: [DONE]\n\n';
+  const stops = {
+    'guard-persisted': { type: 'loop_breaker_triggered', message: 'Repeated reads', persisted_in_text: true },
+    'guard-legacy': { type: 'loop_breaker_triggered', message: 'Repeated reads' },
+    'intent-stop': { type: 'intent_nudge_exhausted', message: 'No action after two reminders' },
+    'budget-stop': { type: 'budget_exceeded', used: 10, limit: 10 },
+    'rounds-stop': { type: 'rounds_exhausted', rounds: 20 },
+  };
+  if (stops[scenario]) text = `data: ${JSON.stringify({ delta: 'Partial work' })}\n\ndata: ${JSON.stringify(stops[scenario])}\n\n` +
+    (scenario === 'guard-persisted' ? 'data: {"delta":"\\n\\n[Agent paused: Repeated reads]"}\n\n' : '') + 'data: [DONE]\n\n';
   const body = new ReadableStream({ start(controller) {
     options.signal.addEventListener('abort', () => { aborted++; try { controller.error(new DOMException('Stopped', 'AbortError')); } catch {} }, { once: true });
     if (shouldStop) {
@@ -155,5 +164,14 @@ else if (['single', 'parallel', 'context', 'tool-events'].includes(scenario)) {
   assert.equal(streams, 2);
   if (scenario === 'tool-events') assert.ok(box.children.every(x => x.querySelector('.body').children.some(c => c.className === 'agent-tool-event')), 'Text updates must retain tool events');
 }
-else { assert.equal(streams, 1); assert.ok(notices.some(x => x.includes('stopped'))); }
+else {
+  assert.equal(streams, 1); assert.ok(notices.some(x => x.includes('stopped')));
+  if (['guard-persisted', 'guard-legacy', 'intent-stop', 'budget-stop', 'rounds-stop'].includes(scenario)) {
+    const saved = injections.find(x => x.url.includes('/parent/') && x.messages[0].role === 'assistant');
+    assert.ok(saved.messages[0].content.includes('Partial work'), 'Partial work must remain saved');
+    assert.ok(saved.messages[0].content.includes('Agent paused:'), 'The pause reason must survive refresh');
+    assert.equal(saved.messages[0].content.match(/Agent paused:/g).length, 1, 'No duplicate pause notice');
+    assert.equal(injections.filter(x => x.url.includes('b-session')).length, 0, 'No paused reply shared as completed work');
+  }
+}
 console.log(JSON.stringify({ scenario, streams, passed: true }));

@@ -280,7 +280,8 @@ def test_build_uploaded_file_manifest_hides_paths_read_file_cannot_open(monkeypa
 
     # empty / default
     ("", True),
-    ("  ", False),
+    ("  ", True),
+    ("Chat", True),
     ("Chat: something", True),
 
     # custom titles – should NOT trigger auto-naming
@@ -291,6 +292,80 @@ def test_build_uploaded_file_manifest_hides_paths_read_file_cannot_open(monkeypa
 ])
 def test_needs_auto_name(name, expected):
     assert needs_auto_name(name) == expected, f"needs_auto_name({name!r}) should be {expected}"
+
+
+@pytest.mark.parametrize("name,model,expected", [
+    ("gpt-6.1-sol", "gpt-6.1-sol", True),
+    ("huihui-qwen3.8:27b-local", "huihui-qwen3.8:27b-local", True),
+    ("Custom title", "gpt-6.1-sol", False),
+])
+def test_needs_auto_name_recognizes_model_placeholders_only(name, model, expected):
+    assert needs_auto_name(name, model) is expected
+
+
+def test_request_fallback_remains_auto_named_but_custom_chat_prefix_does_not():
+    message = "Please explain how workspace snapshots work."
+    fallback = "Chat: Please explain how workspace snapshots work."
+    assert needs_auto_name(fallback, "gpt-6.1-sol", first_message=message)
+    assert not needs_auto_name("Chat: Keep this name", "gpt-6.1-sol", name_is_custom=True)
+    assert not needs_auto_name("Chat", "gpt-6.1-sol", name_is_custom=True)
+    assert not needs_auto_name("Chat: Custom title", "gpt-6.1-sol", name_is_custom=True)
+
+
+def test_first_request_replaces_model_placeholder_but_keeps_user_title():
+    from src.chat_handler import ChatHandler
+
+    message = "Please explain how workspace snapshots work."
+    updates = []
+    handler = ChatHandler(None, None, None, None, None, None)
+    handler.session_manager = SimpleNamespace(
+        update_session_name=lambda session_id, title, **kwargs: updates.append((session_id, title, kwargs))
+    )
+    session = SimpleNamespace(
+        id="session-title", name="gpt-6.1-sol", model="gpt-6.1-sol",
+        history=[SimpleNamespace(role="user", content=message)], name_is_custom=False,
+    )
+
+    handler.update_session_name_if_needed(session, message)
+    assert updates == [("session-title", f"Chat: {message}", {"name_is_custom": False})]
+
+    updates.clear()
+    session.name = "My chosen title"
+    handler.update_session_name_if_needed(session, message)
+    assert updates == []
+
+
+def test_generated_title_does_not_overwrite_user_rename_during_generation(monkeypatch):
+    import src.llm_core as llm_core
+    import src.task_endpoint as task_endpoint
+
+    sess = SimpleNamespace(
+        id="session-rename-race", owner="alice", name="Chat: First request",
+        endpoint_url="http://session.example/v1", model="gpt-6.1-sol", headers={},
+        history=[SimpleNamespace(role="user", content="First request")],
+        name_is_custom=False,
+    )
+
+    def resolve(*_args, **_kwargs):
+        return "http://session.example/v1", "gpt-6.1-sol", {}
+
+    async def rename_while_generating(*_args, **_kwargs):
+        sess.name = "User chosen title"
+        return "Generated title"
+
+    monkeypatch.setattr(task_endpoint, "resolve_task_endpoint", resolve)
+    monkeypatch.setattr(llm_core, "llm_call_async", rename_while_generating)
+    updates = []
+    manager = SimpleNamespace(update_session_name=lambda *args, **kwargs: updates.append((args, kwargs)))
+
+    asyncio.run(auto_name_session(manager, sess))
+
+    assert updates == []
+
+
+def test_legacy_group_parent_is_placeholder_but_manual_model_name_is_not():
+    assert needs_auto_name("[GRP] huihui, gpt-6.1-sol", "gpt-6.1-sol")
+    assert not needs_auto_name("gpt-6.1-sol", "gpt-6.1-sol", name_is_custom=True)
 
 
 def test_clean_thinking_for_save_extracts_gemma4_thought_channel():
@@ -414,7 +489,7 @@ def test_auto_name_session_passes_session_fallback_to_task_resolver(monkeypatch)
     )
     updates = []
     session_manager = SimpleNamespace(
-        update_session_name=lambda session_id, title: updates.append((session_id, title))
+        update_session_name=lambda session_id, title, **kwargs: updates.append((session_id, title))
     )
 
     asyncio.run(auto_name_session(session_manager, sess))

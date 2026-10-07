@@ -60,20 +60,71 @@ def test_list_sessions_excludes_other_users_sessions(monkeypatch):
     finally:
         db.close()
 
-    alice_session = MagicMock(id=alice_id, name="alice session",
-                              model="gpt-4", endpoint_url="http://localhost",
+    alice_session = MagicMock(id=alice_id, model="gpt-4", endpoint_url="http://localhost",
                               rag=False, archived=False)
+    alice_session.name = "alice session"
     sm = MagicMock()
     sm.get_sessions_for_user.return_value = {alice_id: alice_session}
     router = sr.setup_session_routes(sm, {})
-    endpoint = next(r.endpoint for r in router.routes
-                    if getattr(r, "path", "") == "/api/sessions"
-                    and "GET" in getattr(r, "methods", set()))
+    endpoint = [r.endpoint for r in router.routes
+                if getattr(r, "path", "") == "/api/sessions"
+                and "GET" in getattr(r, "methods", set())][-1]
 
     result = endpoint(request=MagicMock())
     returned_ids = {s["id"] for s in result}
     assert alice_id in returned_ids
     assert bob_id not in returned_ids
+
+
+def test_list_sessions_derives_only_owned_legacy_placeholder_titles(monkeypatch):
+    import routes.session_routes as sr
+    from unittest.mock import MagicMock
+
+    _stub_multipart_if_missing(monkeypatch)
+    monkeypatch.setattr(sr, "SessionLocal", _TS)
+    monkeypatch.setattr(sr, "effective_user", lambda request: "alice")
+    alice_id, bob_id, manual_id = [str(uuid.uuid4()) for _ in range(3)]
+    db = _TS()
+    try:
+        db.query(DbMessage).delete()
+        db.query(DbSession).delete()
+        for sid, owner, name, custom in (
+            (alice_id, "alice", "gpt-4", None),
+            (bob_id, "bob", "gpt-4", None),
+            (manual_id, "alice", "gpt-4", True),
+        ):
+            db.add(DbSession(id=sid, owner=owner, name=name, endpoint_url="http://localhost",
+                             model="gpt-4", archived=False, name_is_custom=custom))
+        tie_time = cdb.utcnow_naive()
+        for msg_id, sid, text, timestamp in (
+            ("z-second", alice_id, "Second message", tie_time),
+            ("a-first", alice_id, "Fix my workspace snapshot", tie_time),
+            ("bob-first", bob_id, "Secret bob request", tie_time),
+            ("manual-first", manual_id, "Keep model as my chosen title", tie_time),
+        ):
+            db.add(DbMessage(id=msg_id, session_id=sid,
+                             role="user", content=text, timestamp=timestamp))
+        db.commit()
+    finally:
+        db.close()
+
+    def cached(sid, custom=None):
+        result = MagicMock(id=sid, model="gpt-4", endpoint_url="http://localhost",
+                           rag=False, archived=False, name_is_custom=custom)
+        result.name = "gpt-4"
+        return result
+    sm = MagicMock()
+    sm.get_sessions_for_user.return_value = {
+        alice_id: cached(alice_id), manual_id: cached(manual_id, True),
+    }
+    router = sr.setup_session_routes(sm, {})
+    endpoint = [r.endpoint for r in router.routes
+                if getattr(r, "path", "") == "/api/sessions"
+                and "GET" in getattr(r, "methods", set())][-1]
+    result = {row["id"]: row["name"] for row in endpoint(request=MagicMock())}
+    assert result.get(alice_id) == "Chat: Fix my workspace snapshot", result
+    assert result[manual_id] == "gpt-4"
+    assert bob_id not in result
 
 
 def test_auto_sort_skip_llm_cleans_owner_stamped_sessions_when_auth_disabled(monkeypatch):

@@ -150,6 +150,7 @@ class SessionManager:
             history=[],
             owner=getattr(db_session, "owner", None),
             is_important=getattr(db_session, "is_important", False) or False,
+            name_is_custom=getattr(db_session, "name_is_custom", None),
         )
         session.message_count = getattr(db_session, "message_count", 0) or 0
         return session
@@ -208,6 +209,7 @@ class SessionManager:
             history=history,
             owner=getattr(db_session, 'owner', None),
             is_important=getattr(db_session, 'is_important', False) or False,
+            name_is_custom=getattr(db_session, "name_is_custom", None),
         )
 
         # The rows just loaded are the whole transcript, so they — not the
@@ -478,6 +480,7 @@ class SessionManager:
                 except json.JSONDecodeError:
                     headers = {}
             session.name = db_session.name
+            session.name_is_custom = getattr(db_session, "name_is_custom", None)
             session.endpoint_url = db_session.endpoint_url or ""
             session.model = db_session.model or ""
             session.headers = headers or {}
@@ -545,7 +548,8 @@ class SessionManager:
         endpoint_url: str,
         model: str,
         rag: bool = False,
-        owner: str = None
+        owner: str = None,
+        name_is_custom: Optional[bool] = True,
     ) -> Session:
         """Create a new session and save to database."""
         from src.agent_runs import ensure_session_reusable
@@ -560,6 +564,7 @@ class SessionManager:
                 rag=rag,
                 headers={},
                 owner=owner,
+                name_is_custom=name_is_custom,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc)
             )
@@ -574,6 +579,7 @@ class SessionManager:
                 rag=rag,
                 headers={},
                 owner=owner,
+                name_is_custom=name_is_custom,
             )
 
             self.sessions[session_id] = session
@@ -664,7 +670,7 @@ class SessionManager:
     # Session updates
     # ------------------------------------------------------------------
 
-    def update_session_name(self, session_id: str, name: str):
+    def update_session_name(self, session_id: str, name: str, *, name_is_custom: bool = True):
         """Update session name."""
         if session_id not in self.sessions:
             return
@@ -674,9 +680,11 @@ class SessionManager:
             db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
             if db_session:
                 db_session.name = name
+                db_session.name_is_custom = name_is_custom
                 db_session.updated_at = datetime.now(timezone.utc)
                 db.commit()
                 self.sessions[session_id].name = name
+                self.sessions[session_id].name_is_custom = name_is_custom
         except Exception as e:
             db.rollback()
             logger.error(f"Error updating session name: {e}")

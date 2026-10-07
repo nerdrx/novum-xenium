@@ -19,6 +19,11 @@ from src.model_context import estimate_tokens, get_context_length
 from src.auth_helpers import effective_user
 from src.prompt_security import untrusted_context_message
 from src.attachment_refs import attachment_ref
+from src.session_titles import (
+    first_user_message as _first_user_message,
+    needs_auto_name,
+    request_title as _request_title,
+)
 from routes.prefs_routes import _load_for_user as load_prefs_for_user
 
 from fastapi import HTTPException
@@ -239,36 +244,13 @@ def _enforce_chat_privileges(request, sess) -> None:
         raise HTTPException(429, f"Daily message limit reached ({cap}). Try again in 24 hours.")
 
 
-def needs_auto_name(name: str) -> bool:
-    """Check if a session still has its default/placeholder name."""
-    if not name:
-        return True
-    if name.startswith("Chat:") or name == "Chat":
-        return True
-    # Default frontend name: "modelname HH:MM:SS AM/PM"
-    if re.match(r"^.+ \d{1,2}:\d{2}:\d{2}(\s*(AM|PM))?$", name, re.IGNORECASE):
-        return True
-    return False
-
-
 async def auto_name_session(session_manager, sess):
     """Generate a short title for a session from its first user message."""
     try:
         from src.llm_core import llm_call_async
         from src.task_endpoint import resolve_task_endpoint
 
-        # Find first user message
-        first_msg = ""
-        for msg in sess.history:
-            if msg.role == "user":
-                content = msg.content
-                if isinstance(content, list):
-                    content = next(
-                        (i.get("text", "") for i in content if isinstance(i, dict) and i.get("type") == "text"),
-                        "",
-                    )
-                first_msg = str(content)[:500]
-                break
+        first_msg = _first_user_message(sess)[:500]
 
         if not first_msg:
             return
@@ -304,8 +286,14 @@ async def auto_name_session(session_manager, sess):
         # via the central helper.
         from src.text_helpers import strip_think
         title = strip_think(title, prose=False, prompt_echo=False)
-        if title and len(title) < 80:
-            session_manager.update_session_name(sess.id, title)
+        if title and len(title) < 80 and needs_auto_name(
+            getattr(sess, "name", ""), getattr(sess, "model", ""),
+            getattr(sess, "name_is_custom", None), first_msg,
+        ):
+            group = (getattr(sess, "name", "") or "").startswith("[GRP] ")
+            if group:
+                title = "[GRP] " + title.removeprefix("[GRP] ")
+            session_manager.update_session_name(sess.id, title, name_is_custom=False)
             logger.info(f"Auto-named session {sess.id}: {title}")
 
     except Exception as e:
@@ -1263,5 +1251,8 @@ def run_post_response_tasks(
         })
 
     # Auto-name
-    if needs_auto_name(sess.name):
+    if needs_auto_name(
+        sess.name, getattr(sess, "model", ""), getattr(sess, "name_is_custom", None),
+        _first_user_message(sess),
+    ):
         _spawn_bg(auto_name_session(session_manager, sess))

@@ -320,9 +320,18 @@ class ChatHandler:
     # ------------------------------------------------------------------
 
     def update_session_name_if_needed(self, session, message: str):
-        if not session.name:
-            derived = " ".join(message.split()[:5])
-            session.name = "Chat: " + derived if derived else "Chat"
+        from src.session_titles import first_user_message, needs_auto_name, request_title
+
+        first_message = first_user_message(session.history) or message
+        if needs_auto_name(
+            session.name, getattr(session, "model", ""),
+            getattr(session, "name_is_custom", None), first_message,
+        ):
+            title = request_title(first_message, group=(session.name or "").startswith("[GRP] "))
+            if title != session.name:
+                self.session_manager.update_session_name(
+                    session.id, title, name_is_custom=False
+                )
 
     def trim_history_if_needed(self, session):
         if len(session.history) > MAX_CONTEXT_MESSAGES:

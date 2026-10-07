@@ -11,6 +11,7 @@ _STATIC = Path(__file__).resolve().parents[1] / "static"
 _SINGLETONS = [
     "js/models.js", "js/settings.js", "js/tasks.js", "js/memory.js",
     "js/modalManager.js", "js/slashCommands.js", "js/compare/index.js", "js/gallery.js",
+    "js/sessions.js", "js/workspace.js", "js/approvalMode.js",
 ]
 
 

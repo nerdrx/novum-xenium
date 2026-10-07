@@ -4,7 +4,7 @@ const MODES = [
   { key: 'full', label: 'Full access', detail: 'Skip approval prompts within current workspace/container.' },
 ];
 
-const SCOPE = 'Existing folder access, disabled tools, account rules, and plan mode still apply. Applies next agent turn, all chats/group participants for this account; current run not altered.';
+const SCOPE = 'Applies to new agent turns in all chats on this account. Running turns keep their current mode. Folder access, disabled tools, account rules and plan mode still apply.';
 
 export function init() {
   const right = document.querySelector('.chat-input-right');
@@ -22,6 +22,7 @@ export function init() {
       <div class="approval-mode-options" role="radiogroup" aria-label="Approval mode"></div>
       <div class="approval-mode-scope"></div>
       <div class="approval-mode-error" role="status" aria-live="polite" hidden></div>
+      <button type="button" class="confirm-btn confirm-btn-secondary approval-mode-retry" hidden>Retry loading approval mode</button>
     </div>`;
   right.insertBefore(anchor, modeToggle);
 
@@ -30,6 +31,7 @@ export function init() {
   const options = anchor.querySelector('.approval-mode-options');
   const label = anchor.querySelector('[data-approval-label]');
   const error = anchor.querySelector('.approval-mode-error');
+  const retry = anchor.querySelector('.approval-mode-retry');
   anchor.querySelector('.approval-mode-scope').textContent = SCOPE;
   let selected = null;
   let busy = true;
@@ -46,7 +48,7 @@ export function init() {
       button.className = 'approval-mode-option';
       button.setAttribute('role', 'radio');
       button.setAttribute('aria-checked', String(selected === key));
-      button.disabled = busy;
+      button.disabled = busy || selected === null;
       button.innerHTML = `<span class="approval-mode-option-title"></span><span class="approval-mode-option-detail"></span>`;
       button.querySelector('.approval-mode-option-title').textContent = title;
       button.querySelector('.approval-mode-option-detail').textContent = detail;
@@ -59,7 +61,12 @@ export function init() {
       });
       options.append(button);
     });
-    label.textContent = MODES.find(mode => mode.key === selected)?.label || 'Approval';
+    const modeLabel = MODES.find(mode => mode.key === selected)?.label;
+    label.textContent = busy ? (selected === null ? 'Loading…' : 'Saving…') : modeLabel || 'Approval unavailable';
+    trigger.setAttribute('aria-label', `Tool approval mode: ${modeLabel || 'unavailable'}`);
+    trigger.title = modeLabel ? `Tool approval: ${modeLabel}` : 'Retry loading tool approval mode';
+    panel.setAttribute('aria-busy', String(busy));
+    retry.disabled = busy;
     trigger.disabled = busy;
   };
   const close = (returnFocus = false) => {
@@ -88,6 +95,7 @@ export function init() {
       busy = false;
       render();
       if (panel.hidden) trigger.focus();
+      else options.querySelector(`[aria-checked="true"]`)?.focus();
     }
   };
 
@@ -107,21 +115,36 @@ export function init() {
     }
   });
 
-  render();
-  fetch('/api/prefs/tool_approval_mode', { credentials: 'same-origin' })
-    .then(async response => {
+  const load = async () => {
+    if (busy && selected !== null) return;
+    busy = true;
+    retry.hidden = true;
+    setError();
+    render();
+    try {
+      const response = await fetch('/api/prefs/tool_approval_mode', { credentials: 'same-origin' });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'Could not load approval mode.');
       const value = data.value === null ? 'auto' : data.value;
       if (!MODES.some(mode => mode.key === value)) throw new Error('Server returned an unknown approval mode.');
       selected = value;
-    })
-    .catch(err => {
-      setError(err.message || 'Could not load approval mode.');
+      if (!panel.hidden) options.querySelector('[aria-checked="true"]')?.focus();
+    } catch (err) {
+      setError('Could not load approval mode. Retry to see or change the saved setting.');
+      retry.hidden = false;
       panel.hidden = false;
       trigger.setAttribute('aria-expanded', 'true');
-    })
-    .finally(() => { busy = false; render(); });
+    } finally {
+      busy = false;
+      render();
+      if (!panel.hidden) {
+        if (!retry.hidden) retry.focus();
+        else options.querySelector('[aria-checked="true"]')?.focus();
+      }
+    }
+  };
+  retry.addEventListener('click', load);
+  load();
 }
 
 export default { init };

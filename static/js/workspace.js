@@ -15,6 +15,12 @@ const _FOLDER_SVG = '<svg class="workspace-row-icon" width="15" height="15" view
 let _modal = null;
 let _curPath = '';
 let _snapshotPreview = null;
+let _browseController = null;
+let _snapshotListVersion = 0;
+let _snapshotLoading = false;
+let _snapshotBusy = '';
+let _snapshotViewVersion = 0;
+let _opener = null;
 
 export function getWorkspace() {
   // This local Docker installation mounts the persistent files folder here.
@@ -91,10 +97,10 @@ export function clearWorkspace() {
   if (uiModule && uiModule.showToast) uiModule.showToast('Workspace cleared');
 }
 
-async function _load(path) {
+async function _load(path, signal) {
   const url = `${API_BASE}/api/workspace/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`;
-  const res = await fetch(url, { credentials: 'same-origin' });
-  if (!res.ok) throw new Error(`browse failed: ${res.status}`);
+  const res = await fetch(url, { credentials: 'same-origin', signal });
+  if (!res.ok) throw new Error('Could not open this folder. Check the path and access, then retry.');
   return res.json();
 }
 
@@ -109,11 +115,11 @@ function _render(data) {
   }
   let rows = '';
   if (data.parent) {
-    rows += `<div class="workspace-row workspace-up" data-path="${encodeURIComponent(data.parent)}">↑ ..</div>`;
+    rows += `<button type="button" class="workspace-row workspace-up" data-path="${encodeURIComponent(data.parent)}" aria-label="Open parent folder">↑ ..</button>`;
   }
   for (const d of data.dirs) {
     // Backend supplies the full child path (os.path.join → cross-platform).
-    rows += `<div class="workspace-row" data-path="${encodeURIComponent(d.path)}">${_FOLDER_SVG}<span>${uiModule.esc(d.name)}</span></div>`;
+    rows += `<button type="button" class="workspace-row" data-path="${encodeURIComponent(d.path)}">${_FOLDER_SVG}<span>${uiModule.esc(d.name)}</span></button>`;
   }
   if (data.truncated) {
     rows += '<div class="workspace-empty">Too many folders to list. Type or paste a path above to jump in.</div>';
@@ -133,15 +139,42 @@ function _render(data) {
 }
 
 async function _navigate(path) {
+  _browseController?.abort();
+  const controller = new AbortController();
+  _browseController = controller;
+  const body = _modal.querySelector('#workspace-body');
+  _modal.querySelector('#workspace-use').disabled = true;
+  body.setAttribute('aria-busy', 'true');
+  body.textContent = 'Opening folder…';
   try {
-    _render(await _load(path));
+    const data = await _load(path, controller.signal);
+    if (_browseController !== controller || controller.signal.aborted) return;
+    _render(data);
   } catch (e) {
-    if (uiModule && uiModule.showError) uiModule.showError('Could not open folder');
+    if (_browseController !== controller || controller.signal.aborted) return;
+    body.textContent = 'Could not open this folder. Check the path and access, then retry.';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'confirm-btn confirm-btn-secondary';
+    retry.textContent = 'Retry opening folder';
+    retry.addEventListener('click', () => _navigate(path));
+    body.appendChild(retry);
+  } finally {
+    if (_browseController === controller) {
+      _browseController = null;
+      body.setAttribute('aria-busy', 'false');
+    }
   }
 }
 
 function _snapshotContext() {
   return { workspace: getWorkspace(), session_id: window.sessionModule?.getCurrentSessionId?.() || '' };
+}
+
+function _snapshotViewCurrent(ctx, version) {
+  const active = _snapshotContext();
+  return version === _snapshotViewVersion && ctx.workspace === active.workspace &&
+    ctx.session_id === active.session_id && _modal?.style.display !== 'none';
 }
 
 async function _snapshotRequest(url, method = 'GET', body = null) {
@@ -156,42 +189,101 @@ async function _snapshotRequest(url, method = 'GET', body = null) {
   return data;
 }
 
-async function _refreshSnapshots() {
+function _syncSnapshotControls() {
+  if (!_modal) return;
+  const ctx = _snapshotContext();
+  const select = _modal.querySelector('#workspace-snapshot-select');
+  const unavailable = !!(_snapshotBusy || _snapshotLoading || !ctx.workspace || !ctx.session_id);
+  select.disabled = unavailable;
+  _modal.querySelector('#workspace-snapshot-create').disabled = unavailable;
+  _modal.querySelector('#workspace-snapshot-review').disabled = unavailable || !select.value;
+  _modal.querySelector('#workspace-snapshot-restore').disabled = unavailable ||
+    !_snapshotPreview || !_snapshotPreview.changes.length ||
+    _snapshotPreview.snapshot.id !== select.value ||
+    _snapshotPreview.workspace !== ctx.workspace || _snapshotPreview.session_id !== ctx.session_id;
+  _modal.querySelector('.workspace-snapshots').setAttribute('aria-busy', String(!!(_snapshotBusy || _snapshotLoading)));
+  for (const [id, label, pending] of [
+    ['create', 'Create snapshot', 'Saving…'], ['review', 'Review changes', 'Reviewing…'], ['restore', 'Restore files', 'Restoring…'],
+  ]) _modal.querySelector(`#workspace-snapshot-${id}`).textContent = _snapshotBusy === id ? pending : label;
+}
+
+function _clearSnapshotPreview() {
+  _snapshotPreview = null;
+  _modal?.querySelector('#workspace-snapshot-preview')?.replaceChildren();
+  _syncSnapshotControls();
+}
+
+async function _refreshSnapshots(preferredId = '') {
+  const version = ++_snapshotListVersion;
   const ctx = _snapshotContext();
   const select = _modal?.querySelector('#workspace-snapshot-select');
   const note = _modal?.querySelector('#workspace-snapshot-note');
   if (!select || !ctx.workspace || !ctx.session_id) {
     if (select) select.innerHTML = '<option value="">Select a chat and workspace first</option>';
+    if (note) note.textContent = 'Open a chat and choose a workspace to save or restore snapshots.';
+    _snapshotLoading = false;
+    _syncSnapshotControls();
     return;
   }
+  const selected = preferredId || select.value;
+  _snapshotLoading = true;
+  note.textContent = `Loading snapshots for ${ctx.workspace}…`;
+  _syncSnapshotControls();
+  const current = () => version === _snapshotListVersion && ctx.workspace === getWorkspace() &&
+    ctx.session_id === _snapshotContext().session_id;
   try {
     const data = await _snapshotRequest(`/api/workspace/snapshots?workspace=${encodeURIComponent(ctx.workspace)}&session_id=${encodeURIComponent(ctx.session_id)}`);
+    if (!current()) return;
     select.innerHTML = '<option value="">Choose snapshot…</option>' + data.snapshots.map(s =>
       `<option value="${uiModule.esc(s.id)}">${uiModule.esc(new Date(s.created_at).toLocaleString())}${s.label ? ` · ${uiModule.esc(s.label)}` : ''}</option>`
     ).join('');
-    if (note) note.textContent = data.snapshots.length ? `${data.snapshots.length} snapshots for this chat and workspace` : 'No snapshots yet';
+    if (Array.from(select.options).some(option => option.value === selected)) select.value = selected;
+    if (note) note.textContent = `${ctx.workspace} · ${data.snapshots.length ? `${data.snapshots.length} snapshots for this chat` : 'No snapshots yet. Create one before making changes.'}`;
   } catch (e) {
-    if (note) note.textContent = e.message;
+    if (!current()) return;
+    select.innerHTML = '<option value="">Snapshots unavailable</option>';
+    note.textContent = 'Could not load snapshots. ';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'confirm-btn confirm-btn-secondary';
+    retry.textContent = 'Retry loading snapshots';
+    retry.addEventListener('click', () => _refreshSnapshots());
+    note.appendChild(retry);
+  } finally {
+    if (version === _snapshotListVersion) {
+      _snapshotLoading = false;
+      _syncSnapshotControls();
+    }
   }
 }
 
 async function _createSnapshot() {
   const ctx = _snapshotContext();
-  if (!ctx.workspace || !ctx.session_id) return;
+  const version = _snapshotViewVersion;
+  if (_snapshotBusy || !ctx.workspace || !ctx.session_id) return;
+  _snapshotBusy = 'create';
+  _syncSnapshotControls();
   try {
-    await _snapshotRequest('/api/workspace/snapshots', 'POST', { ...ctx, label: 'Manual snapshot' });
-    _snapshotPreview = null;
-    await _refreshSnapshots();
+    const saved = await _snapshotRequest('/api/workspace/snapshots', 'POST', { ...ctx, label: 'Manual snapshot' });
+    if (!_snapshotViewCurrent(ctx, version)) return;
+    _clearSnapshotPreview();
+    await _refreshSnapshots(saved.id);
     if (uiModule?.showToast) uiModule.showToast('Workspace snapshot saved');
   } catch (e) { if (uiModule?.showError) uiModule.showError(e.message); }
+  finally { _snapshotBusy = ''; _syncSnapshotControls(); }
 }
 
 async function _reviewSnapshot() {
   const ctx = _snapshotContext();
+  const version = _snapshotViewVersion;
   const id = _modal?.querySelector('#workspace-snapshot-select')?.value;
-  if (!ctx.workspace || !ctx.session_id || !id) return;
+  if (_snapshotBusy || !ctx.workspace || !ctx.session_id || !id) return;
+  _clearSnapshotPreview();
+  _snapshotBusy = 'review';
+  _syncSnapshotControls();
   try {
     const preview = await _snapshotRequest(`/api/workspace/snapshots/${encodeURIComponent(id)}/preview`, 'POST', ctx);
+    if (!_snapshotViewCurrent(ctx, version)) return;
     _snapshotPreview = { ...preview, workspace: ctx.workspace, session_id: ctx.session_id };
     const host = _modal.querySelector('#workspace-snapshot-preview');
     host.replaceChildren();
@@ -204,23 +296,29 @@ async function _reviewSnapshot() {
       pre.textContent = change.diff || '[Binary or non-text file]';
       row.append(summary, pre); host.append(row);
     }
-    _modal.querySelector('#workspace-snapshot-restore').disabled = !preview.changes.length;
   } catch (e) {
     _snapshotPreview = null;
     if (uiModule?.showError) uiModule.showError(e.message);
   }
+  finally { _snapshotBusy = ''; _syncSnapshotControls(); }
 }
 
 async function _restoreSnapshot() {
   const preview = _snapshotPreview;
   const ctx = _snapshotContext();
-  if (!preview || preview.workspace !== ctx.workspace || preview.session_id !== ctx.session_id) {
+  const version = _snapshotViewVersion;
+  if (_snapshotBusy) return;
+  if (!preview || preview.workspace !== ctx.workspace || preview.session_id !== ctx.session_id ||
+      preview.snapshot.id !== _modal.querySelector('#workspace-snapshot-select').value) {
     if (uiModule?.showError) uiModule.showError('Chat or workspace changed; review the snapshot again');
     return;
   }
-  if (!window.confirm('Restore all workspace files to this snapshot? A rollback snapshot will be saved first.')) return;
+  if (!window.confirm('Restore the files shown in this review? A recovery snapshot will be saved first.')) return;
+  _snapshotBusy = 'restore';
+  _syncSnapshotControls();
   try {
     const result = await _snapshotRequest(`/api/workspace/snapshots/${encodeURIComponent(preview.snapshot.id)}/restore`, 'POST', { ...ctx, expected_revision: preview.revision });
+    if (!_snapshotViewCurrent(ctx, version)) return;
     _snapshotPreview = null;
     _modal.querySelector('#workspace-snapshot-preview').textContent = `Restored. Rollback snapshot: ${result.rollback_snapshot_id}`;
     _modal.querySelector('#workspace-snapshot-restore').disabled = true;
@@ -230,6 +328,7 @@ async function _restoreSnapshot() {
     _snapshotPreview = null;
     if (uiModule?.showError) uiModule.showError(e.message);
   }
+  finally { _snapshotBusy = ''; _syncSnapshotControls(); }
 }
 
 function _getModal() {
@@ -239,16 +338,16 @@ function _getModal() {
   _modal.className = 'modal';
   _modal.style.display = 'none';
   _modal.innerHTML = `
-    <div class="modal-content">
+    <div class="modal-content" role="dialog" aria-label="Select workspace">
       <div class="modal-header">
         <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Select workspace</h4>
         <button class="close-btn" id="workspace-close" aria-label="Close">✖</button>
       </div>
       <input type="text" class="styled-prompt-input workspace-cur" id="workspace-cur-path"
              spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off"
-             placeholder="Type or paste a folder path, then press Enter" />
+             aria-label="Workspace folder path" placeholder="Type or paste a folder path, then press Enter" />
       <p class="muted workspace-note">File tools are <strong>confined</strong> to this folder. Shell commands start here but are <strong>not sandboxed</strong> and can reach outside it. A workspace scopes the tools; it is not a security boundary.</p>
-      <div class="modal-body workspace-body" id="workspace-body"></div>
+      <div class="modal-body workspace-body" id="workspace-body" aria-live="polite"></div>
       <section class="workspace-snapshots" aria-label="Workspace snapshots">
         <div class="workspace-snapshot-actions">
           <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-snapshot-create">Snapshot</button>
@@ -256,7 +355,7 @@ function _getModal() {
           <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-snapshot-review">Review</button>
           <button type="button" class="confirm-btn confirm-btn-primary" id="workspace-snapshot-restore" disabled>Restore</button>
         </div>
-        <div class="muted" id="workspace-snapshot-note"></div>
+        <div class="muted" id="workspace-snapshot-note" role="status"></div>
         <div id="workspace-snapshot-preview" class="workspace-snapshot-preview"></div>
       </section>
       <div class="modal-footer workspace-footer">
@@ -267,9 +366,16 @@ function _getModal() {
   document.body.appendChild(_modal);
   _modal.querySelector('#workspace-close').addEventListener('click', closeWorkspaceBrowser);
   _modal.querySelector('#workspace-cancel').addEventListener('click', closeWorkspaceBrowser);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && _modal.style.display !== 'none') {
+      event.preventDefault();
+      closeWorkspaceBrowser();
+    }
+  });
   _modal.querySelector('#workspace-snapshot-create').addEventListener('click', _createSnapshot);
   _modal.querySelector('#workspace-snapshot-review').addEventListener('click', _reviewSnapshot);
   _modal.querySelector('#workspace-snapshot-restore').addEventListener('click', _restoreSnapshot);
+  _modal.querySelector('#workspace-snapshot-select').addEventListener('change', _clearSnapshotPreview);
   // Editable path bar: Enter navigates to a typed/pasted folder.
   _modal.querySelector('#workspace-cur-path').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -279,6 +385,7 @@ function _getModal() {
     }
   });
   _modal.querySelector('#workspace-use').addEventListener('click', () => {
+    if (_modal.querySelector('#workspace-use').disabled || !_curPath) return;
     setWorkspace(_curPath);
     if (uiModule && uiModule.showToast) uiModule.showToast(`Workspace set: ${_basename(_curPath)}`);
     closeWorkspaceBrowser();
@@ -290,18 +397,23 @@ function _getModal() {
 }
 
 export async function openWorkspaceBrowser() {
+  ++_snapshotViewVersion;
+  _opener = document.activeElement;
   const modal = _getModal();
   modal.style.display = 'flex';
-  try {
-    _render(await _load(getWorkspace() || ''));
-    await _refreshSnapshots();
-  } catch (e) {
-    if (uiModule && uiModule.showError) uiModule.showError('Could not browse folders');
-  }
+  modal.querySelector('#workspace-cur-path').focus();
+  _clearSnapshotPreview();
+  await Promise.all([_navigate(getWorkspace() || ''), _refreshSnapshots()]);
 }
 
 export function closeWorkspaceBrowser() {
+  ++_snapshotViewVersion;
+  _browseController?.abort();
+  _browseController = null;
+  ++_snapshotListVersion;
+  _snapshotLoading = false;
   if (_modal) _modal.style.display = 'none';
+  if (_opener?.isConnected && _opener.getClientRects().length) _opener.focus();
 }
 
 export function initWorkspace() {

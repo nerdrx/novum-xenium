@@ -6,6 +6,10 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Usability pass: ordinary and group chats get a title from the first request immediately. Older model/time and group placeholders show request-derived titles without rewriting their stored names or making bulk model calls. Explicit create/rename titles carry provenance and are preserved, including during asynchronous naming.
+- Workspace folders support keyboard activation, loading states and retries; stale navigation replies are ignored. Snapshot controls show the active workspace, prevent duplicate saves and invalidate a restore preview when another snapshot is selected. Disabled actions look disabled; Escape closes the picker and returns focus.
+- Approval mode shows loading/saving state, retries failed loading and preserves keyboard focus after a failed save. Participant choices initialize immediately, report provider errors or an empty model list and retry without caching the failure.
+
 - Deleting a chat stops its active agent and waits for archive cleanup/drain before allowing same-ID reuse. Late prepared requests recheck the session; canceled archive workers cannot recreate removed tool context.
 - Compare search rerolls preserve the current cancellation controller. Admin Tools saves are queued; reopening waits for saves, and failed changes report an error and reload saved state.
 - Rapid approval choices submit directly through the chat form and bypass only the composer debounce. Gated tool proposals show approval state separately from execution results, including after reload; Deny confirms that no action ran. Pending resume requests and readers cancel cleanly when navigating away and cannot insert a reply into another chat.
@@ -69,6 +73,10 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 7 usability pass: 170 focused checks passed in a network-disabled container with read-only source and temporary data. Headless Chrome exercised the shipped controls with fixture HTTP replies: approval load/save failures and keyboard focus, participant error/empty/retry, folder keyboard navigation and stale responses, snapshot selection/restore/single-save behavior, Escape focus return, and desktop/mobile bounds. The existing team/reviewer/snapshot UI check also passed. These checks do not assess model response quality.
+
+The broader suite passed 6,443 checks with 17 skips in the older test image. One test mock still accepted the old naming-helper signature; after correcting that fixture, all 56 related checks passed. A fresh standard Docker image also passed real login, session creation/injection/list/history, group naming, explicit rename preservation, restart persistence and rendered chat-header/sidebar checks using temporary data. UID 1000 could write to `/workspace`; the image contained no private installation files. No local model was loaded for this pass.
 
 October 7 general quality pass: the complete suite passed **6,442 checks**, with three skips, in a network-disabled container with read-only source, temporary data, ripgrep and repository metadata. Skips cover the Windows-only Ollama startup guard, an unavailable Docker test-image alias and optional `markitdown`. This supersedes the earlier foreground-suite failure counts below. Test fixtures now provide the session cache required by the deletion guard; that production check remains strict. Fork guide ownership and retained artwork references are checked explicitly. Node startup checks have a bounded 30-second timeout.
 

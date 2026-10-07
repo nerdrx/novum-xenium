@@ -320,7 +320,7 @@ async def test_run_post_response_tasks_does_not_fire_extraction_concurrently(mon
         name="My session title",  # needs_auto_name(...) only fires for placeholder names
     )
     session_manager = SimpleNamespace(save_sessions=lambda: None)
-    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda name: False)
+    monkeypatch.setattr(chat_helpers, "needs_auto_name", lambda *args, **kwargs: False)
 
     chat_helpers.run_post_response_tasks(
         sess, session_manager, "sess-Y", "hello", "hi there", None,

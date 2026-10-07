@@ -47,7 +47,7 @@ import themeModule from './js/theme.js';
 // _envState objects), which broke server selection. Keep all cookbook imports
 // unversioned so this can't recur.
 import cookbookModule from './js/cookbook.js';
-import groupModule from './js/group.js?v=20261007quality1';
+import groupModule from './js/group.js?v=20261007usability1';
 import * as researchPanelModule from './js/research/panel.js?v=20261007quality1';
 import ttsModule from './js/tts-ai.js';
 import spinnerModule from './js/spinner.js';

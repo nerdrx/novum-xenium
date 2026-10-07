@@ -28,6 +28,20 @@ let _waitingForUser = 0;
 let _teamModule = null;
 const GROUP_STATE_KEY = 'odysseus-group-state';
 
+async function loadGroupModelItems(fetcher, apiBase) {
+  const res = await fetcher(apiBase + '/api/models', { credentials: 'same-origin' });
+  if (!res.ok) throw new Error(`Model request failed (${res.status})`);
+  const data = await res.json();
+  const arrayFields = ['models', 'models_extra', 'models_display', 'models_extra_display'];
+  if (!data || !Array.isArray(data.items) || data.items.some(item =>
+    !item || typeof item !== 'object' || Array.isArray(item) ||
+    arrayFields.some(field => item[field] != null && !Array.isArray(item[field]))
+  )) {
+    throw new Error('The model service returned an invalid response.');
+  }
+  return data.items;
+}
+
 export function init(apiBase) {
   API_BASE = apiBase;
   _teamModule = createGroupTeam({
@@ -37,7 +51,7 @@ export function init(apiBase) {
     runAssignment: runTeamAssignment,
   });
   // Initialize Group tab inside Characters modal
-  setTimeout(_initGroupTab, 500);
+  _initGroupTab();
 }
 
 function _initGroupTab() {
@@ -54,10 +68,7 @@ function _initGroupTab() {
     if (_modelsCache) return _modelsCache;
     let items = (window.modelsModule && window.modelsModule.getCachedItems) ? window.modelsModule.getCachedItems() : [];
     if (!items || items.length === 0) {
-      try {
-        const res = await fetch(API_BASE + '/api/models', { credentials: 'same-origin' });
-        items = (await res.json()).items || [];
-      } catch (e) {}
+      items = await loadGroupModelItems(fetch, API_BASE);
     }
     const result = [];
     const seen = new Set();
@@ -70,8 +81,9 @@ function _initGroupTab() {
         result.push({ mid, display: display.split('/').pop(), url: item.url, endpointId: item.endpoint_id });
       });
     });
-    _modelsCache = sortModelObjects(result);
-    return _modelsCache;
+    const sorted = sortModelObjects(result);
+    _modelsCache = sorted.length ? sorted : null;
+    return sorted;
   }
 
   function _render() {
@@ -94,43 +106,73 @@ function _initGroupTab() {
     // startBtn is shared — don't disable it
   }
 
+  function setPickerStatus(message) {
+    let status = participantsEl.querySelector('[data-group-picker-status]');
+    if (!status) {
+      status = document.createElement('div');
+      status.dataset.groupPickerStatus = '';
+      status.setAttribute('role', 'status');
+      status.setAttribute('aria-live', 'polite');
+      status.style.cssText = 'font-size:11px;opacity:.75;padding:4px 2px;';
+      participantsEl.prepend(status);
+    }
+    status.textContent = message;
+  }
+
   addBtn.addEventListener('click', async () => {
-    const [models, characters] = await Promise.all([_getModels(), _getCharacterList()]);
+    if (addBtn.disabled) return;
+    addBtn.disabled = true;
+    addBtn.setAttribute('aria-busy', 'true');
+    setPickerStatus('Loading participant choices…');
+    try {
+      const [models, characters] = await Promise.all([_getModels(), _getCharacterList()]);
+      if (!models.length) {
+        setPickerStatus('No models are available. Configure a provider, then try again.');
+        return;
+      }
+      setPickerStatus('');
 
-    const picker = document.createElement('div');
-    picker.style.cssText = 'display:flex;gap:4px;align-items:center;';
+      const picker = document.createElement('div');
+      picker.style.cssText = 'display:flex;gap:4px;align-items:center;';
 
-    const charSel = document.createElement('select');
-    charSel.className = 'preset-input';
-    // add an identifier that this is a character selection
-    charSel.dataset.selectionType = "character"
-    charSel.style.cssText = 'font-size:11px;flex:1;height:26px;';
-    charSel.innerHTML = '<option value="">Empty...</option>' +
-      characters.map(c => '<option value="' + c.id + '">' + uiModule.esc(c.name) + '</option>').join('');
+      const charSel = document.createElement('select');
+      charSel.className = 'preset-input';
+      charSel.dataset.selectionType = 'character';
+      charSel.setAttribute('aria-label', 'Participant character');
+      charSel.style.cssText = 'font-size:11px;flex:1;height:26px;';
+      charSel.innerHTML = '<option value="">No character</option>' +
+        characters.map(c => '<option value="' + c.id + '">' + uiModule.esc(c.name) + '</option>').join('');
 
-    const modelSel = document.createElement('select');
-    modelSel.className = 'preset-input';
-    // add an identifier that this is a model selection
-    modelSel.dataset.selectionType = "model"
-    modelSel.style.cssText = 'font-size:11px;flex:1;height:26px;';
-    modelSel.innerHTML = '<option value="">Model…</option>' +
-      models.map(m => '<option value="' + m.mid + '">' + uiModule.esc(m.display) + '</option>').join('');
+      const modelSel = document.createElement('select');
+      modelSel.className = 'preset-input';
+      modelSel.dataset.selectionType = 'model';
+      modelSel.setAttribute('aria-label', 'Participant model');
+      modelSel.style.cssText = 'font-size:11px;flex:1;height:26px;';
+      modelSel.innerHTML = '<option value="">Model…</option>' +
+        models.map(m => '<option value="' + m.mid + '">' + uiModule.esc(m.display) + '</option>').join('');
 
-    // Auto-add when model is selected
-    modelSel.addEventListener('change', () => {
-      if (!modelSel.value) return;
-      if (_groupParticipants.length >= 8) { uiModule.showToast('Max 8'); return; }
-      const entry = { character: null, model: null };
-      entry.model = models.find(m => m.mid === modelSel.value) || null;
-      if (charSel.value) entry.character = characters.find(c => c.id === charSel.value) || null;
-      _groupParticipants.push(entry);
-      picker.remove();
-      _render();
-    });
+      // Auto-add when model is selected
+      modelSel.addEventListener('change', () => {
+        if (!modelSel.value) return;
+        if (_groupParticipants.length >= 8) { uiModule.showToast('Max 8'); return; }
+        const entry = { character: null, model: null };
+        entry.model = models.find(m => m.mid === modelSel.value) || null;
+        if (charSel.value) entry.character = characters.find(c => c.id === charSel.value) || null;
+        _groupParticipants.push(entry);
+        picker.remove();
+        _render();
+      });
 
-    picker.appendChild(charSel);
-    picker.appendChild(modelSel);
-    participantsEl.appendChild(picker);
+      picker.appendChild(charSel);
+      picker.appendChild(modelSel);
+      participantsEl.appendChild(picker);
+    } catch (e) {
+      setPickerStatus('Could not load participant choices. Check provider setup or connection, then try Add participant again.');
+      console.warn('[group] Failed to load participant choices:', e);
+    } finally {
+      addBtn.disabled = false;
+      addBtn.removeAttribute('aria-busy');
+    }
   });
 
   // Mode toggle — same style as Compare's parallel button
@@ -249,7 +291,7 @@ function _initGroupTab() {
         const isChosenCharacterExisting = chosenCharacter !== EMPTY
           && characters.findIndex((char) => char.id === chosenCharacter) !== -1;
 
-        characterSelection.innerHTML = '<option value="">Empty...</option>' +
+        characterSelection.innerHTML = '<option value="">No character</option>' +
           characters.map(c => '<option value="' + c.id + '">' + uiModule.esc(c.name) + '</option>').join('');
         if (isChosenCharacterExisting) {
           characterSelection.value = chosenCharacter;
@@ -748,6 +790,7 @@ export async function startGroup(models, parentSessionId) {
   try {
     const pfd = new FormData();
     pfd.append('name', groupName);
+    pfd.append('auto_title', 'true');
     pfd.append('endpoint_url', models[0].url);
     pfd.append('model', models[0].mid);
     pfd.append('skip_validation', 'true');
@@ -896,6 +939,8 @@ export async function sendMessage(msg) {
         body: JSON.stringify({ messages: [{ role: 'user', content: msg }] }),
       });
       if (!response.ok) throw new Error('Could not save the group message');
+      // Refresh the parent request title without changing the active chat.
+      window.sessionModule?.loadSessions?.();
     }
     if (run !== _runId || ac.signal.aborted) return;
 

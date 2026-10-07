@@ -118,6 +118,7 @@ class Session:
     owner: Optional[str] = None
     is_important: bool = False
     message_count: int = 0
+    name_is_custom: Optional[bool] = None
 
     def __post_init__(self):
         if self.headers is None:

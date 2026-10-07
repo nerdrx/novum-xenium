@@ -288,6 +288,11 @@ def setup_session_routes(
         except Exception:
             pass
         user_sessions = session_manager.get_sessions_for_user(user)
+        from src.session_titles import display_title, first_user_message, needs_auto_name
+        title_ids = [sid for sid, item in user_sessions.items()
+                     if not item.archived and needs_auto_name(
+                         item.name, item.model, getattr(item, "name_is_custom", None))]
+        first_request = {}
         # Fetch folder info from DB for each session
         db = SessionLocal()
         try:
@@ -317,6 +322,30 @@ def setup_session_routes(
                 )
                 mode_map[row.id] = row.mode
                 msg_count_map[row.id] = row.message_count or 0
+            if title_ids:
+                from core.database import ChatMessage as _TitleMessage
+                from sqlalchemy import func
+                first_user_rows = (
+                    db.query(
+                        _TitleMessage.session_id.label("session_id"),
+                        _TitleMessage.content.label("content"),
+                        func.row_number().over(
+                            partition_by=_TitleMessage.session_id,
+                            order_by=(_TitleMessage.timestamp, _TitleMessage.id),
+                        ).label("row_num"),
+                    )
+                    .filter(_TitleMessage.session_id.in_(title_ids), _TitleMessage.role == "user")
+                    .subquery()
+                )
+                title_rows = (
+                    db.query(first_user_rows.c.session_id, first_user_rows.c.content)
+                    .filter(first_user_rows.c.row_num == 1)
+                    .order_by(first_user_rows.c.session_id).all()
+                )
+                for title_row in title_rows:
+                    first_request.setdefault(title_row.session_id, first_user_message([
+                        {"role": "user", "content": title_row.content}
+                    ]))
             # Sessions with active documents that have content
             from sqlalchemy import func
             doc_session_ids = set(
@@ -338,7 +367,9 @@ def setup_session_routes(
         finally:
             db.close()
 
-        sessions = [{"id": s.id, "name": s.name, "model": _public_model(s.name, s.model),
+        sessions = [{"id": s.id, "name": display_title(
+                         s.name, s.model, getattr(s, "name_is_custom", None), first_request.get(s.id, "")),
+                     "model": _public_model(s.name, s.model),
                      "endpoint_url": s.endpoint_url, "rag": s.rag,
                      "archived": s.archived, "folder": folder_map.get(s.id),
                      "total_tokens": token_map.get(s.id, 0),
@@ -365,6 +396,7 @@ def setup_session_routes(
         model: str = Form(""),
         rag: str = Form(None),
         skip_validation: str = Form(None),
+        auto_title: bool = Form(False),
         api_key: str = Form(""),
         endpoint_id: str = Form(""),
     ):
@@ -467,6 +499,7 @@ def setup_session_routes(
             model=model_to_use,
             rag=str(rag).lower() == "true" if rag else False,
             owner=user,
+            name_is_custom=not auto_title,
         )
         # Set auth headers for custom API-key endpoints
         resolved_key = request_api_key
@@ -604,6 +637,13 @@ def setup_session_routes(
                 m["content"],
                 metadata=sanitize_client_message_metadata(m.get("metadata")),
             ))
+        from src.session_titles import first_user_message, needs_auto_name, request_title
+        first_request = first_user_message(sess.history)
+        if needs_auto_name(sess.name, sess.model, getattr(sess, "name_is_custom", None), first_request):
+            session_manager.update_session_name(
+                sid, request_title(first_request, group=(sess.name or "").startswith("[GRP] ")),
+                name_is_custom=False,
+            )
         session_manager.save_sessions()
         return {"ok": True, "count": len(messages)}
 

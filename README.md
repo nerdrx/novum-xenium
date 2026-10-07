@@ -19,7 +19,8 @@ The original Odysseus already has chat, agents, MCP, documents, email, notes, ta
 - **Knowing what's happening.** Waiting and streaming have clearer status messages. Repeated reads and failed retries pause with an explanation, keeping the edits and tool history. Interrupted runs can continue from saved progress after a restart.
 - **Choosing how much to approve.** Ask for approval, Approve for me or Full access within the workspace/container. A small judge handles eligible uncertain actions and shows its reason.
 - **ChatGPT and images.** Native subscription tool calls, fixes for unsupported request parameters, proper image-provider settings and an optional host Codex image bridge.
-- **Keeping your setup.** Application-data backups with restore preview, improved emoji rendering, personality names that survive refresh, and the NX default theme.
+- **Finding your chats.** Request-based titles for ordinary and group chats, including older model-name placeholders. Names you set yourself stay untouched.
+- **Keeping your setup.** Application-data backups with restore preview, improved emoji rendering, personality names that survive refresh, and the NX default theme. Folder, provider and approval failures offer a retry instead of leaving you guessing.
 
 The [change record](FORK-CHANGES.md) has the details. The [Hermes comparison](docs/hermes-comparison.md) explains the skills, recall and team improvements; Hermes itself isn't a dependency.
 

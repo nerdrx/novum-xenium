@@ -2286,6 +2286,7 @@ export async function materializePendingSession() {
 
     const fd = new FormData();
     fd.append('name', name);
+    fd.append('auto_title', isIncognito ? 'false' : 'true');
     fd.append('endpoint_url', pending.url || '');
     fd.append('model', pending.modelId || '');
     if (pending.url && pending.modelId) {

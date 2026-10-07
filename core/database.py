@@ -184,6 +184,9 @@ class Session(TimestampMixin, Base):
     
     # Session metadata
     name = Column(String, nullable=False)
+    # True for an explicit user title, False for an application-generated one,
+    # NULL for rows created before title provenance was tracked.
+    name_is_custom = Column(Boolean, nullable=True, default=None)
     endpoint_url = Column(String, nullable=False)
     model = Column(String, nullable=False)
     owner = Column(String, nullable=True, index=True)  # username; null = legacy/shared
@@ -1259,6 +1262,36 @@ def _migrate_add_mode_column():
         except Exception:
             pass
 
+def _migrate_add_session_name_provenance_column():
+    """Track whether a session title was explicitly set by the user.
+
+    Existing rows stay NULL so display code can recognize established legacy
+    placeholders without rewriting their stored names.
+    """
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(sessions)")]
+        if "name_is_custom" not in columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN name_is_custom BOOLEAN")
+            conn.commit()
+            logging.getLogger(__name__).info(
+                "Migrated: added 'name_is_custom' to sessions"
+            )
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "Migration check for session title provenance failed: %s", e
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 def _migrate_add_folder_column():
     """Add folder column to sessions table if it doesn't exist."""
     import sqlite3
@@ -2116,6 +2149,7 @@ def init_db():
     _migrate_add_folder_column()
     _migrate_add_token_columns()
     _migrate_add_mode_column()
+    _migrate_add_session_name_provenance_column()
     _migrate_add_multiuser_owner_columns()
     _migrate_add_gallery_caption_column()
     _migrate_add_api_token_scopes_column()

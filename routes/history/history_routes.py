@@ -240,11 +240,22 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
                     entry for entry in (_db_history_entry(m) for m in rows)
                     if not (entry.get("metadata") or {}).get("hidden")
                 ]
+                from src.session_titles import display_title, first_user_message, needs_auto_name
+                first_request = ""
+                if needs_auto_name(db_session.name, db_session.model,
+                                   db_session.name_is_custom):
+                    first_row = (db.query(DbChatMessage)
+                                 .filter(DbChatMessage.session_id == session_id,
+                                         DbChatMessage.role == "user")
+                                 .order_by(DbChatMessage.timestamp, DbChatMessage.id).first())
+                    if first_row:
+                        first_request = first_user_message([{"role": "user", "content": first_row.content}])
                 return {
                     "history": history_dict,
                     "model": db_session.model,
                     "endpoint_url": db_session.endpoint_url,
-                    "name": db_session.name,
+                    "name": display_title(db_session.name, db_session.model,
+                                          getattr(db_session, "name_is_custom", None), first_request),
                     "offset": page_offset,
                     "limit": page_limit,
                     "total": total,
@@ -303,11 +314,14 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
             finally:
                 db.close()
 
+        from src.session_titles import display_title, first_user_message
         return {
             "history": history_dict,
             "model": session.model,
             "endpoint_url": session.endpoint_url,
-            "name": session.name,
+            "name": display_title(session.name, session.model,
+                                  getattr(session, "name_is_custom", None),
+                                  first_user_message(session.history)),
         }
 
     @router.post("/api/session/{session_id}/truncate")

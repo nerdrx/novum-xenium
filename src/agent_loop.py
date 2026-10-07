@@ -4500,8 +4500,8 @@ async def stream_agent_loop(
                 coding_requested = bool(
                     workspace and _looks_like_workspace_coding_request(_retrieval_query or _last_user)
                 )
-                coding_core = {"read_file": 0, "edit_file": 1, "bash": 2, "grep": 3,
-                               "write_file": 4, "apply_patch": 5}
+                coding_core = {"read_file": 0, "edit_file": 1, "bash": 2, "python": 3,
+                               "grep": 4, "write_file": 5, "apply_patch": 6}
 
                 def schema_priority(schema):
                     name = schema.get("function", {}).get("name", "")
@@ -4541,6 +4541,18 @@ async def stream_agent_loop(
                 selected_names = {
                     schema.get("function", {}).get("name", "") for schema in selected
                 }
+                if coding_requested and not (set(coding_core) & selected_names):
+                    available_coding_names = {
+                        schema.get("function", {}).get("name", "")
+                        for schema in route_tools
+                    } & set(coding_core)
+                    if available_coding_names:
+                        raise ValueError(
+                            "Agent context budget cannot fit any enabled "
+                            "workspace coding tool schema "
+                            f"for model {candidate_model} within its {window_description}; "
+                            "shorten the current request or increase the model context/input budget."
+                        )
                 if required_forced_schema_names and not (
                     required_forced_schema_names & selected_names
                 ):

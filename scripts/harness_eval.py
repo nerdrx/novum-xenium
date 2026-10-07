@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -43,7 +44,9 @@ def parse_event(event_name, payload):
     try:
         data = json.loads(payload)
     except (TypeError, ValueError):
-        return {}
+        return {"stream_error": True} if event_name == "error" else {}
+    if not isinstance(data, dict):
+        return {"stream_error": True} if event_name == "error" else {}
     kind = data.get("type")
     status = data.get("status")
     if event_name == "error" or kind == "error" or data.get("error"):
@@ -52,13 +55,29 @@ def parse_event(event_name, payload):
             result["error_status"] = status
         return result
     result = {}
-    if kind == "agent_terminal" and isinstance(data.get("data"), dict) and data["data"].get("failed"):
-        result["incomplete"] = "agent_terminal_failed"
+    if kind in {"agent_terminal", "chat_terminal"} and isinstance(data.get("data"), dict) and data["data"].get("failed"):
+        result["incomplete"] = f"{kind}_failed"
+    if kind == "verification" and data.get("passed") is False:
+        result["incomplete"] = "verification_failed"
     if kind == "tool_start":
         result["tool_calls"] = 1
     if kind in INCOMPLETE_EVENTS:
         result["incomplete"] = kind
     return result
+
+
+def stream_events(response, deadline):
+    """Keep heartbeat-producing streams inside the case's wall-clock budget."""
+    current_event = "message"
+    for raw in response:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Evaluation case exceeded its wall-clock budget")
+        line = raw.decode("utf-8", "replace").strip()
+        if line.startswith("event: "):
+            current_event = line[7:]
+        elif line.startswith("data: "):
+            yield parse_event(current_event, line[6:])
+            current_event = "message"
 
 
 def run_file_check(case, fixture):
@@ -88,7 +107,10 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--endpoint-id", required=True)
     parser.add_argument("--report", default="harness-eval.json")
+    parser.add_argument("--case-timeout", type=float, default=600, help="Maximum stream wall-clock seconds per case (default: 600)")
     args = parser.parse_args()
+    if not math.isfinite(args.case_timeout) or args.case_timeout <= 0:
+        parser.error("--case-timeout must be a positive finite number")
     cookie = os.environ.get("NX_EVAL_COOKIE", "")
     base = args.base_url.rstrip("/")
     def request(path, fields=None, *, headers=None, timeout=600):
@@ -115,18 +137,9 @@ def main():
             with request("/api/chat_stream", {"message": case["prompt"], "session": session,
                          "mode": "agent", "allow_bash": "true", "allow_web_search": "false",
                          "selected_endpoint_id": args.endpoint_id,
-                         "workspace": f"{args.app_workspace_root.rstrip('/')}/{batch}/{case['name']}"}) as response:
+                         "workspace": f"{args.app_workspace_root.rstrip('/')}/{batch}/{case['name']}"}, timeout=args.case_timeout) as response:
                 run_id = response.headers.get("X-Odysseus-Run-Id")
-                current_event = "message"
-                for raw in response:
-                    line = raw.decode("utf-8", "replace").strip()
-                    if line.startswith("event: "):
-                        current_event = line[7:]
-                        continue
-                    if not line.startswith("data: "):
-                        continue
-                    facts = parse_event(current_event, line[6:])
-                    current_event = "message"
+                for facts in stream_events(response, started + args.case_timeout):
                     done = done or facts.get("done", False)
                     tool_calls += facts.get("tool_calls", 0)
                     if facts.get("incomplete"):
@@ -145,15 +158,23 @@ def main():
             except Exception as exc:
                 errors.append(f"stop_{type(exc).__name__}")
         # The fixture's own imports and assertions are the outcome evidence.
-        check = run_file_check(case, fixture)
-        with request(f"/api/chat/evidence/{session}") as response:
-            evidence = json.load(response)
+        check_returncode = None
+        try:
+            check_returncode = run_file_check(case, fixture).returncode
+        except Exception as exc:
+            errors.append(f"verification_{type(exc).__name__}")
+        evidence = None
+        try:
+            with request(f"/api/chat/evidence/{session}", timeout=10) as response:
+                evidence = json.load(response)
+        except Exception as exc:
+            errors.append(f"evidence_{type(exc).__name__}")
         report["cases"].append({"name": case["name"], "session_id": session, "run_id": run_id,
             "seconds": round(time.monotonic() - started, 2), "tool_calls": tool_calls,
             "stream_complete": done, "incomplete": bool(errors), "errors": errors,
-            "stop_requested": stop_requested, "file_tests_passed": check.returncode == 0,
+            "stop_requested": stop_requested, "file_tests_passed": check_returncode == 0,
             "passed": case_passes(done=done, errors=errors,
-                                  check_returncode=check.returncode, tool_calls=tool_calls),
+                                  check_returncode=check_returncode, tool_calls=tool_calls),
             "evidence": evidence})
         Path(args.report).write_text(json.dumps(report, indent=2))
     print(f"{sum(c['passed'] for c in report['cases'])}/{len(CASES)} tasks passed; report: {args.report}")

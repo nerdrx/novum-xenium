@@ -32602,7 +32602,8 @@ body.doc-find-active mark.doc-find-mark.current {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-#tool-library-btn:hover #library-new-doc-btn {
+#tool-library-btn:hover #library-new-doc-btn,
+.library-list-row:focus-within #library-new-doc-btn {
   opacity: 0.7;
 }
 #library-new-doc-btn:hover {
@@ -41650,3 +41651,90 @@ body.settings-sidebar-resize-active {
 .group-team-chat-links { display: flex; flex-wrap: wrap; gap: .6rem; font-size: .85em; }
 
 .project-workflow-panel input[type="checkbox"] { width: auto; margin-right: 6px; }
+
+/* Native sidebar buttons keep the existing rows while adding browser keyboard behavior. */
+#sidebar button.list-item {
+  appearance: none;
+  width: 100%;
+  height: auto;
+  border: 0;
+  color: var(--fg);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+#sidebar button.list-item:hover {
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+#sidebar button.list-item.active,
+#sidebar button.list-item.active-session,
+#sidebar button.list-item.active:hover,
+#sidebar button.list-item.active-session:hover {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+#sidebar button.list-item:focus-visible,
+#sidebar .sidebar-brand:focus-visible {
+  outline: 1px solid var(--red, var(--color-error));
+  outline-offset: 1px;
+}
+#sidebar .sidebar-brand {
+  appearance: none;
+  height: auto;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+#sidebar .sidebar-brand:hover {
+  border: 0;
+  background: transparent;
+}
+#tools-section .library-list-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+#tools-section .library-list-row > #tool-library-btn {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+#tools-section .library-list-row:hover #library-new-doc-btn,
+#tools-section .library-list-row:focus-within #library-new-doc-btn {
+  opacity: 0.7;
+}
+
+button.export-dropdown-item {
+  appearance: none;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+button.export-dropdown-item:hover {
+  background: color-mix(in srgb, var(--accent, var(--red)) 10%, transparent);
+}
+button.export-dropdown-item:focus-visible {
+  outline: 1px solid var(--red, var(--color-error));
+  outline-offset: -1px;
+}
+@media (max-width: 768px) {
+  button.export-dropdown-item {
+    min-height: 44px;
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+  #export-compact-btn { min-height: 44px; }
+}

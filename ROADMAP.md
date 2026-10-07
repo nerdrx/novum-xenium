@@ -1,87 +1,51 @@
-# Roadmap / Help Wanted
+# Where NX Odysseus goes next
 
-Odysseus is on a voyage, but not home yet. It works great for me (lol), but this ship is moving fast and feedback/help would be appreciated! (I don't know what I'm doing, help).
+The point is to finish useful work without making you babysit the harness.
+More features help only when their controls, tools and recovery paths work.
+Small tested fixes come first; a new subsystem needs a concrete use case.
 
-If you see weird CSS, strange layout behavior, or a suspiciously murky corner of
-the codebase, you are probably right to stay away.
+## Coding work that finishes
 
-## High Priority
+- Keep the tools needed for the current request available within its actual context budget. If the request cannot fit, say which limit blocked it before calling the model.
+- Test longer repository tasks through the normal chat routes: inspect, edit, run checks, recover after interruption, review the diff and continue.
+- Expand the coding evaluation beyond its three small Python tasks. Keep independent file assertions and record approvals, pauses and failures separately from stream completion.
+- Make project checks and worktrees easy to configure. Keep completion tied to reviewed checks rather than an assistant saying “done.”
+- Test private repository authentication and publishing with separately configured credentials. A model subscription does not provide GitHub authentication.
 
-- SQUASH BUGS
-- Fresh install smoke tests on Linux, macOS, and Windows. Docker, native Python,
-  and WSL all need coverage.
+## A UI that explains itself
 
-- Integration audit: do integrations even work? Confirm what works, what needs setup docs, and what should be removed or hidden. 
-- Cookbook reliability on other computers. This is probably the area most likely to need work across different machines, GPUs, drivers, shells, and Python environments.
-- Cookbook SGLang support across platforms. Make sure SGLang setup/serve works
-  predictably on Linux, Windows/WSL, macOS where possible, Docker, and common
-  NVIDIA/AMD hardware paths.
-- Deep Research model presets by hardware. Recommend approved model/parameter
-  profiles for small, medium, and large local setups so people with different
-  hardware can use Deep Research without guessing. Surface this either in Deep
-  Research settings or as a Cookbook scan/dropdown suggestion.
-- Cookbook model scan/download ranking. Prioritize newer architectures and
-  better hardware-fit models instead of scoring everything almost the same.
-  Ranking should account for architecture age, quant format, VRAM/RAM fit,
-  backend support, vision/mmproj requirements, and likely serve reliability.
-- Cookbook error feedback and logging. Failed downloads, dependency installs,
-  preflights, and serve jobs should show the actual command/output/error in the
-  UI, with copyable logs and clear next steps instead of just "crashed".
-- Agent prompt/context bloat. Agent mode is too heavy for smaller local models:
-  tool schemas, skills, memory, documents, and instructions can eat the context
-  before the user request really starts. We need slimmer prompts, better tool
-  selection, smaller default tool sets, and clearer guidance for models with
-  4k/8k/16k context windows.
-- Local model speculative decoding support. For Odysseus-tuned local models,
-  plan to ship or recommend a small same-tokenizer draft model when the serving
-  backend supports it. Early vLLM testing showed a generic `Qwen3-0.6B` draft
-  beside `Qwen3-8B` can materially reduce wall time, while an unsupported
-  DSpark conversion performed poorly. Treat this as a supported draft-model lane
-  first; keep MTP-specific packaging as future work only when the architecture
-  and runtime support are real. Judge this by time-to-success, tool correctness,
-  grammar, and unchanged target output, not tokens/sec alone.
-- Skill/tool prompt-injection audit. User-editable skills, notes, documents,
-  fetched pages, and memories should be treated as untrusted data. Keep testing
-  whether models follow malicious instructions from those surfaces.
-- Better degraded-state reporting for ChromaDB, SearXNG, email, ntfy, and provider probes.
-- Email performance audit. Fetching, searching, opening, deleting, and sending
-  email can feel slow, especially over IMAP/SMTP providers with high latency.
-  Need someone who knows mail performance to profile the current flow, identify
-  whether the bottleneck is IMAP folder select/fetch, cache invalidation,
-  attachment/body loading, SMTP handshakes, or frontend refresh behavior, then
-  propose safer caching/prefetch/batching without breaking multi-account state.
-- Provider setup/probing audit for Anthropic, Gemini, Groq, xAI, OpenRouter, OpenAI, and DeepSeek.
+- Clear status for provider calls, queued work, tools, approvals, failed checks and reconnects.
+- Native keyboard controls, predictable focus, usable narrow layouts, and popups above the window that opened them.
+- Check complete user flows instead of isolated buttons: create a chat, select a provider/workspace, approve a task, inspect its output and find it again.
+- Keep error details useful without exposing credentials. Retry should preserve the request and stay in the correct chat.
 
-## Refactor Targets
-- CSS cleanup. `static/style.css` basically Calypso's island atm.
-- Tour core helper. The onboarding tours have too much copy-pasted scaffolding; promote a shared `tour-core.js` helper before adding more tours.
-- Modal/window positioning cleanup. Some window controls have improved, but the
-  underlying popup/dropdown/fixed-position behavior is still too fragile.
-- Mobile media override discoverability. A lot of "CSS did not move" bugs are mobile `@media` overrides of the same selector; comments or linting around desktop/mobile paired rules would help.
-- Dead code pass for old routes, stale feature flags, and unused UI states.
+## Setup and recovery
 
-## Frontend
+- Keep the default Docker setup to clone, copy the environment example and run Compose.
+- Reduce runtime downloads and unnecessary first-start network work. Optional service failures should be diagnosable without blocking unrelated work.
+- Test fresh data, updates, actual restart recovery and moved backups in temporary installations.
+- Verify Windows/macOS Docker and native install paths on those platforms. Linux checks alone do not establish cross-platform support.
+- Preserve workspace snapshots, ownership boundaries and fail-closed restores. Stop must report its actual cleanup limits.
 
-- Expand the Editor for quicker, more robust everyday use. Better file/document
-  handling, smoother window behavior, clearer save/export flows, stronger image
-  editing affordances, and fewer brittle edge cases.
-- Better AI integration for Notes and Todos. Notes should be easier for the
-  agent to read, update, summarize, and turn into actions. Todos should be
-  assignable to an agent from the UI, possibly through a button, task action,
-  or dedicated skill/tool flow.
-- Mobile gallery/editor polish. Easier to launch/download inpaint model or any missing pieces.
-- Accessibility pass: keyboard navigation, focus states, contrast, reduced motion.
-- Improve empty states and error messages on fresh installs.
-- Tighten first-run setup, hints, and tours so they do not repeat or fight each other.
-- Vendor CDN assets eventually for a more fully self-hosted/offline mode.
+## Context, recall and skills
 
-## Backend
+- Load procedures and tool schemas when needed. Make capability reports distinguish configured, connected and actually tested.
+- Retain source references when summarizing old work; open exact archived chunks or chat messages when the details matter.
+- Test long current requests, tool exchanges, large outputs and fallback providers together. Retrieval does not enlarge the model's context window.
+- Keep fetched pages, repository instructions, skills and historical text marked as untrusted context.
 
-- More tests around endpoint probing and provider setup.
-- Better task scheduler defaults and visibility.
-- Backup/restore guide and helper flow for `data/`.
-- Security hardening around admin-only tools and clear docs for their risk.
+## Integrations and local models
 
-## Not The Focus Right Now
+- Test provider login, refresh, discovery, cancellation and reconnect paths independently from model quality.
+- Make image, browser, search, email and notification setup states visible and accurate.
+- Improve Cookbook download/serve errors and hardware fit using actual backend constraints. Test hardware-specific claims on that hardware.
+- Measure speculative decoding by successful task time and tool correctness, not token speed alone.
 
-I prob shouldnt add more themes.
+## Help wanted
+
+A useful report has the request, selected provider/model, relevant settings,
+what happened, and the tool or error output with private information removed.
+Say whether a check used real provider replies or fixtures.
+
+The [change record](FORK-CHANGES.md) documents shipped work and its validation.
+The [workflow guide](docs/nx-workflows.md) covers current controls and limits.

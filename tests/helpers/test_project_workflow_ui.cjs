@@ -65,7 +65,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname.startsWith('/api/harness/preflight/')) {
     calls.push({method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams)});
-    return json(res, {capabilities: ['python'], workspace: url.searchParams.get('workspace')});
+    return json(res, {model: {id: 'fixture-model', tool_calling: {status: 'claimed'}, context_window: {tokens: 16000, reason: 'Endpoint serving limit may differ'}}, endpoint: {configured: true, enabled: true}, backends: {search: {status: 'configured_unverified'}, browser: {status: 'disabled'}, image_generation: {status: 'unavailable'}}, execution: {mode: 'local_process'}, tools: {items: [{name: 'python', availability: 'available'}, {name: 'web_fetch', availability: 'disabled'}]}, workspace: url.searchParams.get('workspace')});
   }
   if (url.pathname.startsWith('/api/chat/evidence/')) {
     calls.push({method: req.method, path: url.pathname});
@@ -113,12 +113,12 @@ const server = http.createServer(async (req, res) => {
     assert.equal(await checks.getByLabel('Timeout (seconds)').getAttribute('max'), '600');
     await panel.locator('details > summary').click();
     await panel.getByLabel('Checks JSON').fill(JSON.stringify([{name: 'JSON check', argv: ['python', '-m', 'pytest -q'], timeout_seconds: 120, required: true}]));
-    await panel.getByRole('button', {name: 'Apply JSON to fields'}).click();
-    assert.equal(await checks.getByLabel('Name').inputValue(), 'JSON check');
     await panel.locator('details > summary').click();
     await panel.getByRole('checkbox', {name: /automatically after agent edits/}).check();
     await panel.getByRole('button', {name: 'Save checks'}).click();
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [role="status"]')?.textContent.includes('gate completion'));
+    assert.equal(savedConfig.checks[0].name, 'JSON check', 'collapsing JSON editor preserves its pending edits when saving');
+    assert.equal(await checks.getByLabel('Name').inputValue(), 'JSON check');
     assert.equal(savedConfig.auto_run_on_completion, true);
     assert.equal(savedConfig.workspace, '/workspace');
     assert.deepEqual(savedConfig.checks[0].argv, ['python', '-m', 'pytest -q'], 'arguments stay explicit argv entries');
@@ -127,7 +127,11 @@ const server = http.createServer(async (req, res) => {
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('check passed'));
     assert.equal(await panel.getByLabel('Project workflow results').locator('pre').textContent(), 'check passed');
     await panel.getByRole('button', {name: 'Check capabilities'}).click();
-    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('python'));
+    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('fixture-model'));
+    assert.match(await report.textContent(), /Configured; not tested/);
+    assert.match(await report.textContent(), /1 available · 1 disabled/);
+    assert.match(await report.textContent(), /registry estimate/);
+    assert.equal(await report.locator('pre').count(), 0, 'capability report is readable, raw JSON remains exportable');
     await panel.getByRole('button', {name: 'Run evidence'}).click();
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('Awaiting approval'));
 

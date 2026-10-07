@@ -6,6 +6,12 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Docker packages the tested Browser MCP CLI and uses system Chromium; startup prefers that installed CLI and keeps npx as the native-install fallback. Locked-down cache-only startup accepts the local executable.
+- Subscription-backed endpoint diagnostics resolve account credentials through the normal endpoint resolver. Reconnect-required failures remain controlled categories without exposing tokens or exception text.
+- Rapid third-run replacement keeps the original predecessor cleanup barrier even when the middle run never started. Coding requests that cannot retain any enabled coding schema fail before provider dispatch; viable Bash/Python, read-only and disabled-tool paths stay supported.
+- Native sidebar and export action buttons preserve existing action IDs. The export popup supports keyboard focus, Escape focus return and outside dismissal. Capability reports use readable sections and keep the complete JSON export; collapsed JSON check edits remain pending for Save.
+- The coding evaluator enforces a stream wall-clock budget even with heartbeats, records failed project verification, and preserves reports after independent verification timeouts or evidence-fetch failures. The roadmap now reflects NX priorities and verification limits.
+
 - Project checks now have named fields, explicit argument lines, bounded timeouts and an optional JSON editor. Removing a check preserves edits to other checks. Reports show readable verification results and distinguish waiting for approval, waiting for input, pauses and incomplete verification. Raw reports remain available for copying or download.
 - Team autosaves preserve textarea focus and cursor position. Running phases name the active participant and task; builder and reviewer chats are linked from each task. Invalid task titles do not leave the board stuck busy, and late Stop replies cannot update a different chat.
 - The approval judge can review bounded edits to common Rust, Go, C/C++, JVM, configuration and frontend source formats, plus Makefile and Dockerfile. This adds eligibility for classification rather than blanket approval. Hidden paths, excluded directories and symlink components remain rejected; execution checks and mandatory snapshots remain in place.

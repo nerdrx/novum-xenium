@@ -42,6 +42,7 @@ import logging
 import socket
 import ssl
 import time
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -74,6 +75,7 @@ _ERROR_DETAIL = {
     "network_error": "network error",
     "http_error": "server returned an error response",
     "auth_or_protocol_error": "authentication or protocol error",
+    "reauth_required": "provider credentials need reconnecting",
     "no_models": "endpoint returned no models",
     "no_host": "no host configured",
     "error": "probe failed",
@@ -120,6 +122,8 @@ def _classify_error(exc: BaseException) -> str:
     mod = (type(exc).__module__ or "")
     if isinstance(exc, ssl.SSLError) or "SSL" in name or "Certificate" in name:
         return "tls_error"
+    if name in ("ChatGPTSubscriptionReauthRequired", "ChatGPTSubscriptionAuthNotFound"):
+        return "reauth_required"
     if isinstance(exc, socket.gaierror) or name in ("gaierror", "herror"):
         return "dns_error"
     if isinstance(exc, ConnectionRefusedError) or "ConnectionRefused" in name \
@@ -347,8 +351,9 @@ def providers_health(endpoints: List[Dict[str, Any]],
                      *, probe: Optional[Callable] = None) -> Dict[str, Any]:
     """Probe each enabled model endpoint's model list, concurrently.
 
-    `endpoints` is a list of plain dicts ({name, base_url, api_key}) so this
-    stays decoupled from the ORM and trivially testable. Non-empty model list
+    `endpoints` is a list of plain dicts so this stays decoupled from the ORM
+    and trivially testable. Session-backed credentials are resolved per probe.
+    Non-empty model list
     → reachable. Bounded by `_FANOUT_BUDGET` regardless of count. `meta` never
     contains api_key or raw URLs — only a display name (or a sanitized URL when
     no name is set) and a controlled error category.
@@ -364,7 +369,14 @@ def providers_health(endpoints: List[Dict[str, Any]],
     def _check(_i: int, ep: Dict[str, Any]) -> Dict[str, Any]:
         name = _label(ep)
         try:
-            models = probe(ep.get("base_url"), ep.get("api_key"),
+            base_url, api_key = ep.get("base_url"), ep.get("api_key")
+            if ep.get("provider_auth_id"):
+                from src.endpoint_resolver import resolve_endpoint_runtime
+
+                base_url, api_key = resolve_endpoint_runtime(
+                    SimpleNamespace(**ep), owner=ep.get("owner")
+                )
+            models = probe(base_url, api_key,
                            timeout=_PROBE_TIMEOUT) or []
         except Exception as e:
             return {"name": name, "ok": False, "model_count": 0,
@@ -439,7 +451,9 @@ def _gather_inputs() -> Dict[str, Any]:
             rows = db.query(ModelEndpoint).filter(
                 ModelEndpoint.is_enabled == True).all()  # noqa: E712
             endpoints = [{"name": r.name, "base_url": r.base_url,
-                          "api_key": r.api_key} for r in rows]
+                          "api_key": r.api_key,
+                          "provider_auth_id": r.provider_auth_id,
+                          "owner": r.owner} for r in rows]
         finally:
             db.close()
     except Exception as e:

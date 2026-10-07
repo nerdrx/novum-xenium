@@ -66,6 +66,8 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
   const saveButton = button("Save checks");
   panel.append(configTitle, configHelp, checkList, addCheckButton, advanced, autoRunLabel, saveButton);
 
+  let jsonEdited = false;
+  config.addEventListener("input", () => { jsonEdited = true; });
   const renderChecks = (checks) => {
     checkList.replaceChildren();
     for (const [index, check] of checks.entries()) {
@@ -88,6 +90,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
       checkList.append(row);
     }
     config.value = JSON.stringify(checks, null, 2);
+    jsonEdited = false;
   };
   renderChecks(JSON.parse(config.value));
   addCheckButton.addEventListener("click", () => renderChecks([...readChecks(), { name: "", argv: [""], required: true, timeout_seconds: 120 }]));
@@ -109,7 +112,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
     try { renderChecks(validateChecks(JSON.parse(config.value))); status("JSON applied to the check fields."); }
     catch (error) { status(`Could not apply JSON: ${error.message}`); }
   });
-  checkList.addEventListener("input", () => { config.value = JSON.stringify(readChecks(), null, 2); });
+  checkList.addEventListener("input", () => { config.value = JSON.stringify(readChecks(), null, 2); jsonEdited = false; });
 
   const worktreeTitle = el("h3", "Managed worktrees");
   const worktreeList = el("ul");
@@ -149,6 +152,27 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
           row.append(output);
           report.append(row);
         }
+      } else if (value && value.model && value.backends && value.execution) {
+        report.append(el("h3", "Capability check"), el("p", "This checks saved configuration and the current tool inventory. It does not call the model or test provider reachability."));
+        const labels = { available: "Available", connected: "Connected", disabled: "Disabled", unavailable: "Unavailable", configured_unverified: "Configured; not tested", misconfigured: "Needs configuration", not_configured: "Not configured", claimed: "Declared by endpoint; not tested", unsupported: "Not supported", unknown: "Unknown" };
+        const row = (name, state, reason = "") => {
+          const section = el("section");
+          section.append(el("h4", name), el("p", labels[state] || state || "Unknown"));
+          if (reason) section.append(el("p", reason));
+          report.append(section);
+        };
+        row(value.model.id || "Model", value.model.tool_calling?.status, "Tool calling support comes from endpoint configuration.");
+        const context = value.model.context_window || {};
+        row("Context window", context.tokens ? `${Number(context.tokens).toLocaleString()} tokens (registry estimate)` : "Unknown", context.reason);
+        row("Model endpoint", !value.endpoint?.configured ? "Not configured" : value.endpoint.enabled ? "Configured; not tested" : "disabled");
+        for (const [key, name] of [["search", "Web search"], ["browser", "Browser"], ["image_generation", "Image generation"]]) {
+          const backend = value.backends[key] || {};
+          row(name, backend.status, backend.reason);
+        }
+        row("Shell execution", value.execution.mode === "separate_container" ? value.execution.status : "Runs in the app container/process", value.execution.mode === "separate_container" ? "Worker configuration does not prove reachability." : "Workspace folders scope file tools; shell commands can reach outside them.");
+        const items = value.tools?.items || [];
+        row("Tool inventory", `${items.filter((tool) => tool.availability === "available").length} available · ${items.filter((tool) => tool.availability === "disabled").length} disabled`, "Available tools are loaded on demand; the model may not use every tool.");
+        if (value.latest_run) row("Latest run", value.latest_run.status, `${value.latest_run.duration_seconds ?? "?"} seconds`);
       } else if (value && Array.isArray(value.runs)) {
         report.append(el("h3", "Run evidence"));
         const labels = { done: "Finished", running: "Running", error: "Failed", stopped: "Stopped", interrupted: "Interrupted", awaiting_approval: "Awaiting approval", awaiting_input: "Awaiting your answer", paused: "Paused at a limit", unverified: "Verification incomplete" };
@@ -280,7 +304,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
     if (!workspace) { status("Inspect a workspace first."); return; }
     let checks;
     try {
-      checks = advanced.open ? JSON.parse(config.value) : readChecks();
+      checks = jsonEdited ? JSON.parse(config.value) : readChecks();
       validateChecks(checks);
       renderChecks(checks);
     }

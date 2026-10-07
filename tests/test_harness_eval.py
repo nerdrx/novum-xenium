@@ -68,3 +68,59 @@ def test_each_benchmark_case_requires_real_file_assertions(tmp_path, case):
     assert not harness_eval.case_passes(done=True, errors=[], check_returncode=0, tool_calls=0)
     assert not harness_eval.case_passes(done=True, errors=["budget_exceeded"], check_returncode=0, tool_calls=1)
     assert harness_eval.case_passes(done=True, errors=[], check_returncode=0, tool_calls=1)
+
+
+@pytest.mark.parametrize("payload", ["null", "[]", "42", '"text"', "{invalid"])
+def test_event_parser_ignores_non_event_payloads(payload):
+    assert harness_eval.parse_event("message", payload) == {}
+
+
+def test_verification_failure_cannot_be_counted_as_success():
+    assert harness_eval.parse_event("message", '{"type":"verification","passed":false}') == {"incomplete": "verification_failed"}
+    assert harness_eval.parse_event("message", '{"type":"chat_terminal","data":{"failed":true}}') == {"incomplete": "chat_terminal_failed"}
+
+
+def test_heartbeat_does_not_extend_evaluation_deadline(monkeypatch):
+    monkeypatch.setattr(harness_eval.time, "monotonic", lambda: 10)
+    with pytest.raises(TimeoutError):
+        list(harness_eval.stream_events([b": heartbeat\n"], deadline=10))
+    assert list(harness_eval.stream_events([b"event: error\n", b'data: {"error":"private"}\n'], deadline=11)) == [{"stream_error": True}]
+
+
+def test_verification_timeout_still_writes_case_report(tmp_path, monkeypatch):
+    import io
+    import json
+    import subprocess
+    import sys
+
+    case = {"name": "fixture", "files": {}, "prompt": "fixture", "check": "fixture"}
+    monkeypatch.setattr(harness_eval, "CASES", [case])
+    monkeypatch.setattr(sys, "argv", ["harness_eval", "--workspace-root", str(tmp_path),
+        "--app-workspace-root", "/workspace", "--model", "fixture", "--endpoint-id", "fixture",
+        "--report", str(tmp_path / "report.json")])
+
+    def response(request, **kwargs):
+        if request.full_url.endswith("/api/session"):
+            return io.BytesIO(b'{"id":"fixture-session"}')
+        if request.full_url.endswith("/api/chat_stream"):
+            result = io.BytesIO(b'data: {"type":"tool_start"}\n\ndata: [DONE]\n\n')
+            result.headers = {}
+            return result
+        return io.BytesIO(b'{"runs":[]}')
+
+    def timed_out(*args):
+        raise subprocess.TimeoutExpired("private verification command", 15)
+
+    monkeypatch.setattr(harness_eval.urllib.request, "urlopen", response)
+    monkeypatch.setattr(harness_eval, "run_file_check", timed_out)
+    assert harness_eval.main() == 1
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert report["cases"][0]["errors"] == ["verification_TimeoutExpired"]
+    assert report["cases"][0]["file_tests_passed"] is False
+    assert report["cases"][0]["passed"] is False
+    assert "private verification command" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("payload", ["not JSON", "null", "[]"])
+def test_error_event_stays_error_without_valid_object(payload):
+    assert harness_eval.parse_event("error", payload) == {"stream_error": True}

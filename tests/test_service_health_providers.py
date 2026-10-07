@@ -23,6 +23,60 @@ def test_providers_ok_all_reachable():
     assert s["meta"]["endpoints"][0]["model_count"] == 2
 
 
+def test_providers_resolve_session_backed_credentials_without_exposing_token(monkeypatch):
+    from src import endpoint_resolver
+
+    seen = {}
+    token = "session-access-token-secret"
+
+    def resolve(ep, owner=None):
+        seen["endpoint"] = ep
+        seen["owner"] = owner
+        return "https://chatgpt.com/backend-api/codex", token
+
+    monkeypatch.setattr(endpoint_resolver, "resolve_endpoint_runtime", resolve)
+    s = sh.providers_health(
+        [{
+            "name": "ChatGPT Subscription",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+            "api_key": None,
+            "provider_auth_id": "auth-1",
+            "owner": "alice",
+        }],
+        probe=lambda base, key, timeout: ["gpt-test"] if key == token else [],
+    )
+
+    assert s["status"] == sh.OK
+    assert seen["owner"] == "alice"
+    assert seen["endpoint"].provider_auth_id == "auth-1"
+    assert token not in repr(s)
+
+
+def test_providers_report_session_reconnect_requirement_separately(monkeypatch):
+    from src import endpoint_resolver
+    from src.chatgpt_subscription import ChatGPTSubscriptionReauthRequired
+
+    def resolve(_ep, owner=None):
+        raise ChatGPTSubscriptionReauthRequired("secret-bearing detail")
+
+    monkeypatch.setattr(endpoint_resolver, "resolve_endpoint_runtime", resolve)
+    s = sh.providers_health(
+        [{
+            "name": "ChatGPT Subscription",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+            "api_key": None,
+            "provider_auth_id": "auth-1",
+            "owner": "alice",
+        }],
+        probe=lambda *_a, **_k: pytest.fail("probe must not run without valid auth"),
+    )
+
+    endpoint = s["meta"]["endpoints"][0]
+    assert s["status"] == sh.DOWN
+    assert endpoint["error"] == "reauth_required"
+    assert "secret-bearing detail" not in repr(s)
+
+
 def test_providers_degraded_some_empty():
     def probe(base, key, timeout):
         return ["m1"] if "good" in base else []

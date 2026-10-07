@@ -47,6 +47,45 @@ def test_collect_service_health_shape(monkeypatch):
     assert out["overall"] == sh.OK
 
 
+def test_gather_inputs_preserves_session_auth_and_owner(monkeypatch):
+    from types import SimpleNamespace
+    import core.database as database
+    import src.integrations as integrations
+    import src.settings as settings
+    import sys
+    import types
+
+    row = SimpleNamespace(
+        name="ChatGPT Subscription", base_url="https://chatgpt.com/backend-api/codex",
+        api_key=None, provider_auth_id="auth-1", owner="alice",
+    )
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            return [row]
+
+    class DB:
+        def query(self, *_args):
+            return Query()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(settings, "load_settings", lambda: {})
+    monkeypatch.setattr(integrations, "load_integrations", lambda: [])
+    email_helpers = types.ModuleType("routes.email_helpers")
+    email_helpers._list_email_accounts = lambda: []
+    monkeypatch.setitem(sys.modules, "routes.email_helpers", email_helpers)
+    monkeypatch.setattr(database, "SessionLocal", DB)
+
+    endpoint = sh._gather_inputs()["endpoints"][0]
+    assert endpoint["provider_auth_id"] == "auth-1"
+    assert endpoint["owner"] == "alice"
+
+
 # ── _safe_url: strip userinfo / query / fragment ──
 
 @pytest.mark.parametrize("raw,expected", [

@@ -60,6 +60,26 @@ def _find_npx() -> str:
             return npx_candidate
     return "npx"  # fallback, will fail with a clear error
 
+def _find_browser_mcp() -> str:
+    """Find the directly executable Browser MCP CLI, if installed."""
+    cli = which_tool("playwright-mcp")
+    if cli:
+        return cli
+    for candidate in ("/usr/local/bin/playwright-mcp", "/usr/bin/playwright-mcp"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return ""
+
+
+def _browser_mcp_launch(cfg: dict, npx_path: str) -> tuple[str, list[str], str | None]:
+    """Choose baked CLI when present; otherwise preserve the native npx path."""
+    cli = _find_browser_mcp()
+    if cli:
+        return cli, _browser_mcp_args(cfg["args"]), None
+    args = ["-y", cfg["package"], *cfg["args"]]
+    return npx_path, _browser_mcp_args(args), cfg["package"]
+
+
 # Server definitions: id -> (script path relative to project root, display name)
 #
 # bash / python / filesystem / web_search were folded into native in-process
@@ -76,12 +96,13 @@ _BUILTIN_SERVERS = {
     "email":      ("mcp_servers/email_server.py",      "Built-in: Email"),
 }
 
-# NPX-based built-in servers (run via npx, not Python)
+# Browser MCP has a baked image CLI and a native npx fallback. Desktop installs
+# can use the npx package when no global CLI is available.
 _BUILTIN_NPX_SERVERS = {
     "builtin_browser": {
         "name": "Built-in: Browser",
-        "command": "npx",
-        "args": ["-y", "@playwright/mcp@latest", "--headless", "--caps", "vision"],
+        "package": "@playwright/mcp@latest",
+        "args": ["--headless", "--caps", "vision"],
     }
 }
 
@@ -198,17 +219,16 @@ async def register_builtin_servers(mcp_manager):
 
     # Register NPX-based servers in the background (they take longer to start)
     npx_path = _find_npx()
-    logger.info(f"NPX binary resolved to: {npx_path}")
+    logger.info(f"Browser MCP npx fallback resolved to: {npx_path}")
 
     async def _start_npx_servers():
         await asyncio.sleep(3)  # let Python servers finish first
         for server_id, cfg in _BUILTIN_NPX_SERVERS.items():
-            # Browser automation is a shipped built-in, so the default path
-            # lets `npx -y` install @playwright/mcp on first start. Locked-down
-            # installs can opt back into the old no-network startup behavior
-            # with ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE=1.
-            args = _browser_mcp_args(cfg["args"]) if server_id == "builtin_browser" else list(cfg["args"])
-            pkg_spec = _npx_package_from_args(args)
+            if server_id == "builtin_browser":
+                command, args, pkg_spec = _browser_mcp_launch(cfg, npx_path)
+            else:
+                command, args = cfg["command"], list(cfg["args"])
+                pkg_spec = _npx_package_from_args(args)
             if BROWSER_MCP_REQUIRE_CACHE and pkg_spec and not await _is_npx_package_cached(npx_path, pkg_spec):
                 logger.warning(
                     f"{cfg['name']} is not available.\n"
@@ -221,7 +241,7 @@ async def register_builtin_servers(mcp_manager):
                 )
                 continue
 
-            logger.info(f"Starting NPX server: {cfg['name']} ({npx_path} {' '.join(args)})")
+            logger.info(f"Starting built-in server: {cfg['name']} ({command} {' '.join(args)})")
             try:
                 env = None
                 if server_id == "builtin_browser":
@@ -238,18 +258,18 @@ async def register_builtin_servers(mcp_manager):
                     server_id=server_id,
                     name=cfg["name"],
                     transport="stdio",
-                    command=npx_path,
+                    command=command,
                     args=args,
                     env=env,
                 )
                 if ok:
-                    logger.info(f"Built-in NPX server registered: {cfg['name']}")
+                    logger.info(f"Built-in server registered: {cfg['name']}")
                 else:
-                    logger.warning(f"Built-in NPX server failed to connect: {cfg['name']}")
+                    logger.warning(f"Built-in server failed to connect: {cfg['name']}")
             except asyncio.CancelledError:
                 raise
             except BaseException as e:
-                logger.warning(f"Built-in NPX server {cfg['name']} error: {type(e).__name__}: {e}")
+                logger.warning(f"Built-in server {cfg['name']} error: {type(e).__name__}: {e}")
 
     _spawn_bg(_start_npx_servers())
 

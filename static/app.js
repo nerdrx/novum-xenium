@@ -56,6 +56,7 @@ import { getSettings } from './js/appConfig.js';
 import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js?v=20260715startupclean';
 import { initSectionCollapse, initSectionDrag } from './js/section-management.js';
 import approvalModeModule from './js/approvalMode.js';
+import { bindMenuDismiss } from './js/escMenuStack.js';
 
 const API_BASE = window.location.origin;
 window.themeModule = themeModule;
@@ -377,7 +378,14 @@ function initializeEventListeners() {
   window.closeAllPopups = function closeAllPopups(except) {
     document.querySelectorAll(
       '.export-dropdown-menu.open, .overflow-menu.open, .model-picker-menu.open, .doc-overflow-menu.open'
-    ).forEach(m => { if (m !== except) m.classList.remove('open'); });
+    ).forEach(m => {
+      if (m === except) return;
+      if (m.id === 'export-dropdown-menu' && typeof m._dismiss === 'function') m._dismiss();
+      else {
+        m.classList.remove('open');
+        if (m.id === 'export-dropdown-menu') document.getElementById('export-dl-btn')?.setAttribute('aria-expanded', 'false');
+      }
+    });
     document.querySelectorAll(
       '.skill-kebab-menu, .note-reminder-menu, .task-dropdown, .doclib-card-dropdown, .email-card-dropdown, .msg-overflow-menu'
     ).forEach(m => { if (m !== except) m.remove(); });
@@ -394,11 +402,16 @@ function initializeEventListeners() {
   });
 
   const exportMenu = el('export-dropdown-menu');
+  let closeExportMenu = () => {};
   if (exportDlBtn && exportMenu) {
+    const setExportMenuOpen = open => {
+      exportMenu.classList.toggle('open', open);
+      exportDlBtn.setAttribute('aria-expanded', String(open));
+    };
     exportDlBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (exportMenu.classList.contains('open')) {
-        exportMenu.classList.remove('open');
+        closeExportMenu();
       } else {
         // Move menu to body so it's not affected by ancestor transforms
         if (exportMenu.parentElement !== document.body) document.body.appendChild(exportMenu);
@@ -406,13 +419,13 @@ function initializeEventListeners() {
         exportMenu.style.top = (rect.bottom + 4) + 'px';
         exportMenu.style.left = 'auto';
         exportMenu.style.right = (window.innerWidth - rect.right) + 'px';
-        exportMenu.classList.add('open');
-      }
-    });
-    document.addEventListener('click', () => exportMenu.classList.remove('open'));
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && exportMenu.classList.contains('open')) {
-        exportMenu.classList.remove('open');
+        setExportMenuOpen(true);
+        closeExportMenu = bindMenuDismiss(exportMenu, () => {
+          const returnFocus = exportMenu.contains(document.activeElement);
+          setExportMenuOpen(false);
+          if (returnFocus) exportDlBtn.focus();
+        }, event => !exportMenu.contains(event.target) && !exportDlBtn.contains(event.target));
+        if (e.detail === 0) exportMenu.querySelector('button:not(:disabled)')?.focus();
       }
     });
     // Opening the sidebar should dismiss any open popup. Many code paths open
@@ -490,7 +503,7 @@ function initializeEventListeners() {
   if (exportCopyBtn) {
     exportCopyBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      exportMenu.classList.remove('open');
+      closeExportMenu();
       const transcript = _serializeChatTranscript();
       // A new/empty chat has nothing to copy — don't write an empty string and
       // falsely report "Copied".
@@ -504,7 +517,7 @@ function initializeEventListeners() {
   if (exportCompactBtn) {
     exportCompactBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      exportMenu.classList.remove('open');
+      closeExportMenu();
       if (window.compactCurrentChatContext) {
         await window.compactCurrentChatContext();
       } else {
@@ -518,7 +531,7 @@ function initializeEventListeners() {
   if (exportPdfBtn) {
     exportPdfBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      exportMenu.classList.remove('open');
+      closeExportMenu();
       const meta = sessionModule.getSessions().find(s => s.id === sessionModule.getCurrentSessionId());
       const sessionName = meta ? meta.name : 'Odysseus Chat';
       const originalTitle = document.title;
@@ -543,7 +556,7 @@ function initializeEventListeners() {
   if (exportDocBtn) {
     exportDocBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      exportMenu.classList.remove('open');
+      closeExportMenu();
       try {
         const sessionId = sessionModule.getCurrentSessionId();
         const texts = _serializeChatTranscript();
@@ -570,7 +583,7 @@ function initializeEventListeners() {
   if (exportDeleteBtn) {
     exportDeleteBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      exportMenu.classList.remove('open');
+      closeExportMenu();
       if (sessionModule?.deleteCurrentSessionFromTopMenu) {
         await sessionModule.deleteCurrentSessionFromTopMenu();
       }
@@ -582,7 +595,7 @@ function initializeEventListeners() {
   if (exportRenameBtn) {
     exportRenameBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      exportMenu.classList.remove('open');
+      closeExportMenu();
       let sid = sessionModule.getCurrentSessionId();
       // A brand-new chat has no session id yet — still allow renaming if there's
       // a pending chat (we materialize it on commit so the name sticks).

@@ -720,15 +720,15 @@ All upload-limit vars are validated (must be a positive integer) and optional; a
 
 ### Built-in MCP servers (optional setup)
 
-Odysseus auto-registers a few built-in MCP servers at startup. The npx-based ones (currently the browser server, `@playwright/mcp`) only start when their npm package is already in the local npx cache. If a package isn't cached, that server is skipped with a startup log message explaining what to do, so a fresh install does not block on a multi-minute npm download or hang if Playwright system deps are missing.
+NX Odysseus auto-registers its built-in MCP servers at startup. The standard Docker image includes Browser MCP (`@playwright/mcp` 0.0.83) and system Chromium. It starts the installed CLI directly, without an npm package download at runtime.
 
-To enable the browser MCP (page navigation, screenshots, vision), run once:
+Native installs use an installed `playwright-mcp` CLI when available, otherwise `npx -y @playwright/mcp@latest`. The fallback can download the package on its first start. Set `ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE=1` to prevent uncached startup downloads. To pre-cache that fallback while online, run:
 
 ```bash
 npx -y @playwright/mcp@latest --version
 ```
 
-That installs `@playwright/mcp` plus Playwright (~300MB total). Restart Odysseus and the server will register at startup.
+Native installs also need a supported browser binary and its system dependencies. Browser configuration can select an executable; the Docker image supplies `/usr/bin/chromium`. Restart Odysseus after installing the package or changing its browser configuration. A connected browser tool does not grant additional host folders or bypass tool permissions.
 
 ## Architecture
 ```

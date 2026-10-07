@@ -33,10 +33,11 @@ class _Run:
     __slots__ = (
         "buffer", "subscribers", "status", "task", "evict_task", "run_id", "owner",
         "checkpoint_pending", "checkpoint_last_flush", "persist_checkpoint", "drain_started",
-        "deleted_scope",
+        "deleted_scope", "predecessor_task",
     )
 
-    def __init__(self, owner: Optional[str] = None, persist_checkpoint: bool = True) -> None:
+    def __init__(self, owner: Optional[str] = None, persist_checkpoint: bool = True,
+                 predecessor_task: Optional[asyncio.Task] = None) -> None:
         self.buffer: list = []          # ordered SSE event strings (replay log)
         self.subscribers: set = set()   # one asyncio.Queue per connected client
         self.status: str = "running"    # running | done | error | stopped
@@ -51,6 +52,9 @@ class _Run:
         self.persist_checkpoint = persist_checkpoint
         self.drain_started = False
         self.deleted_scope: Optional[tuple[str, str]] = None
+        # If this run is replaced before _drain starts, its own task cannot
+        # carry the predecessor barrier onward, so the next run inherits it.
+        self.predecessor_task = predecessor_task
 
 
 _RUNS: Dict[str, _Run] = {}
@@ -262,10 +266,23 @@ def start(
                         run_checkpoints.finish(prev.run_id, "stopped")
                         run_evidence.finish(prev.run_id, "stopped")
                 prev.task.cancel()
-                prev_task = prev.task   # new run awaits this before it starts writing
+            if prev.drain_started:
+                # A started drain holds its predecessor barrier until its own
+                # cancellation cleanup finishes.
+                if prev.task and not prev.task.done():
+                    prev_task = prev.task
+            else:
+                # A not-yet-started task cannot run _drain's barrier/cleanup.
+                # Inherit its predecessor directly so a rapid third send still
+                # waits for the original run's partial save.
+                inherited = prev.predecessor_task
+                if inherited and not inherited.done():
+                    prev_task = inherited
+                elif prev.task and not prev.task.done():
+                    prev_task = prev.task
             if prev.evict_task and not prev.evict_task.done():
                 prev.evict_task.cancel()
-        run = _Run(owner, persist_checkpoint=persist)
+        run = _Run(owner, persist_checkpoint=persist, predecessor_task=prev_task)
         _RUNS[session_id] = run
         if persist:
             run_checkpoints.begin(run.run_id, session_id, owner, context)

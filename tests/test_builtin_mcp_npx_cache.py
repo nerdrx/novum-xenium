@@ -54,7 +54,7 @@ def test_browser_mcp_args_use_configured_browser_executable(monkeypatch):
     monkeypatch.setenv("ODYSSEUS_BROWSER_EXECUTABLE", "/usr/bin/chromium")
     builtin_mcp = _load_builtin_mcp(monkeypatch)
 
-    args = builtin_mcp._browser_mcp_args(["-y", "@playwright/mcp@latest", "--headless"])
+    args = builtin_mcp._browser_mcp_args(["--headless"])
 
     assert "--executable-path" in args
     assert "/usr/bin/chromium" in args
@@ -67,7 +67,7 @@ def test_browser_mcp_args_can_use_persistent_profile_when_requested(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_BROWSER_ISOLATED", "0")
     builtin_mcp = _load_builtin_mcp(monkeypatch)
 
-    args = builtin_mcp._browser_mcp_args(["-y", "@playwright/mcp@latest", "--headless"])
+    args = builtin_mcp._browser_mcp_args(["--headless"])
 
     assert "--executable-path" in args
     assert "--isolated" not in args
@@ -78,7 +78,7 @@ def test_browser_mcp_args_respect_explicit_user_data_dir(monkeypatch):
     builtin_mcp = _load_builtin_mcp(monkeypatch)
 
     args = builtin_mcp._browser_mcp_args([
-        "-y", "@playwright/mcp@latest", "--headless", "--user-data-dir", "/tmp/profile",
+        "--headless", "--user-data-dir", "/tmp/profile",
     ])
 
     assert "--user-data-dir" in args
@@ -90,10 +90,89 @@ def test_browser_mcp_args_can_keep_sandbox(monkeypatch):
     monkeypatch.setenv("ODYSSEUS_BROWSER_NO_SANDBOX", "0")
     builtin_mcp = _load_builtin_mcp(monkeypatch)
 
-    args = builtin_mcp._browser_mcp_args(["-y", "@playwright/mcp@latest", "--headless"])
+    args = builtin_mcp._browser_mcp_args(["--headless"])
 
     assert "--executable-path" in args
     assert "--no-sandbox" not in args
+
+
+def test_browser_mcp_prefers_baked_cli_and_does_not_require_npx_cache(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE", "1")
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    monkeypatch.setattr(builtin_mcp, "_find_browser_mcp", lambda: "/usr/local/bin/playwright-mcp")
+
+    command, args, package = builtin_mcp._browser_mcp_launch(
+        builtin_mcp._BUILTIN_NPX_SERVERS["builtin_browser"], "npx"
+    )
+
+    assert command == "/usr/local/bin/playwright-mcp"
+    assert args[:3] == ["--headless", "--caps", "vision"]
+    assert "--isolated" in args
+    assert package is None
+
+
+def test_browser_mcp_falls_back_to_npx_when_cli_is_missing(monkeypatch):
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    monkeypatch.setattr(builtin_mcp, "_find_browser_mcp", lambda: "")
+
+    command, args, package = builtin_mcp._browser_mcp_launch(
+        builtin_mcp._BUILTIN_NPX_SERVERS["builtin_browser"], "/custom/npx"
+    )
+
+    assert command == "/custom/npx"
+    assert args[:5] == ["-y", "@playwright/mcp@latest", "--headless", "--caps", "vision"]
+    assert package == "@playwright/mcp@latest"
+
+
+def test_browser_mcp_ignores_non_executable_fallback_cli(monkeypatch):
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    monkeypatch.setattr(builtin_mcp.os.path, "isfile", lambda path: path == "/usr/local/bin/playwright-mcp")
+    monkeypatch.setattr(builtin_mcp.os, "access", lambda _path, _mode: False)
+
+    assert builtin_mcp._find_browser_mcp() == ""
+
+
+def test_browser_mcp_cache_gate_skips_npx_but_not_baked_cli(monkeypatch, tmp_path):
+    monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE", "1")
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    builtin_mcp._BUILTIN_SERVERS = {}
+    monkeypatch.setattr(builtin_mcp, "get_app_root", lambda: str(tmp_path))
+    monkeypatch.setattr(builtin_mcp, "_find_npx", lambda: "npx")
+    monkeypatch.setattr(builtin_mcp.asyncio, "sleep", lambda *_: _done())
+    monkeypatch.setattr(builtin_mcp, "_is_npx_package_cached", lambda *_args, **_kwargs: _false())
+    calls = []
+
+    class Manager:
+        async def connect_server(self, **kwargs):
+            calls.append(kwargs)
+            return True
+
+    async def run_startup(cli):
+        monkeypatch.setattr(builtin_mcp, "_find_browser_mcp", lambda: cli)
+        await builtin_mcp.register_builtin_servers(Manager())
+        if builtin_mcp._BG_TASKS:
+            await asyncio.gather(*list(builtin_mcp._BG_TASKS))
+
+    builtin_mcp.MCP_DISABLED = True
+    asyncio.run(run_startup("/usr/local/bin/playwright-mcp"))
+    assert calls == []
+    builtin_mcp.MCP_DISABLED = False
+
+    asyncio.run(run_startup("/usr/local/bin/playwright-mcp"))
+    assert len(calls) == 1
+    assert calls[0]["command"] == "/usr/local/bin/playwright-mcp"
+
+    calls.clear()
+    asyncio.run(run_startup(""))
+    assert calls == []
+
+
+async def _done():
+    return None
+
+
+async def _false():
+    return False
 
 
 def test_npx_cache_check_detects_scoped_package_in_npx_cache(monkeypatch, tmp_path):

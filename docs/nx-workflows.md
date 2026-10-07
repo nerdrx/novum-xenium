@@ -102,7 +102,7 @@ Select a workspace inside `/workspace`; a different mount requires matching `ODY
 
 ## Preflight, run evidence and coding evaluations
 
-**Check capabilities** reports configured providers, tool declarations, backend state and known context information. Unknown stays unknown; registry context values are advisory. This offline check does not start models or prove provider reachability. Existing explicit provider tests remain available in Settings.
+**Check capabilities** reports configured providers, tool declarations, backend state and known context information. The report uses readable sections instead of a tool-inventory JSON dump; the complete JSON remains available through Copy report and Download JSON. Unknown stays unknown; registry context values are advisory. This offline check does not start models or prove provider reachability. Existing explicit provider tests remain available in Settings.
 
 **Run evidence** shows recent run status, elapsed time, tool names and exit codes. It retains up to 20 runs per chat and 256 metadata events per run. Prompts, commands, tool output, endpoint URLs and credentials are not copied into this metadata log. Full content remains in the chat's existing history and recovery storage. Deleting the chat deletes its evidence.
 
@@ -113,6 +113,6 @@ python scripts/harness_eval.py --workspace-root /path/to/fixtures \
   --app-workspace-root /workspace/fixtures --model MODEL --endpoint-id ENDPOINT_ID
 ```
 
-The report requires real tool calls, a completed stream and independent file assertions. A stopped run, approval question, exhausted budget or failed file test fails the task. These small tasks are a regression baseline, not a general coding leaderboard.
+The report requires real tool calls, a completed stream and independent file assertions. A stopped run, approval question, exhausted budget, failed project verification or failed file test fails the task. Each case has a 600-second stream budget; change it with `--case-timeout SECONDS`. Heartbeats do not renew that budget. A verification timeout or unavailable evidence endpoint is recorded as incomplete work rather than aborting the entire report. These small tasks are a regression baseline, not a general coding leaderboard.
 
 Group Team also offers **Isolate task worktrees** for an admin or single-user Git workspace. Each task starts from the selected repository HEAD; its builder and reviewer share that task checkout. Uncommitted source changes are not copied. Task paths survive retries and server restarts. Inspect and merge the resulting work yourself; no automatic merge runs.

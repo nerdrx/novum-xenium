@@ -107,6 +107,58 @@ async def test_stop_before_drain_wakes_subscriber_without_checkpoint(tmp_path, m
     agent_runs._RUNS.pop(session_id, None)
 
 
+@pytest.mark.asyncio
+async def test_triple_replacement_before_middle_drain_keeps_transitive_save_order():
+    session_id = "triple-replacement-before-middle-drain"
+    agent_runs._RUNS.pop(session_id, None)
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    third_started = asyncio.Event()
+
+    async def first_stream():
+        try:
+            yield 'data: {"delta":"first"}\n\n'
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await release_cleanup.wait()
+
+    async def middle_stream():
+        yield 'data: {"delta":"middle"}\n\n'
+
+    async def third_stream():
+        third_started.set()
+        yield 'data: {"delta":"third"}\n\n'
+
+    first = agent_runs.start(session_id, first_stream(), persist=False)
+    while not first.buffer:
+        await asyncio.sleep(0)
+
+    # Replacing twice without yielding cancels the middle task before it can
+    # enter _drain and inherit the first run's partial-save barrier.
+    middle = agent_runs.start(session_id, middle_stream(), persist=False)
+    third = agent_runs.start(session_id, third_stream(), persist=False)
+    try:
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert not third_started.is_set()
+
+        release_cleanup.set()
+        await asyncio.wait_for(first.task, timeout=1)
+        await asyncio.wait_for(third.task, timeout=1)
+        assert middle.status == "stopped"
+        assert third_started.is_set()
+    finally:
+        release_cleanup.set()
+        for run in (first, middle, third):
+            if run.task and not run.task.done():
+                run.task.cancel()
+                await asyncio.gather(run.task, return_exceptions=True)
+            if run.evict_task and not run.evict_task.done():
+                run.evict_task.cancel()
+            agent_runs._RUNS.pop(session_id, None)
+
+
 def test_restart_marks_interrupted_and_one_use_claim_is_owner_scoped(tmp_path):
     path = str(tmp_path / "runs.db")
     first_process = run_checkpoints.CheckpointStore(path, recover_on_open=False)

@@ -12,7 +12,7 @@ The aim is a self-hosted workhorse for coding, research and agent teams. Give it
 
 The original Odysseus already has chat, agents, MCP, documents, email, notes, tasks, calendar, model comparison, deep research and a gallery. NX builds on that.
 
-- **Working on projects.** A persistent workspace, repository guidance and a compact map, managed Git worktrees, and snapshots you can review and restore. Save the checks a project needs and see whether they actually passed. Docker includes ripgrep. Large repos can use a sparse checkout.
+- **Working on projects.** A persistent workspace, repository guidance and a compact map, managed Git worktrees, and snapshots you can review and restore. Save the checks a project needs and see whether they actually passed. Docker includes ripgrep and a packaged browser tool that starts without a runtime npm download. Large repos can use a sparse checkout.
 - **Keeping longer tasks usable.** Tool definitions count toward the context budget. Large outputs are archived and searchable, with exact chunks available when needed. The context inspector shows where the space goes.
 - **Remembering useful things.** Skills load their procedures on demand. Agents can search past chats and open the actual matching messages, with timestamps and links back to the source.
 - **Agents working together.** Group chats can keep talking for 20 replies, 100 replies or Until Stop. Shared task boards add a builder, optional read-only reviewers and a human decision on whether the task is done. Coordinated task passes run on the server, so closing the tab does not stop them.
@@ -94,7 +94,7 @@ Reproducible bugs, fresh-install checks and small fixes are welcome. Show the ac
 
 ## Origin and license
 
-NX Odysseus is an independent fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). The upstream base is `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`, with NX changes recorded through October 7, 2026.
+NX Odysseus is an independent fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). The upstream base is `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`, with NX changes recorded through October 8, 2026.
 
 It remains **AGPL-3.0-or-later**. The original authors and third-party notices are kept in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md); see [LICENSE](LICENSE) for the terms. Keep the license and notices, and provide corresponding source as required when distributing or serving modified versions.
 

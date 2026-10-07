@@ -96,6 +96,13 @@ RUN pip install --no-cache-dir --no-deps /tmp/odysseus-wheels/*.whl \
 RUN apt-get update && apt-get install -y --no-install-recommends ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
+# Install the same Browser MCP package used by the native npx fallback during
+# image build. Runtime startup can then launch it directly, including offline;
+# Playwright browser binaries remain supplied by the system Chromium package.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.83
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global --no-audit --no-fund \
+    "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"
+
 # Copy app code
 COPY . .
 

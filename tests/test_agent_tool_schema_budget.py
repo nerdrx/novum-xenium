@@ -383,6 +383,131 @@ def test_workspace_coding_budget_keeps_file_editing_tools(monkeypatch, disabled_
     assert estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(selected) + 1024 <= 6000
 
 
+def test_workspace_coding_request_fails_if_its_own_size_starves_all_tools(monkeypatch):
+    import src.model_context as model_context
+
+    names = {"read_file", "edit_file", "bash"}
+    schemas = [
+        schema for schema in loop.FUNCTION_TOOL_SCHEMAS
+        if schema.get("function", {}).get("name") in names
+    ]
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 6000)
+    monkeypatch.setattr(
+        loop,
+        "get_setting",
+        lambda key, default=None: 6000 if key == "agent_input_token_budget" else default,
+    )
+    question = "Please read the project file and fix the bug. " + "x" * 12_700
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1",
+            "coding-fixture",
+            [{"role": "user", "content": question}],
+            workspace="/workspace",
+            relevant_tools=names,
+            max_rounds=1,
+            _is_teacher_run=True,
+        )]
+
+    with pytest.raises(ValueError, match="any enabled workspace coding tool schema"):
+        asyncio.run(run())
+    assert requests == []
+
+
+@pytest.mark.parametrize("terminal_tool", ["bash", "python"])
+def test_workspace_test_request_can_use_enabled_terminal_without_file_tools(monkeypatch, terminal_tool):
+    names = {"read_file", "edit_file", "bash", "python"}
+    schemas = [
+        schema for schema in loop.FUNCTION_TOOL_SCHEMAS
+        if schema.get("function", {}).get("name") in names
+    ]
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    disabled = set(loop._DOMAIN_TOOL_MAP["files"]) - {terminal_tool}
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1",
+            "coding-fixture",
+            [{"role": "user", "content": "Run the project's focused test suite."}],
+            workspace="/workspace",
+            relevant_tools=names,
+            disabled_tools=disabled,
+            max_rounds=1,
+            _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    selected_names = {schema["function"]["name"] for schema in requests[0]["kwargs"]["tools"]}
+    assert terminal_tool in selected_names
+    assert disabled.isdisjoint(selected_names)
+
+
+def test_workspace_read_only_request_can_use_only_read_file(monkeypatch):
+    schemas = [
+        schema for schema in loop.FUNCTION_TOOL_SCHEMAS
+        if schema.get("function", {}).get("name") == "read_file"
+    ]
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    disabled = set(loop._DOMAIN_TOOL_MAP["files"]) - {"read_file", "grep", "glob", "ls"}
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1",
+            "coding-fixture",
+            [{"role": "user", "content": "Inspect the project code and summarize how it handles requests."}],
+            workspace="/workspace",
+            relevant_tools={"read_file"},
+            disabled_tools=disabled,
+            max_rounds=1,
+            _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    selected_names = {schema["function"]["name"] for schema in requests[0]["kwargs"]["tools"]}
+    assert "read_file" in selected_names
+    assert disabled.isdisjoint(selected_names)
+
+
+def test_normal_agent_turn_may_proceed_without_schemas_when_budget_is_tight(monkeypatch):
+    import src.model_context as model_context
+
+    schema = {"type": "function", "function": {
+        "name": "update_plan", "description": "Plan details. " * 400,
+        "parameters": {"type": "object", "properties": {"plan": {"type": "string"}}},
+    }}
+    requests = []
+    _configure(monkeypatch, [schema], requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 6000)
+    monkeypatch.setattr(
+        loop,
+        "get_setting",
+        lambda key, default=None: 6000 if key == "agent_input_token_budget" else default,
+    )
+    message = "Explain recursion simply. " + "x" * 12_700
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1",
+            "chat-fixture",
+            [{"role": "user", "content": message}],
+            relevant_tools={"update_plan"},
+            max_rounds=1,
+            _is_teacher_run=True,
+        )]
+
+    events = asyncio.run(run())
+    assert len(requests) == 1
+    assert not requests[0]["kwargs"].get("tools")
+    assert any(event.startswith("data: [DONE]") for event in events)
+
+
 def test_workspace_coding_budget_compacts_large_native_history_before_schema_selection(monkeypatch):
     import src.model_context as model_context
 

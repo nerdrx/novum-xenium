@@ -8,7 +8,7 @@ Compared on October 7, 2026 against [Hermes Agent](https://github.com/NousResear
 | Tool loading | Load capabilities when the workflow needs them | Tool selection plus skill-declared requirements | Matching a skill no longer preloads all its declared tool schemas. A successful skill read activates its known, enabled requirements for the next round; schema budgeting preserves those activated tools. Existing disabled-tool policies still apply. |
 | Learning from work | Save and maintain reusable lessons | Background skill extraction, manual tests, audit/self-edit/teacher loop | Extraction now honors the account's publication confidence threshold. Invalid/non-finite scores are rejected; valid lower-confidence entries remain drafts. Draft discovery no longer calls those methods authoritative or proven. |
 | Usage tracking | Track procedural reuse | Skill use counters | A suggestion no longer counts as a use. A successful agent read of the procedure increments its counter. A read is not proof of execution or success. Existing counters are retained. |
-| Recall across chats | Search earlier sessions when needed | Owner-scoped transcript search with nearby context | `search_chats` retains up to three distinct matching messages per chat, with message IDs, timestamps and bounded neighboring excerpts. Chat-title links remain clickable. |
+| Recall across chats | Search earlier sessions when needed | Owner-scoped transcript search with nearby context | `search_chats` retains up to three distinct matching messages per chat, then opens an exact message by ID in pages of up to 4,000 characters. Source links, timestamps and continuation offsets let agents inspect more evidence on demand. |
 | Personal memory | Persistent curated user facts and recall | Brain memory, pinned facts, retrieval, editing and consolidation | Retained existing implementation; this update does not add a second store or auto-write new user facts. |
 | Scheduling | Unattended recurring tasks | Server task scheduler, scheduled AI jobs and event triggers | Retained existing implementation. No second scheduler or background service. |
 | Delegation | Isolated subagents | Session delegation and coordinated group task boards | Existing workflows remain; this update does not claim isolated Hermes-style worker environments. |
@@ -19,11 +19,21 @@ Use Agent mode with Skills enabled in Brain. The assistant sees skill names/desc
 
 The existing Auto-approve skills setting still controls publication. Confidence must also meet your account's configured threshold, falling back to the global `skill_autosave_min_confidence` value (default 0.85). An explicit zero threshold remains supported, while the existing extraction floor of 0.6 still applies. If preferences cannot be read, the extracted entry stays a draft. Confidence is a model estimate, not a successful test result.
 
-Ask the agent to find a past discussion to use `search_chats`. Results can include several evidence messages from one chat rather than silently discarding all but its first match. IDs and timestamps identify the source; neighboring text is bounded and should not be mistaken for the entire transcript. Owner boundaries remain enforced by the search engine.
+Ask the agent to find a past discussion to use `search_chats`. Results can include several evidence messages from one chat rather than silently discarding all but its first match. To inspect the saved text beyond an excerpt, the agent calls the same tool with a message ID, then follows the returned character offset:
+
+```json
+{"query": "project milestone"}
+{"message_id": "ID_FROM_SEARCH"}
+{"message_id": "ID_FROM_SEARCH", "offset": 4000}
+```
+
+Supply either `query` or `message_id`. Each read contains at most 4,000 characters of exact saved message text, a chat link, role, timestamp, total length and next offset (or an end marker). Plain keyword calls still work. It reads user/assistant messages in non-archived chats, following existing search ownership rules: an identified owner sees their chats plus legacy null-owner chats; an ownerless call sees only legacy chats. Model arguments cannot choose another account. Existing admin, disabled-tool, delegated-token and approval restrictions remain; after untrusted content, the usual private-read approval may still apply. Historical text stays untrusted data and may contain old mistakes or instructions; retrieval does not make it a current user request or proof that a past claim was true.
 
 No additional provider, login, service, model download or Docker configuration is required. The normal build command remains `docker compose up -d --build`.
 
 ## Validation and limits
+
+The deeper recall follow-up passed 117 focused checks in a network-disabled, read-only source container using temporary data. Tests cover real SQLite page reconstruction and isolation, argument validation, native/text transport through the production executor, existing permission gates and a four-round production agent loop that retrieves a detail absent from search excerpts. That agent-loop check uses fixture provider replies and Full access; it does not measure a live model's retrieval decisions. No entire chat is automatically loaded into the prompt.
 
 208 focused checks passed in a network-disabled container with a read-only source mount and temporary data. Coverage includes owner boundaries, on-demand procedure reads and counters, disabled skill tools, bounded discovery, malformed confidence, per-user publication thresholds, multiple transcript matches and native tool activation across fallback rounds. Provider responses in the agent-loop checks are fixtures.
 

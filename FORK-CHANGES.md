@@ -6,7 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
-- Hermes-inspired native improvements: bounded skill metadata with on-demand procedures/tool activation; usage counted on procedure read, finite confidence and account-threshold publication, draft guidance labeled unverified; multiple owner-scoped recall excerpts per chat with message IDs/timestamps. Existing personal memory, scheduler, audits and groups are retained. The [comparison](docs/hermes-comparison.md) documents overlap and limits; no Hermes runtime is required.
+- Hermes-inspired native improvements: bounded skill metadata with on-demand procedures/tool activation; usage counted on procedure read, finite confidence and account-threshold publication, draft guidance labeled unverified; multiple owner-scoped recall excerpts per chat, followed by exact message reads in bounded pages with source links/timestamps. Existing personal memory, scheduler, audits and groups are retained. The [comparison](docs/hermes-comparison.md) documents overlap and limits; no Hermes runtime is required.
 
 - Compare preflight, retries, shuffle replacements and toolbar checks use the selected 5–300 second timeout instead of a fixed eight-second deadline. The UI shows the wait budget and local loading/queue explanation, with pending browser requests cancelled when the check closes. Server-side provider work may continue until its deadline.
 
@@ -39,6 +39,8 @@ The normal installation stays `git clone`, `cp .env.example .env`, then `docker 
 `.env`, data, credentials, chats, generated images, local model configurations, logs and personal installation notes are excluded from Git and Docker build context. Existing upstream GPU overlays remain available. Optional image bridge instructions are in [docs/codex-image-bridge.md](docs/codex-image-bridge.md).
 
 ## Validation
+
+October 7 deeper recall update: 117 focused checks passed in a network-disabled, read-only container using temporary data. Real SQLite checks cover exact text reconstruction across pages, owner/legacy isolation, archived and non-transcript exclusions, malformed arguments, native/text tool transport, disabled tools and approval/delegated gates. A four-round production agent-loop test searches, opens a message, reads its next page and receives an exact detail absent from the excerpt; provider replies are fixtures, with Full access selected for that test. No new provider, dependency, database migration or Docker configuration is needed. This verifies retrieval and request shaping, not model judgment or the truth of historical statements.
 
 October 7 skills/recall update: 208 focused checks passed in a network-disabled, read-only container. A same-fixture prompt comparison reduced skill-related context from 11,710 to 948 characters (91.9%); procedures remain available by explicit read. Tests cover owner scope, counters, disabled tools, confidence/publication settings, distinct recall matches and on-demand native tool activation across fallback rounds. The broader foreground-routing baseline reproduced eleven prior failures; this update fixes the skill-activation failure, leaving ten existing error-message/context-budget assertion failures. Full details and validation limits are in the comparison document.
 

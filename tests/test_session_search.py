@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from core.database import Base
 from core.database import ChatMessage as DbChatMessage
 from core.database import Session as DbSession
-from src.session_search import SessionSearchResult, search_session_messages
+from src.session_search import SessionSearchResult, read_session_message, search_session_messages
 
 
 def _db(with_fts=True):
@@ -152,6 +152,93 @@ def test_session_search_ownerless_call_only_sees_legacy_rows():
         results = search_session_messages("ownerless search target", owner=None, db=db)
 
         assert [r.message_id for r in results] == ["m-legacy"]
+    finally:
+        db.close()
+
+
+def test_read_session_message_returns_exact_content_in_bounded_pages():
+    db = _db(with_fts=False)
+    try:
+        base = datetime(2026, 1, 1, 12, 0, 0)
+        _add_session(db, "s1", owner="alice", name="Long transcript")
+        exact = "Exact body with punctuation, newlines, and 100% literal text.\nSecond line."
+        long_content = "abcde" * 1100
+        _add_message(db, "s1", "exact", "user", exact, base)
+        _add_message(db, "s1", "long", "assistant", long_content, base + timedelta(minutes=1))
+        db.commit()
+
+        result = read_session_message("exact", owner="alice", db=db)
+        assert result["content"] == exact
+        assert result["session_name"] == "Long transcript"
+        assert result["offset"] == 0
+        assert result["end_offset"] == len(exact)
+        assert result["total_chars"] == len(exact)
+        assert result["has_more"] is False
+        assert result["next_offset"] is None
+
+        first = read_session_message("long", owner="alice", db=db)
+        second = read_session_message("long", owner="alice", offset=first["next_offset"], db=db)
+        assert len(first["content"]) == 4000
+        assert first["has_more"] is True
+        assert first["next_offset"] == 4000
+        assert second["offset"] == 4000
+        assert second["has_more"] is False
+        assert second["next_offset"] is None
+        assert first["content"] + second["content"] == long_content
+    finally:
+        db.close()
+
+
+def test_read_session_message_scopes_owner_legacy_archive_and_roles():
+    db = _db(with_fts=False)
+    try:
+        base = datetime(2026, 1, 1, 12, 0, 0)
+        _add_session(db, "alice", owner="alice")
+        _add_session(db, "legacy", owner=None)
+        _add_session(db, "bob", owner="bob")
+        _add_session(db, "archived", owner="alice", archived=True)
+        _add_message(db, "alice", "m-alice", "user", "alice text", base)
+        _add_message(db, "legacy", "m-legacy", "assistant", "legacy text", base)
+        _add_message(db, "bob", "m-bob", "user", "bob text", base)
+        _add_message(db, "archived", "m-archived", "user", "archived text", base)
+        _add_message(db, "alice", "m-tool", "tool", "tool output", base)
+        db.commit()
+
+        assert read_session_message("m-alice", owner="alice", db=db)["content"] == "alice text"
+        assert read_session_message("m-legacy", owner="alice", db=db)["content"] == "legacy text"
+        assert read_session_message("m-bob", owner="alice", db=db) is None
+        assert read_session_message("m-archived", owner="alice", db=db) is None
+        assert read_session_message("m-tool", owner="alice", db=db) is None
+
+        assert read_session_message("m-legacy", owner=None, db=db)["content"] == "legacy text"
+        assert read_session_message("m-alice", owner=None, db=db) is None
+        assert read_session_message("missing", owner="alice", db=db) is None
+    finally:
+        db.close()
+
+
+def test_read_session_message_validates_pagination_and_clamps_past_end():
+    db = _db(with_fts=False)
+    try:
+        base = datetime(2026, 1, 1, 12, 0, 0)
+        _add_session(db, "s1", owner="alice")
+        _add_message(db, "s1", "m1", "user", "short", base)
+        db.commit()
+
+        result = read_session_message("m1", owner="alice", offset=50, db=db)
+        assert result["content"] == ""
+        assert result["offset"] == 5
+        assert result["end_offset"] == 5
+        assert result["has_more"] is False
+        assert result["next_offset"] is None
+
+        for offset, page_size in ((True, 1), (-1, 1), (0, 0), (0, 4001), (0, True)):
+            try:
+                read_session_message("m1", owner="alice", offset=offset, page_size=page_size, db=db)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid pagination values must be rejected")
     finally:
         db.close()
 

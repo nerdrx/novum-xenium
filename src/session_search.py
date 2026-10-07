@@ -367,3 +367,62 @@ def search_session_messages(
     finally:
         if owns_db:
             db.close()
+
+
+def read_session_message(
+    message_id: str,
+    *,
+    owner: str | None = None,
+    offset: int = 0,
+    page_size: int = 4000,
+    db=None,
+) -> dict[str, Any] | None:
+    """Read one visible transcript message in bounded character pages.
+
+    Ownership follows transcript search: an identified owner can read their
+    sessions and legacy null-owner sessions; owner=None sees only legacy rows.
+    """
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise ValueError("offset must be a nonnegative integer")
+    if not isinstance(page_size, int) or isinstance(page_size, bool) or not 1 <= page_size <= 4000:
+        raise ValueError("page_size must be an integer from 1 to 4000")
+
+    owns_db = db is None
+    if owns_db:
+        db = SessionLocal()
+    try:
+        row = (
+            db.query(DBChatMessage, DBSession.name)
+            .join(DBSession, DBChatMessage.session_id == DBSession.id)
+            .filter(
+                DBChatMessage.id == message_id,
+                DBChatMessage.role.in_(SEARCH_ROLES),
+                DBSession.archived == False,
+            )
+        )
+        row = _owner_filter(row, owner, include_legacy_owner=True).first()
+        if row is None:
+            return None
+
+        message, session_name = row
+        content = message.content or ""
+        total_chars = len(content)
+        start = min(offset, total_chars)
+        end = min(start + page_size, total_chars)
+        has_more = end < total_chars
+        return {
+            "message_id": message.id,
+            "session_id": message.session_id,
+            "session_name": session_name or "Untitled",
+            "role": message.role,
+            "timestamp": _iso(message.timestamp),
+            "content": content[start:end],
+            "offset": start,
+            "end_offset": end,
+            "total_chars": total_chars,
+            "has_more": has_more,
+            "next_offset": end if has_more else None,
+        }
+    finally:
+        if owns_db:
+            db.close()

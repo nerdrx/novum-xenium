@@ -1176,7 +1176,7 @@ async def _execute_tool_block_impl(
         if tool in ("edit_document", "suggest_document") and "title" in (result or {}):
             desc = f"{tool}: {result.get('title', '')}"
     elif tool == "search_chats":
-        query = content.split("\n")[0].strip()
+        query = content.strip() if content.lstrip().startswith("{") else content.split("\n")[0].strip()
         desc = f"search_chats: {query[:80]}"
         result = await do_search_chats(query, owner=owner)
     elif tool in ("chat_with_model", "ask_teacher", "list_models"):

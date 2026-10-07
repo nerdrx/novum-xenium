@@ -32,6 +32,14 @@ These modes do not add host-folder access or override disabled tools, account pr
 
 The lightweight judge adds no model download, service, or dependency. It runs only when the normal Auto rules would ask: at most six distinct candidates per run, one attempt each, eight seconds maximum, and 128 output tokens. It does not receive personas, fetched page content, tool results, or the conversation history. Eligible coding actions are small `write_file` / `edit_file` source or text changes inside the selected workspace, with a required pre-write snapshot; the inspection exception accepts only plain `pwd` and constrained `ls`. Query-bearing or encoded/action-like URLs, arbitrary shell execution, deletions, secret/hidden files, private reads, unknown tools, Ask mode, plan mode and delegated API-token runs cannot use this exception. Edits in incognito do not use the judge because no persistent snapshot is created. Decisions are cached only within the run and their short reasons remain visible after refresh. Classification is a model judgment, not a guarantee that every public GET is harmless.
 
+## When an agent goes in circles
+
+Repeated unchanged reads, plans and failed retries can pause an agent turn before it uses all its rounds. The guard checks individual tool results across rounds; adding narration or rearranging the calls does not reset it. Three rounds containing repeats within the last eight monitored rounds trigger the pause, with history bounded to 64 signatures. File reads distinguish offsets, normalize paths and ignore limit changes when the returned page is identical.
+
+Changed results and successful edits reset the counter. Background-job polling, approval cards and questions are excluded. The pause explains which tools repeated and how often, and stays in the saved reply after refresh. It does not roll back edits, replay tools or automatically switch to a teacher model. Review the latest output and send a different next step to continue.
+
+This is a bounded repetition check, not a judgment of whether every action is useful. It cannot detect a hung tool before that tool returns, and successful shell commands or unknown read-only MCP tools still rely on the existing exact-call backstop and round limit.
+
 ## Restart recovery
 
 after a process interruption, open the chat and click **Continue** on its recovery card. The server retains bounded partial text and tool outcomes in owner-scoped checkpoints. Continue is one-use, rechecks the saved workspace/model/endpoint and preserves read-only plan mode. Saved evidence is untrusted context; tools and old approvals are never replayed automatically. In-memory runs still reconnect normally without a restart. Incognito does not store checkpoints.
@@ -69,4 +77,3 @@ the magnifying-glass toggle enables **Search & fetch** in Agent mode and adds we
 This does not increase the model's context window or guarantee lossless recall: each stored result is capped at 1 MiB (an explicit marker identifies omitted middle content), each chat retains up to 20 MiB of source text, and results expire after 30 days. Deleting a chat removes its archive. Incognito and delegated API-token turns do not create archives. The tool obeys disabled-tool/account policies, derives the chat and owner from the server, and treats retrieved text as untrusted data.
 
 The default theme is **NX**, matching the exported palette and synapse background. Existing saved themes remain selected; **Reset to Default** applies NX. Saved agent rounds retain the personality name, with the actual model available in the label tooltip.
-

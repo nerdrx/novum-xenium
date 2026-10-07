@@ -98,4 +98,4 @@ def test_emits_loop_breaker_triggered_when_loop_breaker_trips(monkeypatch):
 
     guard = next((e for e in events if e.get("type") == "loop_breaker_triggered"), None)
     assert guard is not None, events
-    assert guard["reason"] == "loop_breaker_stall"
+    assert guard["reason"] == "repeated_tool_results"

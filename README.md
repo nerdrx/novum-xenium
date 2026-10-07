@@ -16,7 +16,7 @@ The original Odysseus already has chat, agents, MCP, documents, email, notes, ta
 - **Keeping longer tasks usable.** Tool definitions count toward the context budget. Large outputs are archived and searchable, with exact chunks available when needed. The context inspector shows where the space goes.
 - **Remembering useful things.** Skills load their procedures on demand. Agents can search past chats and open the actual matching messages, with timestamps and links back to the source.
 - **Agents working together.** Group chats can keep talking for 20 replies, 100 replies or Until Stop. Shared task boards add a builder, optional read-only reviewers and a human decision on whether the task is done.
-- **Knowing what's happening.** Waiting and streaming have clearer status messages. Errors explain the failure and next step. Interrupted runs can continue from saved progress after a restart.
+- **Knowing what's happening.** Waiting and streaming have clearer status messages. Repeated reads and failed retries pause with an explanation, keeping the edits and tool history. Interrupted runs can continue from saved progress after a restart.
 - **Choosing how much to approve.** Ask for approval, Approve for me or Full access within the workspace/container. A small judge handles eligible uncertain actions and shows its reason.
 - **ChatGPT and images.** Native subscription tool calls, fixes for unsupported request parameters, proper image-provider settings and an optional host Codex image bridge.
 - **Keeping your setup.** Application-data backups with restore preview, improved emoji rendering, personality names that survive refresh, and the NX default theme.

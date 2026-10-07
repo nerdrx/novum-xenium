@@ -3994,9 +3994,11 @@ import { loadPanel } from './panels.js';
                 chatBox.appendChild(budgetDiv);
 
               } else if (json.type === 'loop_breaker_triggered' || json.type === 'intent_nudge_exhausted') {
-                if (_isBg) continue;
-                _cancelThinkingTimer();
-                _removeThinkingSpinner();
+                if (!_isBg) {
+                  _cancelThinkingTimer();
+                  _removeThinkingSpinner();
+                }
+                if (_isBg || json.persisted_in_text) continue;
                 const guardDiv = document.createElement('div');
                 guardDiv.className = 'stopped-indicator';
                 const guardLabel = document.createElement('span');

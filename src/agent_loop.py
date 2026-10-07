@@ -8,6 +8,8 @@ The LLM decides when to use tools by writing fenced code blocks.
 
 import asyncio
 import collections
+import hashlib
+import os
 import json
 import re
 import time
@@ -41,6 +43,7 @@ from src.tool_security import (
 from src.tool_policy import GUIDE_ONLY_DIRECTIVE, WEB_TOOL_NAMES, ToolPolicy
 from src.tool_capabilities import (
     ResultIntegrity,
+    ToolEffect,
     ToolRunSecurityContext,
     blocked_tool_result,
     capabilities_for_action,
@@ -3407,10 +3410,103 @@ def _detect_runaway_call(call_freq, threshold=15):
     legitimate batch of distinct calls to one tool (e.g. creating 18 calendar
     events at once) is NOT flagged. Returns ``None`` when nothing is runaway.
 
-    ``call_freq`` is a Counter keyed by ``"{tool_type}:{content[:120]}"``.
+    ``call_freq`` is a Counter keyed by tool name and full-argument digest.
     """
     sig = next((s for s, n in call_freq.items() if n >= threshold), None)
     return sig.split(":", 1)[0] if sig else None
+
+
+def _tool_call_signature(tool, content):
+    """Full canonical arguments, without storing command text in guard state."""
+    content = (content or "").strip()
+    try:
+        content = json.dumps(json.loads(content), sort_keys=True, separators=(",", ":"))
+    except (ValueError, TypeError):
+        pass
+    return f"{tool}:{hashlib.sha256(content.encode()).hexdigest()}"
+
+
+class _ToolProgressGuard:
+    """Bounded, turn-local detection of unchanged reads and failed retries."""
+
+    reads = frozenset({"read_file", "grep", "glob", "ls", "get_workspace",
+                       "web_search", "web_fetch", "context_search", "search_chats",
+                       "list_models", "update_plan", "todowrite"})
+    polls = frozenset({"manage_bg_jobs", "tail_serve_output"})
+
+    def __init__(self, workspace=None):
+        self.workspace = workspace
+        self.seen = collections.OrderedDict()
+        self.last_outputs = collections.OrderedDict()
+        self.recent = collections.deque(maxlen=8)
+
+    @staticmethod
+    def _remember(mapping, key, value):
+        mapping[key] = value
+        mapping.move_to_end(key)
+        while len(mapping) > 64:
+            mapping.popitem(last=False)
+
+    def observe(self, records):
+        repeats, monitored = [], False
+        for record in records:
+            tool, content, result = record["tool_name"], record["content"], record["result"]
+            if (tool in self.polls or tool == "ask_user" or result.get("blocked")
+                    or result.get("approval_required") or result.get("ask_user")):
+                continue
+            successful = tool_result_is_successful(result)
+            effects = capabilities_for_action(tool, content).effects
+            if successful and tool not in self.reads and effects & {
+                ToolEffect.WRITE_WORKSPACE, ToolEffect.WRITE_PRIVATE,
+                ToolEffect.EXTERNAL_SIDE_EFFECT, ToolEffect.ADMIN_CHANGE,
+            }:
+                self.recent.clear()
+                self.last_outputs.clear()
+                repeats, monitored = [], False
+                continue
+            exact = _tool_call_signature(tool, content)
+            outcome = {key: result.get(key) for key in ("output", "error", "exit_code", "success")}
+            if not successful and isinstance(outcome["output"], str):
+                # Test duration changes alone do not make a failed retry progress.
+                outcome["output"] = re.sub(r"\bin \d+(?:\.\d+)?s\b", "in <duration>s", outcome["output"])
+            digest = hashlib.sha256(json.dumps(outcome, sort_keys=True, default=str).encode()).hexdigest()
+            if exact in self.last_outputs and self.last_outputs[exact] != digest:
+                self.recent.clear()
+                self.seen.clear()
+                repeats = []
+            self._remember(self.last_outputs, exact, digest)
+            if successful and tool not in self.reads:
+                continue
+            monitored = True
+            if tool == "read_file":
+                try:
+                    args = json.loads(content)
+                except (ValueError, TypeError):
+                    args = {"path": (content or "").split("\n", 1)[0].strip()}
+                if isinstance(args, dict):
+                    args = dict(args)
+                    args.pop("limit", None)
+                    try:
+                        args["offset"] = max(int(args.get("offset") or 1), 1)
+                    except (TypeError, ValueError):
+                        pass
+                    if self.workspace and isinstance(args.get("path"), str):
+                        args["path"] = os.path.normpath(os.path.join(self.workspace, args["path"]))
+                    content = json.dumps(args)
+            signature = (_tool_call_signature(tool, content), digest)
+            if signature in self.seen:
+                repeats.append((tool, "read" if successful else "failure"))
+            self._remember(self.seen, signature, None)
+        if monitored:
+            self.recent.append(repeats)
+        repeated_rounds = [items for items in self.recent if items]
+        if len(repeated_rounds) < 3:
+            return None
+        calls = [item for items in repeated_rounds for item in items]
+        return {"tools": sorted({tool for tool, _ in calls}),
+                "read_repeats": sum(kind == "read" for _, kind in calls),
+                "failed_retries": sum(kind == "failure" for _, kind in calls),
+                "repeated_rounds": len(repeated_rounds)}
 
 
 async def stream_agent_loop(
@@ -4662,15 +4758,10 @@ async def stream_agent_loop(
     _last_route_context_length = _initial_route_context_length
     _last_context_inspection = None
 
-    # Loop-breaker state. Small models (e.g. deepseek-v4-flash) can get
-    # stuck firing the same tool call over and over with no text — burns
-    # all 20 rounds, looks like the chat "died". Track recent call
-    # signatures + consecutive no-text tool rounds to bail early.
-    _recent_call_sigs = collections.deque(maxlen=6)
-    _stuck_rounds = 0
-    # Frequency of each exact call signature (tool + args), for the runaway
-    # backstop. Counting identical repeats — not distinct same-tool calls —
-    # lets a legit batch (e.g. 18 calendar events at once) through.
+    # Outcome history survives context trimming; narration is not tool progress.
+    _progress_guard = _ToolProgressGuard(workspace)
+    _progress_paused = False
+    # Keep the exact-call backstop for unmonitored tools, including mutations.
     _call_freq: collections.Counter = collections.Counter()
     _force_answer = False  # set by loop-breaker → next round runs with NO tools
     # Supervisor: how many times we've nudged the model after it announced
@@ -5761,40 +5852,15 @@ async def stream_agent_loop(
                 break
             break  # no tools — done
 
-        # ── Loop-breaker (Terminus-style stall detector) ──────────────
-        # Stall detector for repeated no-progress tool loops.
-        # A round is "useless" ONLY when it re-issues a recent tool call AND
-        # writes no answer text — i.e. the model is going in circles.
-        # Genuine exploration (new, distinct calls) is never useless, so
-        # multi-step work (file hunts, multi-host ssh, build→test→fix) rides
-        # all the way to a real answer. We bail only on a streak of useless
-        # rounds, or a single tool fired an absurd number of times (hard
-        # runaway backstop). On bail we don't give up — we force one
-        # tool-free round so the model declares done or declares blocked,
-        # mirroring Terminus's explicit-completion handshake.
-        _sig = "|".join(sorted(f"{b.tool_type}:{(b.content or '').strip()[:120]}" for b in tool_blocks))
-        _is_repeat = _sig in _recent_call_sigs
-        _recent_call_sigs.append(_sig)
+        # Exact-call backstop for tools not covered by the outcome guard.
+        # Full arguments avoid collisions between distinct long batch calls.
         for _b in tool_blocks:
-            _call_freq[f"{_b.tool_type}:{(_b.content or '').strip()[:120]}"] += 1
-        # "Real" answer text = round text minus <think> blocks. Empty-think
-        # rounds (just "<think>\n\n</think>" + a tool call) must not read as
-        # progress, so strip think before checking.
-        _real_text = _strip_think_blocks(cleaned_round).strip()
-        # Circling = repeating a recent call with nothing written. Any
-        # progress (a NEW distinct call, or actual answer text) resets it.
-        if _is_repeat and not _real_text:
-            _stuck_rounds += 1
-        else:
-            _stuck_rounds = 0
-        # Runaway = the SAME exact call repeated an absurd number of times.
-        # Distinct calls to one tool (a real batch) are legitimate work, so we
-        # count identical call signatures, not raw per-tool-type totals.
+            if _b.tool_type not in _progress_guard.reads | _progress_guard.polls:
+                _call_freq[_tool_call_signature(_b.tool_type, _b.content)] += 1
         _runaway = _detect_runaway_call(_call_freq)
-        if _stuck_rounds >= 4 or _runaway:
-            reason = (f"calling {_runaway} with identical arguments over and over" if _runaway
-                      else "repeating the same tool calls without new progress")
-            logger.warning(f"[agent] loop-breaker tripped on round {round_num} ({reason}); sig={_sig[:80]!r}")
+        if _runaway:
+            reason = f"calling {_runaway} with identical arguments over and over"
+            logger.warning("[agent] loop-breaker tripped on round %d (%s)", round_num, reason)
             yield (
                 "data: "
                     + json.dumps({
@@ -6543,6 +6609,33 @@ async def stream_agent_loop(
                              round_reasoning=round_reasoning,
                              tool_result_records=tool_result_records)
 
+        stall = _progress_guard.observe(tool_result_records)
+        if stall:
+            _progress_paused = True
+            detail = (
+                f"{stall['read_repeats']} unchanged read/planning results and "
+                f"{stall['failed_retries']} unchanged failed retries across "
+                f"{stall['repeated_rounds']} recent rounds "
+                f"({', '.join(stall['tools'])})."
+            )
+            message = (
+                "Paused because the agent is repeating tool results without progress: "
+                + detail + " No more tools were run after this pause. Review the latest "
+                "tool output and give a different next step before retrying. "
+                "Existing changes have not been rolled back."
+            )
+            notice = "\n\n[Agent paused: " + detail + " Review the latest tool output and give a different next step before retrying. Existing changes have not been rolled back.]"
+            full_response += notice
+            round_texts[-1] = (round_texts[-1] + notice).strip()
+            yield 'data: ' + json.dumps({
+                "type": "loop_breaker_triggered", "reason": "repeated_tool_results",
+                "message": message, "round": round_num,
+                "persisted_in_text": True, **stall,
+            }) + '\n\n'
+            yield 'data: ' + json.dumps({"delta": notice}) + '\n\n'
+            logger.warning("[agent] outcome guard paused round %d: %s", round_num, detail)
+            break
+
         # Emit agent_step event
         yield (
             f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
@@ -6586,7 +6679,7 @@ async def stream_agent_loop(
         ):
             full_response = "I couldn't make that change because no matching tool action completed."
     _response_before_tool_summary = full_response
-    if tool_events:
+    if tool_events and not _progress_paused:
         for _ev in reversed(tool_events):
             _tool_name = _resolved_tool_event_name(_ev)
             _tool_action = ""
@@ -6681,7 +6774,7 @@ async def stream_agent_loop(
     # gets a turn (with its own tool calls forwarded to the user) and
     # a skill is saved ONLY if the teacher actually succeeds. Skipped
     # when we ARE the teacher to avoid recursion.
-    if not _is_teacher_run and not guide_only and not _awaiting_user:
+    if not _is_teacher_run and not guide_only and not _awaiting_user and not _progress_paused:
         try:
             from src.teacher_escalation import run_teacher_inline
             async for evt in run_teacher_inline(

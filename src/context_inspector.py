@@ -113,6 +113,7 @@ def describe_request(
     context_length: int | None = None,
     output_reserve: int = 0,
     archive_stats: dict | None = None,
+    input_budget: int | None = None,
 ) -> dict:
     """Estimate prompt composition from assembled messages and native schemas.
 
@@ -151,7 +152,13 @@ def describe_request(
         reserve = max(0, int(output_reserve or 0))
     except (TypeError, ValueError):
         reserve = 0
+    try:
+        request_budget = max(0, int(input_budget)) if input_budget is not None else None
+    except (TypeError, ValueError, OverflowError):
+        request_budget = None
     available = max(window - reserve, 0) if window else None
+    if request_budget is not None:
+        available = min(available, request_budget) if available is not None else request_budget
     total = sum(category["tokens"] for category in categories.values())
     return {
         "version": 1,
@@ -159,6 +166,7 @@ def describe_request(
         "total_tokens": total,
         "context_length": window or None,
         "output_reserve": reserve,
+        "input_budget_tokens": request_budget,
         "available_tokens": available,
         "remaining_tokens": max(available - total, 0) if available is not None else None,
         "categories": categories,

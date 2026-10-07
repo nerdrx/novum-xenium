@@ -19,6 +19,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.constants import GENERATED_IMAGES_DIR
 
 server = Server("image_gen")
+_MCP_OWNER_ARG = "_odysseus_owner"
+_OWNER_SCOPE_ERROR = (
+    "Error: Image MCP requires an authenticated owner when image providers are owner-scoped."
+)
+
+
+def _mcp_owner_required(owner: str | None) -> bool:
+    """Fail closed if an ownerless MCP call could select a private endpoint."""
+    if owner:
+        return False
+    try:
+        from src.auth_helpers import _auth_disabled
+        if _auth_disabled():
+            return False
+        from src.database import SessionLocal, ModelEndpoint
+        db = SessionLocal()
+        try:
+            return db.query(ModelEndpoint.id).filter(
+                ModelEndpoint.is_enabled == True,  # noqa: E712
+                ModelEndpoint.owner.isnot(None),
+            ).first() is not None
+        finally:
+            db.close()
+    except Exception:
+        # A failed ownership check must not turn an ownerless call into an
+        # unscoped provider lookup.
+        return True
 
 
 @server.list_tools()
@@ -46,6 +73,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name != "generate_image":
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
+    arguments = dict(arguments) if isinstance(arguments, dict) else {}
+    owner = str(arguments.pop(_MCP_OWNER_ARG, "") or "").strip() or None
+    if _mcp_owner_required(owner):
+        return [TextContent(type="text", text=_OWNER_SCOPE_ERROR)]
+
     prompt = arguments.get("prompt", "")
     model_spec = arguments.get("model", "")
     size = arguments.get("size", "1024x1024")
@@ -70,17 +102,19 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             quality = _settings["image_quality"]
 
         if not model_spec:
-            model_spec = await _auto_detect_image_model()
+            model_spec = await _auto_detect_image_model(owner=owner)
             if not model_spec:
                 return [TextContent(type="text", text="Error: No image model found. Configure one in Settings → AI → Image Generation.")]
 
         try:
-            url, model_id, headers = await asyncio.to_thread(_resolve_model, model_spec, model_type="image")
+            url, model_id, headers = await asyncio.to_thread(
+                _resolve_model, model_spec, owner=owner, model_type="image"
+            )
         except ValueError:
             _lower_model_spec = model_spec.lower()
             if not any(_name in _lower_model_spec for _name in ("gpt-image", "dall-e")):
                 raise
-            url, model_id, headers = await asyncio.to_thread(_resolve_model, model_spec)
+            url, model_id, headers = await asyncio.to_thread(_resolve_model, model_spec, owner=owner)
 
         is_gpt_image = "gpt-image" in model_id.lower()
         base_url = url.replace("/chat/completions", "").replace("/v1/messages", "").rstrip("/")
@@ -140,6 +174,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         model=model_id,
                         size=size,
                         quality=payload.get("quality", "medium"),
+                        owner=owner,
                     ))
                     db.commit()
                     db.close()

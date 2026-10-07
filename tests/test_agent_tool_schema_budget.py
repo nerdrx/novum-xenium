@@ -65,6 +65,8 @@ def test_candidate_budget_includes_tools_on_first_and_later_rounds(monkeypatch, 
     assert inspection["categories"]["native_tool_schemas"]["tokens"] == estimate_tool_schema_tokens([schema])
     assert inspection["total_tokens"] == estimate_tokens(requests[-1]) + estimate_tool_schema_tokens([schema])
     assert inspection["context_length"] == 6000
+    assert inspection["input_budget_tokens"] == 3952
+    assert inspection["available_tokens"] <= inspection["input_budget_tokens"]
     assert inspection["trimmed"]["removed_tokens"] > 0
     assert len(requests) == rounds
 

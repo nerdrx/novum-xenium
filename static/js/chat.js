@@ -264,7 +264,8 @@ import { loadPanel } from './panels.js';
       const detailRows = [
         ['Request tokens', lastRequest.total_tokens],
         ['Reserved for response', lastRequest.output_reserve],
-        ['Available after reserve', lastRequest.available_tokens],
+        ['Request input budget', lastRequest.input_budget_tokens],
+        ['Available for request', lastRequest.available_tokens],
         ['Remaining after request', lastRequest.remaining_tokens],
         ['Instructions', categories.instructions?.tokens],
         ['Native tool schemas', categories.native_tool_schemas?.tokens],

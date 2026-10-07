@@ -569,7 +569,7 @@ _MCP_TOOL_MAP = {
     "web_fetch":      ("web_fetch",  "web_fetch"),
     "generate_image": ("image_gen",  "generate_image"),
 }
-_EMAIL_MCP_OWNER_ARG = "_odysseus_owner"
+_MCP_OWNER_ARG = "_odysseus_owner"
 
 
 def _parse_qualified_mcp_args(tool: str, content: str) -> tuple[Dict, Optional[str]]:
@@ -680,20 +680,24 @@ async def _call_mcp_tool(
     tool: str,
     content: str,
     progress_cb: Optional[Callable[[Dict], Awaitable[None]]] = None,
+    owner: Optional[str] = None,
 ) -> Dict:
     """Route a legacy tool call through the MCP manager, with direct fallbacks."""
     mcp = get_mcp_manager()
     if not mcp:
-        return await _direct_fallback(tool, content, progress_cb=progress_cb) or {"error": f"MCP manager not available for tool '{tool}'", "exit_code": 1}
+        return await _direct_fallback(tool, content, progress_cb=progress_cb, owner=owner) or {"error": f"MCP manager not available for tool '{tool}'", "exit_code": 1}
 
     server_id, tool_name = _MCP_TOOL_MAP[tool]
     qualified = f"mcp__{server_id}__{tool_name}"
     args = _build_mcp_args(tool, content)
+    if server_id == "image_gen":
+        args = dict(args)
+        args[_MCP_OWNER_ARG] = owner or ""
     result = await mcp.call_tool(qualified, args)
 
     # If MCP server not connected, try direct fallback
     if isinstance(result, dict) and result.get("exit_code") == 1 and "not connected" in result.get("error", ""):
-        fallback = await _direct_fallback(tool, content, progress_cb=progress_cb)
+        fallback = await _direct_fallback(tool, content, progress_cb=progress_cb, owner=owner)
         if fallback:
             return fallback
 
@@ -1144,7 +1148,7 @@ async def _execute_tool_block_impl(
     if tool in _MCP_TOOL_MAP:
         first_line = content.split(chr(10))[0][:80]
         desc = f"{tool}: {first_line}"
-        result = await _call_mcp_tool(tool, content, progress_cb=progress_cb)
+        result = await _call_mcp_tool(tool, content, progress_cb=progress_cb, owner=owner)
     elif tool in ("grep", "glob", "ls", "get_workspace"):
         # Code-navigation tools — no MCP server; run the direct implementation.
         first_line = content.split(chr(10))[0][:80]
@@ -1331,7 +1335,7 @@ async def _execute_tool_block_impl(
             else:
                 if owner:
                     args = dict(args)
-                    args[_EMAIL_MCP_OWNER_ARG] = owner
+                    args[_MCP_OWNER_ARG] = owner
                 result = await mcp.call_tool(qualified, args)
         else:
             result = {"error": "MCP manager not available", "exit_code": 1}
@@ -1346,8 +1350,18 @@ async def _execute_tool_block_impl(
             else:
                 if tool.startswith("mcp__email__") and owner:
                     args = dict(args)
-                    args[_EMAIL_MCP_OWNER_ARG] = owner
+                    args[_MCP_OWNER_ARG] = owner
+                elif tool.startswith("mcp__image_gen__"):
+                    args = dict(args)
+                    args[_MCP_OWNER_ARG] = owner or ""
                 result = await mcp.call_tool(tool, args)
+                if tool == "mcp__image_gen__generate_image":
+                    output = (result.get("stdout") or "").strip()
+                    if output.startswith("Error:"):
+                        result["exit_code"] = 1
+                        result["error"] = output
+                        result["untrusted_content"] = True
+                    _promote_image_fields(result)
         else:
             desc = f"mcp: {tool}"
             result = {"error": "MCP manager not available", "exit_code": 1}

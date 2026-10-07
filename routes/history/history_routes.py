@@ -114,6 +114,7 @@ def _clean_context_inspection(value: Any) -> Optional[Dict[str, Any]]:
         "total_tokens": _number(value.get("total_tokens")),
         "context_length": _optional_number(value.get("context_length")),
         "output_reserve": _number(value.get("output_reserve")),
+        "input_budget_tokens": _optional_number(value.get("input_budget_tokens")),
         "available_tokens": _optional_number(value.get("available_tokens")),
         "remaining_tokens": _optional_number(value.get("remaining_tokens")),
         "trimmed": {key: _number((value.get("trimmed") or {}).get(key))

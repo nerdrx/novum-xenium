@@ -43,6 +43,19 @@ def test_describe_request_totals_messages_and_native_schemas_by_category():
     assert "trusted instructions" not in json.dumps(inspection)
 
 
+def test_describe_request_clamps_known_window_to_actual_input_budget():
+    inspection = describe_request([], [], context_length=1000, output_reserve=100, input_budget=250)
+    assert inspection["input_budget_tokens"] == 250
+    assert inspection["available_tokens"] == 250
+
+
+def test_describe_request_reports_input_budget_for_unknown_window():
+    inspection = describe_request([], [], context_length=None, output_reserve=100, input_budget=500)
+    assert inspection["context_length"] is None
+    assert inspection["input_budget_tokens"] == 500
+    assert inspection["available_tokens"] == 500
+
+
 def test_context_endpoint_reads_latest_assistant_inspection_and_scoped_archives(tmp_path, monkeypatch):
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     cdb.Base.metadata.create_all(engine, tables=[cdb.Session.__table__, cdb.ChatMessage.__table__])
@@ -51,10 +64,11 @@ def test_context_endpoint_reads_latest_assistant_inspection_and_scoped_archives(
     monkeypatch.setattr(history_routes, "_verify_session_owner", lambda *args, **kwargs: None)
 
     old = {"version": 1, "total_tokens": 10, "categories": {"instructions": {"tokens": 10}}}
+    assert history_routes._clean_context_inspection(old)["input_budget_tokens"] is None
     newest = {
         "version": 1, "estimated": True, "total_tokens": 55,
         "context_length": 1000, "output_reserve": 100,
-        "available_tokens": 900, "remaining_tokens": 845,
+        "input_budget_tokens": 700, "available_tokens": 700, "remaining_tokens": 645,
         "categories": {
             "instructions": {"tokens": 20, "items": 1, "characters": 50},
             "native_tool_schemas": {"tokens": 5, "items": 1, "characters": 10},
@@ -98,6 +112,8 @@ def test_context_endpoint_reads_latest_assistant_inspection_and_scoped_archives(
     result = asyncio.run(endpoint(SimpleNamespace(), "session-1"))
 
     assert result["last_request"]["total_tokens"] == 55
+    assert result["last_request"]["input_budget_tokens"] == 700
+    assert result["last_request"]["available_tokens"] == 700
     assert "prompt_text" not in result["last_request"]
     assert result["archives"]["count"] == 1
     assert result["archives"]["bytes"] == len("alice archive")

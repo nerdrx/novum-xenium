@@ -4344,6 +4344,7 @@ async def stream_agent_loop(
     _t2 = time.time()
     _route_context_lengths = {}
     _route_output_token_budgets = {}
+    _route_input_budgets = {}
     _route_trim_info = {}
 
     def _trim_route_request_messages(candidate_url, candidate_model, route_messages, route_tools=None):
@@ -4693,6 +4694,9 @@ async def stream_agent_loop(
                 )
             output_token_budget = min(requested_output_tokens, available_output_tokens)
             _route_output_token_budgets[(candidate_url, candidate_model)] = output_token_budget
+            _route_input_budgets[(candidate_url, candidate_model)] = max(
+                0, prompt_budget - trim_reserve_tokens,
+            )
             _route_trim_info[(candidate_url, candidate_model)] = {
                 "removed_tokens": max(0, before_trim_tokens - after_trim_tokens),
                 "removed_messages": max(0, len(route_messages) - len(trimmed_messages)),
@@ -5355,6 +5359,7 @@ async def stream_agent_loop(
                     (candidate_url, candidate_model),
                     min(max(max_tokens or 1024, 512), 2048),
                 ),
+                input_budget=_route_input_budgets.get((candidate_url, candidate_model)),
             )
             _last_context_inspection["trimmed"] = _route_trim_info.get((candidate_url, candidate_model), {})
             run_security.observe_messages(request_messages)

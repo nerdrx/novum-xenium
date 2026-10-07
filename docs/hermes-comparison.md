@@ -57,8 +57,10 @@ The wider foreground-routing suite had eleven failures on the previous commit, r
 
 ## Harness follow-up
 
-The next pass adds repository guidance and compact maps, managed detached Git worktrees, explicit project verification checks, run-owned Stop cleanup, server-owned coordinated task passes, offline capability preflight and bounded run metadata. An optional worker container separates shell execution from application data. The workspace picker contains the new project controls.
+The harness pass adds repository guidance and compact maps, managed detached Git worktrees, explicit project verification checks, run-owned Stop cleanup, server-owned coordinated task passes, offline capability preflight and bounded run metadata. An optional worker container separates shell execution from application data. The workspace picker contains the new project controls.
 
 Worktrees separate file edits, not host permissions. Coordinated task passes survive tab closure; ordinary auto-conversation is still separate. Restarted team work requires inspection and an explicit retry. Verification checks must be configured and automatic completion checks are opt-in. Capability metadata does not prove a model will choose the right tool, and the small coding evaluation is a regression baseline rather than a benchmark ranking.
 
 Group Team can opt into one managed worktree per task. Builder and reviewer use the same persisted task path; interrupted passes retain their mappings. Checkouts start from HEAD and need a human merge.
+
+The harness validation includes 6,509 broad regression passes, 69 final focused passes, hidden browser controls, fresh Docker workflow and restart checks, and three live ChatGPT coding tasks with independent assertions. Task-scoped approvals were supplied for those fixtures; this does not demonstrate automatic approval. See the [validation record](../FORK-CHANGES.md#validation) for the exact boundaries.

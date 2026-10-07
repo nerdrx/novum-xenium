@@ -2722,6 +2722,21 @@ def setup_chat_routes(
             finally:
                 _active_streams.pop(session, None)
 
+        # A request can wait here after its initial ownership check while a
+        # deletion or same-ID recreation completes. Recheck both persisted row
+        # and cached object identity before binding this request to a run.
+        latest_db = SessionLocal()
+        try:
+            latest_owner = latest_db.query(DBSession.owner).filter(
+                DBSession.id == session
+            ).first()
+        finally:
+            latest_db.close()
+        if session_manager.sessions.get(session) is not sess:
+            raise HTTPException(404, f"Session '{session}' not found")
+        if latest_owner is not None and owner and latest_owner[0] != owner:
+            raise HTTPException(404, f"Session '{session}' not found")
+
         # Compare panes are short-lived, single-shot generations whose sessions
         # exist only to drive that one pane — there's nothing to "resume" and
         # the user expects the pane's Stop button (which aborts the fetch,

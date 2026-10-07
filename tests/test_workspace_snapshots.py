@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -31,6 +33,58 @@ def test_snapshot_fails_closed_when_tree_walker_reports_error(ws, monkeypatch, w
     with pytest.raises(snapshots.SnapshotError, match="could not be read"):
         snapshots.create_snapshot(str(ws), "alice", "chat-1")
     assert snapshots.list_snapshots(str(ws), "alice", "chat-1") == []
+
+
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "mkfifo"), reason="requires POSIX FIFO")
+@pytest.mark.parametrize("reader", ["restore", "snapshot"])
+def test_snapshot_readers_do_not_block_on_fifo_leaf_swap(tmp_path, reader):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "fifo.txt").write_text("regular first")
+    code = r'''import os, sys
+from src import workspace_snapshots as snapshots
+root, reader = sys.argv[1:]
+safe_restore = snapshots._supports_safe_restore()
+real_open = os.open
+swapped = False
+def racing_open(path, flags, *args, **kwargs):
+    global swapped
+    dir_fd = kwargs.get("dir_fd")
+    if path == "fifo.txt" and dir_fd is not None and not swapped:
+        os.unlink(path, dir_fd=dir_fd)
+        os.mkfifo(path, dir_fd=dir_fd)
+        swapped = True
+    return real_open(path, flags, *args, **kwargs)
+os.open = racing_open
+snapshots._supports_safe_restore = lambda: safe_restore
+try:
+    if reader == "restore":
+        root_fd = snapshots._open_root_fd(root)
+        try:
+            try:
+                snapshots._read_regular_at(root_fd, "fifo.txt")
+            except snapshots.SnapshotError:
+                print("rejected" if swapped else "not-swapped")
+            else:
+                raise SystemExit("FIFO was accepted")
+        finally:
+            os.close(root_fd)
+    else:
+        files, _ = snapshots._tree_and_modes(root)
+        if not swapped or "fifo.txt" in files:
+            raise SystemExit(f"FIFO was not rejected (swapped={swapped}, files={list(files)})")
+        print("rejected")
+finally:
+    os.open = real_open
+'''
+    env = os.environ.copy()
+    env.update(DATABASE_URL="sqlite:///:memory:", ODYSSEUS_DATA_DIR=str(tmp_path / "data"))
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(workspace), reader],
+        capture_output=True, text=True, timeout=2, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "rejected"
 
 
 def test_preview_and_restore_add_edit_delete(ws):

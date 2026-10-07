@@ -1,7 +1,7 @@
 // compare/stream.js — SSE streaming to panes
 import state from './state.js';
 import { addFinishBadge } from './vote.js';
-import { getModelCost, renderAskUserCard, safeDisplayImageSrc } from '../chatRenderer.js?v=20261007quality1';
+import { getModelCost, renderAskUserCard, safeDisplayImageSrc, toolEventStatus, resolveToolApprovalNode, findPendingApprovalNode } from '../chatRenderer.js?v=20261007toolstatus1';
 import markdownModule from '../markdown.js';
 import spinnerModule from '../spinner.js';
 import uiModule from '../ui.js';
@@ -139,6 +139,7 @@ function _resumePaneChoiceWhenIdle(paneIdx, sessionId, originController, submiss
       resumeOptions.toolApproval = {
         approval_id: String(submission.approval_id || ''),
         decision: String(submission.decision || '').toLowerCase(),
+        tool: String(submission.tool || ''),
       };
     }
 
@@ -489,6 +490,10 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
           // Deny ends as a tiny resolution-only stream, so replace the
           // continuation spinner with an explicit pane-local result.
           } else if (json.type === 'tool_approval_resolved') {
+            resolveToolApprovalNode(
+              findPendingApprovalNode(hist, opts.toolApproval?.approval_id, paneIdx),
+              json.decision,
+            );
             if (aiMsgEl._spinner) {
               if (aiMsgEl._spinner.element) aiMsgEl._spinner.destroy();
               aiMsgEl._spinner = null;
@@ -505,6 +510,13 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
 
           // ── Tool start (bash, web search agent tool) ──
           } else if (json.type === 'tool_start') {
+            if (opts.toolApproval && opts.toolApproval.decision !== 'deny'
+                && opts.toolApproval.tool && json.tool === opts.toolApproval.tool) {
+              resolveToolApprovalNode(
+                findPendingApprovalNode(hist, opts.toolApproval.approval_id, paneIdx),
+                'approve',
+              );
+            }
             // Finalize any accumulated text before the tool block
             if (accumulated.trim() && aiMsgEl._textEl) {
               if (markdownModule) {
@@ -538,6 +550,7 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
               const cmdHtml = cmd ? `<pre class="agent-thread-cmd">${escapeHtml(cmd)}</pre>` : '';
               const node = document.createElement('div');
               node.className = 'agent-thread-node running';
+              node.dataset.toolName = toolName;
               node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">\u25B6</span><span class="agent-thread-tool">${escapeHtml(toolLabel)}</span><span class="agent-thread-wave">▁▂▃</span></div><div class="agent-thread-content">${cmdHtml}</div>`;
               node.querySelector('.agent-thread-header').addEventListener('click', () => node.classList.toggle('open'));
               // Animate wave
@@ -554,6 +567,40 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
 
           // ── Tool output (image or non-image) ──
           } else if (json.type === 'tool_output') {
+            const toolStatus = toolEventStatus(json);
+            const approvedReceipt = opts.toolApproval && opts.toolApproval.decision !== 'deny'
+              && opts.toolApproval.tool && json.tool === opts.toolApproval.tool;
+            const proposalNode = approvedReceipt
+              ? findPendingApprovalNode(hist, opts.toolApproval.approval_id, paneIdx)
+              : null;
+            if (proposalNode) {
+              resolveToolApprovalNode(proposalNode, 'approve');
+              if (currentToolBlock === proposalNode || !currentToolBlock
+                  || currentToolBlock.dataset.toolName !== (json.tool || '')) {
+                currentToolBlock = null;
+              }
+              if (!currentToolBlock) {
+                const node = document.createElement('div');
+                node.className = 'agent-thread-node running';
+                node.dataset.toolName = json.tool || '';
+                node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">▶</span><span class="agent-thread-tool">${escapeHtml(json.tool || 'tool')}</span><span class="agent-thread-wave"></span></div><div class="agent-thread-content"></div>`;
+                aiBody.appendChild(node);
+                currentToolBlock = node;
+              }
+            }
+            if (currentToolBlock && currentToolBlock.dataset.toolName !== (json.tool || '')) {
+              currentToolBlock = null;
+            }
+            if (!currentToolBlock && toolStatus.pending) {
+              const node = document.createElement('div');
+              node.className = 'agent-thread-node pending';
+              node.dataset.toolName = json.tool || '';
+              node.dataset.approvalId = json.ask_user?.approval_id || '';
+              node.dataset.comparePane = String(paneIdx);
+              node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">…</span><span class="agent-thread-tool">${escapeHtml(json.tool || 'tool')}</span><span class="agent-thread-status">${toolStatus.label}</span><span class="agent-thread-chevron">▶</span></div><div class="agent-thread-content"></div>`;
+              aiBody.appendChild(node);
+              currentToolBlock = node;
+            }
             if (json.image_url) {
               // Stop image spinner and render generated image in pane
               if (aiMsgEl._imgSpinner) { aiMsgEl._imgSpinner.destroy(); aiMsgEl._imgSpinner = null; }
@@ -587,7 +634,7 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
             } else if (currentToolBlock) {
               // Stop wave animation
               if (currentToolBlock._waveInterval) { clearInterval(currentToolBlock._waveInterval); currentToolBlock._waveInterval = null; }
-              const ok = (json.exit_code === 0 || json.exit_code == null);
+              const ok = toolStatus.label === 'done';
               const cmd = json.command || '';
               const _toolLabels2 = { bash: 'Terminal', python: 'Python', web_search: 'Web Search', read_file: 'Read File', write_file: 'Write File' };
               const tLabel = _toolLabels2[(json.tool || '').toLowerCase()] || json.tool || '';
@@ -596,8 +643,8 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
                 outHtml = `<details class="agent-tool-output"><summary>Output</summary><pre>${escapeHtml(json.output)}</pre></details>`;
               }
               const cmdHtml = cmd ? `<pre class="agent-thread-cmd">${escapeHtml(cmd)}</pre>` : '';
-              currentToolBlock.className = 'agent-thread-node' + (ok ? '' : ' error');
-              currentToolBlock.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${escapeHtml(tLabel)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml}${outHtml}</div>`;
+              currentToolBlock.className = 'agent-thread-node' + (toolStatus.className ? ` ${toolStatus.className}` : '');
+              currentToolBlock.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${toolStatus.icon}</span><span class="agent-thread-tool">${escapeHtml(tLabel)}</span><span class="agent-thread-status">${toolStatus.label}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml}${outHtml}</div>`;
               currentToolBlock.querySelector('.agent-thread-header').addEventListener('click', () => currentToolBlock.classList.toggle('open'));
               currentToolBlock = null;
               // Reset text element so next deltas create a fresh container

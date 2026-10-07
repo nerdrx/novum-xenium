@@ -7,6 +7,9 @@ adapted by this repository, and notes their licenses.
 If you believe something here is mis-attributed or missing, please open an
 issue — it will be corrected promptly.
 
+NX Odysseus retains upstream's [browser artwork](assets/branding/odysseus-browser.jpg)
+and [wordmark](assets/branding/odysseus-wordmark.png) as part of its source history.
+
 ---
 
 ## Adapted / borrowed code

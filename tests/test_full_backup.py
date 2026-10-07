@@ -1,7 +1,10 @@
 import io
 import json
+import os
+import shutil
 import sqlite3
 import stat
+import subprocess
 import threading
 import time
 import zipfile
@@ -16,6 +19,68 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import src.constants as constants
 import src.full_backup as full_backup
 import routes.backup_routes as backup_routes
+
+
+_SQLITE_OPEN_SWAP_C = r"""
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int open64(const char *path, int flags, ...) {
+    static int (*real_open64)(const char *, int, ...);
+    if (!real_open64) real_open64 = dlsym(RTLD_NEXT, "open64");
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode = va_arg(args, int);
+        va_end(args);
+    }
+    static int swapped = 0;
+    const char *kind = getenv("NX_SWAP_KIND");
+    const char *trigger = getenv("NX_SWAP_TRIGGER");
+    const char *held = getenv("NX_SWAP_HELD");
+    const char *outside = getenv("NX_SWAP_OUTSIDE");
+    const char *parent = getenv("NX_SWAP_PARENT");
+    const char *held_dir = getenv("NX_SWAP_HELD_DIR");
+    if (!swapped && kind && trigger && held && outside && strcmp(path, trigger) == 0) {
+        swapped = 1;
+        if (strcmp(kind, "parent") == 0 && parent && held_dir) {
+            if (rename(parent, held_dir) == 0) symlink(outside, parent);
+        } else if (strcmp(kind, "wal") == 0) {
+            if (rename(trigger, held) == 0) link(outside, trigger);
+        } else if (strcmp(kind, "wal-alias") == 0) {
+            if (rename(trigger, held) == 0 || errno == ENOENT) symlink(outside, trigger);
+        } else if (strcmp(kind, "leaf") == 0) {
+            if (rename(trigger, held) == 0) symlink(outside, trigger);
+        }
+    }
+    return (flags & O_CREAT) ? real_open64(path, flags, mode) : real_open64(path, flags);
+}
+"""
+
+
+@pytest.fixture(scope="session")
+def sqlite_open_swap_shim(tmp_path_factory):
+    compiler = shutil.which("cc")
+    if os.name != "posix" or not Path("/proc/self/fd").is_dir() or not compiler:
+        pytest.skip("SQLite path-swap regression requires POSIX cc")
+    build = tmp_path_factory.mktemp("sqlite-open-swap")
+    source = build / "open_swap.c"
+    library = build / "open_swap.so"
+    source.write_text(_SQLITE_OPEN_SWAP_C, encoding="utf-8")
+    result = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", str(library), str(source), "-ldl"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    return library
 
 
 def _zip_with(entries):
@@ -48,12 +113,13 @@ def test_backup_contains_chat_workspace_uploads_and_settings(tmp_path):
             path.write_bytes(content)
     import sqlite3
     conn = sqlite3.connect(data / "app.db")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
     conn.execute("CREATE TABLE chats (id TEXT PRIMARY KEY, body TEXT)")
     conn.execute("INSERT INTO chats VALUES ('chat-1', 'hello')")
-    conn.commit(); conn.close()
+    conn.commit()
     (data / "tmp").mkdir()
     (data / "tmp" / "active.lock").write_text("skip")
-    (data / "app.db-wal").write_text("active SQLite journal")
     (data / "agent_workspace" / "running.lock").write_text("active lock")
     (data / "models").mkdir()
     (data / "models" / "huge.bin").write_bytes(b"skip")
@@ -77,6 +143,56 @@ def test_backup_contains_chat_workspace_uploads_and_settings(tmp_path):
             db.close()
     finally:
         archive_path.unlink(missing_ok=True)
+        conn.close()
+
+
+def test_backup_prunes_excluded_models_before_scanning(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    excluded = data / "models"
+    excluded_nested = excluded / "large-tree"
+    excluded_nested.mkdir(parents=True)
+    (excluded_nested / "weights.bin").write_bytes(b"excluded")
+    (data / "settings.json").write_text("{}")
+    scandir = os.scandir
+    visited = []
+
+    def reject_excluded(path):
+        if isinstance(path, int):
+            return scandir(path)
+        candidate = Path(path)
+        if candidate == excluded or excluded in candidate.parents:
+            visited.append(candidate)
+            raise AssertionError("backup descended into excluded model data")
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", reject_excluded)
+    archive_path = full_backup.create_backup(data)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            assert "data/settings.json" in archive.namelist()
+            assert not any("models" in Path(name).parts for name in archive.namelist())
+        assert visited == []
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_backup_inventory_fails_closed_on_scandir_error(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    blocked = data / "blocked"
+    blocked.mkdir(parents=True)
+    (blocked / "state.json").write_text("{}")
+    scandir = os.scandir
+
+    def fail_blocked(path):
+        if isinstance(path, int):
+            return scandir(path)
+        if Path(path) == blocked:
+            raise PermissionError("simulated scan failure")
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", fail_blocked)
+    with pytest.raises(PermissionError, match="simulated scan failure"):
+        full_backup.create_backup(data)
 
 
 def test_backup_skips_sqlite_created_after_snapshot_inventory(tmp_path, monkeypatch):
@@ -92,9 +208,9 @@ def test_backup_skips_sqlite_created_after_snapshot_inventory(tmp_path, monkeypa
     created = False
     live_connections = []
 
-    def create_late_database(source, destination):
+    def create_late_database(source, destination, source_fd=None, wal_fd=None, shm_fd=None, parent_fd=None):
         nonlocal created
-        snapshot_sqlite(source, destination)
+        snapshot_sqlite(source, destination, source_fd, wal_fd, shm_fd, parent_fd)
         if not created:
             created = True
             late = sqlite3.connect(data / "late.db")
@@ -151,18 +267,336 @@ def test_backup_rechecks_sqlite_symlink_before_snapshot(tmp_path, monkeypatch):
     snapshots = []
     snapshot_sqlite = full_backup._snapshot_sqlite
 
-    def record_snapshot(source, destination):
+    def record_snapshot(source, destination, source_fd=None, wal_fd=None, shm_fd=None, parent_fd=None):
         snapshots.append(source)
-        snapshot_sqlite(source, destination)
+        snapshot_sqlite(source, destination, source_fd, wal_fd, shm_fd, parent_fd)
 
     monkeypatch.setattr(Path, "is_file", swap_to_symlink)
     monkeypatch.setattr(full_backup, "_snapshot_sqlite", record_snapshot)
+    with pytest.raises(OSError):
+        full_backup.create_backup(data)
+    assert snapshots == []
+
+
+def test_backup_reads_pinned_file_if_leaf_becomes_symlink(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    target = data / "public.txt"
+    target.write_text("in-workspace")
+    target.chmod(0o640)
+    os.utime(target, (1_700_000_000, 1_700_000_000))
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside-secret")
+    original_open = zipfile.ZipFile.open
+    swapped = False
+
+    def swap_before_member_open(self, name, mode="r", *args, **kwargs):
+        nonlocal swapped
+        member_name = name.filename if isinstance(name, zipfile.ZipInfo) else name
+        if mode == "w" and member_name == "data/public.txt" and not swapped:
+            target.unlink()
+            target.symlink_to(outside)
+            swapped = True
+        return original_open(self, name, mode, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", swap_before_member_open)
     archive_path = full_backup.create_backup(data)
     try:
         with zipfile.ZipFile(archive_path) as archive:
-            assert "data/settings.json" in archive.namelist()
-            assert "data/state.db" not in archive.namelist()
-        assert snapshots == []
+            assert swapped
+            assert archive.read("data/public.txt") == b"in-workspace"
+            member = archive.getinfo("data/public.txt")
+            assert stat.S_IMODE(member.external_attr >> 16) == 0o640
+            assert member.date_time == time.localtime(1_700_000_000)[:6]
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_backup_stream_stops_at_existing_unpacked_limit(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "large.txt").write_text("x" * 256)
+    monkeypatch.setattr(full_backup, "MAX_UNPACKED_BYTES", 200)
+    with pytest.raises(ValueError, match="40 GiB restore limit"):
+        full_backup.create_backup(data)
+
+
+def test_backup_file_count_limit_runs_before_sqlite_snapshot(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    conn = sqlite3.connect(data / "state.db")
+    conn.execute("CREATE TABLE entries (value TEXT)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(full_backup, "MAX_FILES", 1)
+    monkeypatch.setattr(
+        full_backup, "_snapshot_sqlite",
+        lambda *args: pytest.fail("SQLite staging started before the inventory limit"),
+    )
+    with pytest.raises(ValueError, match="too many entries"):
+        full_backup.create_backup(data)
+
+
+def test_backup_file_count_limit_stops_inventory_early(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    for name in ("one.txt", "two.txt", "three.txt"):
+        (data / name).write_text(name)
+    original_is_file = Path.is_file
+    visited = []
+
+    def count_inventory(path):
+        visited.append(path)
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", count_inventory)
+    monkeypatch.setattr(full_backup, "MAX_FILES", 1)
+    with pytest.raises(ValueError, match="too many entries"):
+        full_backup.create_backup(data)
+    assert len(visited) == 1
+
+
+def test_backup_rejects_file_replaced_with_fifo_without_blocking(tmp_path, monkeypatch):
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO paths are POSIX-only")
+    data = tmp_path / "data"
+    data.mkdir()
+    target = data / "candidate.txt"
+    target.write_text("regular at inventory")
+    original_open = full_backup._open_backup_file
+    swapped = False
+
+    def replace_with_fifo(root_fd, relative):
+        nonlocal swapped
+        if not swapped and relative == Path("candidate.txt"):
+            target.unlink()
+            os.mkfifo(target)
+            swapped = True
+        return original_open(root_fd, relative)
+
+    monkeypatch.setattr(full_backup, "_open_backup_file", replace_with_fifo)
+    with pytest.raises(ValueError, match="not a regular file"):
+        full_backup.create_backup(data)
+    assert swapped
+
+
+def _sqlite_with_wal(path, *values):
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA wal_autocheckpoint=0")
+    connection.execute("CREATE TABLE entries (value TEXT)")
+    connection.commit()
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    connection.executemany("INSERT INTO entries VALUES (?)", [(v,) for v in values])
+    connection.commit()
+    return connection
+
+
+def _enable_sqlite_open_swap(monkeypatch, shim, kind, trigger, held, outside,
+                             parent=None, held_dir=None):
+    monkeypatch.setenv("LD_PRELOAD", str(shim))
+    monkeypatch.setenv("NX_SWAP_KIND", kind)
+    monkeypatch.setenv("NX_SWAP_TRIGGER", str(trigger))
+    monkeypatch.setenv("NX_SWAP_HELD", str(held))
+    monkeypatch.setenv("NX_SWAP_OUTSIDE", str(outside))
+    if parent is not None:
+        monkeypatch.setenv("NX_SWAP_PARENT", str(parent))
+    if held_dir is not None:
+        monkeypatch.setenv("NX_SWAP_HELD_DIR", str(held_dir))
+
+
+def test_sqlite_snapshot_fd_reads_committed_wal_rows(tmp_path):
+    source = tmp_path / "source.db"
+    writer = _sqlite_with_wal(source, "visible-in-wal")
+    root_fd = full_backup._open_backup_root(tmp_path)
+    source_fd = full_backup._open_backup_file(root_fd, Path("source.db"))
+    parent_fd = full_backup._open_backup_directory(root_fd, Path("."))
+    wal_fd = full_backup._open_backup_file(root_fd, Path("source.db-wal"))
+    shm_fd = full_backup._open_optional_backup_file(root_fd, Path("source.db-shm"))
+    snapshot = tmp_path / "snapshot.db"
+    try:
+        assert Path(f"{source}-wal").stat().st_size > 0
+        full_backup._snapshot_sqlite(source, snapshot, source_fd, wal_fd, shm_fd, parent_fd)
+        with sqlite3.connect(snapshot) as copy:
+            assert copy.execute("SELECT value FROM entries").fetchall() == [("visible-in-wal",)]
+    finally:
+        if shm_fd is not None:
+            os.close(shm_fd)
+        os.close(wal_fd)
+        os.close(source_fd)
+        os.close(parent_fd)
+        os.close(root_fd)
+        writer.close()
+
+
+def test_sqlite_snapshot_handles_checkpointed_wal_database_without_sidecars(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    source = data / "idle.db"
+    writer = _sqlite_with_wal(source, "checkpointed-row")
+    writer.close()
+    assert not Path(f"{source}-wal").exists()
+    assert not Path(f"{source}-shm").exists()
+
+    archive_path = full_backup.create_backup(data)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            snapshot = tmp_path / "snapshot.db"
+            snapshot.write_bytes(archive.read("data/idle.db"))
+        with sqlite3.connect(snapshot) as db:
+            assert db.execute("SELECT value FROM entries").fetchall() == [("checkpointed-row",)]
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_sqlite_fd_snapshot_rejects_parent_symlink_swap(
+    tmp_path, monkeypatch, sqlite_open_swap_shim,
+):
+    data = tmp_path / "data"
+    source_dir = data / "workspace"
+    source_dir.mkdir(parents=True)
+    source = source_dir / "state.db"
+    with sqlite3.connect(source) as db:
+        db.execute("CREATE TABLE entries (value TEXT)")
+        db.execute("INSERT INTO entries VALUES (?)", ("original-row",))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_db = outside / "state.db"
+    with sqlite3.connect(outside_db) as db:
+        db.execute("CREATE TABLE entries (value TEXT)")
+        db.execute("INSERT INTO entries VALUES (?)", ("outside-secret",))
+    moved_dir = data / "workspace-moved"
+    _enable_sqlite_open_swap(
+        monkeypatch, sqlite_open_swap_shim, "parent", source, moved_dir,
+        outside, parent=source_dir, held_dir=moved_dir,
+    )
+    with pytest.raises(sqlite3.DatabaseError, match="identity verification"):
+        full_backup.create_backup(data)
+    assert source_dir.is_symlink()
+    assert (moved_dir / "state.db").is_file()
+    with sqlite3.connect(outside_db) as db:
+        assert db.execute("SELECT value FROM entries").fetchall() == [("outside-secret",)]
+
+
+def test_sqlite_fd_snapshot_rejects_leaf_symlink_swap(
+    tmp_path, monkeypatch, sqlite_open_swap_shim,
+):
+    data = tmp_path / "data"
+    data.mkdir()
+    source = data / "state.db"
+    with sqlite3.connect(source) as db:
+        db.execute("CREATE TABLE entries (value TEXT)")
+        db.execute("INSERT INTO entries VALUES (?)", ("original-row",))
+    outside = tmp_path / "outside.db"
+    with sqlite3.connect(outside) as db:
+        db.execute("CREATE TABLE entries (value TEXT)")
+        db.execute("INSERT INTO entries VALUES (?)", ("outside-secret",))
+    moved = data / "held.db"
+    _enable_sqlite_open_swap(
+        monkeypatch, sqlite_open_swap_shim, "leaf", source, moved, outside,
+    )
+    with pytest.raises(sqlite3.DatabaseError):
+        full_backup.create_backup(data)
+    assert source.is_symlink()
+    assert moved.is_file()
+    with sqlite3.connect(outside) as db:
+        assert db.execute("SELECT value FROM entries").fetchall() == [("outside-secret",)]
+
+
+def test_sqlite_fd_snapshot_rejects_wal_hardlink_swap(
+    tmp_path, monkeypatch, sqlite_open_swap_shim,
+):
+    data = tmp_path / "data"
+    data.mkdir()
+    source = data / "state.db"
+    writer = _sqlite_with_wal(source, "original-wal-row")
+    outside = tmp_path / "outside.db"
+    outsider = _sqlite_with_wal(outside, "outside-secret")
+    wal = Path(f"{source}-wal")
+    moved_wal = data / "held-wal"
+    outside_wal = Path(f"{outside}-wal")
+    _enable_sqlite_open_swap(
+        monkeypatch, sqlite_open_swap_shim, "wal", wal, moved_wal, outside_wal,
+    )
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="identity verification"):
+            full_backup.create_backup(data)
+        assert wal.samefile(outside_wal)
+        with sqlite3.connect(outside) as db:
+            assert db.execute("SELECT value FROM entries").fetchall() == [("outside-secret",)]
+    finally:
+        if wal.exists():
+            wal.unlink()
+        if moved_wal.exists():
+            moved_wal.replace(wal)
+        writer.close()
+        outsider.close()
+
+
+def test_sqlite_fd_snapshot_rejects_unclassified_wal_alias(
+    tmp_path, monkeypatch, sqlite_open_swap_shim,
+):
+    data = tmp_path / "data"
+    data.mkdir()
+    source = data / "state.db"
+    source_writer = _sqlite_with_wal(source, "base-row")
+    source_writer.close()
+    assert not Path(f"{source}-wal").exists()
+
+    outside = tmp_path / "outside.db"
+    shutil.copyfile(source, outside)
+    outsider = sqlite3.connect(outside)
+    outsider.execute("PRAGMA journal_mode=WAL")
+    outsider.execute("PRAGMA wal_autocheckpoint=0")
+    outsider.execute("INSERT INTO entries VALUES (?)", ("outside-secret",))
+    outsider.commit()
+    alias = tmp_path / "outside.bin"
+    Path(f"{outside}-wal").rename(alias)
+    alias_before = alias.read_bytes()
+    source_wal = Path(f"{source}-wal")
+    held = data / "held-wal"
+    _enable_sqlite_open_swap(
+        monkeypatch, sqlite_open_swap_shim, "wal-alias", source_wal, held, alias,
+    )
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="identity verification"):
+            full_backup.create_backup(data)
+        assert source_wal.is_symlink()
+        assert source_wal.resolve() == alias
+        assert alias.read_bytes() == alias_before
+    finally:
+        source_wal.unlink(missing_ok=True)
+        held.unlink(missing_ok=True)
+        outsider.close()
+
+
+def test_backup_reads_pinned_file_if_parent_becomes_symlink(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    source_dir = data / "workspace"
+    source_dir.mkdir(parents=True)
+    (source_dir / "project.txt").write_text("in-workspace")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "project.txt").write_text("outside-secret")
+    moved_dir = data / "workspace-moved"
+    original_open = zipfile.ZipFile.open
+    swapped = False
+
+    def swap_before_member_open(self, name, mode="r", *args, **kwargs):
+        nonlocal swapped
+        member_name = name.filename if isinstance(name, zipfile.ZipInfo) else name
+        if mode == "w" and member_name == "data/workspace/project.txt" and not swapped:
+            source_dir.rename(moved_dir)
+            source_dir.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original_open(self, name, mode, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", swap_before_member_open)
+    archive_path = full_backup.create_backup(data)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            assert swapped
+            assert archive.read("data/workspace/project.txt") == b"in-workspace"
     finally:
         archive_path.unlink(missing_ok=True)
 

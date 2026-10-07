@@ -12,7 +12,7 @@ import modelsModule from './js/models.js';
 import ragModule from './js/rag.js';
 import presetsModule from './js/presets.js';
 import searchModule from './js/search.js';
-import chatModule from './js/chat.js?v=20261007quality1';
+import chatModule from './js/chat.js?v=20261007approvalfix2';
 import compareModule from './js/compare/index.js';
 import documentModule from './js/document.js?v=20260815approvalsave1';
 import searchChatModule from './js/search-chat.js';
@@ -24,7 +24,7 @@ import {
   settleSessionHydration
 } from './js/startupShell.js';
 import markdownModule from './js/markdown.js';
-import chatRenderer from './js/chatRenderer.js?v=20261007quality1';
+import chatRenderer from './js/chatRenderer.js?v=20261007toolstatus1';
 import sessionModule from './js/sessions.js';
 import memoryModule from './js/memory.js';
 import voiceRecorderModule from './js/voiceRecorder.js';
@@ -34,7 +34,7 @@ import { UI_VIS_DEFAULT_OFF, resolveVisibility } from './js/ui_visibility.js';
 import tasksModule from './js/tasks.js';
 import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
-import adminModule from './js/admin.js?v=20260716openrouter3';
+import adminModule from './js/admin.js?v=20261007toolqueue1';
 import settingsModule from './js/settings.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
@@ -3852,8 +3852,9 @@ function startOdysseusApp() {
   function handleSubmit(e) {
     if (e) e.preventDefault();
     _bumpChatPriority(30000);
+    const isToolApprovalSubmit = chatForm?.dataset?.odysseusControlPlaneSubmit === 'tool-approval';
     // Debounce: prevent double-submit while a request is being initiated
-    if (_submitting) return;
+    if (_submitting && !isToolApprovalSubmit) return;
     _submitting = true;
     // Release after a short delay (stream start sets its own isStreaming guard)
     setTimeout(() => { _submitting = false; }, 300);

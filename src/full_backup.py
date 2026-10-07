@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
 import sqlite3
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -46,15 +50,257 @@ def _skip_path(relative: Path) -> bool:
     )
 
 
-def _snapshot_sqlite(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    src = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True, timeout=30)
-    dst = sqlite3.connect(str(destination), timeout=30)
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+_SQLITE_SNAPSHOT_TIMEOUT = 180
+_SQLITE_SNAPSHOT_WORKER = r"""
+import os, sqlite3, stat, sys
+from pathlib import Path
+
+def _identity(fd):
+    info = os.fstat(fd)
+    return info.st_dev, info.st_ino
+
+def _fd_snapshot(directory_fd):
+    result = {}
+    for name in os.listdir(directory_fd):
+        try:
+            fd = int(name)
+            result[fd] = (_identity(fd), os.readlink('/proc/self/fd/' + name))
+        except (OSError, ValueError):
+            continue
+    return result
+
+def _sidecar_matches(fd, expected, parent_fd, name, allow_empty):
+    opened = os.fstat(fd)
     try:
-        src.backup(dst)
+        linked = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    identity = (opened.st_dev, opened.st_ino)
+    if not stat.S_ISREG(linked.st_mode) or linked.st_nlink != 1:
+        return False
+    if identity != (linked.st_dev, linked.st_ino):
+        return False
+    if expected is not None and identity != expected:
+        return False
+    if expected is not None:
+        return True
+    return not allow_empty or opened.st_size == 0
+
+def _sidecar(path, suffix):
+    path = path.removesuffix(' (deleted)')
+    return path.rsplit('/', 1)[-1].endswith(suffix)
+
+def main():
+    source_fd, wal_fd, shm_fd, parent_fd = map(int, sys.argv[1:5])
+    wal_name, shm_name = sys.argv[5:7]
+    destination = sys.argv[7]
+    expected_source = (int(sys.argv[8]), int(sys.argv[9]))
+    expected_wal = None if wal_fd < 0 else (int(sys.argv[10]), int(sys.argv[11]))
+    expected_shm = None if shm_fd < 0 else (int(sys.argv[12]), int(sys.argv[13]))
+    if _identity(source_fd) != expected_source:
+        return 2
+    try:
+        main_entry = os.stat(sys.argv[14], dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return 2
+    if (not stat.S_ISREG(main_entry.st_mode)
+            or (main_entry.st_dev, main_entry.st_ino) != expected_source):
+        return 2
+    if expected_wal is not None and _identity(wal_fd) != expected_wal:
+        return 3
+    if expected_shm is not None and _identity(shm_fd) != expected_shm:
+        return 4
+
+    proc_fd_dir = os.open('/proc/self/fd', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    source = destination_db = None
+    try:
+        before = _fd_snapshot(proc_fd_dir)
+        uri = (Path('/proc/self/fd') / str(source_fd)).as_uri() + '?mode=ro'
+        source = sqlite3.connect(uri, uri=True, timeout=30)
+        source.execute('BEGIN')
+        source.execute('SELECT name FROM sqlite_master LIMIT 0').fetchall()
+        journal_mode = source.execute('PRAGMA journal_mode').fetchone()[0].lower()
+        after = _fd_snapshot(proc_fd_dir)
+        new_fds = {fd: value for fd, value in after.items() if fd not in before}
+
+        main_matches = [value for value in new_fds.values() if value[0] == expected_source]
+        if len(main_matches) != 1:
+            return 5
+        wal_fds = []
+        shm_fds = []
+        for fd, value in new_fds.items():
+            if value[0] == expected_source:
+                continue
+            if _sidecar(value[1], '-wal'):
+                if not _sidecar_matches(fd, expected_wal, parent_fd, wal_name, True):
+                    return 6
+                wal_fds.append(value)
+            elif _sidecar(value[1], '-shm'):
+                if not _sidecar_matches(fd, expected_shm, parent_fd, shm_name, False):
+                    return 7
+                shm_fds.append(value)
+            else:
+                try:
+                    regular = stat.S_ISREG(os.fstat(fd).st_mode)
+                except OSError:
+                    regular = False
+                if regular:
+                    return 9
+        if journal_mode == 'wal' and expected_wal is not None and not any(
+            value[0] == expected_wal for value in wal_fds
+        ):
+            return 6
+
+        destination_db = sqlite3.connect(destination, timeout=30)
+        source.backup(destination_db)
+        return 0
+    except BaseException:
+        return 8
     finally:
-        dst.close()
-        src.close()
+        if destination_db is not None:
+            destination_db.close()
+        if source is not None:
+            source.close()
+        os.close(proc_fd_dir)
+
+sys.exit(main())
+"""
+
+
+def _snapshot_sqlite(
+    source: Path, destination: Path, source_fd: int,
+    wal_fd: int | None = None, shm_fd: int | None = None,
+    parent_fd: int | None = None,
+) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    proc_fd = Path("/proc/self/fd")
+    if not proc_fd.is_dir():
+        raise OSError(errno.ENOTSUP, "safe SQLite backup requires /proc/self/fd")
+    source_stat = os.fstat(source_fd)
+    if parent_fd is None:
+        raise sqlite3.OperationalError("SQLite snapshot requires a pinned source directory")
+    wal_stat = os.fstat(wal_fd) if wal_fd is not None else None
+    shm_stat = os.fstat(shm_fd) if shm_fd is not None else None
+    pass_fds = tuple(fd for fd in (source_fd, wal_fd, shm_fd, parent_fd) if fd is not None)
+    try:
+        result = subprocess.run(
+            [
+                sys.executable, "-I", "-c", _SQLITE_SNAPSHOT_WORKER,
+                str(source_fd), str(wal_fd if wal_fd is not None else -1),
+                str(shm_fd if shm_fd is not None else -1), str(parent_fd),
+                source.name + "-wal", source.name + "-shm", str(destination),
+                str(source_stat.st_dev), str(source_stat.st_ino),
+                str(wal_stat.st_dev if wal_stat else -1),
+                str(wal_stat.st_ino if wal_stat else -1),
+                str(shm_stat.st_dev if shm_stat else -1),
+                str(shm_stat.st_ino if shm_stat else -1),
+                source.name,
+            ],
+            pass_fds=pass_fds,
+            close_fds=True,
+            timeout=_SQLITE_SNAPSHOT_TIMEOUT,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise sqlite3.OperationalError(
+            "SQLite snapshot timed out; stop concurrent database writes or file moves and retry."
+        ) from exc
+    if result.returncode:
+        raise sqlite3.DatabaseError(
+            "SQLite snapshot failed identity verification or database validation; "
+            "stop concurrent file moves and retry."
+        )
+
+
+def _open_optional_backup_file(root_fd: int, relative: Path) -> int | None:
+    try:
+        return _open_backup_file(root_fd, relative)
+    except FileNotFoundError:
+        return None
+
+
+def _open_backup_root(root: Path) -> int:
+    """Pin the resolved data root without following a swapped path component."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(os.path.sep, flags)
+    try:
+        for part in root.parts[1:]:
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _open_backup_file(root_fd: int, relative: Path) -> int:
+    """Open an inventoried file beneath a pinned root, refusing links."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.dup(root_fd)
+    try:
+        for part in relative.parts[:-1]:
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        file_fd = os.open(
+            relative.parts[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            dir_fd=fd,
+        )
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            os.close(file_fd)
+            raise ValueError("Backup source is not a regular file")
+        return file_fd
+    finally:
+        os.close(fd)
+
+
+def _open_backup_directory(root_fd: int, relative: Path) -> int:
+    """Open a directory below the pinned backup root without following links."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.dup(root_fd)
+    try:
+        for part in relative.parts:
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _write_backup_file(
+    archive: zipfile.ZipFile, source_fd: int, arcname: str, remaining_bytes: int,
+) -> int:
+    """Stream an already-pinned file into ZIP while retaining file metadata."""
+    info = os.fstat(source_fd)
+    stamp = time.localtime(info.st_mtime)[:6]
+    if stamp < (1980, 1, 1, 0, 0, 0):
+        stamp = (1980, 1, 1, 0, 0, 0)
+    elif stamp > (2107, 12, 31, 23, 59, 58):
+        stamp = (2107, 12, 31, 23, 59, 58)
+    member = zipfile.ZipInfo(arcname, stamp)
+    member.compress_type = archive.compression
+    member.create_system = 3
+    member.file_size = info.st_size
+    member.external_attr = (stat.S_IFREG | stat.S_IMODE(info.st_mode)) << 16
+    copied = 0
+    with archive.open(member, "w", force_zip64=info.st_size > zipfile.ZIP64_LIMIT) as output:
+        while chunk := os.read(source_fd, 1024 * 1024):
+            copied += len(chunk)
+            if copied > remaining_bytes:
+                raise ValueError("Backup expands beyond the 40 GiB restore limit")
+            output.write(chunk)
+            if archive.fp.tell() > MAX_ARCHIVE_BYTES:
+                raise ValueError("Archive exceeds the 20 GiB upload limit")
+    return copied
 
 
 def create_backup(data_dir: str | Path = DATA_DIR) -> Path:
@@ -62,27 +308,66 @@ def create_backup(data_dir: str | Path = DATA_DIR) -> Path:
     root = Path(data_dir).resolve()
     if not root.is_dir():
         raise ValueError("Data directory is unavailable")
+    safe_fd = (
+        os.name == "posix" and hasattr(os, "O_NOFOLLOW")
+        and hasattr(os, "O_DIRECTORY") and hasattr(os, "O_CLOEXEC")
+        and os.open in os.supports_dir_fd
+    )
+    if not safe_fd:
+        raise OSError(errno.ENOTSUP, "safe backup source reads are unavailable")
     fd, name = tempfile.mkstemp(prefix="odysseus-backup-", suffix=".zip")
     os.close(fd)
     archive_path = Path(name)
+    root_fd = None
     try:
+        root_fd = _open_backup_root(root) if safe_fd else None
         with tempfile.TemporaryDirectory(prefix="odysseus-sqlite-") as tmp_name:
             tmp = Path(tmp_name)
             sources = []
             staged: dict[Path, Path] = {}
-            for source in root.rglob("*"):
-                if source.is_symlink() or not source.is_file():
-                    continue
-                relative = source.relative_to(root)
-                if _skip_path(relative):
-                    continue
-                sources.append(source)
+            for directory, directories, filenames in os.walk(
+                root, topdown=True, onerror=_raise_walk_error, followlinks=False,
+            ):
+                directory_path = Path(directory)
+                parent_relative = directory_path.relative_to(root)
+                directories[:] = [
+                    name for name in directories
+                    if not (directory_path / name).is_symlink()
+                    and not _skip_path(parent_relative / name)
+                ]
+                for filename in filenames:
+                    source = directory_path / filename
+                    if source.is_symlink() or not source.is_file():
+                        continue
+                    relative = source.relative_to(root)
+                    if _skip_path(relative):
+                        continue
+                    if len(sources) + 2 > MAX_FILES:  # include the manifest
+                        raise ValueError("Backup has too many entries")
+                    sources.append(source)
             for source in sources:
-                if source.is_symlink() or not source.is_file() or not _is_sqlite(source):
+                if not _is_sqlite(source):
                     continue
                 relative = source.relative_to(root)
                 target = tmp / relative
-                _snapshot_sqlite(source, target)
+                source_fd = _open_backup_file(root_fd, relative)
+                parent_fd = _open_backup_directory(root_fd, relative.parent)
+                wal_fd = shm_fd = None
+                try:
+                    wal_fd = _open_optional_backup_file(
+                        root_fd, relative.with_name(relative.name + "-wal"),
+                    )
+                    shm_fd = _open_optional_backup_file(
+                        root_fd, relative.with_name(relative.name + "-shm"),
+                    )
+                    _snapshot_sqlite(source, target, source_fd, wal_fd, shm_fd, parent_fd)
+                finally:
+                    if shm_fd is not None:
+                        os.close(shm_fd)
+                    if wal_fd is not None:
+                        os.close(wal_fd)
+                    os.close(parent_fd)
+                    os.close(source_fd)
                 staged[source] = target
 
             manifest = {
@@ -92,19 +377,33 @@ def create_backup(data_dir: str | Path = DATA_DIR) -> Path:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-                archive.writestr(MANIFEST, json.dumps(manifest, separators=(",", ":")))
+                manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode("utf-8")
+                archive.writestr(MANIFEST, manifest_bytes)
+                unpacked_bytes = len(manifest_bytes)
                 for source in sorted(sources):
-                    if source.is_symlink() or not source.is_file():
-                        continue
                     relative = source.relative_to(root)
-                    if _skip_path(relative):
-                        continue
-                    archive.write(staged.get(source, source), f"data/{relative.as_posix()}")
+                    arcname = f"data/{relative.as_posix()}"
+                    staged_source = staged.get(source)
+                    source_fd = (
+                        os.open(staged_source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                        if staged_source is not None
+                        else _open_backup_file(root_fd, relative)
+                    )
+                    try:
+                        unpacked_bytes += _write_backup_file(
+                            archive, source_fd, arcname,
+                            MAX_UNPACKED_BYTES - unpacked_bytes,
+                        )
+                    finally:
+                        os.close(source_fd)
         inspect_archive(archive_path)
         return archive_path
     except Exception:
         archive_path.unlink(missing_ok=True)
         raise
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
 
 
 def _safe_member(info: zipfile.ZipInfo) -> PurePosixPath:

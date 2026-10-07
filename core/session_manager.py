@@ -548,6 +548,8 @@ class SessionManager:
         owner: str = None
     ) -> Session:
         """Create a new session and save to database."""
+        from src.agent_runs import ensure_session_reusable
+        ensure_session_reusable(session_id)
         db = SessionLocal()
         try:
             db_session = DbSession(
@@ -587,6 +589,8 @@ class SessionManager:
     def delete_session(self, session_id: str) -> bool:
         """Permanently delete a session and all its messages."""
         db = SessionLocal()
+        fenced_run = False
+        context_owner = None
         try:
             try:
                 from src.session_image_cleanup import cleanup_session_images
@@ -605,6 +609,9 @@ class SessionManager:
             # Delete session
             db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
             context_owner = getattr(db_session, "owner", None) or getattr(self.sessions.get(session_id), "owner", None)
+            if context_owner is None:
+                from src.agent_runs import get_run_owner
+                context_owner = get_run_owner(session_id)
             if db_session:
                 db.delete(db_session)
 
@@ -615,6 +622,8 @@ class SessionManager:
             removed_in_memory = self.sessions.pop(session_id, None) is not None
 
             if db_session or removed_in_memory:
+                from src.agent_runs import fence_deleted_session
+                fenced_run = fence_deleted_session(session_id, context_owner)
                 # Commit the document-detach / message-delete above (a no-op when
                 # the ghost had no rows) together with the session delete.
                 db.commit()
@@ -635,6 +644,8 @@ class SessionManager:
                     delete_team_board(session_id, effective_storage_owner(context_owner))
                 except Exception:
                     logger.warning("Team board cleanup failed for deleted session %s", session_id, exc_info=True)
+                from src.agent_runs import complete_session_deletion
+                complete_session_deletion(context_owner, session_id)
                 logger.info(f"Deleted session {session_id}")
                 return True
             return False
@@ -642,6 +653,9 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error deleting session: {e}")
             db.rollback()
+            if fenced_run:
+                from src.agent_runs import complete_session_deletion
+                complete_session_deletion(context_owner, session_id)
             return False
         finally:
             db.close()

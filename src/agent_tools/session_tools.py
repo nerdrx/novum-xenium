@@ -380,7 +380,7 @@ async def manage_session(content: str, session_id: Optional[str] = None, owner: 
             if db_sess and db_sess.is_important:
                 return {"error": f"Session '{db_sess.name}' is starred/favorited. Unstar it first before deleting."}
             try:
-                ok = _session_manager.delete_session(target_sid)
+                ok = await asyncio.to_thread(_session_manager.delete_session, target_sid)
                 if not ok:
                     return {"error": f"Session '{target_sid}' was not deleted because it no longer exists."}
                 return {"action": "delete", "session_id": target_sid,

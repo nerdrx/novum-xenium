@@ -9,7 +9,7 @@ import uiModule from './ui.js';
 import sessionModule from './sessions.js';
 import dragSortModule from './dragSort.js';
 import spinnerModule from './spinner.js';
-import { modelColor } from './chatRenderer.js?v=20261007quality1';
+import { modelColor } from './chatRenderer.js?v=20261007toolstatus1';
 import { providerLogo } from './providers.js';
 import { sortModelIds } from './modelSort.js';
 

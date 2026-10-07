@@ -362,6 +362,37 @@ class TaskScheduler:
         self._run_semaphore = asyncio.Semaphore(1)
         self._concurrency_cap = 1
         self._task_handles = {}
+        # Track owner of each _executing entry separately; force runs can
+        # replace the latest cancellable handle without owning that entry.
+        self._execution_handles = {}
+
+    def _track_task(self, task_id: str, coroutine, *, release_executing: bool = True):
+        """Register task handle before another request can stop or replace it."""
+        handle = asyncio.create_task(coroutine)
+        self._task_handles[task_id] = handle
+        if release_executing:
+            self._execution_handles[task_id] = handle
+
+        def _cleanup(done):
+            if self._task_handles.get(task_id) is done:
+                self._task_handles.pop(task_id, None)
+            if self._execution_handles.get(task_id) is done:
+                self._execution_handles.pop(task_id, None)
+                self._executing.discard(task_id)
+
+        handle.add_done_callback(_cleanup)
+        return handle
+
+    async def _release_execution(self, task_id: str, handle):
+        if not hasattr(self, "_executing"):
+            self._executing = set()
+        if not hasattr(self, "_executing_lock"):
+            self._executing_lock = asyncio.Lock()
+        async with self._executing_lock:
+            owners = getattr(self, "_execution_handles", {})
+            if owners.get(task_id) is handle:
+                owners.pop(task_id, None)
+                self._executing.discard(task_id)
 
     def _set_run_progress(self, run_id: str, message: str):
         """Persist short live progress text for Activity while a run is active."""
@@ -730,7 +761,7 @@ class TaskScheduler:
                 if foreground_active and due:
                     db.commit()
             for task_id in to_dispatch:
-                asyncio.create_task(self._execute_task(task_id))
+                self._track_task(task_id, self._execute_task(task_id))
         finally:
             db.close()
 
@@ -742,7 +773,9 @@ class TaskScheduler:
         from core.database import SessionLocal, TaskRun
         current = asyncio.current_task()
         if current:
-            self._task_handles[task_id] = current
+            self._task_handles.setdefault(task_id, current)
+            if release_executing and task_id in self._executing:
+                self._execution_handles.setdefault(task_id, current)
         run_id = str(uuid.uuid4())
         _q_db = SessionLocal()
         try:
@@ -788,8 +821,7 @@ class TaskScheduler:
             if handle is current:
                 self._task_handles.pop(task_id, None)
             if release_executing:
-                async with self._executing_lock:
-                    self._executing.discard(task_id)
+                await self._release_execution(task_id, current)
 
     def _defer_immediately_due_task(self, task_id: str, *, delay: timedelta):
         """A queued task can be cancelled before _execute_task_locked gets a DB
@@ -822,6 +854,13 @@ class TaskScheduler:
         gate_foreground: bool = True,
     ):
         from core.database import SessionLocal, ScheduledTask, TaskRun
+
+        current = asyncio.current_task()
+        owners = getattr(self, "_execution_handles", None)
+        if owners is None:
+            owners = self._execution_handles = {}
+        if release_executing and task_id in getattr(self, "_executing", set()):
+            owners.setdefault(task_id, current)
 
         db = SessionLocal()
         try:
@@ -1082,7 +1121,7 @@ class TaskScheduler:
                     )
                 elif not self._has_chain_cycle(db, chain_id, owner=task.owner):
                     logger.info(f"Chaining: '{task.name}' → task {chain_id}")
-                    asyncio.create_task(self._run_chained(chain_id))
+                    await self._run_chained(chain_id)
                 else:
                     logger.warning(f"Skipping chain from '{task.name}': cycle detected")
 
@@ -1170,8 +1209,7 @@ class TaskScheduler:
             if handle is asyncio.current_task():
                 self._task_handles.pop(task_id, None)
             if release_executing:
-                async with self._executing_lock:
-                    self._executing.discard(task_id)
+                await self._release_execution(task_id, current)
 
 
 
@@ -2154,7 +2192,7 @@ class TaskScheduler:
             if task_id in self._executing:
                 return  # already in flight (manual trigger, scheduler tick, or another chain)
             self._executing.add(task_id)
-        await self._execute_task(task_id)
+            self._track_task(task_id, self._execute_task(task_id))
 
     def _has_chain_cycle(self, db, start_id: str, max_depth: int = 10, owner: str | None = None) -> bool:
         """Detect cycles in task chains."""
@@ -2264,13 +2302,17 @@ class TaskScheduler:
     async def run_task_now(self, task_id: str, *, force: bool = False):
         """Manually trigger a task execution."""
         if force:
-            asyncio.create_task(self._execute_task(task_id, bypass_model_slot=True, release_executing=False))
+            self._track_task(
+                task_id,
+                self._execute_task(task_id, bypass_model_slot=True, release_executing=False),
+                release_executing=False,
+            )
             return True
         async with self._executing_lock:
             if task_id in self._executing:
                 return False
             self._executing.add(task_id)
-        asyncio.create_task(self._execute_task(task_id))
+        self._track_task(task_id, self._execute_task(task_id))
         return True
 
     async def stop_task(self, task_id: str) -> bool:

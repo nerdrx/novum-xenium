@@ -2,6 +2,7 @@
 import asyncio
 import json
 import re
+import threading
 
 import pytest
 import src.agent_loop as loop
@@ -78,6 +79,83 @@ async def test_search_arguments_cannot_choose_another_scope(tmp_path, monkeypatc
         assert (await tool.execute(json.dumps(args), {"owner": "alice", "session_id": "chat-a"}))["exit_code"] == 1
     result = await tool.execute('{"query":"private"}', {"owner": "alice", "session_id": "chat-a"})
     assert "private secret" not in result["output"]
+
+
+@pytest.mark.asyncio
+async def test_deleted_session_waits_for_archive_worker_before_reuse(tmp_path, monkeypatch):
+    import src.tool_result_store as store
+    from src import agent_runs
+
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    started = threading.Event()
+    finish = threading.Event()
+    session_id = "delete-during-archive"
+
+    def slow_archive(*args):
+        started.set()
+        assert finish.wait(5)
+        return store.archive_result(*args)
+
+    async def stream():
+        result_id = await loop._archive_result_until_worker_finishes(
+            slow_archive, "alice", session_id, "fetch", "deleted content",
+        )
+        yield result_id
+
+    run = agent_runs.start(session_id, stream(), owner="alice", persist=False)
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        assert agent_runs.fence_deleted_session(session_id, "alice")
+        with pytest.raises(ValueError, match="still draining"):
+            agent_runs.ensure_session_reusable(session_id)
+        assert not run.task.done()
+        await asyncio.sleep(0)
+        assert agent_runs.stop(session_id, run.run_id)
+        assert not run.task.done()
+
+        finish.set()
+        await asyncio.wait_for(run.task, 2)
+        assert store.results_fenced("alice", session_id)
+        with pytest.raises(ValueError, match="still draining"):
+            agent_runs.ensure_session_reusable(session_id)
+        store.delete_results("alice", session_id)
+        agent_runs.complete_session_deletion("alice", session_id)
+        assert store.get_result_stats("alice", session_id) == {"count": 0, "bytes": 0}
+        assert not store.results_fenced("alice", session_id)
+        agent_runs.ensure_session_reusable(session_id)
+    finally:
+        finish.set()
+        if not run.task.done():
+            run.task.cancel()
+            await asyncio.gather(run.task, return_exceptions=True)
+        if run.evict_task and not run.evict_task.done():
+            run.evict_task.cancel()
+        agent_runs._RUNS.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_delete_fence_blocks_queued_start_until_cleanup(tmp_path, monkeypatch):
+    import src.tool_result_store as store
+    from src import agent_runs
+
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    session_id = "delete-before-start"
+
+    async def stream():
+        yield "unexpected"
+
+    assert agent_runs.fence_deleted_session(session_id, "alice")
+    with pytest.raises(ValueError, match="being deleted"):
+        agent_runs.start(session_id, stream(), owner="alice", persist=False)
+    store.delete_results("alice", session_id)
+    agent_runs.complete_session_deletion("alice", session_id)
+    run = agent_runs.start(session_id, stream(), owner="alice", persist=False)
+    try:
+        await asyncio.wait_for(run.task, 2)
+    finally:
+        if run.evict_task and not run.evict_task.done():
+            run.evict_task.cancel()
+        agent_runs._RUNS.pop(session_id, None)
 
 
 def test_context_retrieval_keeps_untrusted_action_gate():

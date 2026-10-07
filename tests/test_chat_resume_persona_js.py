@@ -58,7 +58,7 @@ def test_resume_replays_persona_name_into_live_and_final_bubble():
       const resumeStream = new Function(
         'hasActiveStream', 'fetch', 'API_BASE', '_streamRunIds', 'document',
         'sessionModule', '_shortModel', 'uiModule', '_applyModelColor',
-        '_resumingStreams', 'spinnerModule', 'markdownModule', '_streamDisplayText',
+        '_resumingStreams', '_resumeStreams', 'spinnerModule', 'markdownModule', '_streamDisplayText',
         'chatRenderer',
         {json.dumps('return (' + _FUNCTION + ');')}
       )(
@@ -74,7 +74,7 @@ def test_resume_replays_persona_name_into_live_and_final_bubble():
         }},
         (value) => value,
         {{ esc: (value) => value, scrollHistory() {{}} }},
-        () => {{}}, new Set(),
+        () => {{}}, new Set(), new Map(),
         {{ create: () => spinner }},
         {{ normalizeThinkingMarkup: (value) => value, squashOutsideCode: (value) => value, mdToHtml: (value) => value }},
         (value) => value,

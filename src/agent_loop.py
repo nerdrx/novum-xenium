@@ -3512,6 +3512,22 @@ class _ToolProgressGuard:
                 "repeated_rounds": len(repeated_rounds)}
 
 
+async def _archive_result_until_worker_finishes(archive_result, *args):
+    """Keep a canceled run alive until its non-cancelable archive thread ends."""
+    task = asyncio.create_task(asyncio.to_thread(archive_result, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        raise
+
+
 async def stream_agent_loop(
     endpoint_url: str,
     model: str,
@@ -4933,7 +4949,10 @@ async def stream_agent_loop(
             return formatted
         try:
             from src.tool_result_store import archive_result
-            context_id = await asyncio.to_thread(
+            # Cancelling to_thread's await does not stop its worker. Keep this
+            # run alive until the archive write finishes so deletion can safely
+            # release its scope fence.
+            context_id = await _archive_result_until_worker_finishes(
                 archive_result, owner, session_id, tool_name, raw_context,
             )
             event["context_result_id"] = context_id

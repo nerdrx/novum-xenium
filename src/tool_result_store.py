@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import closing
@@ -19,6 +20,36 @@ _TTL_SECONDS = 30 * 24 * 60 * 60
 _CHUNK_SIZE = 2000
 _CHUNK_OVERLAP = 200
 _OUTPUT_LIMIT = 6000
+# ponytail: fixed stripes avoid an unbounded lock registry; increase if contention appears.
+_SCOPE_LOCKS = tuple(threading.RLock() for _ in range(64))
+_FENCED_SCOPES: set[str] = set()
+
+
+def _scope_key(owner: str, session_id: str) -> str:
+    return str(_scope_file(owner, session_id).absolute())
+
+
+def _scope_lock(key: str):
+    return _SCOPE_LOCKS[int(hashlib.sha256(key.encode()).hexdigest()[:8], 16) % len(_SCOPE_LOCKS)]
+
+
+def fence_results(owner: str, session_id: str) -> None:
+    """Reject new archive writes for a deleted scope while its run drains."""
+    key = _scope_key(owner, session_id)
+    with _scope_lock(key):
+        _FENCED_SCOPES.add(key)
+
+
+def release_results_fence(owner: str, session_id: str) -> None:
+    key = _scope_key(owner, session_id)
+    with _scope_lock(key):
+        _FENCED_SCOPES.discard(key)
+
+
+def results_fenced(owner: str, session_id: str) -> bool:
+    key = _scope_key(owner, session_id)
+    with _scope_lock(key):
+        return key in _FENCED_SCOPES
 
 
 def _scope_digest(owner: str, session_id: str) -> str:
@@ -121,58 +152,64 @@ def archive_result(owner: str, session_id: str, tool_name: str, text: str) -> st
         raise ValueError("text must be a string")
     if not isinstance(tool_name, str) or not tool_name:
         raise ValueError("tool_name is required")
-    body = _capped_text(text)
-    now = time.time()
-    result_id = uuid.uuid4().hex
-    conn = _connect(owner, session_id)
-    evicted = False
-    try:
-        with conn:
-            evicted = _purge_expired(conn, owner, session_id, now - _TTL_SECONDS)
-            size_bytes = len(body.encode("utf-8"))
-            conn.execute(
-                "INSERT INTO results(id, owner, session_id, tool_name, body, size_bytes, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (result_id, owner, session_id, tool_name[:256], body, size_bytes, now),
-            )
-            for index, chunk in enumerate(_chunks(body)):
-                chunk_id = conn.execute(
-                    "INSERT INTO chunks(result_id, chunk_index) VALUES (?, ?)",
-                    (result_id, index),
-                ).lastrowid
+    key = _scope_key(owner, session_id)
+    with _scope_lock(key):
+        if key in _FENCED_SCOPES:
+            raise RuntimeError("session tool context is being deleted")
+        body = _capped_text(text)
+        now = time.time()
+        result_id = uuid.uuid4().hex
+        conn = _connect(owner, session_id)
+        evicted = False
+        try:
+            with conn:
+                evicted = _purge_expired(conn, owner, session_id, now - _TTL_SECONDS)
+                size_bytes = len(body.encode("utf-8"))
                 conn.execute(
-                    "INSERT INTO chunk_fts(rowid, result_id, chunk_index, body) VALUES (?, ?, ?, ?)",
-                    (chunk_id, result_id, index, chunk),
+                    "INSERT INTO results(id, owner, session_id, tool_name, body, size_bytes, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (result_id, owner, session_id, tool_name[:256], body, size_bytes, now),
                 )
-            total = conn.execute(
-                "SELECT COALESCE(SUM(size_bytes), 0) FROM results WHERE owner = ? AND session_id = ?",
-                (owner, session_id),
-            ).fetchone()[0]
-            while total > _SESSION_LIMIT:
-                oldest = conn.execute(
-                    "SELECT id, size_bytes FROM results WHERE owner = ? AND session_id = ? "
-                    "ORDER BY created_at, rowid LIMIT 1", (owner, session_id),
-                ).fetchone()
-                if oldest is None:
-                    break
-                _delete_result(conn, oldest["id"])
-                total -= oldest["size_bytes"]
-                evicted = True
-        if evicted:
-            conn.execute("VACUUM")
-    finally:
-        conn.close()
+                for index, chunk in enumerate(_chunks(body)):
+                    chunk_id = conn.execute(
+                        "INSERT INTO chunks(result_id, chunk_index) VALUES (?, ?)",
+                        (result_id, index),
+                    ).lastrowid
+                    conn.execute(
+                        "INSERT INTO chunk_fts(rowid, result_id, chunk_index, body) VALUES (?, ?, ?, ?)",
+                        (chunk_id, result_id, index, chunk),
+                    )
+                total = conn.execute(
+                    "SELECT COALESCE(SUM(size_bytes), 0) FROM results WHERE owner = ? AND session_id = ?",
+                    (owner, session_id),
+                ).fetchone()[0]
+                while total > _SESSION_LIMIT:
+                    oldest = conn.execute(
+                        "SELECT id, size_bytes FROM results WHERE owner = ? AND session_id = ? "
+                        "ORDER BY created_at, rowid LIMIT 1", (owner, session_id),
+                    ).fetchone()
+                    if oldest is None:
+                        break
+                    _delete_result(conn, oldest["id"])
+                    total -= oldest["size_bytes"]
+                    evicted = True
+            if evicted:
+                conn.execute("VACUUM")
+        finally:
+            conn.close()
     return result_id
 
 
 def delete_results(owner: str, session_id: str) -> bool:
     """Delete this exact owner's session archive without creating a store."""
-    path = _scope_file(owner, session_id)
-    existed = path.exists()
-    for suffix in ("-journal", "-wal", "-shm"):
-        Path(str(path) + suffix).unlink(missing_ok=True)
-    path.unlink(missing_ok=True)
-    return existed
+    key = _scope_key(owner, session_id)
+    with _scope_lock(key):
+        path = _scope_file(owner, session_id)
+        existed = path.exists()
+        for suffix in ("-journal", "-wal", "-shm"):
+            Path(str(path) + suffix).unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        return existed
 
 
 def get_result_stats(owner: str, session_id: str) -> dict[str, int]:

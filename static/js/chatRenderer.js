@@ -53,6 +53,49 @@ export function safeDisplayImageSrc(raw) {
   return '';
 }
 
+export function toolEventStatus(event = {}) {
+  const approval = event.ask_user;
+  if (approval?.kind === 'tool_approval' && approval.resolved) {
+    const decision = String(approval.resolved).toLowerCase();
+    const label = /deny|reject/.test(decision) ? 'denied'
+      : /allow|approv/.test(decision) ? 'approved' : 'approval resolved';
+    return { label, icon: label === 'denied' ? '✗' : '✓', className: '', pending: false };
+  }
+  if (event.approval_required || approval?.kind === 'tool_approval') {
+    return { label: 'awaiting approval', icon: '…', className: 'pending', pending: true };
+  }
+  const ok = event.exit_code === 0 || event.exit_code == null;
+  return { label: ok ? 'done' : 'failed', icon: ok ? '✓' : '✗', className: ok ? '' : 'error', pending: false };
+}
+
+export function resolveToolApprovalNode(node, decision) {
+  if (!node) return false;
+  const status = toolEventStatus({ ask_user: { kind: 'tool_approval', resolved: decision } });
+  node.classList.remove('pending');
+  const icon = node.querySelector('.agent-thread-icon');
+  if (icon) icon.textContent = status.icon;
+  let label = node.querySelector('.agent-thread-status');
+  if (!label) {
+    label = document.createElement('span');
+    label.className = 'agent-thread-status';
+    node.querySelector('.agent-thread-header')?.appendChild(label);
+  }
+  if (label) label.textContent = status.label;
+  node.querySelector('.agent-thread-wave')?.remove();
+  return true;
+}
+
+export function findPendingApprovalNode(root, approvalId, paneId = null) {
+  if (!root || !approvalId) return null;
+  const nodes = root.querySelectorAll('.agent-thread-node.pending');
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const node = nodes[i];
+    if (node.dataset.approvalId === String(approvalId)
+        && (paneId == null || node.dataset.comparePane === String(paneId))) return node;
+  }
+  return null;
+}
+
 function _makeActionBtn(className, title, text, handler) {
   const btn = document.createElement('button');
   btn.className = className;
@@ -2493,6 +2536,7 @@ export function renderAskUserCard(payload, options) {
             approval_id: aq.approval_id,
             decision: String((opt && opt.value) || '').toLowerCase(),
             label,
+            tool: aq.action && aq.action.tool ? String(aq.action.tool) : '',
             document_id: aq.action && aq.action.document_id
               ? String(aq.action.document_id)
               : '',
@@ -2697,7 +2741,7 @@ export function addMessage(role, content, modelName, metadata) {
           }
           for (const ev of roundTools) {
             if (ev.ask_user && !ev.ask_user.resolved) pendingAskUser = ev.ask_user;
-            const ok = (ev.exit_code === 0 || ev.exit_code == null);
+            const toolStatus = toolEventStatus(ev);
             let outHtml = '';
             if (ev.output && ev.output.trim()) {
               outHtml = `<details class="agent-tool-output"><summary>Output</summary><pre>${esc(ev.output)}</pre></details>`;
@@ -2729,10 +2773,11 @@ export function addMessage(role, content, modelName, metadata) {
               evDiffHtml = `<details class="agent-tool-output agent-tool-diff"><summary><span class="diff-file">${esc(d.file || 'diff')}</span> <span class="diff-summary-stats">${stat}</span></summary><pre class="diff-pre">${rows}</pre></details>`;
             }
             const node = document.createElement('div');
-            node.className = 'agent-thread-node' + (ok ? '' : ' error');
+            node.className = 'agent-thread-node' + (toolStatus.className ? ` ${toolStatus.className}` : '');
+            if (ev.ask_user?.approval_id) node.dataset.approvalId = ev.ask_user.approval_id;
             // Hide the raw JSON command when a diff says it better (same as live).
             const evCmdHtml = (ev.command && !(ev.diff && ev.diff.text)) ? `<pre class="agent-thread-cmd">${esc(ev.command)}</pre>` : '';
-            node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${esc(ev.tool)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${evCmdHtml}${outHtml}${evDiffHtml}</div>`;
+            node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${toolStatus.icon}</span><span class="agent-thread-tool">${esc(ev.tool)}</span><span class="agent-thread-status">${toolStatus.label}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${evCmdHtml}${outHtml}${evDiffHtml}</div>`;
             // Click handling is delegated globally \u2014 see chat.js init.
             threadWrap.appendChild(node);
           }
@@ -3116,6 +3161,9 @@ const chatRenderer = {
   copyMessageText,
   safeToolScreenshotSrc,
   safeDisplayImageSrc,
+  toolEventStatus,
+  resolveToolApprovalNode,
+  findPendingApprovalNode,
   removeAskUserCards,
   renderAskUserCard,
   buildSourcesBox,

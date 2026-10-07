@@ -8,8 +8,8 @@
 import Storage from './storage.js';
 import uiModule from './ui.js';
 import sessionModule from './sessions.js';
-import chatRenderer from './chatRenderer.js?v=20261007quality1';
-import chatStream from './chatStream.js?v=20261007quality1';
+import chatRenderer from './chatRenderer.js?v=20261007toolstatus1';
+import chatStream from './chatStream.js?v=20261007approvalfix2';
 import { addAITTSButton } from './tts-ai.js';
 import markdownModule from './markdown.js';
 import spinnerModule from './spinner.js';
@@ -106,8 +106,15 @@ import { loadPanel } from './panels.js';
     if (input) {
       _pendingToolApproval.draft = input.value || '';
     }
-    const sendButton = document.querySelector('.send-btn');
-    if (sendButton) sendButton.click();
+    const form = document.getElementById('chat-form');
+    if (!form) return;
+    form.dataset.odysseusControlPlaneSubmit = 'tool-approval';
+    try {
+      if (form.requestSubmit) form.requestSubmit();
+      else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    } finally {
+      delete form.dataset.odysseusControlPlaneSubmit;
+    }
   }
 
   document.addEventListener('odysseus:tool-approval', (event) => {
@@ -117,6 +124,7 @@ import { loadPanel } from './panels.js';
     _pendingToolApproval = {
       approval_id: String(detail.approval_id),
       decision,
+      tool: String(detail.tool || ''),
       document_id: String(detail.document_id || ''),
     };
     _submitToolApprovalWhenIdle(_pendingToolApproval.approval_id);
@@ -703,6 +711,7 @@ import { loadPanel } from './panels.js';
   const _backgroundStreams = new Map(); // sessionId -> { status, accumulated, sourcesHtml, abortCtrl, query, metrics }
   const _activeStreams = new Map();     // sessionId -> { abortCtrl, holder, query, startedAt, cancelViewWork, finalizeView }
   const _resumingStreams = new Set();   // sessionId -> a resumeStream() reader is live (re-attach lock)
+  const _resumeStreams = new Map();     // sessionId -> pending/live resume request and cancellable view state
   const _terminalSavedStreams = new Set(); // sessionId -> canonical terminal event seen by active reader
   const _streamRunIds = new Map();      // sessionId -> opaque identity of the current send's detached run
   const _streamGenerations = new Map(); // sessionId -> generation of the current (latest) send
@@ -717,7 +726,7 @@ import { loadPanel } from './panels.js';
   /** Check if an SSE reader is still actively connected for a session. */
   function hasActiveStream(sessionId) {
     return _activeStreams.has(sessionId) || _streamSessionId === sessionId || _backgroundStreams.has(sessionId) ||
-           _resumingStreams.has(sessionId);
+           _resumingStreams.has(sessionId) || _resumeStreams.has(sessionId);
   }
 
   function _getForegroundStreamState() {
@@ -2983,6 +2992,16 @@ import { loadPanel } from './panels.js';
                 _cancelThinkingTimer();
                 _removeThinkingSpinner();
                 if (spinner && spinner.element) spinner.destroy();
+                if (!_isBg) {
+                  const history = document.getElementById('chat-history');
+                  const pendingNode = chatRenderer.findPendingApprovalNode(
+                    history, approvalForSend?.approval_id,
+                  );
+                  chatRenderer.resolveToolApprovalNode(pendingNode, json.decision);
+                  if (json.decision === 'deny') {
+                    uiModule.showToast('Denied. No action executed.', 5000);
+                  }
+                }
                 if (!_isBg && roundHolder && roundHolder !== holder) roundHolder.remove();
                 if (!_isBg && holder) holder.remove();
                 continue;
@@ -3594,6 +3613,15 @@ import { loadPanel } from './panels.js';
               } else if (json.type === 'tool_start') {
                 _closeOpenThinkingMarkup(_isBg);
                 if (_isBg) continue;
+                if (approvalForSend && approvalForSend.decision !== 'deny'
+                    && approvalForSend.tool && json.tool === approvalForSend.tool) {
+                  chatRenderer.resolveToolApprovalNode(
+                    chatRenderer.findPendingApprovalNode(
+                      document.getElementById('chat-history'), approvalForSend.approval_id,
+                    ),
+                    'approve',
+                  );
+                }
                 _cancelThinkingTimer();
                 _removeThinkingSpinner();
                 // Force-close thinking if still open — tools are real content, not thinking
@@ -3646,6 +3674,7 @@ import { loadPanel } from './panels.js';
                 const toolIcon = _toolIcons[json.tool.toLowerCase()] || '\u25B6';
                 const node = document.createElement('div')
                 node.className = 'agent-thread-node running';
+                node.dataset.toolName = json.tool || '';
                 const cmdHtml = cmd ? `<pre class="agent-thread-cmd">${esc(cmd)}</pre>` : '';
                 node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${toolIcon}</span><span class="agent-thread-tool">${esc(toolLabel)}</span><span class="agent-thread-wave">▁▂▃</span></div><div class="agent-thread-content">${cmdHtml}</div>`;
                 // Expand/collapse via delegated click handler (init at module bottom).
@@ -3732,6 +3761,57 @@ import { loadPanel } from './panels.js';
 
               } else if (json.type === 'tool_output') {
                 if (_isBg) continue;
+                const toolStatus = chatRenderer.toolEventStatus(json);
+                const approvedReceipt = approvalForSend && approvalForSend.decision !== 'deny'
+                  && approvalForSend.tool && json.tool === approvalForSend.tool;
+                const proposalNode = approvedReceipt
+                  ? chatRenderer.findPendingApprovalNode(
+                    document.getElementById('chat-history'), approvalForSend.approval_id,
+                  )
+                  : null;
+                if (proposalNode) {
+                  chatRenderer.resolveToolApprovalNode(proposalNode, 'approve');
+                  if (currentToolBubble === proposalNode || !currentToolBubble
+                      || currentToolBubble.dataset.toolName !== (json.tool || '')) {
+                    currentToolBubble = null;
+                  }
+                  if (!currentToolBubble) {
+                    const chatBox = document.getElementById('chat-history');
+                    if (chatBox) {
+                      const threadWrap = document.createElement('div');
+                      threadWrap.className = 'agent-thread has-top';
+                      chatBox.appendChild(threadWrap);
+                      lastToolThread = threadWrap;
+                      const node = document.createElement('div');
+                      node.className = 'agent-thread-node running';
+                      node.dataset.toolName = json.tool || '';
+                      node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">▶</span><span class="agent-thread-tool">${esc(json.tool || 'tool')}</span><span class="agent-thread-wave"></span></div><div class="agent-thread-content"></div>`;
+                      threadWrap.appendChild(node);
+                      currentToolBubble = node;
+                    }
+                  }
+                }
+                // Approval-gated calls have no tool_start. Do not let their
+                // output close the previous tool node (often a completed read).
+                if (currentToolBubble && currentToolBubble.dataset.toolName !== (json.tool || '')) {
+                  currentToolBubble = null;
+                }
+                if (!currentToolBubble && toolStatus.pending) {
+                  const chatBox = document.getElementById('chat-history');
+                  if (chatBox) {
+                    const threadWrap = document.createElement('div');
+                    threadWrap.className = 'agent-thread has-top';
+                    chatBox.appendChild(threadWrap);
+                    lastToolThread = threadWrap;
+                    const node = document.createElement('div');
+                    node.className = 'agent-thread-node pending';
+                    node.dataset.toolName = json.tool || '';
+                    node.dataset.approvalId = json.ask_user?.approval_id || '';
+                    node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">…</span><span class="agent-thread-tool">${esc(json.tool || 'tool')}</span><span class="agent-thread-wave"></span></div><div class="agent-thread-content"></div>`;
+                    threadWrap.appendChild(node);
+                    currentToolBubble = node;
+                  }
+                }
                 // --- Update the current thread node ---
                 if (currentToolBubble) {
                   // Stop wave animation + the per-second cooking ticker
@@ -3743,7 +3823,7 @@ import { loadPanel } from './panels.js';
                     clearInterval(currentToolBubble._elapsedTicker);
                     currentToolBubble._elapsedTicker = null;
                   }
-                  const ok = (json.exit_code === 0 || json.exit_code == null);
+                  const ok = toolStatus.label === 'done';
                   const cmd = json.command || '';
                   let outHtml = '';
                   if (json.output && json.output.trim()) {
@@ -3782,8 +3862,8 @@ import { loadPanel } from './panels.js';
                   // click again. Click handling is delegated (see init at
                   // bottom of file) so no per-node listener needed.
                   const _wasOpen = currentToolBubble.classList.contains('open');
-                  currentToolBubble.className = 'agent-thread-node' + (ok ? '' : ' error') + (_wasOpen ? ' open' : '');
-                  currentToolBubble.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${esc(json.tool)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml2}${outHtml}${diffHtml}</div>`;
+                  currentToolBubble.className = 'agent-thread-node' + (toolStatus.className ? ` ${toolStatus.className}` : '') + (_wasOpen ? ' open' : '');
+                  currentToolBubble.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${toolStatus.icon}</span><span class="agent-thread-tool">${esc(json.tool)}</span><span class="agent-thread-status">${toolStatus.label}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml2}${outHtml}${diffHtml}</div>`;
                   // Reset so thinking spinner between tools says "Thinking" not the old tool's label
                   _lastToolName = '';
                   uiModule.scrollHistory();
@@ -4995,10 +5075,17 @@ import { loadPanel } from './panels.js';
    * Called when user switches sessions mid-stream.
    */
   export function detachCurrentStream(sessionId) {
+    const resuming = sessionId && _resumeStreams.get(sessionId);
+    if (resuming) {
+      resuming.cancelled = true;
+      try { resuming.controller.abort(); } catch (_) {}
+      try { Promise.resolve(resuming.reader?.cancel()).catch(() => {}); } catch (_) {}
+      if (resuming.cleanup) resuming.cleanup(true);
+    }
     const active = sessionId ? _activeStreams.get(sessionId) : _getForegroundStreamState();
     if (!active || !active.abortCtrl) {
       // Not streaming — fall through to abort
-      abortCurrentRequest();
+      if (!resuming) abortCurrentRequest();
       return;
     }
     // Detachment deliberately keeps the network stream alive, but the outgoing
@@ -5055,18 +5142,38 @@ import { loadPanel } from './panels.js';
     if (!sessionId) return false;
     if (hasActiveStream(sessionId)) return false;
 
+    const resumeState = {
+      controller: new AbortController(), reader: null, holder: null, spinner: null,
+      cancelled: false, cleaned: false, cleanup: null,
+    };
+    _resumeStreams.set(sessionId, resumeState);
+    const isCurrentResume = () => !resumeState.cancelled &&
+      _resumeStreams.get(sessionId) === resumeState &&
+      (!sessionModule.getCurrentSessionId || sessionModule.getCurrentSessionId() === sessionId);
+    const releaseResumeState = (removeHolder = false) => {
+      if (resumeState.cleaned) return;
+      resumeState.cleaned = true;
+      try { resumeState.spinner?.destroy(); } catch (_) {}
+      if (removeHolder && resumeState.holder?.parentNode) resumeState.holder.remove();
+      _resumingStreams.delete(sessionId);
+      if (_resumeStreams.get(sessionId) === resumeState) _resumeStreams.delete(sessionId);
+    };
+    resumeState.cleanup = releaseResumeState;
+
     let res;
     try {
-      res = await fetch(`${API_BASE}/api/chat/resume/${sessionId}`);
-    } catch (e) {
+      res = await fetch(`${API_BASE}/api/chat/resume/${sessionId}`, { signal: resumeState.controller.signal });
+    } catch (_) {
+      releaseResumeState();
       return false;
     }
-    if (!res.ok || !res.body) return false;
+    if (!isCurrentResume()) { releaseResumeState(true); return false; }
+    if (!res.ok || !res.body) { releaseResumeState(); return false; }
     const resumeRunId = res.headers.get('X-Odysseus-Run-Id') || '';
     if (resumeRunId) _streamRunIds.set(sessionId, resumeRunId);
 
     const box = document.getElementById('chat-history');
-    if (!box) return false;
+    if (!box) { releaseResumeState(); return false; }
     if (replaceHolder && replaceHolder.parentNode) replaceHolder.remove();
 
     // Block duplicate re-attach attempts while this reader is live. A dedicated
@@ -5075,6 +5182,7 @@ import { loadPanel } from './panels.js';
     _resumingStreams.add(sessionId);
 
     const holder = document.createElement('div');
+    resumeState.holder = holder;
     holder.className = 'msg msg-ai';
     const meta = sessionModule.getSessions().find(s => s.id === sessionId);
     const roleLabel = _shortModel(meta && meta.model);
@@ -5089,11 +5197,13 @@ import { loadPanel } from './panels.js';
     box.appendChild(holder);
 
     const spinner = spinnerModule.create('Generating response...', 'right');
+    resumeState.spinner = spinner;
     holder.querySelector('.body').appendChild(spinner.createElement());
     spinner.start();
     uiModule.scrollHistory();
 
     const reader = res.body.getReader();
+    resumeState.reader = reader;
     const decoder = new TextDecoder();
     let buffer = '';
     let roundText = '';
@@ -5110,8 +5220,7 @@ import { loadPanel } from './panels.js';
     let rich = false;
 
     const cleanup = () => {
-      try { spinner.destroy(); } catch (_) {}
-      _resumingStreams.delete(sessionId);
+      resumeState.cleanup(false);
     };
 
     const renderDelta = () => {
@@ -5128,13 +5237,17 @@ import { loadPanel } from './panels.js';
       readLoop:
       while (true) {
         // User left this session: stop rendering, the run continues server-side.
-        if (sessionModule.getCurrentSessionId &&
-            sessionModule.getCurrentSessionId() !== sessionId) {
+        if (!isCurrentResume()) {
           leftSession = true;
           try { await reader.cancel(); } catch (_) {}
           break;
         }
         const { done, value } = await reader.read();
+        if (!isCurrentResume()) {
+          leftSession = true;
+          try { await reader.cancel(); } catch (_) {}
+          break;
+        }
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const parts = buffer.split('\n\n');

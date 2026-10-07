@@ -1,7 +1,9 @@
 """Backup routes — export/import user data (memories, presets, settings, skills, preferences)."""
 
+import errno
 import json
 import logging
+import sqlite3
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -70,7 +72,26 @@ def setup_backup_routes(memory_manager, preset_manager, skills_manager) -> APIRo
         _require_browser_admin(request)
         from src.constants import DATA_DIR
         from src.full_backup import create_backup
-        path = await run_in_threadpool(create_backup, DATA_DIR)
+        try:
+            path = await run_in_threadpool(create_backup, DATA_DIR)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except sqlite3.Error as exc:
+            raise HTTPException(
+                409, "A database could not be snapshotted. Stop concurrent file moves and retry; "
+                "check database health if this continues.",
+            ) from exc
+        except OSError as exc:
+            if exc.errno == errno.ENOTSUP:
+                detail = "Safe full backups are unavailable on this platform. Use the Linux Docker installation."
+                status = 503
+            elif exc.errno in {errno.ELOOP, errno.ENOENT, errno.ENOTDIR}:
+                detail = "Application files changed while creating the backup. Stop concurrent file moves and retry."
+                status = 409
+            else:
+                detail = "Could not read or save the application backup. Check folder permissions and free disk space, then retry."
+                status = 500
+            raise HTTPException(status, detail) from exc
         filename = f"odysseus_full_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         return FileResponse(
             path, media_type="application/zip", filename=filename,

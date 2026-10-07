@@ -85,6 +85,9 @@ def test_delete_removes_only_exact_owner_and_session(tmp_path, monkeypatch):
     assert "No matching" in store.search_results("alice", "run", "targetneedle")
     assert "otherneedle" in store.search_results("alice", "other-run", "otherneedle")
     assert "bobneedle" in store.search_results("bob", "run", "bobneedle")
+    # Clearing archived context is not session deletion; later tool output stays archivable.
+    store.archive_result("alice", "run", "tool", "after-clear")
+    assert "after-clear" in store.search_results("alice", "run", "after-clear")
 
 
 def test_context_stats_scope_owner_and_session_even_in_shared_store(tmp_path, monkeypatch):

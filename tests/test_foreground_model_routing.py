@@ -110,6 +110,7 @@ def _chat_stream_endpoint(
         add_message=add_message,
     )
     session_manager = SimpleNamespace(
+        sessions={"session-1": session},
         get_session=lambda session_id: session,
         save_sessions=lambda: None,
     )
@@ -1209,6 +1210,7 @@ def _chat_endpoint(
         add_message=saved.append,
     )
     session_manager = SimpleNamespace(
+        sessions={"session-1": session},
         get_session=lambda session_id: session,
         save_sessions=lambda: None,
     )

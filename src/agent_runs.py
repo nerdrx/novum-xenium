@@ -18,6 +18,7 @@ runs for an explicit, one-use recovery decision; it never replays tools.
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 from typing import AsyncGenerator, Dict, Optional
@@ -32,6 +33,7 @@ class _Run:
     __slots__ = (
         "buffer", "subscribers", "status", "task", "evict_task", "run_id", "owner",
         "checkpoint_pending", "checkpoint_last_flush", "persist_checkpoint", "drain_started",
+        "deleted_scope",
     )
 
     def __init__(self, owner: Optional[str] = None, persist_checkpoint: bool = True) -> None:
@@ -48,9 +50,12 @@ class _Run:
         self.checkpoint_last_flush = 0.0
         self.persist_checkpoint = persist_checkpoint
         self.drain_started = False
+        self.deleted_scope: Optional[tuple[str, str]] = None
 
 
 _RUNS: Dict[str, _Run] = {}
+_RUN_LOCK = threading.RLock()
+_DELETIONS: Dict[tuple[str, str], list[bool]] = {}
 
 # How long a FINISHED run (and its full replay buffer) is retained after the
 # last subscriber disconnects, so a reconnect within the window can still
@@ -124,6 +129,11 @@ def get_run_id(session_id: str) -> Optional[str]:
     """Return the opaque identity of the current detached run, if present."""
     r = _RUNS.get(session_id)
     return r.run_id if r else None
+
+
+def get_run_owner(session_id: str) -> Optional[str]:
+    run = _RUNS.get(session_id)
+    return run.owner if run else None
 
 
 def get_active_run(session_id: str) -> Optional[_Run]:
@@ -200,11 +210,16 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
         )
         _publish(run, "data: [DONE]\n\n")
     finally:
-        # Wake every subscriber with the end sentinel so their SSE closes.
-        _wake_subscribers()
-        _flush_checkpoint_delta(run)
-        if run.persist_checkpoint:
-            run_checkpoints.finish(run.run_id, run.status)
+        try:
+            # Wake every subscriber with the end sentinel so their SSE closes.
+            _wake_subscribers()
+            _flush_checkpoint_delta(run)
+            if run.persist_checkpoint:
+                run_checkpoints.finish(run.run_id, run.status)
+        finally:
+            if run.deleted_scope is not None:
+                _mark_deleted_run_drained(*run.deleted_scope)
+                run.deleted_scope = None
         # Run is terminal — arm the grace timer so it (and its buffer) is
         # eventually freed even if nobody ever reconnects. subscribe() cancels
         # this on connect and re-arms on disconnect.
@@ -221,29 +236,36 @@ def start(
 ) -> _Run:
     """Start a detached run draining `agen` for a session. If a run is already in
     flight for this session (e.g. a rapid double-send), it's cancelled first."""
-    prev = _RUNS.get(session_id)
-    prev_task: Optional[asyncio.Task] = None
-    if prev:
-        if prev.task and not prev.task.done():
-            # A task cancelled before its first instruction never enters
-            # _drain(), so its except/finally blocks cannot update status or
-            # wake a response already bound to this exact run. Terminalize it
-            # synchronously before cancelling; _drain's cleanup is idempotent
-            # when the task had already started.
-            if prev.status == "running":
-                prev.status = "stopped"
-                _wake_run_subscribers(prev)
-                if prev.persist_checkpoint:
-                    run_checkpoints.finish(prev.run_id, "stopped")
-            prev.task.cancel()
-            prev_task = prev.task   # new run awaits this before it starts writing
-        if prev.evict_task and not prev.evict_task.done():
-            prev.evict_task.cancel()
-    run = _Run(owner, persist_checkpoint=persist)
-    _RUNS[session_id] = run
-    if persist:
-        run_checkpoints.begin(run.run_id, session_id, owner, context)
-    run.task = asyncio.create_task(_drain(session_id, run, agen, prev_task))
+    with _RUN_LOCK:
+        if _session_deletion_pending(session_id):
+            raise ValueError("session is being deleted")
+        if owner:
+            from src.tool_result_store import results_fenced
+            if results_fenced(owner, session_id):
+                raise ValueError("session is being deleted")
+        prev = _RUNS.get(session_id)
+        prev_task: Optional[asyncio.Task] = None
+        if prev:
+            if prev.task and not prev.task.done():
+                # A task cancelled before its first instruction never enters
+                # _drain(), so its except/finally blocks cannot update status or
+                # wake a response already bound to this exact run. Terminalize it
+                # synchronously before cancelling; _drain's cleanup is idempotent
+                # when the task had already started.
+                if prev.status == "running":
+                    prev.status = "stopped"
+                    _wake_run_subscribers(prev)
+                    if prev.persist_checkpoint:
+                        run_checkpoints.finish(prev.run_id, "stopped")
+                prev.task.cancel()
+                prev_task = prev.task   # new run awaits this before it starts writing
+            if prev.evict_task and not prev.evict_task.done():
+                prev.evict_task.cancel()
+        run = _Run(owner, persist_checkpoint=persist)
+        _RUNS[session_id] = run
+        if persist:
+            run_checkpoints.begin(run.run_id, session_id, owner, context)
+        run.task = asyncio.create_task(_drain(session_id, run, agen, prev_task))
     return run
 
 
@@ -316,17 +338,91 @@ def stop(session_id: str, expected_run_id: Optional[str] = None) -> bool:
     if not expected_run_id or run is None or run.run_id != expected_run_id:
         return False
     if run and run.task and not run.task.done():
-        if not run.drain_started:
-            # A task cancelled before its coroutine first runs never enters
-            # _drain's cancellation/finally handlers.
-            run.status = "stopped"
-            _wake_run_subscribers(run)
-            if run.persist_checkpoint:
-                run_checkpoints.finish(run.run_id, "stopped")
-            _schedule_evict(session_id, run)
-        run.task.cancel()
+        def _cancel() -> None:
+            if run.task is None or run.task.done():
+                if run.deleted_scope is not None:
+                    _mark_deleted_run_drained(*run.deleted_scope)
+                    run.deleted_scope = None
+                return
+            never_started = not run.drain_started
+            if never_started:
+                # A task cancelled before its coroutine first runs never enters
+                # _drain's cancellation/finally handlers.
+                run.status = "stopped"
+                _wake_run_subscribers(run)
+                if run.persist_checkpoint:
+                    run_checkpoints.finish(run.run_id, "stopped")
+                _schedule_evict(session_id, run)
+            run.task.cancel()
+            if never_started and run.deleted_scope is not None:
+                _mark_deleted_run_drained(*run.deleted_scope)
+                run.deleted_scope = None
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is run.task.get_loop():
+            _cancel()
+        else:
+            run.task.get_loop().call_soon_threadsafe(_cancel)
         return True
     return False
+
+
+def fence_deleted_session(session_id: str, owner: Optional[str]) -> bool:
+    """Fence tool archives and stop a live run before its session is removed."""
+    with _RUN_LOCK:
+        run = _RUNS.get(session_id)
+        active = bool(run and run.task and not run.task.done())
+        owner = owner or (run.owner if run else None)
+        if owner:
+            from src.tool_result_store import fence_results
+            fence_results(owner, session_id)
+            key = (owner, session_id)
+            _DELETIONS.setdefault(key, [not active, False])
+            if active:
+                run.deleted_scope = key
+        if active:
+            stop(session_id, run.run_id)
+        return bool(owner)
+
+
+def _session_deletion_pending(session_id: str) -> bool:
+    return any(deleted_sid == session_id for _owner, deleted_sid in _DELETIONS)
+
+
+def _finish_deletion_scope(owner: str, session_id: str, *, run_done=False, cleanup_done=False) -> None:
+    key = (owner, session_id)
+    with _RUN_LOCK:
+        state = _DELETIONS.get(key)
+        if state is None:
+            return
+        state[0] = state[0] or run_done
+        state[1] = state[1] or cleanup_done
+        if all(state):
+            _DELETIONS.pop(key, None)
+            from src.tool_result_store import release_results_fence
+            release_results_fence(owner, session_id)
+
+
+def _mark_deleted_run_drained(owner: str, session_id: str) -> None:
+    _finish_deletion_scope(owner, session_id, run_done=True)
+
+
+def complete_session_deletion(owner: Optional[str], session_id: str) -> None:
+    """Release deletion fence after DB and private-context cleanup finish."""
+    if owner:
+        _finish_deletion_scope(owner, session_id, cleanup_done=True)
+
+
+def ensure_session_reusable(session_id: str) -> None:
+    """Do not let an explicit ID reuse race a canceled run's final writes."""
+    with _RUN_LOCK:
+        run = _RUNS.get(session_id)
+        if (_session_deletion_pending(session_id)
+                or (run is not None and run.task is not None and not run.task.done())):
+            raise ValueError("session ID is still draining a previous run")
 
 
 def get_checkpoint(session_id: str, owner: Optional[str] = None) -> Optional[dict]:

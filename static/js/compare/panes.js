@@ -119,8 +119,9 @@ async function rerollPane(paneIdx, overrideTimeout) {
     fd.append('query', firstUserText);
     fd.append('provider', m.model);
     fd.append('count', '10');
+    let ac;
     try {
-      const ac = new AbortController();
+      ac = new AbortController();
       state._abortControllers[paneIdx] = ac;
       const t0 = performance.now();
       const res = await fetch(`${state.API_BASE}/api/search/query`, { method: 'POST', body: fd, signal: ac.signal });
@@ -147,7 +148,9 @@ async function rerollPane(paneIdx, overrideTimeout) {
     } catch (err) {
       aiBody.innerHTML = '<div style="color:var(--color-error);font-size:0.85em;">Error: ' + escapeHtml(err.message) + '</div>';
     }
-    state._abortControllers[paneIdx] = null;
+    if (state._abortControllers[paneIdx] === ac) {
+      state._abortControllers[paneIdx] = null;
+    }
     hist.scrollTop = hist.scrollHeight;
     return;
   }

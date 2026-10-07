@@ -549,7 +549,8 @@ class WriteFileTool:
                     if identity is not None:
                         _verify_mutation_write_access(parent_fd, leaf, identity)
                     _write_mutation_target(
-                        parent_fd, leaf, body, expected=identity, mode=mode, metadata=metadata
+                        parent_fd, leaf, body, expected=identity, mode=mode, metadata=metadata,
+                        create_only=(identity is None),
                     )
                     return old, len(body)
                 finally:

@@ -73,6 +73,20 @@ def test_scheduler_utcnow_preserves_naive_utc_contract():
 
 
 def _drive_scheduler(monkeypatch, pre_start_setup=None):
+    from tests.helpers.import_state import preserve_import_state
+
+    names = (
+        "src.builtin_actions",
+        "src.ai_interaction",
+        "src.endpoint_resolver",
+        "src.agent_loop",
+        "src.session_manager",
+    )
+    with preserve_import_state(*names):
+        return _drive_scheduler_with_stubs(monkeypatch, pre_start_setup)
+
+
+def _drive_scheduler_with_stubs(monkeypatch, pre_start_setup=None):
     """Build a TaskScheduler bypassing __init__ and run start() + two polls."""
     _stub_heavy()
     cd, ScheduledTask, TaskRun = _setup_isolated_db()
@@ -100,8 +114,10 @@ def _drive_scheduler(monkeypatch, pre_start_setup=None):
     dispatched = []
     def _fake_create_task(coro):
         dispatched.append(coro)
+        coro.close()  # test records dispatch only; never run these coroutines
         class _T:
             def cancel(self): pass
+            def add_done_callback(self, callback): pass
         return _T()
     monkeypatch.setattr("src.task_scheduler.asyncio.create_task", _fake_create_task)
 

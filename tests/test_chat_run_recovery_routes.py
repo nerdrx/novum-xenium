@@ -68,7 +68,11 @@ def _recovery_post_client(monkeypatch, *, checkpoint_store, workspace, model="mo
         endpoint_url=endpoint_url, model=model, headers={}, name="session",
         history=[], add_message=lambda message: None,
     )
-    manager = SimpleNamespace(get_session=lambda _session_id: session, save_sessions=lambda: None)
+    manager = SimpleNamespace(
+        sessions={"session-a": session},
+        get_session=lambda _session_id: session,
+        save_sessions=lambda: None,
+    )
     context = SimpleNamespace(
         user="alice", messages=[{"role": "user", "content": "continue"}],
         route_messages=[{"role": "user", "content": "continue"}], preface=[],

@@ -10,6 +10,10 @@ import { getSettings, getTools, invalidateSettings, invalidateTools } from './ap
 
 let initialized = false;
 let modalEl = null;
+// /api/tools replaces the complete disabled list, so overlapping saves must
+// fetch after the preceding save has finished. Keep this module-wide because
+// reopening the panel creates another loadBuiltinTools() closure.
+let _toolStateSaveQueue = Promise.resolve();
 // When the user adds an endpoint, store its id so the next render of
 // the endpoints list can flash a glow on that row. Cleared once the
 // animation fires.
@@ -1896,6 +1900,8 @@ async function loadBuiltinTools() {
   const list = el('adm-builtin-tools-list');
   if (!list) return;
   try {
+    // Reopening the editor must not render state preceding a queued save.
+    await _toolStateSaveQueue;
     // This panel is an editor, and its save posts the whole disabled list
     // rebuilt from the checkboxes below. So it has to render authoritative
     // state: a snapshot that went stale out of band (the manage_settings tool,
@@ -1984,45 +1990,51 @@ async function loadBuiltinTools() {
     // panel's DOM can undo a change made by another tab or manage_settings
     // after the panel was opened.
     async function _saveToolState(changes) {
-      invalidateTools();
-      const latest = await getTools();
-      const state = new Map(
-        (latest.tools || []).map(t => [t.id, !!t.enabled])
-      );
-
-      for (const change of changes) {
-        if (state.has(change.id)) {
-          state.set(change.id, !!change.enabled);
-        }
-      }
-
-      const disabled = Array.from(state.entries())
-        .filter(([, enabled]) => !enabled)
-        .map(([id]) => id);
-
-      try {
-        const res = await fetch('/api/tools', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ disabled }),
-          credentials: 'same-origin',
-        });
-        if (!res.ok) throw new Error(`Failed to update tools (${res.status})`);
-
-        // Bring the still-open editor forward to the same merged snapshot so an
-        // out-of-band change is visible instead of leaving stale checkboxes.
-        list.querySelectorAll('input[data-tool-id]').forEach(c => {
-          if (state.has(c.dataset.toolId)) {
-            c.checked = state.get(c.dataset.toolId);
-          }
-        });
-        list.querySelectorAll('.admin-tool-category').forEach(_updateCatCounter);
-      } finally {
-        // This route persists disabled_tools into the settings store
-        // (routes/model_routes.py), so both snapshots are now stale.
+      const save = _toolStateSaveQueue.then(async () => {
         invalidateTools();
-        invalidateSettings();
-      }
+        const latest = await getTools();
+        const state = new Map(
+          (latest.tools || []).map(t => [t.id, !!t.enabled])
+        );
+
+        for (const change of changes) {
+          if (state.has(change.id)) {
+            state.set(change.id, !!change.enabled);
+          }
+        }
+
+        const disabled = Array.from(state.entries())
+          .filter(([, enabled]) => !enabled)
+          .map(([id]) => id);
+
+        try {
+          const res = await fetch('/api/tools', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ disabled }),
+            credentials: 'same-origin',
+          });
+          if (!res.ok) throw new Error(`Failed to update tools (${res.status})`);
+
+          // Bring the still-open editor forward to the same merged snapshot so an
+          // out-of-band change is visible instead of leaving stale checkboxes.
+          list.querySelectorAll('input[data-tool-id]').forEach(c => {
+            if (state.has(c.dataset.toolId)) {
+              c.checked = state.get(c.dataset.toolId);
+            }
+          });
+          list.querySelectorAll('.admin-tool-category').forEach(_updateCatCounter);
+        } finally {
+          // This route persists disabled_tools into the settings store
+          // (routes/model_routes.py), so both snapshots are now stale.
+          invalidateTools();
+          invalidateSettings();
+        }
+      });
+      // A failed request is returned to its caller but must not block later
+      // queued changes.
+      _toolStateSaveQueue = save.catch(() => {});
+      return save;
     }
     function _updateCatCounter(catEl) {
       if (!catEl) return;
@@ -2033,14 +2045,23 @@ async function loadBuiltinTools() {
       const catToggle = catEl.querySelector('input[data-tool-cat-toggle]');
       if (catToggle) catToggle.checked = (catEnabled === catChecks.length);
     }
+    async function _saveToolChanges(changes, catEl) {
+      try {
+        await _saveToolState(changes);
+        _updateCatCounter(catEl);
+      } catch (err) {
+        if (uiModule) uiModule.showError('Failed to update tools: ' + err.message);
+        await _toolStateSaveQueue;
+        await loadBuiltinTools();
+      }
+    }
 
     // Wire individual tool toggles
     list.querySelectorAll('input[data-tool-id]').forEach(chk => {
       chk.addEventListener('change', async () => {
-        await _saveToolState([
+        await _saveToolChanges([
           { id: chk.dataset.toolId, enabled: chk.checked },
-        ]);
-        _updateCatCounter(chk.closest('.admin-tool-category'));
+        ], chk.closest('.admin-tool-category'));
       });
     });
 
@@ -2053,8 +2074,7 @@ async function loadBuiltinTools() {
         const changes = Array.from(catEl.querySelectorAll('input[data-tool-id]'))
           .map(c => ({ id: c.dataset.toolId, enabled: checked }));
         catEl.querySelectorAll('input[data-tool-id]').forEach(c => { c.checked = checked; });
-        await _saveToolState(changes);
-        _updateCatCounter(catEl);
+        await _saveToolChanges(changes, catEl);
       });
     });
   } catch (e) {
@@ -2893,7 +2913,10 @@ function initBackup() {
     fullBackupBtn.disabled = true; fullBackupBtn.textContent = 'Creating backup...';
     try {
       const res = await fetch('/api/backup/full', { credentials: 'same-origin' });
-      if (!res.ok) throw new Error((await res.text()).slice(0, 240) || `HTTP ${res.status}`);
+      if (!res.ok) {
+        const result = await res.json().catch(() => null);
+        throw new Error(result?.detail || `HTTP ${res.status}`);
+      }
       const blob = await res.blob();
       const filename = (res.headers.get('Content-Disposition') || '').match(/filename="?([^";]+)"?/)?.[1] || 'odysseus_full_backup.zip';
       const url = URL.createObjectURL(blob);

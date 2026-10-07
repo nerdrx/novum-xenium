@@ -479,6 +479,10 @@ def test_native_write_fails_closed_for_foreign_owned_files(mode, expected_error)
     workspace = tempfile.mkdtemp(prefix="odysseus-native-owner-")
     try:
         os.chmod(workspace, 0o777)
+        child_data = os.path.join(workspace, "child-data")
+        os.mkdir(child_data, 0o700)
+        os.chown(child_data, 1000, 1000)
+        os.chmod(child_data, 0o700)
         path = os.path.join(workspace, "foreign.txt")
         with open(path, "w") as f:
             f.write("original")
@@ -498,9 +502,14 @@ finally:
             os.setgid(1000)
             os.setuid(1000)
 
+        child_env = os.environ.copy()
+        child_env.update({
+            "DATABASE_URL": "sqlite:///:memory:",
+            "ODYSSEUS_DATA_DIR": child_data,
+        })
         result = subprocess.run(
             [sys.executable, "-c", code, workspace],
-            env=os.environ.copy(), capture_output=True, text=True, timeout=20,
+            env=child_env, capture_output=True, text=True, timeout=20,
             preexec_fn=drop_privileges,
         )
         assert result.returncode == 0, result.stderr
@@ -528,6 +537,85 @@ async def test_native_mutations_fail_closed_without_safe_dir_fd_support(ws, admi
     assert result["exit_code"] == 1
     assert "unavailable on this platform" in result["error"]
     assert open(path).read() == "outside sentinel"
+
+
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "mkfifo"), reason="requires POSIX FIFO")
+def test_native_read_rejects_fifo_swapped_after_regular_file_check(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "fifo.txt").write_text("regular first")
+    code = r'''import os, sys
+import src.agent_tools.filesystem_tools as tools
+import src.tool_execution as execution
+root = sys.argv[1]
+token = execution._active_workspace.set(root)
+parent_fd, leaf = tools._open_mutation_parent(os.path.join(root, "fifo.txt"))
+real_open = os.open
+swapped = False
+def racing_open(path, flags, *args, **kwargs):
+    global swapped
+    if path == leaf and kwargs.get("dir_fd") == parent_fd and not swapped:
+        os.unlink(path, dir_fd=parent_fd)
+        os.mkfifo(path, dir_fd=parent_fd)
+        swapped = True
+    return real_open(path, flags, *args, **kwargs)
+os.open = racing_open
+try:
+    try:
+        tools._read_mutation_target(parent_fd, leaf)
+    except ValueError:
+        print("rejected" if swapped else "not-swapped")
+    else:
+        raise SystemExit("FIFO was accepted")
+finally:
+    os.open = real_open
+    os.close(parent_fd)
+    execution._active_workspace.reset(token)
+'''
+    env = os.environ.copy()
+    env.update(DATABASE_URL="sqlite:///:memory:", ODYSSEUS_DATA_DIR=str(tmp_path / "data"))
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(workspace)],
+        capture_output=True, text=True, timeout=2, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_write_file_does_not_replace_leaf_created_after_absence_check(ws, admin, monkeypatch):
+    import src.agent_tools.filesystem_tools as filesystem_tools
+
+    original_open = os.open
+    original_parent = filesystem_tools._open_mutation_parent
+    original_uuid4 = filesystem_tools.uuid.uuid4
+    parent = None
+    did_create = False
+
+    def capture_parent(path, *, create=False):
+        nonlocal parent
+        parent = original_parent(path, create=create)
+        return parent
+
+    def create_target_after_absence_check():
+        nonlocal did_create
+        if not did_create:
+            did_create = True
+            fd = original_open(parent[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=parent[0])
+            os.write(fd, b"concurrent")
+            os.close(fd)
+        return original_uuid4()
+
+    monkeypatch.setattr(filesystem_tools, "_open_mutation_parent", capture_parent)
+    monkeypatch.setattr(filesystem_tools.uuid, "uuid4", create_target_after_absence_check)
+    _, result = await execute_tool_block(
+        _block("write_file", "new.txt\nagent content"), owner="admin", workspace=ws
+    )
+
+    assert did_create
+    assert result["exit_code"] == 1
+    assert open(os.path.join(ws, "new.txt"), "rb").read() == b"concurrent"
+    assert not any(name.startswith(".agent-write-") for name in os.listdir(ws))
 
 
 @pytest.mark.asyncio

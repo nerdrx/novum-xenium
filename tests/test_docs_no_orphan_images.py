@@ -24,6 +24,8 @@ PUBLIC_GUIDES = {
     "security-ci.md",
     "setup.md",
 }
+# Fork operational guides are repository documents, outside the Pages site.
+FORK_GUIDES = {"codex-image-bridge.md", "hermes-comparison.md", "nx-workflows.md"}
 # Files a referenced image name could legitimately appear in.
 TEXT_EXTS = {".md", ".html", ".htm", ".js", ".ts", ".css", ".py", ".sh",
              ".json", ".yml", ".yaml", ".txt"}
@@ -83,7 +85,8 @@ def test_pages_site_owns_its_entrypoint_and_media():
 
     assert REPO / "website/index.html" in website_files
     assert REPO / "docs/index.html" not in docs_files
-    assert not [p for p in docs_files if p.suffix.lower() in VIDEO_EXTS | {".md"}]
+    assert not [p for p in docs_files if p.suffix.lower() in VIDEO_EXTS]
+    assert {p.name for p in docs_files if p.suffix.lower() == ".md"} == FORK_GUIDES
 
     website_paths = {p.relative_to(REPO / "website").as_posix() for p in website_files}
     assert PUBLIC_GUIDES <= website_paths

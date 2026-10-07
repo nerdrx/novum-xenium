@@ -1,4 +1,5 @@
 # routes/session_routes.py
+import asyncio
 import re
 import html
 import json
@@ -634,7 +635,7 @@ def setup_session_routes(
                 finally:
                     db.close()
 
-                if session_manager.delete_session(sid):
+                if await asyncio.to_thread(session_manager.delete_session, sid):
                     deleted_count += 1
             except Exception:
                 pass
@@ -681,10 +682,20 @@ def setup_session_routes(
         require_admin(request)
 
         db = SessionLocal()
+        fenced_scopes = []
         try:
             from core.database import ChatMessage as DbChatMessage
             session_ids = [row[0] for row in db.query(DbSession.id).all()]
-            context_scopes = db.query(DbSession.id, DbSession.owner).all()
+            context_scopes = dict(db.query(DbSession.id, DbSession.owner).all())
+            for cached_sid, cached_session in session_manager.sessions.items():
+                context_scopes.setdefault(cached_sid, getattr(cached_session, "owner", None))
+            from src.agent_runs import fence_deleted_session
+            from src.agent_runs import get_run_owner
+            for context_sid, context_owner in context_scopes.items():
+                context_owner = context_owner or get_run_owner(context_sid)
+                context_scopes[context_sid] = context_owner
+                if fence_deleted_session(context_sid, context_owner) and context_owner:
+                    fenced_scopes.append((context_owner, context_sid))
             count = db.query(DbSession).count()
             image_ids: set[str] = set()
             filenames: set[str] = set()
@@ -719,17 +730,34 @@ def setup_session_routes(
             db.query(DbSession).delete()
             db.commit()
             from src.tool_result_store import delete_results
-            for context_sid, context_owner in context_scopes:
-                if context_owner:
-                    try:
+            from src.agent_runs import complete_session_deletion, delete_checkpoints
+            for context_sid, context_owner in context_scopes.items():
+                try:
+                    if context_owner:
                         delete_results(context_owner, context_sid)
-                    except Exception:
-                        logger.warning("Tool context cleanup failed for deleted session %s", context_sid, exc_info=True)
+                except Exception:
+                    logger.warning("Tool context cleanup failed for deleted session %s", context_sid, exc_info=True)
+                try:
+                    delete_checkpoints(context_sid, context_owner)
+                except Exception:
+                    logger.warning("Run checkpoint cleanup failed for deleted session %s", context_sid, exc_info=True)
+                try:
+                    from routes.group_routes import delete_team_board
+                    from src.owner_identity import effective_storage_owner
+                    delete_team_board(context_sid, effective_storage_owner(context_owner))
+                except Exception:
+                    logger.warning("Team board cleanup failed for deleted session %s", context_sid, exc_info=True)
             session_manager.sessions.clear()
+            for context_owner, context_sid in fenced_scopes:
+                complete_session_deletion(context_owner, context_sid)
             logger.info(f"Admin deleted all {count} sessions and {removed_images} linked images")
             return {"status": "deleted", "count": count, "images_deleted": removed_images}
         except Exception as e:
             db.rollback()
+            if fenced_scopes:
+                from src.agent_runs import complete_session_deletion
+                for context_owner, context_sid in fenced_scopes:
+                    complete_session_deletion(context_owner, context_sid)
             logger.error(f"Error deleting all sessions: {e}")
             raise HTTPException(500, "Failed to delete sessions")
         finally:

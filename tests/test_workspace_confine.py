@@ -12,6 +12,9 @@ the get_workspace tool, no-leak across calls, and the admin-gated browse route.
 """
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 
@@ -167,6 +170,364 @@ async def test_apply_patch_confined_e2e(ws, admin):
     assert r["exit_code"] == 1 and "outside the workspace" in r["error"]
     with open(outside_file) as f:
         assert f.read() == "x\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operations", ["duplicate_add", "update_delete_alias"])
+async def test_apply_patch_rejects_duplicate_canonical_paths_before_changes(ws, admin, operations):
+    target = os.path.join(ws, "target.txt")
+    with open(target, "w") as f:
+        f.write("original\n")
+    alias = os.path.join(ws, "alias.txt")
+    os.symlink(target, alias)
+    if operations == "duplicate_add":
+        patch = """*** Begin Patch
+*** Add File: new.txt
++first
+*** Add File: new.txt
++second
+*** End Patch"""
+    else:
+        patch = """*** Begin Patch
+*** Update File: target.txt
+@@
+-original
++updated
+*** Delete File: alias.txt
+*** End Patch"""
+
+    _, result = await execute_tool_block(
+        _block("apply_patch", patch), owner="admin", workspace=ws
+    )
+    assert result["exit_code"] == 1
+    assert "duplicate path" in result["error"]
+    assert open(target).read() == "original\n"
+    assert not os.path.exists(os.path.join(ws, "new.txt"))
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_invalid_hunk_does_not_create_add_parent(ws, admin):
+    with open(os.path.join(ws, "existing.txt"), "w") as f:
+        f.write("present\n")
+    patch = """*** Begin Patch
+*** Add File: missing/nested/new.txt
++new content
+*** Update File: existing.txt
+@@
+-not present
++changed
+*** End Patch"""
+
+    _, result = await execute_tool_block(
+        _block("apply_patch", patch), owner="admin", workspace=ws
+    )
+    assert result["exit_code"] == 1
+    assert not os.path.exists(os.path.join(ws, "missing"))
+    assert open(os.path.join(ws, "existing.txt")).read() == "present\n"
+
+    valid = """*** Begin Patch
+*** Add File: missing/nested/new.txt
++new content
+*** End Patch"""
+    _, result = await execute_tool_block(
+        _block("apply_patch", valid), owner="admin", workspace=ws
+    )
+    assert result["exit_code"] == 0
+    assert open(os.path.join(ws, "missing", "nested", "new.txt")).read() == "new content\n"
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_reports_possible_partial_mutation_after_io_failure(ws, admin, monkeypatch):
+    import src.agent_tools.filesystem_tools as filesystem_tools
+
+    original_write = filesystem_tools._write_mutation_target
+    calls = 0
+
+    def fail_second_write(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected write failure")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(filesystem_tools, "_write_mutation_target", fail_second_write)
+    patch = """*** Begin Patch
+*** Add File: first.txt
++first
+*** Add File: second.txt
++second
+*** End Patch"""
+
+    _, result = await execute_tool_block(
+        _block("apply_patch", patch), owner="admin", workspace=ws
+    )
+    assert result["exit_code"] == 1
+    assert "may be partial" in result["error"]
+    assert "inspect the workspace diff" in result["error"]
+    assert open(os.path.join(ws, "first.txt")).read() == "first\n"
+    assert not os.path.exists(os.path.join(ws, "second.txt"))
+
+
+def _native_mutation_block(tool, relative_path):
+    if tool == "write_file":
+        return _block(tool, f"{relative_path}\npwned")
+    if tool == "edit_file":
+        return _block(tool, json.dumps({
+            "path": relative_path, "old_string": "outside sentinel", "new_string": "pwned"
+        }))
+    return _block(tool, f"""*** Begin Patch
+*** Update File: {relative_path}
+@@
+-outside sentinel
++pwned
+*** End Patch""")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["write_file", "edit_file", "apply_patch"])
+@pytest.mark.parametrize("swap", ["leaf", "hardlink", "parent", "root"])
+async def test_native_mutations_do_not_follow_swapped_workspace_paths(ws, admin, monkeypatch, tmp_path, tool, swap):
+    import src.tool_execution as te
+
+    nested = os.path.join(ws, "nested")
+    os.mkdir(nested)
+    victim = os.path.join(nested, "victim.txt")
+    with open(victim, "w") as f:
+        f.write("outside sentinel")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "victim.txt"
+    outside_file.write_text("outside sentinel")
+    original_resolve = te._resolve_tool_path
+
+    def swap_workspace_root():
+        moved = tmp_path / "moved-workspace"
+        os.rename(ws, moved)
+        os.symlink(outside, ws, target_is_directory=True)
+
+    def resolve_then_swap(raw_path):
+        if swap == "root":
+            swap_workspace_root()
+            return original_resolve(raw_path)
+        resolved = original_resolve(raw_path)
+        if swap == "leaf":
+            os.unlink(victim)
+            os.symlink(outside_file, victim)
+        elif swap == "hardlink":
+            os.unlink(victim)
+            os.link(outside_file, victim)
+        elif swap == "parent":
+            os.rename(nested, os.path.join(ws, "moved-away"))
+            os.symlink(outside, nested, target_is_directory=True)
+        return resolved
+
+    monkeypatch.setattr(te, "_resolve_tool_path", resolve_then_swap)
+    _, result = await execute_tool_block(
+        _native_mutation_block(tool, "nested/victim.txt"), owner="admin", workspace=ws
+    )
+
+    assert result["exit_code"] == 1
+    assert outside_file.read_text() == "outside sentinel"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["write_file", "edit_file", "apply_patch"])
+@pytest.mark.parametrize("swap", ["leaf", "parent"])
+async def test_native_mutations_stay_on_pinned_parent_after_swap(ws, admin, monkeypatch, tmp_path, tool, swap):
+    import src.agent_tools.filesystem_tools as filesystem_tools
+
+    nested = os.path.join(ws, "nested")
+    os.mkdir(nested)
+    victim = os.path.join(nested, "victim.txt")
+    with open(victim, "w") as f:
+        f.write("outside sentinel")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "victim.txt"
+    outside_file.write_text("outside sentinel")
+    original_read = filesystem_tools._read_mutation_target
+    did_swap = False
+
+    def read_then_swap(parent_fd, leaf, **kwargs):
+        nonlocal did_swap
+        result = original_read(parent_fd, leaf, **kwargs)
+        if not did_swap:
+            did_swap = True
+            if swap == "leaf":
+                os.unlink(victim)
+                os.symlink(outside_file, victim)
+            else:
+                os.rename(nested, os.path.join(ws, "moved-away"))
+                os.symlink(outside, nested, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(filesystem_tools, "_read_mutation_target", read_then_swap)
+    _, result = await execute_tool_block(
+        _native_mutation_block(tool, "nested/victim.txt"), owner="admin", workspace=ws
+    )
+
+    assert did_swap
+    assert outside_file.read_text() == "outside sentinel"
+    if swap == "leaf":
+        assert result["exit_code"] == 1
+    else:
+        assert result["exit_code"] == 0
+        assert open(os.path.join(ws, "moved-away", "victim.txt")).read() == "pwned"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["write_file", "edit_file", "apply_patch"])
+async def test_native_mutations_preserve_existing_mode(ws, admin, tool):
+    path = os.path.join(ws, "mode.txt")
+    with open(path, "w") as f:
+        f.write("outside sentinel")
+    os.chmod(path, 0o640)
+    _, result = await execute_tool_block(
+        _native_mutation_block(tool, "mode.txt"), owner="admin", workspace=ws
+    )
+    assert result["exit_code"] == 0
+    assert os.stat(path).st_mode & 0o777 == 0o640
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["write_file", "edit_file", "apply_patch"])
+async def test_native_mutations_preserve_existing_owner(ws, admin, tool):
+    if os.geteuid() != 0:
+        pytest.skip("changing fixture ownership requires root")
+    path = os.path.join(ws, "owner.txt")
+    with open(path, "w") as f:
+        f.write("outside sentinel")
+    os.chown(path, 32123, 32124)
+    _, result = await execute_tool_block(
+        _native_mutation_block(tool, "owner.txt"), owner="admin", workspace=ws
+    )
+    info = os.stat(path)
+    assert result["exit_code"] == 0
+    assert (info.st_uid, info.st_gid) == (32123, 32124)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["write_file", "edit_file", "apply_patch"])
+async def test_native_mutations_preserve_user_xattrs(ws, admin, tool):
+    if not all(hasattr(os, name) for name in ("setxattr", "getxattr")):
+        pytest.skip("extended attributes are unavailable")
+    path = os.path.join(ws, "xattr.txt")
+    with open(path, "w") as f:
+        f.write("outside sentinel")
+    try:
+        os.setxattr(path, "user.snapshot-test", b"preserved")
+    except OSError as exc:
+        pytest.skip(f"filesystem does not support user xattrs: {exc}")
+    _, result = await execute_tool_block(
+        _native_mutation_block(tool, "xattr.txt"), owner="admin", workspace=ws
+    )
+    assert result["exit_code"] == 0
+    assert os.getxattr(path, "user.snapshot-test") == b"preserved"
+
+
+@pytest.mark.asyncio
+async def test_multifile_patch_preserves_each_file_metadata(ws, admin):
+    paths = [os.path.join(ws, "first.txt"), os.path.join(ws, "second.txt")]
+    modes = [0o640, 0o604]
+    owners = [(32123, 32124), (32125, 32126)]
+    for index, path in enumerate(paths):
+        with open(path, "w") as f:
+            f.write(f"original-{index}")
+        os.chmod(path, modes[index])
+        if os.geteuid() == 0:
+            os.chown(path, *owners[index])
+        if hasattr(os, "setxattr"):
+            try:
+                os.setxattr(path, "user.patch-test", f"value-{index}".encode())
+            except OSError:
+                pass
+    patch = """*** Begin Patch
+*** Update File: first.txt
+@@
+-original-0
++updated-0
+*** Update File: second.txt
+@@
+-original-1
++updated-1
+*** End Patch"""
+
+    _, result = await execute_tool_block(
+        _block("apply_patch", patch), owner="admin", workspace=ws
+    )
+    assert result["exit_code"] == 0
+    for index, path in enumerate(paths):
+        info = os.stat(path)
+        assert open(path).read() == f"updated-{index}"
+        assert info.st_mode & 0o777 == modes[index]
+        if os.geteuid() == 0:
+            assert (info.st_uid, info.st_gid) == owners[index]
+        if hasattr(os, "getxattr"):
+            try:
+                assert os.getxattr(path, "user.patch-test") == f"value-{index}".encode()
+            except OSError:
+                pass
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_error"),
+    [(0o666, "cannot preserve existing file owner/group"), (0o644, "permission denied")],
+)
+def test_native_write_fails_closed_for_foreign_owned_files(mode, expected_error):
+    if os.name != "posix" or os.geteuid() != 0:
+        pytest.skip("requires POSIX root to create a foreign-owned writable fixture")
+    workspace = tempfile.mkdtemp(prefix="odysseus-native-owner-")
+    try:
+        os.chmod(workspace, 0o777)
+        path = os.path.join(workspace, "foreign.txt")
+        with open(path, "w") as f:
+            f.write("original")
+        os.chmod(path, mode)
+        code = """import asyncio, json, sys
+import src.tool_execution as te
+from src.agent_tools.filesystem_tools import WriteFileTool
+root = sys.argv[1]
+token = te._active_workspace.set(root)
+try:
+    print(json.dumps(asyncio.run(WriteFileTool().execute('foreign.txt\\nchanged', {}))))
+finally:
+    te._active_workspace.reset(token)
+"""
+
+        def drop_privileges():
+            os.setgid(1000)
+            os.setuid(1000)
+
+        result = subprocess.run(
+            [sys.executable, "-c", code, workspace],
+            env=os.environ.copy(), capture_output=True, text=True, timeout=20,
+            preexec_fn=drop_privileges,
+        )
+        assert result.returncode == 0, result.stderr
+        outcome = json.loads(result.stdout)
+        assert outcome["exit_code"] == 1
+        assert expected_error in outcome["error"]
+        assert open(path).read() == "original"
+        assert os.stat(path).st_uid == 0
+    finally:
+        shutil.rmtree(workspace)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["write_file", "edit_file", "apply_patch"])
+async def test_native_mutations_fail_closed_without_safe_dir_fd_support(ws, admin, monkeypatch, tool):
+    import src.agent_tools.filesystem_tools as filesystem_tools
+
+    path = os.path.join(ws, "mode.txt")
+    with open(path, "w") as f:
+        f.write("outside sentinel")
+    monkeypatch.setattr(filesystem_tools, "_supports_safe_file_mutations", lambda: False)
+    _, result = await execute_tool_block(
+        _native_mutation_block(tool, "mode.txt"), owner="admin", workspace=ws
+    )
+    assert result["exit_code"] == 1
+    assert "unavailable on this platform" in result["error"]
+    assert open(path).read() == "outside sentinel"
 
 
 @pytest.mark.asyncio
@@ -372,6 +733,18 @@ def test_workspace_coding_request_surfaces_edit_and_verify_tools(monkeypatch):
     assert "bash" in names
     assert any("Active workspace: `/tmp`" in str(message.get("content", ""))
                for message in prompt_messages)
+
+
+def test_code_filename_with_fix_and_verify_surfaces_edit_and_shell_tools(monkeypatch):
+    names = _sent_tool_names(
+        monkeypatch,
+        workspace="/tmp",
+        message="Inspect probe.py, fix add and run the two assertions.",
+        force_keyword_fallback=True,
+    )
+    assert "read_file" in names
+    assert "edit_file" in names
+    assert "bash" in names
 
 
 def test_low_signal_without_workspace_excludes_file_tools(monkeypatch):

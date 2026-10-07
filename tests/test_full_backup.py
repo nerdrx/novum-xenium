@@ -1,5 +1,6 @@
 import io
 import json
+import sqlite3
 import stat
 import threading
 import time
@@ -74,6 +75,94 @@ def test_backup_contains_chat_workspace_uploads_and_settings(tmp_path):
             db = sqlite3.connect(restored_db)
             assert db.execute("SELECT body FROM chats").fetchone()[0] == "hello"
             db.close()
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_backup_skips_sqlite_created_after_snapshot_inventory(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    first = data / "first.db"
+    conn = sqlite3.connect(first)
+    conn.execute("CREATE TABLE entries (value TEXT)")
+    conn.execute("INSERT INTO entries VALUES (?)", ("staged value",))
+    conn.commit(); conn.close()
+
+    snapshot_sqlite = full_backup._snapshot_sqlite
+    created = False
+    live_connections = []
+
+    def create_late_database(source, destination):
+        nonlocal created
+        snapshot_sqlite(source, destination)
+        if not created:
+            created = True
+            late = sqlite3.connect(data / "late.db")
+            late.execute("PRAGMA journal_mode=WAL")
+            late.execute("CREATE TABLE entries (value TEXT)")
+            late.execute("INSERT INTO entries VALUES (?)", ("committed in WAL",))
+            late.commit()
+            live_connections.append(late)
+
+    monkeypatch.setattr(full_backup, "_snapshot_sqlite", create_late_database)
+    archive_path = full_backup.create_backup(data)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            assert "data/late.db" not in archive.namelist()
+            restored = tmp_path / "restored-first.db"
+            restored.write_bytes(archive.read("data/first.db"))
+        restored_db = sqlite3.connect(restored)
+        try:
+            assert restored_db.execute("SELECT value FROM entries").fetchone() == ("staged value",)
+        finally:
+            restored_db.close()
+    finally:
+        for connection in live_connections:
+            connection.close()
+        archive_path.unlink(missing_ok=True)
+
+
+def test_backup_rechecks_sqlite_symlink_before_snapshot(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    database = data / "state.db"
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE entries (value TEXT)")
+    conn.commit(); conn.close()
+    (data / "settings.json").write_text("{}")
+    outside = tmp_path / "outside.db"
+    conn = sqlite3.connect(outside)
+    conn.execute("CREATE TABLE entries (value TEXT)")
+    conn.execute("INSERT INTO entries VALUES (?)", ("outside",))
+    conn.commit(); conn.close()
+
+    is_file = Path.is_file
+    swapped = False
+
+    def swap_to_symlink(path):
+        nonlocal swapped
+        result = is_file(path)
+        if path == database and not swapped:
+            swapped = True
+            database.unlink()
+            database.symlink_to(outside)
+        return result
+
+    snapshots = []
+    snapshot_sqlite = full_backup._snapshot_sqlite
+
+    def record_snapshot(source, destination):
+        snapshots.append(source)
+        snapshot_sqlite(source, destination)
+
+    monkeypatch.setattr(Path, "is_file", swap_to_symlink)
+    monkeypatch.setattr(full_backup, "_snapshot_sqlite", record_snapshot)
+    archive_path = full_backup.create_backup(data)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            assert "data/settings.json" in archive.namelist()
+            assert "data/state.db" not in archive.namelist()
+        assert snapshots == []
     finally:
         archive_path.unlink(missing_ok=True)
 

@@ -275,6 +275,7 @@ async function _cleanupIncognitoSessions() {
 // Research indicator tracking
 const _researchingSessions = new Set();
 const _streamingSessions = new Set();   // Background chat streams (not polled against research API)
+const _serverStreamChecks = new Map();
 const _completedSessions = new Set();   // Sessions with completed background streams
 let _researchPollTimer = null;
 
@@ -2699,30 +2700,57 @@ async function _checkServerStream(sessionId) {
     // Skip if the SSE reader is still actively connected — it handles rendering
     if (window.chatModule && window.chatModule.hasActiveStream && window.chatModule.hasActiveStream(sessionId)) return;
 
-    const res = await fetch(`${API_BASE}/api/chat/stream_status/${sessionId}`);
-    if (!res.ok) {
-      _clearRunningState(sessionId);
-      return; // 404 = no active stream
+    const checkToken = Symbol(sessionId);
+    _serverStreamChecks.set(sessionId, checkToken);
+    const isCurrentCheck = () => getCurrentSessionId() === sessionId && _serverStreamChecks.get(sessionId) === checkToken;
+    const forgetCheck = () => {
+      if (_serverStreamChecks.get(sessionId) === checkToken) _serverStreamChecks.delete(sessionId);
+    };
+
+    let info = null;
+    try {
+      const res = await fetch(`${API_BASE}/api/chat/stream_status/${sessionId}`);
+      if (!isCurrentCheck()) { forgetCheck(); return; }
+      if (!res.ok) {
+        // 429 and server errors can be brief outages. Keep checking until the
+        // status endpoint can tell us whether the detached run is still active.
+        if (res.status !== 429 && res.status < 500) {
+          _clearRunningState(sessionId);
+          forgetCheck();
+          return;
+        }
+      } else {
+        info = await res.json();
+      }
+    } catch (_) {
+      // A network or response-parse failure is transient; start the same
+      // spinner+poll fallback used for 429/5xx below.
     }
-    const info = await res.json();
-    if (info.status !== 'streaming') {
+    if (!isCurrentCheck()) { forgetCheck(); return; }
+    if (info && info.status !== 'streaming') {
       _clearRunningState(sessionId);
+      forgetCheck();
       return;
     }
 
     // Skip if this is a research stream — research has its own progress UI
-    if (info.mode === 'research' || info.is_research) return;
+    if (info && (info.mode === 'research' || info.is_research)) { forgetCheck(); return; }
 
     // Live-resume the detached run: replay its buffer then stream live tokens
     // (#2539). Falls back to the spinner+poll path below if unavailable.
     if (window.chatModule && window.chatModule.resumeStream) {
-      const attached = await window.chatModule.resumeStream(sessionId);
-      if (attached) return;
+      try {
+        const attached = await window.chatModule.resumeStream(sessionId);
+        if (attached) { forgetCheck(); return; }
+      } catch (_) {
+        // A failed attach does not prove the detached run stopped.
+      }
     }
+    if (!isCurrentCheck()) { forgetCheck(); return; }
 
     // Fallback: server is still streaming, show spinner and poll.
     const box = document.getElementById('chat-history');
-    if (!box) return;
+    if (!box) { forgetCheck(); return; }
 
     const holder = document.createElement('div');
     holder.className = 'msg msg-ai';
@@ -2730,6 +2758,7 @@ async function _checkServerStream(sessionId) {
     const bodyDiv = holder.querySelector('.body');
 
     const spinnerMod = await import('./spinner.js');
+    if (!isCurrentCheck()) { forgetCheck(); return; }
     const spinner = spinnerMod.default.create('Generating response...', 'right');
     bodyDiv.appendChild(spinner.createElement());
     spinner.start();
@@ -2740,37 +2769,67 @@ async function _checkServerStream(sessionId) {
     // may not be set yet when _checkServerStream first runs. Retry resumeStream
     // on the first poll tick where it becomes available.
     let _resumeRetried = false;
-    const pollId = setInterval(async () => {
-      if (getCurrentSessionId() !== sessionId) {
-        clearInterval(pollId);
-        spinner.destroy();
-        if (holder.parentNode) holder.remove();
+    let _polling = false;
+    let _cleaned = false;
+    let pollId;
+    const cleanup = () => {
+      if (_cleaned) return;
+      _cleaned = true;
+      clearInterval(pollId);
+      spinner.destroy();
+      if (holder.parentNode) holder.remove();
+      forgetCheck();
+    };
+    pollId = setInterval(async () => {
+      if (!isCurrentCheck()) {
+        cleanup();
         return;
       }
-      if (!_resumeRetried && window.chatModule && window.chatModule.resumeStream) {
-        _resumeRetried = true;
-        const attached = await window.chatModule.resumeStream(sessionId);
-        if (attached) {
-          clearInterval(pollId);
-          spinner.destroy();
-          if (holder.parentNode) holder.remove();
+      if (_polling) return;
+      _polling = true;
+      try {
+        if (!_resumeRetried && window.chatModule && window.chatModule.resumeStream) {
+          _resumeRetried = true;
+          try {
+            const attached = await window.chatModule.resumeStream(sessionId);
+            if (attached) {
+              cleanup();
+              return;
+            }
+          } catch (_) {
+            // Continue checking status if resume itself is temporarily unavailable.
+          }
+        }
+        if (!isCurrentCheck()) {
+          cleanup();
           return;
         }
-      }
-      try {
         const r = await fetch(`${API_BASE}/api/chat/stream_status/${sessionId}`);
-        if (!r.ok || (await r.json()).status !== 'streaming') {
-          clearInterval(pollId);
-          spinner.destroy();
-          if (holder.parentNode) holder.remove();
+        if (!isCurrentCheck()) {
+          cleanup();
+          return;
+        }
+        if (!r.ok && (r.status === 429 || r.status >= 500)) return;
+        if (r.status === 401 || r.status === 403) {
+          cleanup();
+          _clearRunningState(sessionId);
+          return;
+        }
+        const status = r.ok ? (await r.json()).status : null;
+        if (!isCurrentCheck()) {
+          cleanup();
+          return;
+        }
+        if (!r.ok || status !== 'streaming') {
+          cleanup();
+          _clearRunningState(sessionId);
           // Reload session to show the completed response + docs
           selectSession(sessionId);
         }
       } catch (_) {
-        clearInterval(pollId);
-        spinner.destroy();
-        if (holder.parentNode) holder.remove();
-        selectSession(sessionId);
+        // A temporary status-request failure does not mean the detached run ended.
+      } finally {
+        _polling = false;
       }
     }, 1500);
   } catch (_) {

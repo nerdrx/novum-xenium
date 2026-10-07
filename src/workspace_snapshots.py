@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import difflib
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -91,73 +92,190 @@ def _excluded_rel(path: str) -> bool:
     )
 
 
-def _safe_target(root: str, rel: str, *, create: bool = False) -> str:
-    """Resolve a path while refusing symlink/special-file parents."""
-    parts = _safe_rel(rel).split("/")
-    current = root
-    for index, part in enumerate(parts[:-1]):
-        current = os.path.join(current, part)
-        try:
-            mode = os.lstat(current).st_mode
-            if not stat.S_ISDIR(mode):
-                raise SnapshotError("restore path is no longer safe")
-        except FileNotFoundError:
-            if not create:
-                return os.path.join(current, *parts[index + 1:])
-            os.mkdir(current, 0o700)
-    full = os.path.join(root, *parts)
+def _supports_safe_restore() -> bool:
+    required = (os.open, os.stat, os.unlink, os.mkdir, os.rename)
+    return (
+        os.name == "posix" and hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "fwalk") and all(fn in os.supports_dir_fd for fn in required)
+        and os.stat in os.supports_follow_symlinks
+    )
+
+
+def _open_root_fd(root: str) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(os.path.sep, flags)
     try:
-        mode = os.lstat(full).st_mode
-        if not stat.S_ISREG(mode) or os.stat(full).st_nlink > 1:
-            raise SnapshotError("restore path is no longer safe")
-    except FileNotFoundError:
-        pass
-    return full
+        for part in Path(os.path.abspath(root)).parts[1:]:
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except OSError as exc:
+        os.close(fd)
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.ENOENT}:
+            raise SnapshotError("workspace is no longer a safe directory") from exc
+        raise
 
 
-def _tree(root: str) -> dict[str, bytes]:
-    from src.tool_execution import _is_sensitive_path
-    files: dict[str, bytes] = {}
-    total = 0
-    for current, dirs, names in os.walk(root, topdown=True, followlinks=False):
-        dirs[:] = sorted(d for d in dirs if d.lower() not in _EXCLUDED_DIRS and not d.startswith("."))
-        for name in sorted(names):
-            raw_rel = os.path.relpath(os.path.join(current, name), root)
-            if _excluded_rel(raw_rel):
-                continue
-            rel = _safe_rel(raw_rel)
-            full = os.path.join(current, name)
-            if _is_sensitive_path(full):
-                continue
+def _open_parent_fd(root_fd: int, rel: str, *, create: bool = False) -> tuple[int, str]:
+    parts = _safe_rel(rel).split("/")
+    fd = os.dup(root_fd)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        for part in parts[:-1]:
             try:
-                mode = os.lstat(full).st_mode
-                if not stat.S_ISREG(mode):
+                child = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise SnapshotError("restore path is no longer safe")
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd, parts[-1]
+    except OSError as exc:
+        os.close(fd)
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.ENOENT}:
+            raise SnapshotError("restore path is no longer safe") from exc
+        raise
+    except SnapshotError:
+        os.close(fd)
+        raise
+
+
+def _read_regular_at(parent_fd: int, name: str) -> bytes | None:
+    try:
+        fd = os.open(
+            name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise SnapshotError("restore path is no longer safe") from exc
+        raise
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+            raise SnapshotError("restore path is no longer safe")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            data = handle.read(_MAX_FILE_BYTES + 1)
+        if len(data) > _MAX_FILE_BYTES:
+            raise SnapshotError("restore path changed during restore")
+        return data
+    finally:
+        os.close(fd)
+
+
+def _tree_and_modes(root: str, root_fd: int | None = None) -> tuple[dict[str, bytes], dict[str, int]]:
+    """Read a workspace tree without following links when dir-fd APIs exist."""
+    from src.tool_execution import _is_sensitive_path
+
+    def onerror(exc: OSError) -> None:
+        raise SnapshotError("workspace could not be read during snapshot") from exc
+
+    files: dict[str, bytes] = {}
+    modes: dict[str, int] = {}
+    total = 0
+    if not _supports_safe_restore():
+        for current, dirs, names in os.walk(root, topdown=True, onerror=onerror, followlinks=False):
+            dirs[:] = sorted(d for d in dirs if d.lower() not in _EXCLUDED_DIRS and not d.startswith("."))
+            for name in sorted(names):
+                raw_rel = os.path.relpath(os.path.join(current, name), root)
+                if _excluded_rel(raw_rel):
                     continue
-                if mode & 0o170000 != stat.S_IFREG or os.stat(full).st_nlink > 1:
+                rel = _safe_rel(raw_rel)
+                full = os.path.join(current, name)
+                if _is_sensitive_path(full):
                     continue
-                size = os.path.getsize(full)
+                try:
+                    mode = os.lstat(full).st_mode
+                    if not stat.S_ISREG(mode) or os.stat(full).st_nlink > 1:
+                        continue
+                    size = os.path.getsize(full)
+                    if size > _MAX_FILE_BYTES or total + size > _MAX_TOTAL_BYTES:
+                        raise SnapshotError("workspace exceeds snapshot size limit")
+                    if len(files) >= _MAX_FILES:
+                        raise SnapshotError("workspace exceeds snapshot file limit")
+                    with open(full, "rb") as handle:
+                        data = handle.read(_MAX_FILE_BYTES + 1)
+                    if len(data) != size or len(data) > _MAX_FILE_BYTES:
+                        raise SnapshotError("workspace changed during snapshot")
+                except FileNotFoundError as exc:
+                    raise SnapshotError("workspace changed during snapshot") from exc
                 if size > _MAX_FILE_BYTES or total + size > _MAX_TOTAL_BYTES:
                     raise SnapshotError("workspace exceeds snapshot size limit")
                 if len(files) >= _MAX_FILES:
                     raise SnapshotError("workspace exceeds snapshot file limit")
-                with open(full, "rb") as f:
-                    data = f.read(_MAX_FILE_BYTES + 1)
+                files[rel] = data
+                modes[rel] = stat.S_IMODE(mode) & 0o777
+                total += size
+        return files, modes
+
+    own_fd = root_fd is None
+    root_fd = _open_root_fd(root) if own_fd else root_fd
+    try:
+        for current, dirs, names, dir_fd in os.fwalk(
+            ".", topdown=True, onerror=onerror, follow_symlinks=False, dir_fd=root_fd
+        ):
+            dirs[:] = sorted(d for d in dirs if d.lower() not in _EXCLUDED_DIRS and not d.startswith("."))
+            prefix = "" if current == "." else current.removeprefix("./")
+            for name in sorted(names):
+                raw_rel = f"{prefix}/{name}" if prefix else name
+                if _excluded_rel(raw_rel):
+                    continue
+                rel = _safe_rel(raw_rel)
+                full = os.path.join(root, *rel.split("/"))
+                if _is_sensitive_path(full):
+                    continue
+                try:
+                    info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+                        continue
+                    size = info.st_size
+                    if size > _MAX_FILE_BYTES or total + size > _MAX_TOTAL_BYTES:
+                        raise SnapshotError("workspace exceeds snapshot size limit")
+                    if len(files) >= _MAX_FILES:
+                        raise SnapshotError("workspace exceeds snapshot file limit")
+                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+                    try:
+                        info = os.fstat(fd)
+                        if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+                            continue
+                        size = info.st_size
+                        with os.fdopen(fd, "rb", closefd=False) as handle:
+                            data = handle.read(_MAX_FILE_BYTES + 1)
+                    finally:
+                        os.close(fd)
+                except FileNotFoundError as exc:
+                    raise SnapshotError("workspace changed during snapshot") from exc
+                except OSError as exc:
+                    if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                        raise SnapshotError("workspace changed during snapshot") from exc
+                    raise
                 if len(data) != size or len(data) > _MAX_FILE_BYTES:
                     raise SnapshotError("workspace changed during snapshot")
                 files[rel] = data
+                modes[rel] = stat.S_IMODE(info.st_mode) & 0o777
                 total += size
-            except FileNotFoundError:
-                raise SnapshotError("workspace changed during snapshot")
-    return files
+        return files, modes
+    finally:
+        if own_fd:
+            os.close(root_fd)
+
+
+def _tree(root: str) -> dict[str, bytes]:
+    return _tree_and_modes(root)[0]
 
 
 def _file_modes(root: str, files: dict[str, bytes]) -> dict[str, int]:
-    modes = {}
-    for name in files:
-        mode = os.lstat(os.path.join(root, *_safe_rel(name).split("/"))).st_mode
-        if not stat.S_ISREG(mode):
-            raise SnapshotError("workspace changed during snapshot")
-        modes[name] = stat.S_IMODE(mode) & 0o777
+    current, modes = _tree_and_modes(root)
+    if current.keys() != files.keys():
+        raise SnapshotError("workspace changed during snapshot")
     return modes
 
 
@@ -204,29 +322,33 @@ def create_snapshot(workspace: str, owner: str, session_id: str, label: str | No
         directory = _store(root, owner, session_id)
         try: os.chmod(_ROOT, 0o700)
         except OSError: pass
-        files = _tree(root)
-        modes = _file_modes(root, files)
-        records = []
-        for path in directory.glob("[0-9a-f]" * 32 + ".json"):
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-                if existing.get("key") == key:
-                    records.append((str(existing.get("created_at") or ""), path))
-            except (OSError, ValueError):
-                records.append(("", path))
-        snapshot_id = uuid.uuid4().hex
-        record = {
-            "id": snapshot_id, "key": key, "created_at": datetime.now(timezone.utc).isoformat(),
-            "label": str(label or "")[:120], "turn_id": str(turn_id or "")[:160], "revision": _digest(files, modes),
-            "files": {name: base64.b64encode(data).decode("ascii") for name, data in files.items()},
-            "modes": modes,
-        }
-        _write_json(directory / f"{snapshot_id}.json", record)
-        records.sort(key=lambda item: item[0])
-        for _, old in records[:-(_MAX_SNAPSHOTS - 1)]:
-            try: old.unlink()
-            except OSError: pass
-        return {k: record[k] for k in ("id", "created_at", "label", "revision")}
+        files, modes = _tree_and_modes(root)
+        return _save_snapshot(directory, key, files, modes, label, turn_id)
+
+
+def _save_snapshot(directory: Path, key: str, files: dict[str, bytes], modes: dict[str, int],
+                   label: str | None, turn_id: str | None = None) -> dict:
+    records = []
+    for path in directory.glob("[0-9a-f]" * 32 + ".json"):
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing.get("key") == key:
+                records.append((str(existing.get("created_at") or ""), path))
+        except (OSError, ValueError):
+            records.append(("", path))
+    snapshot_id = uuid.uuid4().hex
+    record = {
+        "id": snapshot_id, "key": key, "created_at": datetime.now(timezone.utc).isoformat(),
+        "label": str(label or "")[:120], "turn_id": str(turn_id or "")[:160], "revision": _digest(files, modes),
+        "files": {name: base64.b64encode(data).decode("ascii") for name, data in files.items()},
+        "modes": modes,
+    }
+    _write_json(directory / f"{snapshot_id}.json", record)
+    records.sort(key=lambda item: item[0])
+    for _, old in records[:-(_MAX_SNAPSHOTS - 1)]:
+        try: old.unlink()
+        except OSError: pass
+    return {k: record[k] for k in ("id", "created_at", "label", "revision")}
 
 
 def ensure_snapshot(workspace: str, owner: str, session_id: str, turn_id: str) -> dict:
@@ -267,8 +389,7 @@ def preview_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: s
         record = _read_manifest(directory, snapshot_id, key)
         saved = {name: base64.b64decode(value, validate=True) for name, value in record.get("files", {}).items()}
         saved_modes = {name: int(mode) & 0o777 for name, mode in record.get("modes", {}).items()}
-        current = _tree(root)
-        current_modes = _file_modes(root, current)
+        current, current_modes = _tree_and_modes(root)
         changes = []
         preview_budget = _MAX_PREVIEW_BYTES
         for name in sorted(saved.keys() | current.keys()):
@@ -312,60 +433,87 @@ def preview_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: s
 
 def restore_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: str, expected_revision: str) -> dict:
     """Restore a whole snapshot only if the current workspace matches its preview."""
+    if not _supports_safe_restore():
+        raise SnapshotError("safe snapshot restore is unavailable on this platform")
     root, key = _identity(workspace, owner, session_id)
     directory = _store(root, owner, session_id)
     with _LOCK:
         record = _read_manifest(directory, snapshot_id, key)
-        current = _tree(root)
-        current_modes = _file_modes(root, current)
-        revision = _digest(current, current_modes)
-        if not expected_revision or revision != expected_revision:
-            raise SnapshotError("workspace changed after preview; review again")
-        target = {name: base64.b64decode(value, validate=True) for name, value in record.get("files", {}).items()}
-        target_modes = {name: int(mode) & 0o777 for name, mode in record.get("modes", {}).items()}
-        rollback = create_snapshot(root, owner, session_id, "Before restore")
-        # Validate the complete operation before changing any workspace file.
-        removals = []
-        for name in sorted(current.keys() - target.keys(), reverse=True):
-            full = _safe_target(root, name)
-            removals.append(full)
-        writes = [(name, data, _safe_target(root, name, create=True)) for name, data in target.items()]
-        fresh = _tree(root)
-        if _digest(fresh, _file_modes(root, fresh)) != expected_revision:
-            raise SnapshotError("workspace changed after preview; review again")
+        root_fd = _open_root_fd(root)
         try:
-            for full in removals:
-                name = os.path.relpath(full, root).replace(os.sep, "/")
-                if _safe_target(root, name) != full or _read_regular(full) != current[name]:
-                    raise SnapshotError("workspace changed during restore; review again")
-                os.unlink(full)
-            for name, data, full in writes:
-                if _safe_target(root, name, create=True) != full:
-                    raise SnapshotError("restore path is no longer safe")
-                actual = _read_regular(full) if os.path.exists(full) else None
-                if actual != current.get(name):
-                    raise SnapshotError("workspace changed during restore; review again")
-                fd, temp = tempfile.mkstemp(prefix=".restore-", dir=os.path.dirname(full))
+            current, current_modes = _tree_and_modes(root, root_fd)
+            revision = _digest(current, current_modes)
+            if not expected_revision or revision != expected_revision:
+                raise SnapshotError("workspace changed after preview; review again")
+            target = {
+                _safe_rel(name): base64.b64decode(value, validate=True)
+                for name, value in record.get("files", {}).items()
+            }
+            target_modes = {
+                _safe_rel(name): int(mode) & 0o777
+                for name, mode in record.get("modes", {}).items()
+            }
+            removals = sorted(current.keys() - target.keys(), reverse=True)
+            writes = sorted(target.items())
+            # Open or create every parent without following links before mutation.
+            for name in removals:
+                parent_fd, leaf = _open_parent_fd(root_fd, name)
                 try:
-                    with os.fdopen(fd, "wb") as f:
-                        f.write(data); f.flush(); os.fsync(f.fileno())
-                    os.chmod(temp, target_modes.get(name, 0o644) & 0o777)
-                    os.replace(temp, full)
+                    if _read_regular_at(parent_fd, leaf) != current[name]:
+                        raise SnapshotError("workspace changed after preview; review again")
                 finally:
-                    if os.path.exists(temp): os.unlink(temp)
-        except Exception as exc:
-            raise SnapshotRestoreError(
-                f"restore failed; inspect workspace and use rollback snapshot {rollback['id']} if needed",
-                rollback["id"],
-            ) from exc
+                    os.close(parent_fd)
+            for name, _ in writes:
+                parent_fd, leaf = _open_parent_fd(root_fd, name, create=True)
+                try:
+                    if _read_regular_at(parent_fd, leaf) != current.get(name):
+                        raise SnapshotError("workspace changed after preview; review again")
+                finally:
+                    os.close(parent_fd)
+            fresh, fresh_modes = _tree_and_modes(root, root_fd)
+            if _digest(fresh, fresh_modes) != expected_revision:
+                raise SnapshotError("workspace changed after preview; review again")
+            rollback = _save_snapshot(directory, key, current, current_modes, "Before restore")
+
+            try:
+                for name in removals:
+                    parent_fd, leaf = _open_parent_fd(root_fd, name)
+                    try:
+                        if _read_regular_at(parent_fd, leaf) != current[name]:
+                            raise SnapshotError("workspace changed during restore; review again")
+                        os.unlink(leaf, dir_fd=parent_fd)
+                    finally:
+                        os.close(parent_fd)
+                for name, data in writes:
+                    parent_fd, leaf = _open_parent_fd(root_fd, name, create=True)
+                    try:
+                        if _read_regular_at(parent_fd, leaf) != current.get(name):
+                            raise SnapshotError("workspace changed during restore; review again")
+                        temporary = f".restore-{uuid.uuid4().hex}"
+                        fd = os.open(
+                            temporary,
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                            0o600,
+                            dir_fd=parent_fd,
+                        )
+                        try:
+                            with os.fdopen(fd, "wb", closefd=False) as handle:
+                                handle.write(data)
+                                handle.flush()
+                                os.fsync(fd)
+                            os.fchmod(fd, target_modes.get(name, 0o644) & 0o777)
+                            os.rename(temporary, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        finally:
+                            os.close(fd)
+                            try: os.unlink(temporary, dir_fd=parent_fd)
+                            except FileNotFoundError: pass
+                    finally:
+                        os.close(parent_fd)
+            except Exception as exc:
+                raise SnapshotRestoreError(
+                    f"restore failed; inspect workspace and use rollback snapshot {rollback['id']} if needed",
+                    rollback["id"],
+                ) from exc
+        finally:
+            os.close(root_fd)
         return {"restored": snapshot_id, "rollback_snapshot_id": rollback["id"]}
-
-
-def _read_regular(path: str) -> bytes:
-    try:
-        if not stat.S_ISREG(os.lstat(path).st_mode):
-            raise SnapshotError("restore path is no longer safe")
-        with open(path, "rb") as f:
-            return f.read(_MAX_FILE_BYTES + 1)
-    except FileNotFoundError:
-        return None

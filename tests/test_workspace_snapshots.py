@@ -13,6 +13,26 @@ def ws(tmp_path, monkeypatch):
     return root
 
 
+@pytest.mark.parametrize("walker_name", ["walk", "fwalk"])
+def test_snapshot_fails_closed_when_tree_walker_reports_error(ws, monkeypatch, walker_name):
+    if walker_name == "fwalk" and not snapshots._supports_safe_restore():
+        pytest.skip("descriptor-relative traversal is unavailable")
+    (ws / "visible.txt").write_text("content")
+    original = getattr(snapshots.os, walker_name)
+
+    def fail_walk(*args, **kwargs):
+        kwargs["onerror"](PermissionError("injected directory read failure"))
+        yield from original(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots.os, walker_name, fail_walk)
+    if walker_name == "walk":
+        monkeypatch.setattr(snapshots, "_supports_safe_restore", lambda: False)
+
+    with pytest.raises(snapshots.SnapshotError, match="could not be read"):
+        snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    assert snapshots.list_snapshots(str(ws), "alice", "chat-1") == []
+
+
 def test_preview_and_restore_add_edit_delete(ws):
     (ws / "edit.txt").write_text("before\n")
     (ws / "gone.txt").write_text("gone")
@@ -180,3 +200,51 @@ def test_restore_refuses_hardlink_target(ws, tmp_path):
         snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
     assert path.read_text() == "keep"
     assert outside.read_text() == "keep"
+
+
+def test_restore_parent_swap_does_not_follow_symlink(ws, tmp_path, monkeypatch):
+    parent = ws / "nested"
+    parent.mkdir()
+    target = parent / "file.txt"
+    target.write_text("saved")
+    saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    target.write_text("current")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "file.txt"
+    sentinel.write_text("outside sentinel")
+    preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
+
+    open_parent = snapshots._open_parent_fd
+    calls = 0
+
+    def swap_after_parent_open(root_fd, rel, *, create=False):
+        nonlocal calls
+        parent_fd, leaf = open_parent(root_fd, rel, create=create)
+        if rel == "nested/file.txt":
+            calls += 1
+            if calls == 2:
+                parent.rename(ws / "moved-away")
+                parent.symlink_to(outside, target_is_directory=True)
+        return parent_fd, leaf
+
+    monkeypatch.setattr(snapshots, "_open_parent_fd", swap_after_parent_open)
+    snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
+
+    assert calls == 2
+    assert sentinel.read_text() == "outside sentinel"
+    assert (ws / "moved-away" / "file.txt").read_text() == "saved"
+    assert parent.is_symlink()
+
+
+def test_restore_rejects_platform_without_safe_dir_fd_support(ws, monkeypatch):
+    path = ws / "file.txt"
+    path.write_text("saved")
+    saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    path.write_text("current")
+    preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
+    monkeypatch.setattr(snapshots, "_supports_safe_restore", lambda: False)
+
+    with pytest.raises(snapshots.SnapshotError, match="unavailable on this platform"):
+        snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
+    assert path.read_text() == "current"

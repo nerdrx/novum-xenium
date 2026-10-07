@@ -1174,7 +1174,10 @@ _WORKSPACE_CODE_TARGET_RE = re.compile(
     r"typescript|python|route|api|component|module|function|class|file|test|"
     r"bug|error|traceback|regression|failing|failure|branch|commit|folder|"
     r"directory|path|movie|video|subtitle|subtitles|srt|vtt|ass|ffmpeg)\b"
-    r"|(?:~?/[^\"'\s`<>]+)",
+    r"|(?:~?/[^\"'\s`<>]+)"
+    r"|\b[A-Za-z0-9][\w.-]*\."
+    r"(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|java|c|h|cc|cpp|hpp|cs|go|rs|rb|php|"
+    r"swift|kt|kts|sh|bash|html|css|scss|sql|json|toml|ya?ml|xml|gd)\b",
     re.IGNORECASE,
 )
 _EXPLICIT_WORKSPACE_REFERENCE_RE = re.compile(
@@ -4371,10 +4374,12 @@ async def stream_agent_loop(
                 requested_output_tokens = 1024
             minimum_required_tail_tokens = _minimum_required_tail_tokens(route_messages)
             reserve_tokens = min(requested_output_tokens, 2048)
+            prompt_budget = effective_budget
+            trim_reserve_tokens = reserve_tokens
             if candidate_context:
                 reserve_tokens = min(
                     reserve_tokens,
-                    effective_budget - minimum_required_tail_tokens,
+                    candidate_context - minimum_required_tail_tokens,
                 )
                 if reserve_tokens < 1:
                     raise ValueError(
@@ -4382,6 +4387,11 @@ async def stream_agent_loop(
                         f"for model {candidate_model} within its {candidate_context}-token window; "
                         "reduce the request or increase the model context/input budget."
                     )
+                # The input setting caps prompt tokens. Native output reserve
+                # comes from the model window, so do not subtract it again in
+                # trim_for_context's prompt budget.
+                prompt_budget = min(effective_budget, candidate_context - reserve_tokens)
+                trim_reserve_tokens = 0
             _route_output_token_budgets[(candidate_url, candidate_model)] = requested_output_tokens
             # Native schemas are serialized outside `messages`, so a large MCP
             # registry can consume almost the entire window before history is
@@ -4392,9 +4402,9 @@ async def stream_agent_loop(
                 # respecting deliberate input caps smaller than that window.
                 schema_cap = max(0, min(
                     8192,
-                    (candidate_context or effective_budget) // 4,
+                    (candidate_context or prompt_budget) // 4,
                     effective_budget // 3,
-                    effective_budget - reserve_tokens - minimum_required_tail_tokens,
+                    prompt_budget - trim_reserve_tokens - minimum_required_tail_tokens,
                 ))
                 latest_user = max(
                     (i for i, msg in enumerate(route_messages)
@@ -4436,12 +4446,12 @@ async def stream_agent_loop(
                     # Otherwise a few inspections remove all unused editors
                     # before the normal message compactor can make room.
                     discovery_cap = min(selected_tokens + schema_cap,
-                                        max(selected_tokens, effective_budget - reserve_tokens))
+                                        max(selected_tokens, prompt_budget - trim_reserve_tokens))
                     bounded_messages = trim_for_context(
-                        route_messages, max(1, effective_budget - discovery_cap),
-                        reserve_tokens=reserve_tokens,
+                        route_messages, max(1, prompt_budget - discovery_cap),
+                        reserve_tokens=trim_reserve_tokens,
                     )
-                    available = max(selected_tokens, effective_budget - reserve_tokens
+                    available = max(selected_tokens, prompt_budget - trim_reserve_tokens
                                     - estimate_tokens(bounded_messages))
                     schema_cap = min(selected_tokens + schema_cap, available)
                 # Retrieval can select the browser without an explicit forced
@@ -4486,10 +4496,23 @@ async def stream_agent_loop(
                     for schema in route_tools
                     if schema.get("function", {}).get("name", "") in (forced_tools or ())
                 }
+                # The Agent-mode search toggle grants permission and normally
+                # makes web tools discoverable, but it is not itself a request
+                # to spend scarce schema tokens on web tools during workspace
+                # coding. Explicit web requests still fail closed when no
+                # forced web schema fits.
+                required_forced_schema_names = forced_schema_names - WEB_TOOL_NAMES
+                if not (
+                    coding_requested
+                    and "web" not in (_intent.get("domains") or set())
+                ):
+                    required_forced_schema_names = forced_schema_names
                 selected_names = {
                     schema.get("function", {}).get("name", "") for schema in selected
                 }
-                if forced_schema_names and not (forced_schema_names & selected_names):
+                if required_forced_schema_names and not (
+                    required_forced_schema_names & selected_names
+                ):
                     raise ValueError(
                         "Agent context budget cannot fit the requested tool schemas "
                         f"for model {candidate_model} within its {window_description}; "
@@ -4505,6 +4528,13 @@ async def stream_agent_loop(
                     route_tools[:] = selected
             schema_tokens = estimate_tool_schema_tokens(route_tools)
             if candidate_context:
+                if prompt_budget - minimum_required_tail_tokens - schema_tokens < 0:
+                    raise ValueError(
+                        "Agent context budget cannot fit the complete current user request and tool schemas "
+                        f"for model {candidate_model} within its {window_description}; "
+                        "reduce the request or increase the model context/input budget."
+                    )
+            else:
                 reserve_tokens = min(
                     reserve_tokens,
                     effective_budget - minimum_required_tail_tokens - schema_tokens,
@@ -4515,11 +4545,12 @@ async def stream_agent_loop(
                         f"for model {candidate_model} within its {window_description}; "
                         "reduce the request or increase the model context/input budget."
                     )
-            effective_budget = max(1, effective_budget - schema_tokens)
+                trim_reserve_tokens = reserve_tokens
+            message_budget = max(1, prompt_budget - schema_tokens)
             trimmed_messages = trim_for_context(
                 route_messages,
-                effective_budget,
-                reserve_tokens=reserve_tokens,
+                message_budget,
+                reserve_tokens=trim_reserve_tokens,
             )
             # `trim_for_context` can reduce the latest user message to empty
             # when the schema estimate alone exceeds a tiny configured budget.
@@ -4593,7 +4624,7 @@ async def stream_agent_loop(
             available_output_tokens = (
                 candidate_context - schema_tokens - after_trim_tokens
                 if candidate_context
-                else effective_budget - after_trim_tokens
+                else message_budget - after_trim_tokens
             )
             if available_output_tokens < 1:
                 raise ValueError(
@@ -4614,8 +4645,8 @@ async def stream_agent_loop(
                     candidate_model,
                     before_trim_tokens,
                     after_trim_tokens,
-                    effective_budget,
-                    reserve_tokens,
+                    message_budget,
+                    trim_reserve_tokens,
                     schema_tokens,
                 )
             return _without_protection(trimmed_messages)
@@ -6164,6 +6195,9 @@ async def stream_agent_loop(
                         ),
                         selected_tools=approval_selected_tools,
                         continuation_query=_retrieval_query or _last_user,
+                        web_search_enabled=bool(
+                            set(forced_tools or ()) & WEB_TOOL_NAMES
+                        ),
                         capabilities=capabilities_for_action(
                             block.tool_type,
                             block.content,

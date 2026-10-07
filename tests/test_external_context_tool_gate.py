@@ -1223,6 +1223,7 @@ def test_tainted_document_approval_seals_current_content(monkeypatch):
             owner="alice",
             max_rounds=1,
             relevant_tools={"update_document"},
+            forced_tools={"web_search", "web_fetch"},
         )
     )
 
@@ -1236,6 +1237,7 @@ def test_tainted_document_approval_seals_current_content(monkeypatch):
     assert pending.document_id == "document-7"
     assert pending.document_version == 4
     assert pending.document_digest == document_content_digest("original")
+    assert pending.web_search_enabled is True
     agent_loop.tool_approval_store.consume(
         pending.approval_id,
         decision="deny",

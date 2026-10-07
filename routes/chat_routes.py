@@ -1301,6 +1301,15 @@ def setup_chat_routes(
                 # Reuse the sealed interrupted request only for internal context,
                 # retrieval, and policy reconstruction; never persist or display it.
                 message = pending_tool_approval.continuation_query
+                # The approval resumes the request whose action was sealed.
+                # A refreshed composer may have loaded different per-mode
+                # defaults, so restore that request's web-search choice before
+                # rebuilding tool policy and forced schemas.
+                allow_web_search = (
+                    "true" if pending_tool_approval.web_search_enabled else "false"
+                )
+                use_web = None
+                _search_enabled = pending_tool_approval.web_search_enabled
                 # The sealed server record, not mutable composer state,
                 # restores the original action workspace.
                 workspace = pending_tool_approval.workspace or None
@@ -1314,6 +1323,7 @@ def setup_chat_routes(
                     allow_bash = "true"
                 if pending_tool_approval.tool_name in WEB_TOOL_NAMES:
                     allow_web_search = "true"
+                    use_web = None
                     _search_enabled = True
                 chat_mode = "agent"
             else:

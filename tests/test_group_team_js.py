@@ -8,7 +8,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("scenario", ["prompts", "persistence", "ownership", "stop", "save-fail", "save-order"])
+@pytest.mark.parametrize("scenario", ["prompts", "persistence", "ownership", "stop", "save-fail", "save-order", "load-race"])
 def test_group_team_controller(scenario):
     if not shutil.which("node"):
         pytest.skip("node is not installed")

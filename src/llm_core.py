@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from typing import Optional, Dict, List, Tuple
 from src.model_context import get_context_length, DEFAULT_CONTEXT, is_local_endpoint
 from src.stream_errors import describe_stream_failure, explain_sse_failure
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 
@@ -1363,15 +1363,68 @@ def _build_chatgpt_responses_input(messages: List[Dict], build_text_input) -> Li
     return items
 
 
-def _format_chatgpt_subscription_error(status_code: int, text: str) -> str:
+def _format_chatgpt_subscription_error(status_code: int, text: str, headers=None) -> str:
     if status_code in (401, 403):
         return "ChatGPT Subscription credentials expired or were rejected. Reconnect the provider."
     if status_code == 429:
         return "ChatGPT Subscription quota or rate limit was reached. Retry after the upstream limit resets."
-    return _format_upstream_error(status_code, text, "https://chatgpt.com/backend-api/codex")
+    return _format_upstream_error(
+        status_code, text, "https://chatgpt.com/backend-api/codex", headers=headers,
+    )
 
 
-def _format_upstream_error(status: int, body: bytes | str, url: str) -> str:
+def _redact_upstream_error_text(value, *, headers=None, url: str = "") -> str:
+    """Stringify and redact credentials before surfacing an upstream error."""
+    if isinstance(value, str):
+        text = value
+    elif value is None:
+        text = ""
+    else:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+
+    sensitive_values = []
+    if isinstance(headers, dict):
+        for name, value in headers.items():
+            header_name = str(name).lower()
+            if any(part in header_name for part in ("authorization", "api-key", "token", "secret", "key")):
+                value = str(value or "")
+                if len(value) >= 4:
+                    sensitive_values.append(value)
+                    if value.lower().startswith("bearer "):
+                        sensitive_values.append(value[7:].strip())
+    try:
+        sensitive_values.extend(
+            value for name, value in parse_qsl(urlsplit(url).query, keep_blank_values=True)
+            if len(value) >= 4 and any(part in name.lower() for part in ("key", "token", "secret", "auth"))
+        )
+    except ValueError:
+        pass
+    for secret in sorted(set(sensitive_values), key=len, reverse=True):
+        text = text.replace(secret, "[redacted]")
+    return re.sub(r"(?i)\bBearer\s+[^\s\"',;}]+", "Bearer [redacted]", text)
+
+
+def _safe_error_url(url: str) -> str:
+    """Keep endpoint diagnostics useful without exposing URL credentials."""
+    try:
+        parsed = urlsplit(url)
+        if not parsed.scheme or not parsed.netloc:
+            return url
+        host = parsed.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        query = urlencode([
+            (name, "[redacted]" if any(part in name.lower() for part in ("key", "token", "secret", "auth")) else value)
+            for name, value in parse_qsl(parsed.query, keep_blank_values=True)
+        ])
+        return urlunsplit((parsed.scheme, host, parsed.path, query, parsed.fragment))
+    except (TypeError, ValueError):
+        return "<provider endpoint>"
+
+
+def _format_upstream_error(status: int, body: bytes | str, url: str, headers=None) -> str:
     """Turn an upstream HTTP error into a user-readable sentence.
 
     Auth failures (401/403) become 'xAI rejected the API key' etc., so the UI
@@ -1382,6 +1435,7 @@ def _format_upstream_error(status: int, body: bytes | str, url: str) -> str:
             body = body.decode("utf-8", errors="replace")
         except Exception:
             body = str(body)
+    body = _redact_upstream_error_text(body, headers=headers, url=url)
     provider = _provider_label(url)
     # Try to pull a message out of the body
     detail = ""
@@ -1390,7 +1444,9 @@ def _format_upstream_error(status: int, body: bytes | str, url: str) -> str:
         if isinstance(j, dict):
             err = j.get("error") or j
             if isinstance(err, dict):
-                detail = (err.get("message") or err.get("detail") or "").strip()
+                detail = _redact_upstream_error_text(
+                    err.get("message") or err.get("detail") or "", headers=headers, url=url,
+                ).strip()
             elif isinstance(err, str):
                 detail = err.strip()
     except Exception:
@@ -2102,10 +2158,18 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
         note_model_activity(target_url, model)
         r = httpx_post_kimi_aware(target_url, h, json=payload, timeout=timeout)
     except Exception as e:
-        raise HTTPException(502, f"POST {target_url} failed: {e}")
+        detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+        raise HTTPException(502, f"POST {_safe_error_url(target_url)} failed: {detail}")
     if not r.is_success:
-        raise HTTPException(502, f"Upstream {target_url} -> {r.status_code}: {r.text}")
+        detail = _format_upstream_error(r.status_code, r.text, target_url, headers=h)
+        raise HTTPException(502, f"Upstream {_safe_error_url(target_url)} -> {r.status_code}: {detail}")
     data = r.json()
+    if isinstance(data, dict) and data.get("error"):
+        provider_error = data["error"]
+        status = _provider_stream_error_status(provider_error, default=400)
+        message = provider_error.get("message") if isinstance(provider_error, dict) else provider_error
+        detail = _redact_upstream_error_text(message or provider_error, headers=h, url=target_url)
+        raise HTTPException(status, detail or "Upstream request failed")
     try:
         if provider == "anthropic":
             response = _parse_anthropic_response(data)
@@ -2126,7 +2190,8 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
         _set_cached_response(cache_key, response)
         return response
     except Exception:
-        raise HTTPException(502, f"Unexpected schema from {target_url}: {str(data)[:400]}")
+        detail = _redact_upstream_error_text(data, headers=h, url=target_url)
+        raise HTTPException(502, f"Unexpected schema from {_safe_error_url(target_url)}: {detail[:400]}")
 
 
 def _candidate_is_configured(candidate) -> bool:
@@ -2479,9 +2544,9 @@ async def llm_call_async(
                 r = await httpx_post_kimi_aware_async(client, target_url, h, json=payload, timeout=call_timeout)
             duration = time.time() - start
             if not r.is_success:
-                friendly = _format_upstream_error(r.status_code, r.text, target_url)
+                friendly = _format_upstream_error(r.status_code, r.text, target_url, headers=h)
                 logger.warning(
-                    f"LLM async call to {target_url} failed in {duration:.2f}s "
+                    f"LLM async call to {_safe_error_url(target_url)} failed in {duration:.2f}s "
                     f"(attempt {attempt}): HTTP {r.status_code} {friendly}"
                 )
                 if r.status_code in (429, 502, 503, 504) and attempt < max_retries:
@@ -2495,9 +2560,10 @@ async def llm_call_async(
                 provider_error = data["error"]
                 status = _provider_stream_error_status(provider_error, default=400)
                 if isinstance(provider_error, dict):
-                    detail = provider_error.get("message") or provider_error.get("type") or str(provider_error)
+                    message = provider_error.get("message") or provider_error.get("type") or provider_error
                 else:
-                    detail = str(provider_error)
+                    message = provider_error
+                detail = _redact_upstream_error_text(message, headers=h, url=target_url)
                 raise HTTPException(status, detail or "Upstream request failed")
             try:
                 reported_model = data.get("model") if isinstance(data, dict) else None
@@ -2536,23 +2602,25 @@ async def llm_call_async(
             except HTTPException:
                 raise
             except Exception:
+                detail = _redact_upstream_error_text(data, headers=h, url=target_url)
                 raise _FallbackIneligibleHTTPException(
                     502,
-                    f"Unexpected schema from {target_url}: {str(data)[:400]}",
+                    f"Unexpected schema from {_safe_error_url(target_url)}: {detail[:400]}",
                 )
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             _cooled = _mark_host_dead(target_url)
             duration = time.time() - start
             _tail = f" — host cooled for {DEAD_HOST_COOLDOWN:.0f}s" if _cooled else " — transient, will retry"
-            logger.warning(f"LLM async connect to {target_url} failed after {duration:.2f}s: {e}{_tail}")
+            detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+            logger.warning(f"LLM async connect to {_safe_error_url(target_url)} failed after {duration:.2f}s: {detail}{_tail}")
             if _cooled or attempt >= max_retries:
-                raise HTTPException(503, f"Cannot reach {_host_key(target_url)}: {e}")
+                raise HTTPException(503, f"Cannot reach {_host_key(target_url)}: {detail}")
             await asyncio.sleep(LLMConfig.RETRY_DELAY)
         except httpx.ReadTimeout as e:
             duration = time.time() - start
             logger.warning(f"LLM async read timed out after {duration:.2f}s: {e}")
             if attempt >= max_retries:
-                raise HTTPException(504, f"POST {target_url} timed out after {max_retries} attempts")
+                raise HTTPException(504, f"POST {_safe_error_url(target_url)} timed out after {max_retries} attempts")
             await asyncio.sleep(LLMConfig.RETRY_DELAY)
         except httpx.PoolTimeout as e:
             duration = time.time() - start
@@ -2563,7 +2631,7 @@ async def llm_call_async(
                     f"POST {target_url} could not acquire an upstream connection",
                 )
             if attempt >= max_retries:
-                raise HTTPException(504, f"POST {target_url} timed out after {max_retries} attempts")
+                raise HTTPException(504, f"POST {_safe_error_url(target_url)} timed out after {max_retries} attempts")
             await asyncio.sleep(LLMConfig.RETRY_DELAY)
         except httpx.WriteTimeout as e:
             duration = time.time() - start
@@ -2574,7 +2642,7 @@ async def llm_call_async(
                     f"POST {target_url} failed during request delivery",
                 )
             if attempt >= max_retries:
-                raise HTTPException(504, f"POST {target_url} timed out after {max_retries} attempts")
+                raise HTTPException(504, f"POST {_safe_error_url(target_url)} timed out after {max_retries} attempts")
             await asyncio.sleep(LLMConfig.RETRY_DELAY)
         except httpx.ProtocolError as e:
             duration = time.time() - start
@@ -2585,7 +2653,8 @@ async def llm_call_async(
                     f"POST {target_url} failed with a protocol error",
                 )
             if attempt >= max_retries:
-                raise HTTPException(502, f"POST {target_url} failed after {max_retries} attempts: {e}")
+                detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+                raise HTTPException(502, f"POST {_safe_error_url(target_url)} failed after {max_retries} attempts: {detail}")
             await asyncio.sleep(LLMConfig.RETRY_DELAY)
         except httpx.NetworkError as e:
             duration = time.time() - start
@@ -2596,7 +2665,8 @@ async def llm_call_async(
                     f"POST {target_url} failed with a network error",
                 )
             if attempt >= max_retries:
-                raise HTTPException(502, f"POST {target_url} failed after {max_retries} attempts: {e}")
+                detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+                raise HTTPException(502, f"POST {_safe_error_url(target_url)} failed after {max_retries} attempts: {detail}")
             await asyncio.sleep(LLMConfig.RETRY_DELAY)
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else 502
@@ -2758,8 +2828,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                 _clear_host_dead(target_url)
                 if r.status_code != 200:
                     raw = (await r.aread()).decode(errors="replace")
-                    friendly = _format_chatgpt_subscription_error(r.status_code, raw)
-                    yield f'event: error\ndata: {json.dumps({"status": r.status_code, "text": friendly, "raw": raw[:500]})}\n\n'
+                    friendly = _format_chatgpt_subscription_error(r.status_code, raw, headers=h)
+                    yield f'event: error\ndata: {json.dumps({"status": r.status_code, "text": friendly})}\n\n'
                     return
                 async for line in r.aiter_lines():
                     if not line:
@@ -2896,6 +2966,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                                 if key in data
                             }
                         text = err.get("message") if isinstance(err, dict) else str(err or "ChatGPT Subscription request failed")
+                        text = _redact_upstream_error_text(text, headers=h, url=target_url)
                         status = _provider_stream_error_status(err, default=400)
                         yield f'event: error\ndata: {json.dumps({"status": status, "text": text})}\n\n'
                         return
@@ -2903,7 +2974,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             _cooled = _mark_host_dead(target_url)
             _tail = f" — host cooled for {DEAD_HOST_COOLDOWN:.0f}s" if _cooled else " — transient, will retry"
-            logger.warning(f"ChatGPT Subscription stream connect to {target_url} failed: {e}{_tail}")
+            detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+            logger.warning(f"ChatGPT Subscription stream connect to {_safe_error_url(target_url)} failed: {detail}{_tail}")
             yield f'event: error\ndata: {json.dumps({"error": f"Cannot reach {_host_key(target_url)}", "status": 503})}\n\n'
         except httpx.ReadTimeout:
             yield _stream_read_timeout_event(stream_timeout)
@@ -2916,8 +2988,9 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         except httpx.NetworkError:
             yield f'event: error\ndata: {json.dumps({"error": "Network error", "status": 502, "fallback_eligible": False})}\n\n'
         except Exception as e:
-            logger.error(f"ChatGPT Subscription stream error: {e}")
-            yield f'event: error\ndata: {json.dumps({"error": str(e), "status": 502, "fallback_eligible": False})}\n\n'
+            detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+            logger.error(f"ChatGPT Subscription stream error: {detail}")
+            yield f'event: error\ndata: {json.dumps({"error": detail, "status": 502, "fallback_eligible": False})}\n\n'
         return
 
     # ── Native Ollama streaming ──
@@ -2932,8 +3005,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                 _clear_host_dead(target_url)
                 if r.status_code != 200:
                     raw = (await r.aread()).decode(errors="replace")
-                    friendly = _format_upstream_error(r.status_code, raw, target_url)
-                    yield f'event: error\ndata: {json.dumps({"status": r.status_code, "text": friendly, "raw": raw[:500]})}\n\n'
+                    friendly = _format_upstream_error(r.status_code, raw, target_url, headers=h)
+                    yield f'event: error\ndata: {json.dumps({"status": r.status_code, "text": friendly})}\n\n'
                     return
                 async for line in r.aiter_lines():
                     if not line:
@@ -2946,6 +3019,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                         err = j.get("error")
                         status = _provider_stream_error_status(err, default=400)
                         text = err.get("message") if isinstance(err, dict) else str(err)
+                        text = _redact_upstream_error_text(text, headers=h, url=target_url)
                         yield f'event: error\ndata: {json.dumps({"error": text or "Ollama request failed", "status": status})}\n\n'
                         return
                     reported_model = _reported_model_name(j.get("model"))
@@ -2997,7 +3071,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             _cooled = _mark_host_dead(target_url)
             _tail = f" — host cooled for {DEAD_HOST_COOLDOWN:.0f}s" if _cooled else " — transient, will retry"
-            logger.warning(f"Ollama stream connect to {target_url} failed: {e}{_tail}")
+            detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+            logger.warning(f"Ollama stream connect to {_safe_error_url(target_url)} failed: {detail}{_tail}")
             yield f'event: error\ndata: {json.dumps({"error": f"Cannot reach {_host_key(target_url)}", "status": 503})}\n\n'
         except httpx.ReadTimeout:
             yield _stream_read_timeout_event(stream_timeout)
@@ -3010,8 +3085,9 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         except httpx.NetworkError:
             yield f'event: error\ndata: {json.dumps({"error": "Network error", "status": 502, "fallback_eligible": False})}\n\n'
         except Exception as e:
-            logger.error(f"Ollama stream error: {e}")
-            yield f'event: error\ndata: {json.dumps({"error": str(e), "status": 502, "fallback_eligible": False})}\n\n'
+            detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+            logger.error(f"Ollama stream error: {detail}")
+            yield f'event: error\ndata: {json.dumps({"error": detail, "status": 502, "fallback_eligible": False})}\n\n'
         return
 
     # ── Anthropic streaming ──
@@ -3031,8 +3107,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                 _clear_host_dead(target_url)
                 if r.status_code != 200:
                     raw = (await r.aread()).decode(errors="replace")
-                    friendly = _format_upstream_error(r.status_code, raw, target_url)
-                    yield f'event: error\ndata: {json.dumps({"status": r.status_code, "text": friendly, "raw": raw[:500]})}\n\n'
+                    friendly = _format_upstream_error(r.status_code, raw, target_url, headers=h)
+                    yield f'event: error\ndata: {json.dumps({"status": r.status_code, "text": friendly})}\n\n'
                     return
                 async for line in r.aiter_lines():
                     # SSE allows "data:value" with no space after the colon
@@ -3141,6 +3217,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                         elif evt == "error":
                             err = j.get("error") or {}
                             err_msg = err.get("message", "Unknown error") if isinstance(err, dict) else str(err)
+                            err_msg = _redact_upstream_error_text(err_msg, headers=h, url=target_url)
                             status = _provider_stream_error_status(err, default=400)
                             yield f'event: error\ndata: {json.dumps({"error": err_msg, "status": status})}\n\n'
                             return
@@ -3150,7 +3227,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             _cooled = _mark_host_dead(target_url)
             _tail = f" — host cooled for {DEAD_HOST_COOLDOWN:.0f}s" if _cooled else " — transient, will retry"
-            logger.warning(f"Anthropic stream connect to {target_url} failed: {e}{_tail}")
+            detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+            logger.warning(f"Anthropic stream connect to {_safe_error_url(target_url)} failed: {detail}{_tail}")
             yield f'event: error\ndata: {json.dumps({"error": f"Cannot reach {_host_key(target_url)}", "status": 503})}\n\n'
         except httpx.ReadTimeout:
             yield _stream_read_timeout_event(stream_timeout)
@@ -3163,8 +3241,9 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         except httpx.NetworkError:
             yield f'event: error\ndata: {json.dumps({"error": "Network error", "status": 502, "fallback_eligible": False})}\n\n'
         except Exception as e:
-            logger.error(f"Anthropic stream error: {e}")
-            yield f'event: error\ndata: {json.dumps({"error": str(e), "status": 502, "fallback_eligible": False})}\n\n'
+            detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+            logger.error(f"Anthropic stream error: {detail}")
+            yield f'event: error\ndata: {json.dumps({"error": detail, "status": 502, "fallback_eligible": False})}\n\n'
         return
 
     # ── OpenAI-compatible streaming ──
@@ -3212,8 +3291,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             _clear_host_dead(target_url)
             if r.status_code != 200:
                 raw = (await r.aread()).decode(errors="replace")
-                friendly = _format_upstream_error(r.status_code, raw, target_url)
-                yield f'event: error\ndata: {json.dumps({"status": r.status_code, "text": friendly, "raw": raw[:500]})}\n\n'
+                friendly = _format_upstream_error(r.status_code, raw, target_url, headers=h)
+                yield f'event: error\ndata: {json.dumps({"status": r.status_code, "text": friendly})}\n\n'
                 return
 
             async for line in r.aiter_lines():
@@ -3242,6 +3321,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                                     err = j.get("error")
                                     status = _provider_stream_error_status(err, default=400)
                                     text = err.get("message") if isinstance(err, dict) else str(err)
+                                    text = _redact_upstream_error_text(text, headers=h, url=target_url)
                                     yield f'event: error\ndata: {json.dumps({"error": text or "Upstream request failed", "status": status})}\n\n'
                                     return
                                 chunk_model = j.get("model")
@@ -3466,7 +3546,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
         _cooled = _mark_host_dead(target_url)
         _tail = f" — host cooled for {DEAD_HOST_COOLDOWN:.0f}s" if _cooled else " — transient, will retry"
-        logger.warning(f"Stream connect to {target_url} failed: {e}{_tail}")
+        detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+        logger.warning(f"Stream connect to {_safe_error_url(target_url)} failed: {detail}{_tail}")
         yield f'event: error\ndata: {json.dumps({"error": f"Cannot reach {_host_key(target_url)}", "status": 503})}\n\n'
     except httpx.ReadTimeout:
         yield _stream_read_timeout_event(stream_timeout)
@@ -3479,8 +3560,9 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
     except httpx.NetworkError:
         yield f'event: error\ndata: {json.dumps({"error": "Network error", "status": 502, "fallback_eligible": False})}\n\n'
     except Exception as e:
-        logger.error(f"Stream error: {e}")
-        yield f'event: error\ndata: {json.dumps({"error": str(e), "status": 502, "fallback_eligible": False})}\n\n'
+        detail = _redact_upstream_error_text(str(e), headers=h, url=target_url)
+        logger.error(f"Stream error: {detail}")
+        yield f'event: error\ndata: {json.dumps({"error": detail, "status": 502, "fallback_eligible": False})}\n\n'
 
 
 def _summarize_stream_error(err_chunk: Optional[str]) -> str:

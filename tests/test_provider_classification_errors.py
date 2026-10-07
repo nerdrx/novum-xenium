@@ -10,7 +10,7 @@ separate from provider identification.
 conftest.py stubs the heavy deps (sqlalchemy, src.database), so importing the
 real module is side-effect free.
 """
-from src.llm_core import _format_upstream_error
+from src.llm_core import _format_upstream_error, _safe_error_url
 
 
 # ── _format_upstream_error ──
@@ -65,6 +65,39 @@ class TestFormatUpstreamError:
             401, b'{"error": {"message": "nope"}}', "https://api.openai.com/v1"
         )
         assert "nope" in msg
+
+    def test_bearer_echo_is_redacted_but_status_guidance_remains(self):
+        msg = _format_upstream_error(
+            502,
+            '{"error":{"message":"proxy echoed Bearer synthetic-secret-123"}}',
+            "https://api.openai.com/v1",
+        )
+        assert "HTTP 502" in msg
+        assert "proxy echoed Bearer [redacted]" in msg
+        assert "synthetic-secret-123" not in msg
+
+    def test_current_sensitive_header_value_is_redacted(self):
+        msg = _format_upstream_error(
+            500,
+            '{"error":{"message":"proxy received synthetic-api-secret"}}',
+            "https://api.openai.com/v1",
+            headers={"x-api-key": "synthetic-api-secret"},
+        )
+        assert "OpenAI is having an outage (HTTP 500)." in msg
+        assert "proxy received [redacted]" in msg
+        assert "synthetic-api-secret" not in msg
+
+    def test_url_key_echo_and_nonstring_error_detail_are_safe(self):
+        url = "https://generativelanguage.googleapis.com/v1beta/models?key=synthetic-gemini-key"
+        msg = _format_upstream_error(
+            429,
+            '{"error":{"message":{"detail":"synthetic-gemini-key"}}}',
+            url,
+        )
+        assert "429" in msg
+        assert "synthetic-gemini-key" not in msg
+        assert "detail" in msg
+        assert "key=%5Bredacted%5D" in _safe_error_url(url)
 
     def test_unknown_url_falls_back_to_generic_label(self):
         msg = _format_upstream_error(401, "", "")

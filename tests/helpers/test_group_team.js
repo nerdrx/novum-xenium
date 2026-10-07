@@ -13,6 +13,8 @@ const models = [
 ];
 const server = new Map();
 const calls = [];
+let parentId = 'parent-1';
+const pendingLoads = new Map();
 globalThis.fetch = async (url, options = {}) => {
   const id = decodeURIComponent(url.split('/').at(-2));
   if (options.method === 'PUT') {
@@ -20,10 +22,11 @@ globalThis.fetch = async (url, options = {}) => {
     server.set(id, structuredClone(board));
     return { ok: true, json: async () => ({ board }) };
   }
+  if (scenario === 'load-race') return new Promise(resolve => pendingLoads.set(id, resolve));
   return { ok: true, json: async () => ({ board: server.get(id) || null }) };
 };
 const make = (runAssignment = async (...args) => { calls.push(args); return 'checked output'; }) =>
-  createGroupTeam({ apiBase: '', getParentSessionId: () => 'parent-1', getModels: () => models, runAssignment });
+  createGroupTeam({ apiBase: '', getParentSessionId: () => parentId, getModels: () => models, runAssignment });
 
 if (scenario === 'prompts') {
   const board = newTeamBoard(models);
@@ -116,6 +119,17 @@ if (scenario === 'prompts') {
   await Promise.all([first, second]);
   assert.deepEqual(requests, ['first', 'second']);
   assert.equal(server.get('parent-1').plan, 'second');
+} else if (scenario === 'load-race') {
+  const team = make();
+  parentId = 'parent-A';
+  const loadingA = team.mount(null);
+  parentId = 'parent-B';
+  const loadingB = team.mount(null);
+  pendingLoads.get('parent-B')({ ok: true, json: async () => ({ board: { plan: 'Board B', participants: [], tasks: [] } }) });
+  await loadingB;
+  pendingLoads.get('parent-A')({ ok: true, json: async () => ({ board: { plan: 'Board A', participants: [], tasks: [] } }) });
+  await loadingA;
+  assert.equal(team.getBoard().plan, 'Board B', 'late board A response must not replace selected board B');
 } else {
   throw new Error(`Unknown scenario: ${scenario}`);
 }

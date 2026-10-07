@@ -1,6 +1,7 @@
 """Workspace API - browse server directories to pick a tool workspace folder."""
 import os
 from fastapi import APIRouter, Request, HTTPException, Query
+from starlette.concurrency import run_in_threadpool
 
 from src.auth_helpers import get_current_user
 from src.tool_security import owner_is_admin_or_single_user
@@ -64,22 +65,22 @@ def setup_workspace_routes():
         body = await request.json()
         workspace, session_id = snapshot_body(body)
         root, owner = snapshot_scope(request, workspace, session_id)
-        return snapshot_call(create_snapshot, root, owner, session_id, body.get("label"))
+        return await run_in_threadpool(snapshot_call, create_snapshot, root, owner, session_id, body.get("label"))
 
     @router.post("/snapshots/{snapshot_id}/preview")
     async def post_snapshot_preview(request: Request, snapshot_id: str):
         body = await request.json()
         workspace, session_id = snapshot_body(body)
         root, owner = snapshot_scope(request, workspace, session_id)
-        return snapshot_call(preview_snapshot, root, owner, session_id, snapshot_id)
+        return await run_in_threadpool(snapshot_call, preview_snapshot, root, owner, session_id, snapshot_id)
 
     @router.post("/snapshots/{snapshot_id}/restore")
     async def post_snapshot_restore(request: Request, snapshot_id: str):
         body = await request.json()
         workspace, session_id = snapshot_body(body)
         root, owner = snapshot_scope(request, workspace, session_id)
-        return snapshot_call(
-            restore_snapshot, root, owner, session_id, snapshot_id, body.get("expected_revision", "")
+        return await run_in_threadpool(
+            snapshot_call, restore_snapshot, root, owner, session_id, snapshot_id, body.get("expected_revision", "")
         )
 
     @router.get("/browse")

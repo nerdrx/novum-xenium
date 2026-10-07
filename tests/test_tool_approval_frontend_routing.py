@@ -101,7 +101,9 @@ def test_every_changed_approval_module_is_cache_busted_together():
     stream_versions = versions(index, "chatStream.js") + versions(chat, "chatStream.js")
     assert len(stream_versions) >= 2
     assert len(set(stream_versions)) == 1
-    assert versions(app, "compare/index.js")
+    # Compare owns shared state with slash commands, so its eager and lazy
+    # entry points use one unversioned URL (static responses require revalidation).
+    assert "from './js/compare/index.js';" in app
     assert versions(compare_index, "stream.js")
     assert versions(compare_stream, "chatRenderer.js")
     # Every importer resolves to the same renderer, including sessions/group

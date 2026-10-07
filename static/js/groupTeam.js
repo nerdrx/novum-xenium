@@ -36,6 +36,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
   let saveTimer = null;
   let taskSerial = 0;
   let saveChain = Promise.resolve();
+  let loadGeneration = 0;
 
   const models = () => (getModels() || []).map(m => ({ ...m, mid: String(m.mid) }));
   const person = id => board.participants.find(p => p.id === id);
@@ -169,7 +170,14 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
 
   async function load() {
     const id = getParentSessionId();
-    if (!id || id === parentId) { render(); return; }
+    if (!id) {
+      loadGeneration++;
+      parentId = null;
+      loading = false;
+      return;
+    }
+    if (id === parentId) { render(); return; }
+    const generation = ++loadGeneration;
     parentId = id;
     loading = true;
     const currentModels = models();
@@ -179,9 +187,11 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, runAss
       const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(parentId)}/team`, { credentials: 'same-origin' });
       if (response.ok) {
         const data = await response.json();
+        if (generation !== loadGeneration || parentId !== id) return;
         if (data.board) board = data.board;
       }
     } catch (error) { console.warn('[group-team] load failed', error); }
+    if (generation !== loadGeneration || parentId !== id) return;
     loading = false;
     render();
   }

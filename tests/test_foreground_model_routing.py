@@ -166,6 +166,7 @@ def _chat_stream_endpoint(
             captured["approval_disabled_tools"] = set(
                 kwargs.get("disabled_tools") or ()
             )
+            captured["approval_forced_tools"] = set(kwargs.get("forced_tools") or ())
         if agent_chunks is not None:
             for chunk in agent_chunks:
                 if isinstance(chunk, BaseException):
@@ -342,6 +343,89 @@ async def test_chat_stream_approval_restores_exact_shell_turn_toggle(monkeypatch
 
     assert captured["exact_approval"].pending == pending
     assert "bash" not in captured["approval_disabled_tools"]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_approval_keeps_sealed_web_action_enabled(monkeypatch):
+    from src.tool_capabilities import capabilities_for_action
+    from src.tool_policy import WEB_TOOL_NAMES
+
+    captured = {}
+    endpoint = _chat_stream_endpoint(monkeypatch, "agent", captured)
+    pending = chat_routes.tool_approval_store.create(
+        owner="alice",
+        session_id="session-1",
+        origin_run_id="run-1",
+        tool_name="web_search",
+        content='{"query":"exact query"}',
+        workspace=None,
+        external_untrusted_context_seen=True,
+        web_search_enabled=False,
+        capabilities=capabilities_for_action("web_search", '{"query":"exact query"}'),
+    )
+    request = _RouteRequest("agent")
+    request._form.update(
+        {
+            "allow_web_search": "false",
+            "tool_approval_id": pending.approval_id,
+            "tool_approval_decision": "approve",
+        }
+    )
+
+    response = await endpoint(request)
+    async for _ in response.body_iterator:
+        pass
+
+    assert pending.web_search_enabled is False
+    assert WEB_TOOL_NAMES.isdisjoint(captured["approval_disabled_tools"])
+    assert WEB_TOOL_NAMES <= captured["approval_forced_tools"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("original_enabled", "refreshed_enabled"),
+    [(False, True), (True, False)],
+)
+async def test_chat_stream_approval_restores_sealed_web_setting(
+    monkeypatch, original_enabled, refreshed_enabled
+):
+    from src.tool_capabilities import capabilities_for_action
+    from src.tool_policy import WEB_TOOL_NAMES
+
+    captured = {}
+    endpoint = _chat_stream_endpoint(monkeypatch, "agent", captured)
+    pending = chat_routes.tool_approval_store.create(
+        owner="alice",
+        session_id="session-1",
+        origin_run_id="run-1",
+        tool_name="edit_file",
+        content='{"path":"probe.py"}',
+        workspace=None,
+        external_untrusted_context_seen=True,
+        selected_tools=("edit_file", "web_search") if original_enabled else ("edit_file",),
+        web_search_enabled=original_enabled,
+        capabilities=capabilities_for_action("edit_file", '{"path":"probe.py"}'),
+    )
+    request = _RouteRequest("agent")
+    request._form.update(
+        {
+            "allow_web_search": "true" if refreshed_enabled else "false",
+            "tool_approval_id": pending.approval_id,
+            "tool_approval_decision": "approve",
+        }
+    )
+
+    response = await endpoint(request)
+    async for _ in response.body_iterator:
+        pass
+
+    assert captured["exact_approval"].pending == pending
+    if original_enabled:
+        assert WEB_TOOL_NAMES.isdisjoint(captured["approval_disabled_tools"])
+        assert WEB_TOOL_NAMES <= captured["approval_forced_tools"]
+    else:
+        assert WEB_TOOL_NAMES <= captured["approval_disabled_tools"]
+        assert WEB_TOOL_NAMES.isdisjoint(captured["approval_forced_tools"])
 
 
 @pytest.mark.asyncio
@@ -3410,8 +3494,18 @@ def test_agent_fallback_request_uses_candidate_context_budget(
         (backup[0], backup[1]),
         (backup[0], backup[1]),
     ]
-    assert trim_budgets.count(primary_context) >= 1
-    assert trim_budgets.count(backup_context) >= 1
+    for request, route_context in zip(requests_by_round[0], (primary_context, backup_context)):
+        assert agent_loop.estimate_tokens(request["messages"]) + model_context.estimate_tool_schema_tokens(
+            request["kwargs"]["tools"]
+        ) + request["kwargs"]["max_tokens"] <= route_context
+    assert min(
+        primary_context,
+        primary_context - min(requested_max_tokens, 2048, primary_context - 10),
+    ) in trim_budgets
+    assert min(
+        backup_context,
+        backup_context - min(requested_max_tokens, 2048, backup_context - 10),
+    ) in trim_budgets
     fallback_messages = requests_by_round[0][1]["messages"]
     assert requests_by_round[0][0]["kwargs"]["max_tokens"] == min(
         requested_max_tokens, primary_context - 20
@@ -3501,16 +3595,28 @@ def test_unknown_backup_context_does_not_inherit_primary_window(monkeypatch):
     assert chunks
 
 
-def test_known_window_output_room_is_not_limited_by_input_budget(monkeypatch):
+@pytest.mark.parametrize(
+    ("input_budget", "prompt_tokens", "requested_max_tokens"),
+    [(5000, 3000, 4096), (10, 10, 4096), (10, 10, 100)],
+)
+def test_known_window_output_room_is_not_limited_by_input_budget(
+    monkeypatch, input_budget, prompt_tokens, requested_max_tokens,
+):
     requests = []
     primary = ("https://selected.example/v1", "selected-model", {})
 
     monkeypatch.setattr(
         agent_loop, "get_setting",
-        lambda key, default=None: 5000 if key == "agent_input_token_budget" else default,
+        lambda key, default=None: input_budget if key == "agent_input_token_budget" else default,
     )
     monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None)
-    monkeypatch.setattr(agent_loop, "estimate_tokens", lambda messages: 3000)
+    # System prompt adds no tokens here. Current user and full prompt fit
+    # exactly at the small-cap boundary in the regression cases.
+    monkeypatch.setattr(
+        agent_loop,
+        "estimate_tokens",
+        lambda messages: prompt_tokens if any(message.get("role") == "user" for message in messages) else 0,
+    )
     monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda owner: set())
     monkeypatch.setattr(
         agent_loop,
@@ -3536,7 +3642,7 @@ def test_known_window_output_room_is_not_limited_by_input_budget(monkeypatch):
 
     monkeypatch.setattr(model_context, "budget_context_for_model", lambda *args, **kwargs: 10000)
     monkeypatch.setattr(model_context, "estimate_tool_schema_tokens", lambda tools: 0)
-    monkeypatch.setattr(context_budget, "compute_input_token_budget", lambda *args, **kwargs: 5000)
+    monkeypatch.setattr(context_budget, "compute_input_token_budget", lambda *args, **kwargs: input_budget)
     monkeypatch.setattr(context_budget, "budget_is_explicit", lambda value: True)
     monkeypatch.setattr(context_compactor, "trim_for_context", lambda messages, budget, reserve_tokens=0: list(messages))
 
@@ -3550,10 +3656,14 @@ def test_known_window_output_room_is_not_limited_by_input_budget(monkeypatch):
 
     chunks = _collect(agent_loop.stream_agent_loop(
         primary[0], primary[1], [{"role": "user", "content": "Question remains intact."}],
-        max_tokens=4096, relevant_tools=set(), context_length=10000, _is_teacher_run=True,
+        max_tokens=requested_max_tokens, relevant_tools=set(), context_length=10000, _is_teacher_run=True,
     ))
 
-    assert requests[0]["kwargs"]["max_tokens"] == 4096
+    assert requests[0]["kwargs"]["max_tokens"] == requested_max_tokens
+    prompt_tokens = agent_loop.estimate_tokens(requests[0]["messages"])
+    schema_tokens = model_context.estimate_tool_schema_tokens(requests[0]["kwargs"]["tools"])
+    assert prompt_tokens + schema_tokens <= input_budget
+    assert prompt_tokens + schema_tokens + requests[0]["kwargs"]["max_tokens"] <= 10000
     assert requests[0]["messages"][-1] == {"role": "user", "content": "Question remains intact."}
     assert chunks
 

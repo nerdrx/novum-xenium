@@ -1,6 +1,7 @@
 """Exact one-use continuation coverage for tainted agent actions."""
 
 import time
+from dataclasses import replace
 from collections import namedtuple
 
 import pytest
@@ -143,6 +144,29 @@ def test_public_payload_shows_complete_action_but_not_authority_fields():
     assert payload["action"]["document_version"] == 4
     assert "SECOND_LINE" in str(payload)
     assert "origin_run_id" not in str(payload)
+
+
+def test_web_search_setting_is_digest_bound_and_server_only():
+    store = ToolApprovalStore()
+    pending = _pending(store, web_search_enabled=True)
+    assert pending.web_search_enabled is True
+    assert "web_search_enabled" not in pending.public_payload()
+
+    grant = store.consume(
+        pending.approval_id,
+        decision="approve",
+        owner="alice",
+        session_id="session-1",
+    )
+    assert grant is not None
+    grant.pending = replace(pending, web_search_enabled=False)
+    assert not grant.claim(
+        owner="alice",
+        session_id="session-1",
+        tool_name="bash",
+        content="printf exact",
+        workspace=None,
+    )
 
 
 @pytest.mark.asyncio

@@ -1,10 +1,14 @@
 import asyncio
+import errno
 import json
 import os
 import re
 import difflib
 import shutil
+import stat
 import time
+import uuid
+from contextlib import ExitStack
 from typing import Optional, Dict, Any, Tuple, List
 
 from src.constants import MAX_READ_CHARS, MAX_DIFF_LINES, MAX_OUTPUT_CHARS
@@ -18,6 +22,219 @@ _CODENAV_MAX_HITS = 200
 _CODENAV_MAX_LINE = 400
 _GREP_TIMEOUT_SECONDS = 20
 _GREP_STDERR_PREFIX = 20_000
+
+
+def _supports_safe_file_mutations() -> bool:
+    required = (os.open, os.stat, os.mkdir, os.unlink, os.rename, os.link)
+    return (
+        os.name == "posix"
+        and hasattr(os, "O_NOFOLLOW")
+        and hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "fchmod")
+        and hasattr(os, "fchown")
+        and all(fn in os.supports_dir_fd for fn in required)
+        and os.link in os.supports_follow_symlinks
+    )
+
+
+def _open_mutation_parent(path: str, *, create: bool = False) -> Tuple[int, str]:
+    """Pin a canonical path's parent without following any path component."""
+    from src.tool_execution import get_active_workspace
+
+    workspace = get_active_workspace()
+    if not _supports_safe_file_mutations():
+        raise OSError(errno.ENOTSUP, "safe file mutations are unavailable on this platform")
+
+    absolute = os.path.abspath(path)
+    if workspace:
+        base = os.path.abspath(workspace)
+        try:
+            if os.path.commonpath((absolute, base)) != base:
+                raise ValueError("file path is outside the active workspace")
+        except ValueError as exc:
+            raise ValueError("file path is outside the active workspace") from exc
+        relative = os.path.relpath(absolute, base)
+        parts = relative.split(os.path.sep)
+        if relative == "." or any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("file path is no longer safe")
+        parent_parts, leaf = parts[:-1], parts[-1]
+        root_path = base
+    else:
+        parent, leaf = os.path.split(absolute)
+        parent_parts = []
+        root_path = parent
+    if not leaf or leaf in {".", ".."}:
+        raise ValueError("file path is no longer safe")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(os.path.sep, flags)
+    try:
+        for part in os.path.abspath(root_path).split(os.path.sep):
+            if not part:
+                continue
+            try:
+                child = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(part, 0o777, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        if workspace:
+            for part in parent_parts:
+                try:
+                    child = os.open(part, flags, dir_fd=fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    try:
+                        os.mkdir(part, 0o777, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                    child = os.open(part, flags, dir_fd=fd)
+                os.close(fd)
+                fd = child
+        return fd, leaf
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _read_mutation_target(
+    parent_fd: int, leaf: str, *, optional: bool = False, read_optional: bool = False
+):
+    """Read a single-link regular file through its pinned parent descriptor."""
+    try:
+        info = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        if optional:
+            return "", None, None, None
+        raise
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+        raise ValueError("file path is not a safe single-link regular file")
+
+    fd = os.open(
+        leaf,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        dir_fd=parent_fd,
+    )
+    try:
+        opened = os.fstat(fd)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink > 1
+                or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)):
+            raise ValueError("file path changed during mutation")
+        try:
+            with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as handle:
+                content = handle.read()
+        except (PermissionError, UnicodeDecodeError):
+            if not read_optional:
+                raise
+            content = ""
+        xattrs = {}
+        if all(hasattr(os, name) for name in ("listxattr", "getxattr")):
+            try:
+                names = os.listxattr(fd)
+            except OSError as exc:
+                if exc.errno not in {errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)}:
+                    raise
+                names = []
+            for name in names:
+                if name.startswith("user.") or name == "system.posix_acl_access":
+                    xattrs[name] = os.getxattr(fd, name)
+        metadata = (info.st_uid, info.st_gid, xattrs)
+        return content, (info.st_dev, info.st_ino), stat.S_IMODE(info.st_mode) & 0o777, metadata
+    finally:
+        os.close(fd)
+
+
+def _verify_mutation_write_access(
+    parent_fd: int, leaf: str, expected: tuple[int, int]
+) -> None:
+    fd = os.open(
+        leaf,
+        os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        dir_fd=parent_fd,
+    )
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink > 1
+                or (info.st_dev, info.st_ino) != expected):
+            raise ValueError("file path changed during mutation")
+    finally:
+        os.close(fd)
+
+
+def _write_mutation_target(
+    parent_fd: int,
+    leaf: str,
+    content: str,
+    *,
+    expected: tuple[int, int] | None,
+    mode: int | None,
+    metadata: tuple[int, int, dict] | None = None,
+    create_only: bool = False,
+) -> None:
+    """Atomically replace/create a leaf relative to a pinned directory."""
+    try:
+        info = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        info = None
+    if expected is None:
+        if info is not None:
+            raise FileExistsError(leaf)
+    elif (info is None or not stat.S_ISREG(info.st_mode) or info.st_nlink > 1
+          or (info.st_dev, info.st_ino) != expected):
+        raise ValueError("file path changed during mutation")
+
+    temporary = f".agent-write-{uuid.uuid4().hex}"
+    fd = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o666,
+        dir_fd=parent_fd,
+    )
+    try:
+        if metadata is not None:
+            info = os.fstat(fd)
+            if (info.st_uid, info.st_gid) != metadata[:2]:
+                try:
+                    os.fchown(fd, metadata[0], metadata[1])
+                except OSError as exc:
+                    raise PermissionError("cannot preserve existing file owner/group") from exc
+            if hasattr(os, "setxattr"):
+                for name, value in metadata[2].items():
+                    os.setxattr(fd, name, value)
+        if mode is not None:
+            os.fchmod(fd, mode & 0o777)
+        with os.fdopen(fd, "wb", closefd=False) as handle:
+            handle.write(content.encode("utf-8"))
+            handle.flush()
+            os.fsync(fd)
+        if create_only:
+            os.link(
+                temporary, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            os.unlink(temporary, dir_fd=parent_fd)
+        else:
+            os.rename(temporary, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(temporary, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _unlink_mutation_target(parent_fd: int, leaf: str, expected: tuple[int, int]) -> None:
+    info = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink > 1
+            or (info.st_dev, info.st_ino) != expected):
+        raise ValueError("file path changed during mutation")
+    os.unlink(leaf, dir_fd=parent_fd)
 
 
 def _glob_to_regex(pat: str) -> "re.Pattern":
@@ -202,18 +419,22 @@ class EditFileTool:
             return {"error": "edit_file: old_string and new_string are identical", "exit_code": 1}
 
         def _apply():
-            """Helper function that performs the actual string replacement and file writing logic."""
-            with open(path, "r", encoding="utf-8") as f:
-                original = f.read()
-            count = original.count(old)
-            if count == 0:
-                return original, None, "not_found"
-            if count > 1 and not replace_all:
-                return original, None, f"not_unique:{count}"
-            updated = original.replace(old, new) if replace_all else original.replace(old, new, 1)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(updated)
-            return original, updated, "ok"
+            parent_fd, leaf = _open_mutation_parent(path)
+            try:
+                original, identity, mode, metadata = _read_mutation_target(parent_fd, leaf)
+                _verify_mutation_write_access(parent_fd, leaf, identity)
+                count = original.count(old)
+                if count == 0:
+                    return original, None, "not_found"
+                if count > 1 and not replace_all:
+                    return original, None, f"not_unique:{count}"
+                updated = original.replace(old, new) if replace_all else original.replace(old, new, 1)
+                _write_mutation_target(
+                    parent_fd, leaf, updated, expected=identity, mode=mode, metadata=metadata
+                )
+                return original, updated, "ok"
+            finally:
+                os.close(parent_fd)
 
         try:
             original, updated, status = await asyncio.to_thread(_apply)
@@ -221,7 +442,11 @@ class EditFileTool:
             return {"error": f"edit_file: {path}: not found (use write_file to create it)", "exit_code": 1}
         except (IsADirectoryError, UnicodeDecodeError):
             return {"error": f"edit_file: {path}: not an editable text file", "exit_code": 1}
-        except PermissionError:
+        except ValueError as e:
+            return {"error": f"edit_file: {path}: {e}", "exit_code": 1}
+        except PermissionError as e:
+            if "cannot preserve existing file owner/group" in str(e):
+                return {"error": f"edit_file: {path}: {e}", "exit_code": 1}
             return {"error": f"edit_file: {path}: permission denied", "exit_code": 1}
         except OSError as e:
             return {"error": f"edit_file: {path}: {e}", "exit_code": 1}
@@ -316,20 +541,25 @@ class WriteFileTool:
             return {"error": f"write_file: {e}", "exit_code": 1}
         try:
             def _write():
-                old = ""
+                parent_fd, leaf = _open_mutation_parent(path, create=True)
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        old = f.read()
-                except (FileNotFoundError, IsADirectoryError, UnicodeDecodeError, OSError):
-                    old = ""
-                d = os.path.dirname(path)
-                if d:
-                    os.makedirs(d, exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(body)
-                return old, len(body)
+                    old, identity, mode, metadata = _read_mutation_target(
+                        parent_fd, leaf, optional=True, read_optional=True
+                    )
+                    if identity is not None:
+                        _verify_mutation_write_access(parent_fd, leaf, identity)
+                    _write_mutation_target(
+                        parent_fd, leaf, body, expected=identity, mode=mode, metadata=metadata
+                    )
+                    return old, len(body)
+                finally:
+                    os.close(parent_fd)
             old_content, size = await asyncio.to_thread(_write)
-        except PermissionError:
+        except ValueError as e:
+            return {"error": f"write_file: {path}: {e}", "exit_code": 1}
+        except PermissionError as e:
+            if "cannot preserve existing file owner/group" in str(e):
+                return {"error": f"write_file: {path}: {e}", "exit_code": 1}
             return {"error": f"write_file: {path}: permission denied", "exit_code": 1}
         except OSError as e:
             return {"error": f"write_file: {path}: {e}", "exit_code": 1}
@@ -362,48 +592,86 @@ class ApplyPatchTool:
         if not patch_text.strip():
             return {"error": "apply_patch: patch_text required", "exit_code": 1}
 
+        mutation_started = False
         try:
             ops = _parse_agent_patch(patch_text)
             if not ops:
                 return {"error": "apply_patch: no file operations found", "exit_code": 1}
             prepared = []
-            for op in ops:
-                path = _resolve_tool_path(op["path"])
-                kind = op["kind"]
-                if kind == "add":
-                    if os.path.exists(path):
-                        return {"error": f"apply_patch: {op['path']}: already exists", "exit_code": 1}
-                    old = ""
-                    new = op["content"]
-                elif kind == "delete":
-                    if not os.path.isfile(path):
-                        return {"error": f"apply_patch: {op['path']}: not found", "exit_code": 1}
-                    with open(path, "r", encoding="utf-8") as f:
-                        old = f.read()
-                    new = ""
-                else:
-                    if not os.path.isfile(path):
-                        return {"error": f"apply_patch: {op['path']}: not found", "exit_code": 1}
-                    with open(path, "r", encoding="utf-8") as f:
-                        old = f.read()
-                    new = _apply_patch_hunks(old, op["hunks"], op["path"])
-                prepared.append((kind, path, old, new))
+            seen_paths = set()
+            with ExitStack() as stack:
+                for op in ops:
+                    path = _resolve_tool_path(op["path"])
+                    kind = op["kind"]
+                    canonical_path = os.path.normcase(os.path.abspath(path))
+                    if canonical_path in seen_paths:
+                        return {"error": f"apply_patch: duplicate path: {op['path']}", "exit_code": 1}
+                    seen_paths.add(canonical_path)
+                    deferred_parent = False
+                    try:
+                        parent_fd, leaf = _open_mutation_parent(path)
+                    except FileNotFoundError:
+                        if kind != "add":
+                            raise
+                        parent_fd = None
+                        leaf = os.path.basename(path)
+                        deferred_parent = True
+                    if parent_fd is not None:
+                        stack.callback(os.close, parent_fd)
+                    if kind == "add":
+                        if deferred_parent:
+                            old, identity, mode, metadata = "", None, None, None
+                        else:
+                            old, identity, mode, metadata = _read_mutation_target(
+                                parent_fd, leaf, optional=True
+                            )
+                        if identity is not None:
+                            return {"error": f"apply_patch: {op['path']}: already exists", "exit_code": 1}
+                        new = op["content"]
+                    else:
+                        old, identity, mode, metadata = _read_mutation_target(parent_fd, leaf)
+                        if kind == "update":
+                            _verify_mutation_write_access(parent_fd, leaf, identity)
+                            new = _apply_patch_hunks(old, op["hunks"], op["path"])
+                        else:
+                            new = ""
+                    prepared.append((
+                        kind, path, old, new, parent_fd, leaf, identity, mode, metadata,
+                        deferred_parent,
+                    ))
 
-            diffs = []
-            for kind, path, old, new in prepared:
-                if kind == "delete":
-                    os.remove(path)
-                else:
-                    directory = os.path.dirname(path)
-                    if directory:
-                        os.makedirs(directory, exist_ok=True)
-                    with open(path, "w", encoding="utf-8") as f:
-                        f.write(new)
-                diff = _unified_diff(old, new, path)
-                if diff:
-                    diffs.append(diff)
+                diffs = []
+                for (kind, path, old, new, parent_fd, leaf, identity, mode, metadata,
+                     deferred_parent) in prepared:
+                    mutation_started = True
+                    if kind == "delete":
+                        current, current_identity, _, _ = _read_mutation_target(parent_fd, leaf)
+                        if current_identity != identity or current != old:
+                            raise ValueError("file changed during patch")
+                        _unlink_mutation_target(parent_fd, leaf, identity)
+                    else:
+                        if kind == "update":
+                            current, current_identity, _, _ = _read_mutation_target(parent_fd, leaf)
+                            if current_identity != identity or current != old:
+                                raise ValueError("file changed during patch")
+                        if deferred_parent:
+                            parent_fd, leaf = _open_mutation_parent(path, create=True)
+                        try:
+                            _write_mutation_target(
+                                parent_fd, leaf, new, expected=identity, mode=mode,
+                                metadata=metadata, create_only=(kind == "add"),
+                            )
+                        finally:
+                            if deferred_parent:
+                                os.close(parent_fd)
+                    diff = _unified_diff(old, new, path)
+                    if diff:
+                        diffs.append(diff)
         except (ValueError, UnicodeDecodeError, PermissionError, OSError) as e:
-            return {"error": f"apply_patch: {e}", "exit_code": 1}
+            message = f"apply_patch: {e}"
+            if mutation_started:
+                message += "; earlier patch operations may be partial; inspect the workspace diff"
+            return {"error": message, "exit_code": 1}
 
         added = sum(int(d.get("added") or 0) for d in diffs)
         removed = sum(int(d.get("removed") or 0) for d in diffs)

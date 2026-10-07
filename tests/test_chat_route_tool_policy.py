@@ -324,6 +324,7 @@ def test_explicit_false_disables_even_for_admin():
 # ── Frontend source-level guards ──────────────────────────────
 
 _CHAT_JS = Path(__file__).resolve().parent.parent / "static" / "js" / "chat.js"
+_APP_JS = Path(__file__).resolve().parent.parent / "static" / "app.js"
 
 
 def test_frontend_always_sends_explicit_allow_bash():
@@ -342,3 +343,9 @@ def test_frontend_sends_explicit_allow_web_search_false_in_agent_mode():
     assert "fd.append('allow_web_search', el('web-toggle').checked ? 'true' : 'false')" in source, (
         "Frontend must send explicit allow_web_search=false in agent mode when toggle is off"
     )
+
+
+def test_mode_change_applies_tool_preferences_before_next_send():
+    source = _APP_JS.read_text(encoding="utf-8")
+    assert "applyModeToToggles(mode);" in source
+    assert "setTimeout(() => applyModeToToggles(mode), 500)" not in source

@@ -229,3 +229,93 @@ def test_sse_disconnect_fallback_preserves_cancelled_terminal_status():
       await fallback();
       assert.equal(job.status, 'cancelled');
     """)
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_late_fallback_done_status_cannot_overwrite_confirmed_cancellation():
+    _run(f"""
+      import assert from 'node:assert/strict';
+      const jobs = await import('{_JOBS}');
+      let finishStatus;
+      let fallback;
+      globalThis.window = {{}};
+      globalThis.setInterval = () => 1;
+      globalThis.clearInterval = () => {{}};
+      globalThis.setTimeout = (fn) => {{ fallback = fn; return 2; }};
+      globalThis.fetch = async (url) => {{
+        if (url.endsWith('/api/research/start')) return {{ ok: true, json: async () => ({{ session_id: 'session-race' }}) }};
+        if (url.endsWith('/api/research/status/session-race')) return new Promise(resolve => finishStatus = resolve);
+        if (url.endsWith('/api/research/cancel/session-race')) return {{ ok: true, json: async () => ({{ cancelled: true }}) }};
+        if (url.endsWith('/api/research/result-peek/session-race')) return {{ ok: false }};
+        throw new Error(`Unexpected request: ${{url}}`);
+      }};
+      let stream;
+      globalThis.EventSource = class {{ constructor() {{ stream = this; }} close() {{}} }};
+      const job = await jobs.startJob('cancel while polling', {{}});
+      stream.onerror();
+      const checking = fallback();
+      assert.equal(typeof finishStatus, 'function');
+      await jobs.cancelJob(job.id);
+      assert.equal(job.status, 'cancelled');
+      finishStatus({{ ok: true, json: async () => ({{ status: 'done', progress: {{ phase: 'done' }} }}) }});
+      await checking;
+      assert.equal(job.status, 'cancelled', 'stale status response must not overwrite Stop result');
+    """)
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_queued_sse_done_event_cannot_overwrite_confirmed_cancellation():
+    _run(f"""
+      import assert from 'node:assert/strict';
+      const jobs = await import('{_JOBS}');
+      globalThis.window = {{}};
+      globalThis.setInterval = () => 1;
+      globalThis.clearInterval = () => {{}};
+      globalThis.fetch = async (url) => {{
+        if (url.endsWith('/api/research/start')) return {{ ok: true, json: async () => ({{ session_id: 'session-sse-race' }}) }};
+        if (url.endsWith('/api/research/cancel/session-sse-race')) return {{ ok: true, json: async () => ({{ cancelled: true }}) }};
+        throw new Error(`Unexpected request: ${{url}}`);
+      }};
+      let stream;
+      globalThis.EventSource = class {{ constructor() {{ stream = this; }} close() {{}} }};
+      const job = await jobs.startJob('cancel before queued event', {{}});
+      await jobs.cancelJob(job.id);
+      assert.equal(job.status, 'cancelled');
+      stream.onmessage({{ data: JSON.stringify({{ final: true, status: 'done' }}) }});
+      assert.equal(job.status, 'cancelled', 'closed stream event must not overwrite Stop result');
+    """)
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_old_result_peek_cannot_replace_retried_job_state():
+    _run(f"""
+      import assert from 'node:assert/strict';
+      const jobs = await import('{_JOBS}');
+      globalThis.window = {{}};
+      globalThis.setInterval = () => 1;
+      globalThis.clearInterval = () => {{}};
+      let starts = 0;
+      let finishOldPeek;
+      globalThis.fetch = async (url) => {{
+        if (url.endsWith('/api/research/start')) {{
+          starts++;
+          return {{ ok: true, json: async () => ({{ session_id: `session-${{starts}}` }}) }};
+        }}
+        if (url.endsWith('/api/research/result-peek/session-1')) return new Promise(resolve => finishOldPeek = resolve);
+        if (url.endsWith('/api/research/result-peek/session-2')) return {{ ok: false }};
+        throw new Error(`Unexpected request: ${{url}}`);
+      }};
+      const streams = [];
+      globalThis.EventSource = class {{ constructor() {{ streams.push(this); }} close() {{}} }};
+      const job = await jobs.startJob('retry while fetching old result', {{}});
+      streams[0].onmessage({{ data: JSON.stringify({{ final: true, status: 'done' }}) }});
+      assert.equal(typeof finishOldPeek, 'function');
+      const retrying = jobs.retryJob(job.id);
+      await retrying;
+      assert.equal(job.id, 'session-2');
+      assert.equal(job.status, 'running');
+      finishOldPeek({{ ok: true, json: async () => ({{ result: 'stale result', sources: [], raw_findings: [] }}) }});
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(job.status, 'running');
+      assert.equal(job.result, null, 'old session result must not populate retried job');
+    """)

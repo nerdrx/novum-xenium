@@ -526,7 +526,8 @@ export function getAutoScroll() {
  * Auto-resize textarea based on content
  */
 export function autoResize(textarea) {
-  const lineHeight = parseInt(getComputedStyle(textarea).lineHeight);
+  const computed = getComputedStyle(textarea);
+  const lineHeight = parseFloat(computed.lineHeight) || parseFloat(computed.fontSize) * 1.2 || 16;
   const isMobile = window.innerWidth <= 768;
   const maxHeight = isMobile ? 150 : lineHeight * 8;
 
@@ -534,7 +535,13 @@ export function autoResize(textarea) {
   let clone = textarea._resizeClone;
   if (!clone) {
     clone = textarea.cloneNode(false);
-    clone.style.cssText = getComputedStyle(textarea).cssText;
+    // Measurement must not become a second named, focusable or validating input.
+    for (const name of ['id', 'name', 'required', 'autofocus', 'form', 'aria-label', 'aria-labelledby']) {
+      clone.removeAttribute(name);
+    }
+    clone.disabled = true;
+    clone.tabIndex = -1;
+    clone.setAttribute('aria-hidden', 'true');
     clone.style.position = 'absolute';
     clone.style.visibility = 'hidden';
     clone.style.height = '0';
@@ -545,7 +552,18 @@ export function autoResize(textarea) {
     textarea.parentNode.appendChild(clone);
     textarea._resizeClone = clone;
   }
-  clone.style.width = textarea.offsetWidth + 'px';
+  // ComputedStyle.cssText is empty in browsers. Copy the metrics explicitly,
+  // including styles selected by the original ID and responsive/theme rules.
+  for (const property of ['font-family', 'font-size', 'font-weight', 'font-style',
+    'line-height', 'letter-spacing', 'text-transform', 'text-indent', 'white-space',
+    'word-break', 'overflow-wrap', 'box-sizing', 'padding-top', 'padding-right',
+    'padding-bottom', 'padding-left', 'border-top-width', 'border-right-width',
+    'border-bottom-width', 'border-left-width']) {
+    clone.style.setProperty(property, computed.getPropertyValue(property), 'important');
+  }
+  clone.style.setProperty('min-height', '0', 'important');
+  clone.style.setProperty('max-height', 'none', 'important');
+  clone.style.setProperty('width', textarea.offsetWidth + 'px', 'important');
   clone.value = textarea.value;
   clone.style.height = '0';
   const newHeight = Math.min(Math.max(clone.scrollHeight, lineHeight), maxHeight);

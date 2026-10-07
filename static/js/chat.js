@@ -19,7 +19,7 @@ import searchModule from './search.js';
 import documentModule from './document.js?v=20260815approvalsave1';
 import * as emailInbox from './emailInbox.js?v=20260815approvalsave1';
 import codeRunnerModule from './codeRunner.js';
-import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js?v=20260815approvalsave1';
+import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js';
 import createResearchSynapse from './researchSynapse.js';
 import { createStreamRenderer } from './streamingRenderer.js';
 import { wireArrowUpRecall, getUserMessagesFromChatHistory } from './composerArrowUpRecall.js?v=20260714promptrecall';
@@ -5103,6 +5103,7 @@ import { loadPanel } from './panels.js';
     let metricsData = null;
     let replayError = null;
     let canonicalTerminalSeen = false;
+    let characterName = '';
     // "Rich" responses (tool calls, sources, doc streaming, multi-round) need the
     // full canonical render, which is rebuilt from the saved DB record on reload.
     // Plain text replies can be finalized in place without a reload.
@@ -5173,6 +5174,16 @@ import { loadPanel } from './panels.js';
             }
             if (metricsData) {
               chatRenderer.recordSessionMetricsCost(metricsData, sessionId);
+            }
+          } else if (json.type === 'model_info') {
+            characterName = json.character_name || characterName;
+            if (characterName) {
+              const roleEl = holder.querySelector('.role');
+              const timestamp = roleEl && roleEl.querySelector('.role-timestamp');
+              if (roleEl) {
+                roleEl.textContent = characterName + ' ';
+                if (timestamp) roleEl.appendChild(timestamp);
+              }
             }
           } else if (json.type === 'fallback') {
             // Replay can attach after the selected route has already failed.
@@ -5265,7 +5276,11 @@ import { loadPanel } from './panels.js';
     if (onThisSession && !rich && roundText.trim()) {
       if (holder.parentNode) holder.remove();
       const model = meta && meta.model;
-      const meta_ = metricsData ? Object.assign({ model }, metricsData) : { model };
+      const meta_ = Object.assign(
+        { model },
+        metricsData || {},
+        characterName ? { character_name: characterName } : {},
+      );
       chatRenderer.addMessage('assistant', roundText, model, meta_);
       uiModule.scrollHistory();
       return true;

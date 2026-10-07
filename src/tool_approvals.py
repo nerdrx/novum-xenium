@@ -115,6 +115,7 @@ def _binding_payload(
     external_untrusted_context_seen: bool,
     selected_tools: Any,
     continuation_query: Any,
+    web_search_enabled: Any,
     effects: tuple[str, ...],
     result_integrity: str,
 ) -> dict[str, Any]:
@@ -135,6 +136,7 @@ def _binding_payload(
             _normalized_selected_tools(selected_tools, required_tool=tool_name)
         ),
         "continuation_query": _normalized_continuation_query(continuation_query),
+        "web_search_enabled": bool(web_search_enabled),
         "effects": list(effects),
         "result_integrity": str(result_integrity),
     }
@@ -162,6 +164,7 @@ class PendingToolApproval:
     # exposed in the browser payload.
     selected_tools: tuple[str, ...] = ()
     continuation_query: str = ""
+    web_search_enabled: bool = False
 
     def public_payload(self, *, reason: str | None = None, single_action_only: bool = False) -> dict[str, Any]:
         payload = {
@@ -278,6 +281,7 @@ class ExactToolApproval:
             ),
             selected_tools=self.pending.selected_tools,
             continuation_query=self.pending.continuation_query,
+            web_search_enabled=self.pending.web_search_enabled,
             effects=effects,
             result_integrity=result_integrity,
         )
@@ -362,6 +366,7 @@ class ToolApprovalStore:
         continuation_query: Any = None,
         external_untrusted_context_seen: bool,
         capabilities: ToolCapabilities,
+        web_search_enabled: Any = False,
     ) -> PendingToolApproval:
         now = time.time()
         effects = tuple(sorted(effect.value for effect in capabilities.effects))
@@ -379,6 +384,7 @@ class ToolApprovalStore:
             external_untrusted_context_seen=external_untrusted_context_seen,
             selected_tools=selected_tools,
             continuation_query=continuation_query,
+            web_search_enabled=web_search_enabled,
             effects=effects,
             result_integrity=result_integrity,
         )
@@ -403,6 +409,7 @@ class ToolApprovalStore:
             expires_at=now + self._ttl_seconds,
             selected_tools=tuple(payload["selected_tools"]),
             continuation_query=payload["continuation_query"],
+            web_search_enabled=payload["web_search_enabled"],
         )
         with self._lock:
             self._purge_expired_locked(now)

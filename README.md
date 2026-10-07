@@ -77,7 +77,8 @@ The [workflow guide](docs/nx-workflows.md) covers project work, approvals, group
 A few limits matter:
 
 - Full access skips approvals within the current setup. It doesn't mount more host folders or override account permissions and disabled tools. The shell isn't an operating-system sandbox.
-- Snapshots cover included workspace files, up to 2,000 files, 8 MiB per file and 64 MiB total. They don't undo external services, running processes or shell effects outside the workspace. Use sparse checkouts for large repos.
+- Native file mutation and snapshot restore require safe POSIX file APIs; the standard Docker install has them, including Docker on Windows/macOS. Native platforms lacking those APIs can inspect files and snapshots but cannot run these mutations. Multi-file patches and snapshot restores can be partial after an I/O failure; inspect the reported recovery point or workspace diff.
+- Snapshots cover included workspace files, up to 2,000 files, 8 MiB per file and 64 MiB total. Stop concurrent file writers before restoring. Snapshots don't undo external services, running processes or shell effects outside the workspace. Use sparse checkouts for large repos.
 - Retrieval doesn't enlarge a model's context window or guarantee perfect recall. Requests and output limits are budgeted separately for each provider route.
 - Auto-conversation runs in the browser tab. Backups contain private application data and credentials, so keep them private.
 

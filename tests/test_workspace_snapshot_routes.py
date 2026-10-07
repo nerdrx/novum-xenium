@@ -112,3 +112,44 @@ def test_auth_disabled_snapshot_uses_shared_local_owner(snapshot_client, monkeyp
     )
     assert response.status_code == 200
     assert captured == ["__odysseus_local__"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,path", [
+    ("create_snapshot", "/api/workspace/snapshots"),
+    ("preview_snapshot", "/api/workspace/snapshots/snap-1/preview"),
+    ("restore_snapshot", "/api/workspace/snapshots/snap-1/restore"),
+])
+async def test_snapshot_disk_work_does_not_block_other_requests(snapshot_client, monkeypatch, operation, path):
+    import asyncio
+    import threading
+    import httpx
+
+    client, workspace = snapshot_client
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def blocking_operation(*args):
+        started.set()
+        release.wait(0.4)  # Bounded even if the old handler blocks the event loop.
+        finished.set()
+        return {"id": "completed"}
+
+    monkeypatch.setattr(workspace_routes, operation, blocking_operation)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app), base_url="http://test") as browser:
+        task = asyncio.create_task(browser.post(path, json={
+            "workspace": workspace, "session_id": "session-1", "expected_revision": "rev",
+        }, headers={"x-test-user": "admin"}))
+        try:
+            async with asyncio.timeout(2):
+                while not started.is_set():
+                    await asyncio.sleep(0.001)
+            # A separate request must complete while disk work is still waiting.
+            other = await browser.get("/api/workspace/snapshots", params={
+                "workspace": workspace, "session_id": "session-1",
+            }, headers={"x-test-user": "admin"})
+            assert other.status_code == 200
+            assert not finished.is_set(), "snapshot disk work blocked the server event loop"
+        finally:
+            release.set()
+            response = await task
+        assert response.status_code == 200

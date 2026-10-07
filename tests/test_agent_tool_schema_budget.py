@@ -33,7 +33,9 @@ def test_candidate_budget_includes_tools_on_first_and_later_rounds(monkeypatch, 
         shaped = request["messages"]
         requests.append(shaped)
         assert tools == [schema]
-        assert estimate_tokens(shaped) + estimate_tool_schema_tokens(tools) <= 5100 - 2048
+        prompt_and_schemas = estimate_tokens(shaped) + estimate_tool_schema_tokens(tools)
+        assert prompt_and_schemas <= 6000 - 2048
+        assert prompt_and_schemas + request["kwargs"]["max_tokens"] <= 6000
         assert any(m["role"] == "user" and "USER_QUESTION" in m["content"] for m in shaped)
         if len(requests) < rounds:
             yield "data: " + json.dumps({"type": "tool_calls", "calls": [
@@ -108,6 +110,61 @@ def _configure(monkeypatch, schemas, request_capture):
         yield "data: [DONE]\n\n"
 
     monkeypatch.setattr(loop, "stream_llm_with_fallback", fake_stream)
+
+
+@pytest.mark.parametrize("explicit_web_request", [False, True])
+def test_default_web_permission_does_not_block_workspace_tools_when_budget_is_tight(
+    monkeypatch, explicit_web_request
+):
+    import src.model_context as model_context
+    from src.tool_policy import WEB_TOOL_NAMES
+
+    names = {"read_file", "edit_file", "bash", "grep", "write_file", *WEB_TOOL_NAMES}
+    schemas = [
+        schema for schema in loop.FUNCTION_TOOL_SCHEMAS
+        if schema.get("function", {}).get("name") in names
+    ]
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        loop,
+        "get_setting",
+        lambda key, default=None: 6000 if key == "agent_input_token_budget" else default,
+    )
+
+    question = "Fix add in probe.py and run assertions."
+    if explicit_web_request:
+        question += " Also search the latest release."
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1",
+            "coding-fixture",
+            [{"role": "user", "content": question}],
+            workspace="/workspace",
+            relevant_tools=names,
+            forced_tools=set(WEB_TOOL_NAMES),
+            max_rounds=1,
+            _is_teacher_run=True,
+        )]
+
+    if explicit_web_request:
+        with pytest.raises(ValueError, match="requested tool schemas"):
+            asyncio.run(run())
+        assert requests == []
+        return
+
+    asyncio.run(run())
+
+    assert len(requests) == 1
+    selected = requests[0]["kwargs"]["tools"]
+    selected_names = {schema["function"]["name"] for schema in selected}
+    assert {"read_file", "edit_file", "bash"} <= selected_names
+    assert not (WEB_TOOL_NAMES & selected_names)
+    prompt_tokens = model_context.estimate_tokens(requests[0]["messages"])
+    schema_tokens = model_context.estimate_tool_schema_tokens(selected)
+    assert prompt_tokens + schema_tokens + requests[0]["kwargs"]["max_tokens"] <= 6000
 
 
 def test_native_browser_schema_budget_keeps_question_and_latest_tool_exchange(monkeypatch):
@@ -222,7 +279,11 @@ def test_browser_bundle_respects_actual_budget(monkeypatch, context, configured,
         assert "mcp__builtin_browser__browser_snapshot" in names
     assert estimate_tool_schema_tokens(selected) <= max(256, min(8192, (context or limit) // 4, limit // 3))
     assert any(m["role"] == "user" and m["content"] == question for m in request["messages"])
-    assert estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(selected) + 1024 <= limit
+    prompt_and_schemas = estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(selected)
+    prompt_limit = min(limit, context - 1024) if context else limit - 1024
+    assert prompt_and_schemas <= prompt_limit
+    native_limit = context if context else limit
+    assert prompt_and_schemas + request["kwargs"]["max_tokens"] <= native_limit
 
 
 @pytest.mark.parametrize("context", [0, 128000])

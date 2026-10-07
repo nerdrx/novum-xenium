@@ -16,35 +16,40 @@ from src import llm_core
 
 
 class _ProviderResponse:
-    def __init__(self, lines):
+    def __init__(self, lines, status_code=200, body=b""):
         self._lines = lines
-        self.status_code = 200
+        self.status_code = status_code
+        self._body = body
 
     async def aiter_lines(self):
         for line in self._lines:
             yield line
 
     async def aread(self):
-        return b""
+        return self._body
 
 
 class _ProviderStreamContext:
-    def __init__(self, lines):
+    def __init__(self, lines, status_code=200, body=b""):
         self._lines = lines
+        self._status_code = status_code
+        self._body = body
 
     async def __aenter__(self):
-        return _ProviderResponse(self._lines)
+        return _ProviderResponse(self._lines, self._status_code, self._body)
 
     async def __aexit__(self, *args):
         return False
 
 
 class _ProviderClient:
-    def __init__(self, lines):
+    def __init__(self, lines, status_code=200, body=b""):
         self._lines = lines
+        self._status_code = status_code
+        self._body = body
 
     def stream(self, method, url, **kwargs):
-        return _ProviderStreamContext(self._lines)
+        return _ProviderStreamContext(self._lines, self._status_code, self._body)
 
 
 def _run_fallback(monkeypatch, per_model, **fallback_kwargs):
@@ -68,8 +73,12 @@ def _run_fallback(monkeypatch, per_model, **fallback_kwargs):
     return asyncio.run(run())
 
 
-def _run_provider_stream(monkeypatch, url, lines):
-    monkeypatch.setattr(llm_core, "_get_http_client", lambda: _ProviderClient(lines))
+def _run_provider_stream(monkeypatch, url, lines, *, status_code=200, body=b""):
+    monkeypatch.setattr(
+        llm_core,
+        "_get_http_client",
+        lambda: _ProviderClient(lines, status_code=status_code, body=body),
+    )
     monkeypatch.setattr(llm_core, "_is_host_dead", lambda url: False)
     monkeypatch.setattr(llm_core, "_clear_host_dead", lambda *args, **kwargs: None)
     monkeypatch.setattr(llm_core, "note_model_activity", lambda *args, **kwargs: None)
@@ -112,6 +121,36 @@ def test_no_fallback_event_when_primary_succeeds(monkeypatch):
         return ['data: {"delta": "ok"}\n\n', "data: [DONE]\n\n"]
     chunks = _run_fallback(monkeypatch, per_model)
     assert not any('"fallback"' in c for c in chunks)
+
+
+def test_provider_http_error_sse_redacts_credentials_and_omits_raw_body(monkeypatch):
+    chunks = _run_provider_stream(
+        monkeypatch,
+        "https://api.openai.com/v1",
+        [],
+        status_code=502,
+        body=b'{"error":{"message":"proxy echoed Bearer test"}}',
+    )
+    assert len(chunks) == 1
+    payload = json.loads(chunks[0].split("data: ", 1)[1])
+    assert payload["status"] == 502
+    assert "HTTP 502" in payload["text"]
+    assert "proxy echoed [redacted]" in payload["text"]
+    assert "test" not in payload["text"]
+    assert "raw" not in payload
+
+
+def test_google_openai_compatible_vendor_error_frame_redacts_bearer(monkeypatch):
+    chunks = _run_provider_stream(
+        monkeypatch,
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        ['data: {"error":{"message":"proxy echoed Bearer test","code":"server_error"}}'],
+    )
+    assert len(chunks) == 1
+    payload = json.loads(chunks[0].split("data: ", 1)[1])
+    assert payload["status"] == 500
+    assert "proxy echoed [redacted]" in payload["error"]
+    assert "Bearer test" not in payload["error"]
 
 
 def test_done_only_primary_invokes_fallback(monkeypatch):

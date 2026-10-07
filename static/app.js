@@ -6,12 +6,14 @@ import Storage from './js/storage.js';
 import uiModule from './js/ui.js';
 import workspaceModule from './js/workspace.js';
 import fileHandlerModule from './js/fileHandler.js';
-import modelsModule from './js/models.js?v=20260715startupcalm2';
+// Stateful modules use the same URLs as their lazy callers and HTML scripts.
+// A query mismatch creates separate caches, listeners and popup registries.
+import modelsModule from './js/models.js';
 import ragModule from './js/rag.js';
 import presetsModule from './js/presets.js';
 import searchModule from './js/search.js';
 import chatModule from './js/chat.js?v=20261007quality1';
-import compareModule from './js/compare/index.js?v=20261007quality1';
+import compareModule from './js/compare/index.js';
 import documentModule from './js/document.js?v=20260815approvalsave1';
 import searchChatModule from './js/search-chat.js';
 import { makeWindowDraggable } from './js/windowDrag.js';
@@ -24,18 +26,18 @@ import {
 import markdownModule from './js/markdown.js';
 import chatRenderer from './js/chatRenderer.js?v=20261007quality1';
 import sessionModule from './js/sessions.js';
-import memoryModule from './js/memory.js?v=20260722memoryloading1';
+import memoryModule from './js/memory.js';
 import voiceRecorderModule from './js/voiceRecorder.js';
 import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import { UI_VIS_DEFAULT_OFF, resolveVisibility } from './js/ui_visibility.js';
-import tasksModule from './js/tasks.js?v=20260723tasksbulkfeedback1';
+import tasksModule from './js/tasks.js';
 import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js?v=20260716openrouter3';
-import settingsModule from './js/settings.js?v=20261007imageprovider1';
+import settingsModule from './js/settings.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
-import './js/modalManager.js?v=20260723compareicon2';
+import './js/modalManager.js';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
 import './js/tileManager.js';
 import themeModule from './js/theme.js';
@@ -1837,8 +1839,9 @@ function initializeEventListeners() {
       if (toggle) toggle.classList.toggle('mode-chat', mode === 'chat');
       // Workspace pill + overflow entry are agent-only - hide immediately (no flash).
       try { workspaceModule.applyMode(mode); } catch (_) {}
-      // Delay tool glow-up for a staggered effect
-      setTimeout(() => applyModeToToggles(mode), 500);
+      // Request construction can run as soon as this click returns. Apply the
+      // mode's tool preferences now so it cannot capture the previous mode.
+      applyModeToToggles(mode);
     }
     window.__odysseusSetChatMode = setMode;
     agentBtn.addEventListener('click', () => {

@@ -68,13 +68,19 @@ def create_backup(data_dir: str | Path = DATA_DIR) -> Path:
     try:
         with tempfile.TemporaryDirectory(prefix="odysseus-sqlite-") as tmp_name:
             tmp = Path(tmp_name)
+            sources = []
             staged: dict[Path, Path] = {}
             for source in root.rglob("*"):
-                if source.is_symlink() or not source.is_file() or not _is_sqlite(source):
+                if source.is_symlink() or not source.is_file():
                     continue
                 relative = source.relative_to(root)
                 if _skip_path(relative):
                     continue
+                sources.append(source)
+            for source in sources:
+                if source.is_symlink() or not source.is_file() or not _is_sqlite(source):
+                    continue
+                relative = source.relative_to(root)
                 target = tmp / relative
                 _snapshot_sqlite(source, target)
                 staged[source] = target
@@ -87,7 +93,7 @@ def create_backup(data_dir: str | Path = DATA_DIR) -> Path:
             }
             with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
                 archive.writestr(MANIFEST, json.dumps(manifest, separators=(",", ":")))
-                for source in sorted(root.rglob("*")):
+                for source in sorted(sources):
                     if source.is_symlink() or not source.is_file():
                         continue
                     relative = source.relative_to(root)

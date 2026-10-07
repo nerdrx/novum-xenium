@@ -349,6 +349,7 @@ async function _launchJobRequest(job) {
 }
 
 function _connectStream(job) {
+  const sessionId = job.id;
   job._timerInterval = setInterval(() => {
     job.elapsed = Date.now() - job.startedAt;
     _notify();
@@ -358,6 +359,7 @@ function _connectStream(job) {
   job._es = es;
 
   es.onmessage = (evt) => {
+    if (job._es !== es || job.id !== sessionId || job.status !== 'running') return;
     try {
       const d = JSON.parse(evt.data);
       if (d.status === 'not_found') { _finishJob(job, 'error'); return; }
@@ -366,7 +368,7 @@ function _connectStream(job) {
       if (d.final) {
         if (d.error) job.errorMsg = d.error;
         _finishJob(job, _terminalStatus(d.status));
-        if (d.status === 'done') _fetchResult(job);
+        if (d.status === 'done') _fetchResult(job, sessionId);
         return;
       }
       _notify();
@@ -374,26 +376,31 @@ function _connectStream(job) {
   };
 
   es.onerror = () => {
+    if (job._es !== es || job.id !== sessionId || job.status !== 'running') return;
     es.close();
-    if (job.status === 'running') setTimeout(() => _pollFallback(job), 3000);
+    if (job.status === 'running') setTimeout(() => _pollFallback(job, sessionId), 3000);
   };
 }
 
-async function _pollFallback(job) {
-  if (job.status !== 'running') return;
+async function _pollFallback(job, sessionId = job.id) {
+  if (job.status !== 'running' || job.id !== sessionId) return;
   try {
-    const res = await fetch(`${_apiBase}/api/research/status/${job.id}`, { credentials: 'same-origin' });
+    const res = await fetch(`${_apiBase}/api/research/status/${sessionId}`, { credentials: 'same-origin' });
+    if (job.status !== 'running' || job.id !== sessionId) return;
     if (!res.ok) { _finishJob(job, 'error'); return; }
     const d = await res.json();
+    if (job.status !== 'running' || job.id !== sessionId) return;
     job.progress = d.progress || {};
     if (d.avg_duration) job.avgDuration = d.avg_duration;
     if (d.status !== 'running') {
       _finishJob(job, _terminalStatus(d.status));
-      if (d.status === 'done') _fetchResult(job);
+      if (d.status === 'done') _fetchResult(job, sessionId);
       return;
     }
-    setTimeout(() => _pollFallback(job), 2000);
-  } catch { _finishJob(job, 'error'); }
+    setTimeout(() => _pollFallback(job, sessionId), 2000);
+  } catch {
+    if (job.status === 'running' && job.id === sessionId) _finishJob(job, 'error');
+  }
 }
 
 function _terminalStatus(status) {
@@ -417,13 +424,15 @@ function _finishJob(job, status) {
 let _onCompleteCb = null;
 export function onComplete(cb) { _onCompleteCb = cb; }
 
-async function _fetchResult(job) {
+async function _fetchResult(job, sessionId = job.id) {
+  if (job.id !== sessionId || job.status !== 'done') return;
   try {
-    const res = await fetch(`${_apiBase}/api/research/result-peek/${job.id}`, {
+    const res = await fetch(`${_apiBase}/api/research/result-peek/${sessionId}`, {
       method: 'POST', credentials: 'same-origin',
     });
-    if (!res.ok) return;
+    if (!res.ok || job.id !== sessionId || job.status !== 'done') return;
     const d = await res.json();
+    if (job.id !== sessionId || job.status !== 'done') return;
     job.result = d.result;
     job.sources = d.sources;
     job.findings = d.raw_findings;

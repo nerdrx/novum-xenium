@@ -148,6 +148,37 @@ def get_active_run(session_id: str) -> Optional[_Run]:
     return r if r and r.status == "running" else None
 
 
+async def interrupt_active_runs(timeout: float = 3.0) -> int:
+    """Persist active runs as recoverable before graceful process shutdown.
+
+    Detached drains otherwise get cancelled by event-loop teardown after the
+    app lifespan exits, which looks like a user stop and hides their checkpoint
+    from explicit recovery. The durable status is written before cancellation;
+    draining gets a short window to close generators and flush partial output.
+    """
+    with _RUN_LOCK:
+        runs = [run for run in list(_RUNS.values()) if run.status == "running"]
+    tasks = []
+    for run in runs:
+        run.status = "interrupted"
+        try:
+            _flush_checkpoint_delta(run)
+            if run.persist_checkpoint:
+                run_checkpoints.finish(run.run_id, "interrupted")
+                run_evidence.finish(run.run_id, "interrupted")
+        except Exception as exc:
+            # Still cancel the drain; a still-running durable row is marked
+            # interrupted automatically when the next process opens the store.
+            logger.warning("[agent-run] shutdown checkpoint failed: %s", type(exc).__name__)
+        finally:
+            if run.task and not run.task.done():
+                tasks.append(run.task)
+                run.task.cancel()
+    if tasks:
+        await asyncio.wait(tasks, timeout=max(0.0, timeout))
+    return len(runs)
+
+
 async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
                  prev_task: Optional[asyncio.Task] = None) -> None:
     """Pull every event from the wrapped generator into the run buffer, fanning
@@ -185,7 +216,11 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
         if run.status == "running":
             run.status = "done"
     except asyncio.CancelledError:
-        run.status = "stopped"
+        # Shutdown marks active runs interrupted before cancelling them so the
+        # next process can offer an explicit continuation. Preserve that state;
+        # user-requested cancellation still becomes "stopped".
+        if run.status == "running":
+            run.status = "stopped"
         # Let the wrapped generator's own CancelledError handler run (it saves
         # the partial response to the session).
         try:

@@ -393,6 +393,8 @@ async function _buildCompareUI() {
   exportWrap.style.cssText = 'position:relative;display:inline-flex;';
   const exportBtn = document.createElement('button');
   exportBtn.id = 'compare-export-btn';
+  exportBtn.setAttribute('aria-expanded', 'false');
+  exportBtn.setAttribute('aria-controls', 'compare-export-menu');
   exportBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span style="font-size:11px;margin-left:3px;">Export</span>';
   exportBtn.title = 'Export options';
   exportBtn.style.cssText = _btnCSS;
@@ -1075,6 +1077,7 @@ function _toggleExportMenu(btn) {
   const r = btn.getBoundingClientRect();
   const m = document.createElement('div');
   m.className = 'compare-export-menu';
+  m.id = 'compare-export-menu';
   m.style.cssText = 'position:fixed;top:' + (r.bottom + 4) + 'px;left:' + r.left + 'px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;display:flex;flex-direction:column;min-width:170px;';
   m.style.zIndex = String(topPortalZ());
   const opts = [
@@ -1095,8 +1098,13 @@ function _toggleExportMenu(btn) {
   document.body.appendChild(m);
   _exportMenuEl = m;
   _closeExportMenu = bindMenuDismiss(m, () => {
+    const restoreFocus = m.contains(document.activeElement);
     if (_exportMenuEl) { _exportMenuEl.remove(); _exportMenuEl = null; }
+    btn.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && btn.isConnected) btn.focus();
   }, (ev) => !m.contains(ev.target));
+  btn.setAttribute('aria-expanded', 'true');
+  m.querySelector('button')?.focus();
 }
 
 async function _exportCopyMarkdown(_btn) {

@@ -6,6 +6,8 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Browser intent excludes URLs and negated file instructions from workspace coding detection, while keeping later positive coding clauses. The bounded native browser core retains click alongside navigation and snapshot. Unknown model-window budgets remain conservative.
+- Graceful shutdown marks active detached runs interrupted before cancellation, preserving explicit continuation and partial output; deliberate Stop remains terminal. Notes drafts survive failed saves and older replies cannot clear a newer draft. Compare export supports keyboard focus and Escape return.
 - Document autosaves remain tied to the edited document across tab switches and pane closure. Late document loads cannot select an older request, and save replies preserve edits made while the request was in flight.
 - Verification reports become stale when the configured checks change, retaining the prior report as history. Health input loading uses the existing aggregate deadline without blocking the event loop; image-only endpoints report reachability separately from untested generation. Browser-disabled settings cover the full MCP server, including newly added tools.
 - PDF exports stop if the pending save fails, preserve editor text and offer a retry rather than exporting stale server content.

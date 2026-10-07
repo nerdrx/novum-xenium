@@ -1286,6 +1286,16 @@ async def _startup_event():
 
 async def _shutdown_event():
     logger.info("Application shutting down...")
+    # Detached agent drains outlive their SSE clients. Mark them recoverable
+    # before event-loop teardown cancels them; ordinary user Stop remains a
+    # terminal, non-recoverable status.
+    try:
+        from src import agent_runs
+        interrupted = await agent_runs.interrupt_active_runs(timeout=3.0)
+        if interrupted:
+            logger.info("Marked %s active agent run(s) interrupted for recovery", interrupted)
+    except Exception as e:
+        logger.warning("Agent-run shutdown checkpoint failed: %s", type(e).__name__)
     if upload_cleanup_task:
         upload_cleanup_task.cancel()
         try:

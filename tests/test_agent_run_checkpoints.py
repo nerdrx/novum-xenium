@@ -80,6 +80,36 @@ async def test_stop_before_drain_starts_terminalizes_checkpoint(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_process_shutdown_preserves_interrupted_run_for_explicit_recovery(tmp_path, monkeypatch):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "shutdown.db"))
+    monkeypatch.setattr(run_checkpoints, "_STORE", store)
+    session_id = "shutdown-recovery-test"
+
+    async def stream():
+        yield 'data: {"delta":"partial answer"}\n\n'
+        await asyncio.Event().wait()
+
+    run = agent_runs.start(session_id, stream(), owner="alice")
+    while not run.buffer:
+        await asyncio.sleep(0)
+
+    assert await agent_runs.interrupt_active_runs(timeout=1) == 1
+    await asyncio.gather(run.task, return_exceptions=True)
+
+    checkpoint = store.get(session_id, "alice")
+    assert checkpoint["status"] == "interrupted"
+    assert checkpoint["can_continue"] is True
+    assert checkpoint["last_output"] == "partial answer"
+    assert checkpoint["replay_tools"] is False
+    claimed = store.claim_recovery(session_id, "alice", run.run_id)
+    assert claimed["status"] == "continued"
+    assert store.claim_recovery(session_id, "alice", run.run_id) is None
+    if run.evict_task:
+        run.evict_task.cancel()
+    agent_runs._RUNS.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_stop_before_drain_wakes_subscriber_without_checkpoint(tmp_path, monkeypatch):
     store = run_checkpoints.CheckpointStore(str(tmp_path / "incognito.db"))
     monkeypatch.setattr(run_checkpoints, "_STORE", store)

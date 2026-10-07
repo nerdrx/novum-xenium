@@ -2141,12 +2141,10 @@ function _renderQuickAdd(body) {
   // Click input or type → expand to full form
   const expandToForm = (initialType = 'note', initialText = '') => {
     _editingId = '__new__';
-    const form = _buildForm({ note_type: initialType });
+    const { note: draft, restored } = _applyDraftToNote({ note_type: initialType }, '__new__');
+    if (initialText) draft.title = initialText;
+    const form = _buildForm(draft);
     form.classList.add('note-form-new');
-    if (initialText) {
-      const titleEl = form.querySelector('.note-form-title');
-      if (titleEl) titleEl.value = initialText;
-    }
     const mobileGrid = body.closest('.notes-pane')?.classList.contains('notes-view-grid')
       && window.matchMedia('(max-width: 768px)').matches;
     if (mobileGrid) {
@@ -2162,6 +2160,7 @@ function _renderQuickAdd(body) {
       // Move caret to end
       titleEl.setSelectionRange(titleEl.value.length, titleEl.value.length);
     }
+    if (restored) uiModule.showToast('Restored unsaved note');
   };
   // Expand only on real intent: a click directly on the input, or actual
   // typing. Focus alone — including focus stolen from a missed nearby
@@ -3628,6 +3627,12 @@ function _buildForm(note = null) {
       _archiveNoteById(note?.id);
       return;
     }
+    // Snapshot the current fields synchronously before the optimistic render
+    // detaches this form. Keep the snapshot until the server confirms the save.
+    form._flushDraft?.();
+    const draftId = isEdit ? note.id : '__new__';
+    let submittedDraft = null;
+    try { submittedDraft = localStorage.getItem(_draftKey(draftId)); } catch {}
     _saveBtn._saving = true; _saveBtn.disabled = true; _saveBtn.style.opacity = '0.5';
     try {
     const title = form.querySelector('.note-form-title').value.trim();
@@ -3692,7 +3697,6 @@ function _buildForm(note = null) {
     }
     // Optimistic update — update local state first, render, then save in background
     _editingId = null;
-    _clearDraft(isEdit ? note.id : '__new__');  // saved → discard the draft
     if (isEdit) {
       const idx = _notes.findIndex(n => n.id === note.id);
       if (idx >= 0) _notes[idx] = { ..._notes[idx], ...payload };
@@ -3702,6 +3706,11 @@ function _buildForm(note = null) {
     _renderNotes();
     // Background save
     _saveNote(payload).then(saved => {
+      // A newer draft may have been started while this request was in flight.
+      // Only clear the recovery copy that this save actually submitted.
+      try {
+        if (localStorage.getItem(_draftKey(draftId)) === submittedDraft) _clearDraft(draftId);
+      } catch {}
       if (!isEdit && saved && saved.id) {
         // Replace temp ID with real one from server. AND re-render — the
         // existing card's `data-note-id="tmp_xxx"` is stale after Object.assign

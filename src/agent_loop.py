@@ -1164,9 +1164,9 @@ def _uploaded_files_context_message(uploaded_files: Optional[List[Dict]]) -> Opt
 
 
 _WORKSPACE_CODE_ACTION_RE = re.compile(
-    r"\b(?:fix|debug|implement|add|remove|change|update|refactor|wire|hook|"
+    r"\b(?:fix|debug|implement|edit|add|remove|change|update|refactor|wire|hook|"
     r"test|verify|run|build|lint|compile|commit|branch|merge|review|"
-    r"download|save|rename|move|copy|extract|convert|open|inspect|read)\b",
+    r"download|save|write|rename|move|copy|extract|convert|open|inspect|read)\b",
     re.IGNORECASE,
 )
 _WORKSPACE_CODE_TARGET_RE = re.compile(
@@ -1203,6 +1203,21 @@ def _looks_like_workspace_coding_request(text: str) -> bool:
     text = str(text or "")
     if not text.strip():
         return False
+    # A URL path is a web target, not a workspace file path. Remove it before
+    # clause handling so punctuation within a URL cannot end a negation early.
+    text = re.sub(r"https?://[^\s<>]+", " ", text, flags=re.IGNORECASE)
+    # Remove only the negated clause. Keep later positive instructions such as
+    # "Do not rewrite everything, fix main.py" and "Never use Bash but edit
+    # config.py" visible to the intent check. Commas in a restriction list
+    # ("Do not use Bash, Python or web_fetch") stay within the negated clause.
+    text = re.sub(
+        r"\b(?:do\s+not|don't|never)\b(?:(?![;.!?\n]|\b(?:but|instead|except)\b|,\s*(?="
+        + _WORKSPACE_CODE_ACTION_RE.pattern
+        + r")).)*",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
     if re.search(r"\b(?:pull request|pr|diff|patch)\b", text, re.IGNORECASE):
         return True
     return bool(_WORKSPACE_CODE_ACTION_RE.search(text) and _WORKSPACE_CODE_TARGET_RE.search(text))
@@ -4495,7 +4510,8 @@ async def stream_agent_loop(
                 browser_core = {
                     _BROWSER_MCP_PREFIX + "browser_navigate": 0,
                     _BROWSER_MCP_PREFIX + "browser_snapshot": 1,
-                    _BROWSER_MCP_PREFIX + "browser_tabs": 2,
+                    _BROWSER_MCP_PREFIX + "browser_click": 2,
+                    _BROWSER_MCP_PREFIX + "browser_tabs": 3,
                 }
                 coding_requested = bool(
                     workspace and _looks_like_workspace_coding_request(_retrieval_query or _last_user)

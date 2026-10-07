@@ -242,13 +242,14 @@ def test_browser_bundle_respects_actual_budget(monkeypatch, context, configured,
     schemas = _browser_schemas(38)
     for schema, action in zip(schemas, ["navigate", "snapshot", "tabs"]):
         schema["function"]["name"] = "mcp__builtin_browser__browser_" + action
+    schemas[3]["function"]["name"] = "mcp__builtin_browser__browser_click"
     forced = {schema["function"]["name"] for schema in schemas[:13]}
     assert estimate_tool_schema_tokens(schemas[:13]) > 1500
     if not core_first:
         # MCP registration order is not relevance order. A retrieved whole
         # family must still offer navigation/read tools under a small cap.
         schemas = schemas[3:] + schemas[:3]
-        schemas[0]["function"]["name"] = "mcp__builtin_browser__browser_close"
+        schemas[1]["function"]["name"] = "mcp__builtin_browser__browser_close"
     requests = []
     _configure(monkeypatch, schemas, requests)
     monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: context)
@@ -277,6 +278,7 @@ def test_browser_bundle_respects_actual_budget(monkeypatch, context, configured,
     assert "mcp__builtin_browser__browser_navigate" in names
     if limit >= 5100:
         assert "mcp__builtin_browser__browser_snapshot" in names
+        assert "mcp__builtin_browser__browser_click" in names
     assert estimate_tool_schema_tokens(selected) <= max(256, min(8192, (context or limit) // 4, limit // 3))
     assert any(m["role"] == "user" and m["content"] == question for m in request["messages"])
     prompt_and_schemas = estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(selected)
@@ -284,6 +286,70 @@ def test_browser_bundle_respects_actual_budget(monkeypatch, context, configured,
     assert prompt_and_schemas <= prompt_limit
     native_limit = context if context else limit
     assert prompt_and_schemas + request["kwargs"]["max_tokens"] <= native_limit
+
+
+def test_browser_workspace_request_does_not_starve_browser_actions(monkeypatch):
+    import src.model_context as model_context
+
+    schemas = _browser_schemas(38)
+    for schema, action in zip(schemas[:3], ("navigate", "snapshot", "click")):
+        schema["function"]["name"] = "mcp__builtin_browser__browser_" + action
+    browser_names = {schema["function"]["name"] for schema in schemas}
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        loop,
+        "get_setting",
+        lambda key, default=None: 6000 if key == "agent_input_token_budget" else default,
+    )
+    disabled = {"bash", "python", "web_search", "web_fetch"}
+    message = (
+        "Use the built-in browser tools to open http://127.0.0.1:17111/, click the Reveal result button, "
+        "then read the resulting heading and return it exactly. This is our disposable local browser fixture. "
+        "Use browser navigation, snapshot and click tools; do not use Bash, Python or web_fetch. Do not edit files."
+    )
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1",
+            "gpt-6-luna",
+            [{"role": "user", "content": message}],
+            workspace="/workspace/.nx-evaluations/browser-fixture",
+            relevant_tools=browser_names,
+            forced_tools=browser_names,
+            disabled_tools=disabled,
+            max_rounds=1,
+            _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    selected = {schema["function"]["name"] for schema in requests[0]["kwargs"]["tools"]}
+    assert {
+        "mcp__builtin_browser__browser_navigate",
+        "mcp__builtin_browser__browser_snapshot",
+        "mcp__builtin_browser__browser_click",
+    } <= selected
+    assert disabled.isdisjoint(selected)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Do not rewrite everything, fix main.py.",
+        "Do not rewrite everything, write calc.py.",
+        "Never use Bash but edit config.py.",
+    ],
+)
+def test_workspace_coding_intent_keeps_positive_clause_after_negation(message):
+    assert loop._looks_like_workspace_coding_request(message)
+
+
+def test_workspace_coding_intent_ignores_url_inside_negated_clause():
+    assert not loop._looks_like_workspace_coding_request(
+        "Do not open https://github.com/a.py but read the heading."
+    )
 
 
 @pytest.mark.parametrize("context", [0, 128000])

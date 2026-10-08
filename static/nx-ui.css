@@ -166,6 +166,9 @@ html.nx-workspace .chat-input-bar:focus-within {
   border-color: color-mix(in srgb, var(--red) 58%, var(--input-border, var(--border)));
 }
 html.nx-workspace .chat-input-bar textarea#message {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
   font-family: var(--font-family, inherit);
   line-height: 1.6;
 }

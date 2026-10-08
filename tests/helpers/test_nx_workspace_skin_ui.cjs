@@ -283,6 +283,17 @@ function noOverflow(metrics, label) {
       } else {
         await page.screenshot({ path: path.join(screenshotDir, 'nx-skin-mobile.png'), fullPage: true });
       }
+      await page.locator('#message').focus();
+      const composerField = await page.locator('#message').evaluate(el => ({
+        appearance: getComputedStyle(el).appearance,
+        background: getComputedStyle(el).backgroundColor,
+        outline: getComputedStyle(el).outlineStyle,
+        border: getComputedStyle(el.closest('.chat-input-bar')).borderColor,
+      }));
+      assert.equal(composerField.appearance, 'none', 'composer avoids native filled control styling');
+      assert.equal(composerField.background, 'rgba(0, 0, 0, 0)', 'typing area stays transparent on focus');
+      assert.equal(composerField.outline, 'none', 'composer uses its outer border for focus');
+      assert.notEqual(composerField.border, 'rgba(0, 0, 0, 0)', 'outer focus indicator remains visible');
       // Exercise the actual effect module, including lifecycle under rapid changes.
       await page.evaluate(() => {
         window.nxTheme.applyBgPattern('none');

@@ -41,6 +41,8 @@ Validation: headless Chromium checks cover desktop and mobile layouts, logo-only
 
 Validation: desktop/mobile Chromium checks cover rendering, controls, repeated selection, cleanup, hidden-tab resume and reduced motion.
 
+- Disables native filled-control appearance on the composer typing area; its surface stays transparent and the outer border retains the focus cue.
+
 ## Included changes
 
 - Tab and Shift+Tab keep native composer focus navigation instead of accidentally switching Plan mode. Plan mode has a visible toggle under More tools, with its pressed state exposed to assistive technology.

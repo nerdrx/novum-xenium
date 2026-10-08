@@ -138,6 +138,11 @@ html.nx-workspace .chat-container {
   padding-left: clamp(12px, 2vw, 24px);
   padding-right: clamp(12px, 2vw, 24px);
 }
+@media (min-width: 769px) {
+  html.nx-workspace .chat-container {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+}
 html.nx-workspace .chat-top-bar {
   min-height: 40px;
   padding-top: 3px;

@@ -44,9 +44,13 @@ That's the setup: clone, copy the environment file, run Compose. Authentication 
 
 ![Novum Xenium desktop manager](assets/branding/desktop-manager.png)
 
+<sub>The manager, with an example checkout. Same palette as the workspace, without the extra browser tab.</sub>
+
 Start the backend, open the workspace, get on with it. Close the window and it stays in the tray. Reopen it without losing the page.
 
 The app uses your system webview. It can check backend health, show logs, review updates, back up application data and help recover a failed startup. Chat, memory and tools live in the backend, so you don't end up managing a second desktop copy.
+
+Copy an image to another app, save it with a native file dialog or open it in your default browser. Ordinary web links open there too. Desktop notifications are optional and off by default; enable them in Settings while the app is running.
 
 Install a [desktop release](https://github.com/nerdrx/novum-xenium/releases) directly or through [NX Hub](https://github.com/nerdrx/nx-hub). The current app adopts an existing Compose checkout; it does not install Docker, WSL or Git for you.
 
@@ -96,7 +100,7 @@ Install small panels and MCP tool connections from **Settings → Modules**. Upd
 
 ### Still your workspace
 
-The NX interface keeps the original colour, font and background controls. Use your own theme, switch effects or turn them off. Personality names and chat titles survive a refresh; names you set yourself stay yours.
+Charcoal panels, lavender controls and quiet orbit lines. The workspace and desktop manager now share the NX default palette. Colour, font and background controls remain, so you can make it yours or turn effects off. Custom themes currently apply to the workspace; the manager keeps the NX default. Personality names and chat titles survive a refresh; names you set yourself stay yours.
 
 Images have their own provider settings. The optional [Codex image bridge](docs/codex-image-bridge.md) uses an existing host login for generation and attached-image edits. It needs separate setup; quality and size settings are guidance.
 

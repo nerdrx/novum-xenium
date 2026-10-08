@@ -12,6 +12,8 @@ The standard Docker workspace is `/workspace` inside the container and `data/age
 
 The ChatGPT subscription connection authenticates model inference. Git authentication must be configured separately for private repositories or publishing. The [NX Warp coding test](https://github.com/nerdrx/nx-warp/pull/74) used the production agent loop for editing, testing and committing, with host-side review, push and PR creation. It does not establish private authentication or publishing through the normal chat UI.
 
+Open the composer’s **More tools** menu and choose **Plan mode** for read-only investigation before editing. Choose it again, or use the visible Plan indicator, to turn it off. Tab moves between controls normally; it does not change this mode.
+
 ## Group conversations
 
 Group chats have a circular-arrow button beside Agent/Chat. Open it for **Auto conversation**, **20 / 100 replies / Until Stop**, and **Stop**. Tool approvals wait for your choice before the requesting participant continues.

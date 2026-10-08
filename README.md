@@ -43,6 +43,8 @@ The agent ran through the production loop in a saved-file harness. Review, push 
 
 We've used focused regression tests, headless UI checks, isolated Docker starts and bounded live provider/browser tests. Those cover things like retrieving details from archived output, restoring workspace files and permissions, recovering interrupted runs, group tool calls and image-provider discovery.
 
+On October 8, live subscription checks also completed small multi-file coding tasks, a builder/reviewer parser change, public GitHub browsing and exact-detail retrieval from archived output. Image checks fetched the generated PNG and compared its dimensions with the saved metadata. A separate browser check caught and fixed model choices leaking between chats. These are bounded tasks with checked results; they don't establish that every model or project will work equally well.
+
 The [validation record](FORK-CHANGES.md#validation) says what ran and what used simulated replies. The [latest notes](docs/hermes-comparison.md#validation-and-limits) include the coding test and remaining failures. Test runs overlap, so their counts aren't added into one big number.
 
 ## Get started

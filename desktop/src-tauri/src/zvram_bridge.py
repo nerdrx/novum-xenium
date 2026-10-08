@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -197,13 +198,24 @@ def _parameters(request, model_helper, backend_checkout):
     }
 
 
+def _model_server(model_helper):
+    candidates = [getattr(model_helper, "DEFAULT_SERVER", None), shutil.which("llama-server"),
+                  Path.home() / ".local/bin/llama-server"]
+    for candidate in candidates:
+        if candidate:
+            path = Path(candidate).expanduser()
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path.resolve())
+    return None
+
+
 def _build_manager_profile(model_helper, name, params):
     command, environment = model_helper.build_server_command(
         params["model"], params["alias"], port=params["port"],
         context=params["context"], compressed=params["compressed"],
         resident_mib=params["resident_mib"], cold_mib=params["cold_mib"],
         clean_cache_mib=params["clean_cache_mib"], headroom_mib=params["headroom_mib"],
-        virtual_gib=params["virtual_gib"],
+        virtual_gib=params["virtual_gib"], server=_model_server(model_helper),
     )
     overrides = {key: value for key, value in environment.items()
                  if key.startswith(("ZVRAM_", "GGML_"))}

@@ -124,6 +124,18 @@ class BridgeTests(unittest.TestCase):
         request.update(extra)
         return request
 
+    def test_server_lookup_uses_user_bin_even_when_desktop_path_omits_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            server = home / ".local/bin/llama-server"
+            server.parent.mkdir(parents=True)
+            server.write_text("fixture")
+            server.chmod(0o700)
+            with mock.patch.object(bridge.Path, "home", return_value=home), mock.patch.object(bridge.shutil, "which", return_value=None):
+                self.assertEqual(bridge._model_server(ModelHelper()), str(server.resolve()))
+                server.chmod(0o600)
+                self.assertIsNone(bridge._model_server(ModelHelper()))
+
     def test_missing_dependency_returns_a_structured_error(self):
         output = io.StringIO()
         with mock.patch.object(bridge, "dispatch", side_effect=ModuleNotFoundError("No module named 'zvram_control'")):

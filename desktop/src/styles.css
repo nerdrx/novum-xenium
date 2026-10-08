@@ -30,17 +30,13 @@ button:focus-visible, input:focus-visible, a:focus-visible, pre:focus-visible { 
 .topbar { min-height: 72px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2a2233; }
 .brand { display: inline-flex; align-items: center; gap: 11px; color: var(--ink); font-size: 15px; font-weight: 650; text-decoration: none; letter-spacing: -.01em; }
 .brand img { object-fit: contain; }
-.local-label { color: var(--muted); display: inline-flex; align-items: center; gap: 8px; font-size: 12px; }
-.local-dot, .state-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 12px #73d6a055; }
-.main-content { flex: 1; padding: 42px 0 32px; }
-.welcome { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 28px; }
+.main-content { flex: 1; padding: 24px 0 32px; }
 .eyebrow { color: var(--violet); font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; margin: 0 0 7px; }
 h1, h2, p { margin-top: 0; }
 h1 { font-size: clamp(27px, 4vw, 36px); line-height: 1.13; letter-spacing: -.035em; margin: 0; }
 h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
-.welcome-copy { color: var(--muted); margin: 10px 0 0; font-size: 14px; }
 .state-chip { display: inline-flex; align-items: center; gap: 9px; border: 1px solid var(--line); background: #100d16; padding: 9px 12px; color: var(--muted); font-size: 12px; white-space: nowrap; }
-.state-chip .state-dot { background: var(--faint); box-shadow: none; }
+.state-chip .state-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); box-shadow: none; }
 .state-running .state-dot { background: var(--good); box-shadow: 0 0 12px #73d6a055; }
 .state-unhealthy .state-dot { background: var(--amber); box-shadow: none; }
 .state-stopped .state-dot, .state-unconfigured .state-dot { background: var(--faint); box-shadow: none; }
@@ -83,7 +79,6 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
   .app-shell { padding: 0 18px; }
   .topbar { min-height: 62px; }
   .main-content { padding-top: 30px; }
-  .welcome { align-items: flex-start; flex-direction: column; margin-bottom: 22px; }
   .dashboard-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .service-panel { grid-column: auto; }
   .panel { padding: 18px; }

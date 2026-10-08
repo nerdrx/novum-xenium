@@ -16,7 +16,7 @@ def _fenced_segments(text: str):
 
 def test_readme_opens_with_fork_title():
     first_line = README.read_text(encoding="utf-8").splitlines()[0]
-    assert first_line == "# NX Odysseus"
+    assert first_line == "# Novum Xenium"
 
 
 def test_reintroduced_ascii_banner_stays_fenced():

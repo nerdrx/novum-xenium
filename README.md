@@ -6,6 +6,8 @@ Built on [Odysseus](https://github.com/odysseus-dev/odysseus) and the NX-Odysseu
 
 ## Desktop app
 
+![Novum Xenium desktop manager](assets/branding/desktop-manager.png)
+
 The Tauri app uses the system webview. It manages an existing Docker Compose installation and opens the same frontend you can use in a browser. No separate desktop copy of chat, tools or memory.
 
 - Start and stop the selected backend, check its health and read logs.

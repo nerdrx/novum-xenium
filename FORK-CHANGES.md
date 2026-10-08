@@ -13,7 +13,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 - Adds a quieter shared browser theme and Novum Xenium labels while retaining existing saved themes, APIs and storage keys.
 - Fixes required web tools being crowded out by optional browser schemas under small tool budgets. The regression reproduces a tiny follow-up failing before any model request.
 
-Validation: 60 focused Python checks passed, with the optional browser wrapper skipped in the container. Direct Chromium checks passed for desktop/mobile shared branding and the manager UI. A real Tauri/WebKit session under headless Gamescope saved isolated configuration, identified the existing host-network backend, retrieved bounded logs and opened the workbench; the workbench was denied native manager access. Updater transaction tests use disposable Git repositories, a fake Docker CLI and a real loopback health server; they do not establish real Windows Docker recovery.
+Validation: 60 focused Python checks passed, with the optional browser wrapper skipped in the container. Direct Chromium checks passed for desktop/mobile shared branding and the manager UI. A real Tauri/WebKit session under headless Gamescope saved isolated configuration, identified the existing host-network backend, retrieved bounded logs and opened the workbench; the workbench was denied native manager access. All 14 native Rust tests passed, including both updater transaction paths. Updater transaction tests use disposable Git repositories, a fake Docker CLI and a real loopback health server; they do not establish real Windows Docker recovery.
 
 See [desktop setup](docs/desktop.md). Packaging results are recorded with the desktop release.
 

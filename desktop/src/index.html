@@ -15,21 +15,12 @@
           <img src="./assets/nx-wordmark-violet.svg" alt="NX" width="38" height="30">
           <span>Novum Xenium</span>
         </a>
-        <span class="local-label"><span class="local-dot" aria-hidden="true"></span>Local manager</span>
+<div id="backend-state" class="state-chip state-checking" role="status" aria-live="polite">
+            <span class="state-dot" aria-hidden="true"></span><span id="backend-state-text">Checking status</span>
+          </div>
       </header>
 
       <main id="main" class="main-content">
-        <section class="welcome" aria-labelledby="page-title">
-          <div>
-            <p class="eyebrow">Your workspace</p>
-            <h1 id="page-title">Novum Xenium</h1>
-            <p class="welcome-copy">Manage the local backend and open your workspace.</p>
-          </div>
-          <div id="backend-state" class="state-chip state-checking" role="status" aria-live="polite">
-            <span class="state-dot" aria-hidden="true"></span><span id="backend-state-text">Checking status</span>
-          </div>
-        </section>
-
         <div id="global-error" class="notice notice-error" role="alert" hidden></div>
         <div id="global-notice" class="notice notice-info" role="status" hidden></div>
 

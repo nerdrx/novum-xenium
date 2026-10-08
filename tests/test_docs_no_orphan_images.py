@@ -25,7 +25,7 @@ PUBLIC_GUIDES = {
     "setup.md",
 }
 # Fork operational guides are repository documents, outside the Pages site.
-FORK_GUIDES = {"codex-image-bridge.md", "hermes-comparison.md", "nx-workflows.md"}
+FORK_GUIDES = {"codex-image-bridge.md", "desktop.md", "hermes-comparison.md", "nx-workflows.md"}
 # Files a referenced image name could legitimately appear in.
 TEXT_EXTS = {".md", ".html", ".htm", ".js", ".ts", ".css", ".py", ".sh",
              ".json", ".yml", ".yaml", ".txt"}

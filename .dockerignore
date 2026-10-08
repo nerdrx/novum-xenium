@@ -62,3 +62,6 @@ timetree*.png
 *_signin_page.png
 *_calendar_view.png
 .gitignore
+
+# Native desktop files are not backend runtime dependencies.
+desktop/

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Novum Xenium</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#main" aria-label="Novum Xenium manager">
+          <img src="./assets/nx-wordmark-violet.svg" alt="NX" width="38" height="30">
+          <span>Novum Xenium</span>
+        </a>
+        <span class="local-label"><span class="local-dot" aria-hidden="true"></span>Local manager</span>
+      </header>
+
+      <main id="main" class="main-content">
+        <section class="welcome" aria-labelledby="page-title">
+          <div>
+            <p class="eyebrow">Your workspace</p>
+            <h1 id="page-title">Novum Xenium</h1>
+            <p class="welcome-copy">Manage the local backend and open your workspace.</p>
+          </div>
+          <div id="backend-state" class="state-chip state-checking" role="status" aria-live="polite">
+            <span class="state-dot" aria-hidden="true"></span><span id="backend-state-text">Checking status</span>
+          </div>
+        </section>
+
+        <div id="global-error" class="notice notice-error" role="alert" hidden></div>
+        <div id="global-notice" class="notice notice-info" role="status" hidden></div>
+
+        <div class="dashboard-grid">
+          <section class="panel service-panel" aria-labelledby="service-heading">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Backend</p>
+                <h2 id="service-heading">Local service</h2>
+              </div>
+              <button class="button button-quiet button-small" type="button" data-action="refresh">Refresh</button>
+            </div>
+            <p id="backend-detail" class="panel-description">Checking the local service…</p>
+            <div class="action-row">
+              <button class="button button-primary" type="button" data-action="start" disabled>Start backend</button>
+              <button class="button button-secondary" type="button" data-action="stop" disabled>Stop backend</button>
+              <button class="button button-secondary" type="button" data-action="open" disabled>Open workspace</button>
+            </div>
+          </section>
+
+          <section class="panel config-panel" aria-labelledby="config-heading">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Connection</p>
+                <h2 id="config-heading">Workspace settings</h2>
+              </div>
+            </div>
+            <p class="panel-description">Choose the existing checkout and project the local service should use.</p>
+            <form id="config-form" novalidate>
+              <label class="field">
+                <span>Checkout folder</span>
+                <input id="checkout" name="checkout" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/checkout" required>
+              </label>
+              <label class="field">
+                <span>Project</span>
+                <input id="project" name="project" type="text" autocomplete="off" placeholder="Project name" required>
+              </label>
+              <label class="field field-port">
+                <span>Port</span>
+                <input id="port" name="port" type="number" min="1" max="65535" step="1" inputmode="numeric" required>
+              </label>
+              <div class="form-footer">
+                <p id="config-message" class="inline-message" role="status" aria-live="polite"></p>
+                <button class="button button-primary" type="submit" data-action="save" disabled>Save settings</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel logs-panel" aria-labelledby="logs-heading">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Diagnostics</p>
+                <h2 id="logs-heading">Recent logs</h2>
+              </div>
+              <button class="button button-quiet button-small" type="button" data-action="logs">Load logs</button>
+            </div>
+            <p id="logs-message" class="panel-description" role="status" aria-live="polite">Logs are loaded only when you ask for them.</p>
+            <pre id="logs-output" class="logs-output" tabindex="0" aria-label="Recent backend logs" hidden></pre>
+          </section>
+
+          <section class="panel update-panel" aria-labelledby="updates-heading">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Maintenance</p>
+                <h2 id="updates-heading">Updates</h2>
+              </div>
+              <button class="button button-quiet button-small" type="button" data-action="check-update">Check</button>
+            </div>
+            <p id="update-message" class="panel-description" role="status" aria-live="polite">Update support is checked when you request it.</p>
+            <div id="update-review" class="update-review" hidden>
+              <p id="update-details"></p>
+              <p class="backup-note">Review the release and make a backup before applying an update.</p>
+              <button class="button button-warning" type="button" data-action="update" disabled>Apply update</button>
+            </div>
+          </section>
+        </div>
+        <p class="privacy-note">This manager runs locally. It does not store credentials.</p>
+      </main>
+      <footer class="footer"><span>Novum Xenium</span><span>Local-first workspace</span></footer>
+    </div>
+    <noscript>This manager requires JavaScript.</noscript>
+  </body>
+</html>

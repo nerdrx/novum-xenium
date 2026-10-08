@@ -1,0 +1,100 @@
+name: Desktop
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['desktop/**', 'nx-app.json', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', 'nx-app.json', '.github/workflows/desktop.yml']
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev patchelf
+      - name: Rust
+        shell: bash
+        run: rustup update stable --no-self-update && rustup default stable
+      - run: npm ci
+        working-directory: desktop
+      - name: Test desktop UI
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: npx playwright install --with-deps chromium && npm test
+      - name: Rust tests
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: npm run build -- --bundles appimage
+      - name: Build Windows portable app
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        run: npm run build -- --no-bundle
+      - name: Package release artifacts
+        shell: bash
+        run: |
+          mkdir -p dist-desktop
+          version=$(node -p "require('./desktop/package.json').version")
+          cp nx-app.json dist-desktop/
+          if [ "$RUNNER_OS" = Linux ]; then
+            cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage "dist-desktop/Novum-Xenium-$version-linux-x86_64.AppImage"
+          else
+            python - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          version = json.loads(Path('desktop/package.json').read_text())['version']
+          with zipfile.ZipFile(f'dist-desktop/Novum-Xenium-{version}-windows-x86_64.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              archive.write('desktop/src-tauri/target/release/novum-xenium-desktop.exe', 'novum-xenium-desktop.exe')
+              archive.write('LICENSE', 'LICENSE')
+              archive.write('ACKNOWLEDGMENTS.md', 'ACKNOWLEDGMENTS.md')
+          PY
+          fi
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          for path in Path('dist-desktop').iterdir():
+              if path.suffix in ('.AppImage', '.zip'):
+                  path.with_name(path.name + '.sha256').write_text(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: desktop-${{ runner.os }}
+          path: dist-desktop/*
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: desktop-*
+          path: dist-desktop
+          merge-multiple: true
+      - name: Attach verified build outputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release upload "$RELEASE_TAG" dist-desktop/* --clobber

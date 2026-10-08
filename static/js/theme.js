@@ -9,6 +9,7 @@ import { makeWindowDraggable } from './windowDrag.js';
 import { snapModalToZone } from './tileManager.js';
 
 export const THEMES = {
+  'novum-xenium': { bg:'#100f14', fg:'#e9e6ef', panel:'#19171e', border:'#37323e', red:'#a88bd6' },
   nx:          { bg:'#060606', fg:'#ded9e3', panel:'#0a0a0b', border:'#413550', red:'#7700ff' },
   dark:       { bg:'#282c34', fg:'#9cdef2', panel:'#111111', border:'#355a66', red:'#e06c75' },
   light:      { bg:'#f0ebe3', fg:'#5a5248', panel:'#faf6f0', border:'#d4cdc2', red:'#c47d5a' },
@@ -32,7 +33,7 @@ export const THEMES = {
   cute:       { bg:'#fff0f5', fg:'#d4608a', panel:'#fff8fa', border:'#f0c0d0', red:'#ff6b9d' },
 };
 
-const DEFAULT_THEME = 'nx';
+const DEFAULT_THEME = 'novum-xenium';
 const LS_KEY = 'odysseus-theme';
 const CUSTOM_THEMES_KEY = 'odysseus-custom-themes';
 
@@ -42,12 +43,18 @@ const FONT_MAP = {
   serif: "Georgia, 'Times New Roman', serif",
   opendyslexic: "'OpenDyslexic', sans-serif",
 };
-const DEFAULT_FONT = 'mono';
+const DEFAULT_FONT = 'sans';
+const LEGACY_DEFAULT_FONT = 'mono';
 const DEFAULT_DENSITY = 'comfortable';
 const MAX_CUSTOM_THEMES = 8;
 
+function _defaultFontForTheme(name) {
+  return name === DEFAULT_THEME ? DEFAULT_FONT : LEGACY_DEFAULT_FONT;
+}
+
 // Default background patterns for built-in themes
 const THEME_DEFAULT_PATTERN = {
+  'novum-xenium': 'none',
   nx:         'synapse',
   dark:       'none',
   light:      'dots',
@@ -187,7 +194,7 @@ const ADV_KEYS = [
   { key: 'aiBubbleBg',         css: '--ai-bubble-bg',      label: 'AI Chat Bubble',   group: 'Chat Bubbles' },
   { key: 'bubbleBorder',       css: '--bubble-border',     label: 'Border Chat Bubble', group: 'Chat Bubbles' },
   { key: 'sidebarBg',          css: '--sidebar-bg',        label: 'Sidebar Bg',       group: 'Sidebar' },
-  { key: 'brandColor',         css: '--brand-color',       label: 'Odysseus Logo',    group: 'Sidebar' },
+  { key: 'brandColor',         css: '--brand-color',       label: 'Novum Xenium Logo', group: 'Sidebar' },
   { key: 'brandMixTo',         css: '--brand-mix-to',      label: 'Logo Gradient End', group: 'Sidebar' },
   { key: 'hamburgerColor',     css: '--hamburger-color',   label: 'Hamburger Menu',   group: 'Sidebar' },
   { key: 'inputBg',            css: '--input-bg',          label: 'Input Bg',         group: 'Chat Input / Prompt Area' },
@@ -292,6 +299,10 @@ export function applyColors(colors) {
 
   // Update favicon to match theme accent color
   _updateFavicon(colors.red || '#e06c75');
+}
+
+function _applyDefaultThemeScope(name) {
+  document.documentElement.classList.toggle('theme-novum-xenium', name === DEFAULT_THEME);
 }
 
 // Per-route SVG shape registry — kept in sync with the inline favicon
@@ -470,9 +481,10 @@ export function getSaved() {
 }
 
 export function save(name, colors, opts) {
+  _applyDefaultThemeScope(name);
   const obj = { name, colors };
   if (opts) {
-    if (opts.font && opts.font !== DEFAULT_FONT) obj.font = opts.font;
+    if (opts.font && opts.font !== _defaultFontForTheme(name)) obj.font = opts.font;
     if (opts.density && opts.density !== DEFAULT_DENSITY) obj.density = opts.density;
     if (opts.bgPattern && opts.bgPattern !== 'none') obj.bgPattern = opts.bgPattern;
     if (opts.bgEffectColor) obj.bgEffectColor = opts.bgEffectColor;
@@ -638,6 +650,7 @@ export function initThemeUI() {
   if (!grid) return;
 
   const saved = getSaved();
+  _applyDefaultThemeScope(saved ? saved.name : DEFAULT_THEME);
   const activeName = saved ? saved.name : DEFAULT_THEME;
   const customThemes = _loadCustomThemes();
 
@@ -712,7 +725,7 @@ export function initThemeUI() {
         sw.classList.add('active');
         syncPickers(colors);
         const ct = sw.dataset.custom ? customThemes[name] : null;
-        const f = ct && ct.font ? ct.font : DEFAULT_FONT;
+        const f = ct && ct.font ? ct.font : _defaultFontForTheme(name);
         const d = ct && ct.density ? ct.density : DEFAULT_DENSITY;
         const p = ct && ct.bgPattern ? ct.bgPattern : (THEME_DEFAULT_PATTERN[name] || 'none');
         const ec = ct && ct.bgEffectColor ? ct.bgEffectColor : (THEME_DEFAULT_EFFECT_COLOR[name] || '');
@@ -1110,9 +1123,9 @@ export function initThemeUI() {
   syncResetButtons();
 
   // Font, density, background pattern controls
-  const _initFont = (saved && saved.font) || DEFAULT_FONT;
-  const _initDensity = (saved && saved.density) || DEFAULT_DENSITY;
   const _initTheme = saved ? saved.name : DEFAULT_THEME;
+  const _initFont = (saved && saved.font) || _defaultFontForTheme(_initTheme);
+  const _initDensity = (saved && saved.density) || DEFAULT_DENSITY;
   const _initPattern = (saved && saved.bgPattern) || THEME_DEFAULT_PATTERN[_initTheme] || 'none';
   const _initEffectColor = (saved && saved.bgEffectColor) || THEME_DEFAULT_EFFECT_COLOR[_initTheme] || '';
   const _initEffectIntensity = (saved && saved.bgEffectIntensity !== undefined)
@@ -1354,7 +1367,7 @@ export function initThemeUI() {
       if (result === 'limit') { saveError.textContent = 'Max ' + MAX_CUSTOM_THEMES + ' custom themes. Delete one first.'; saveError.style.display = 'block'; return; }
       save(slug, colorData, opts);
       applyColors(colorData);
-      applyFontDensity(opts.font || DEFAULT_FONT, opts.density || DEFAULT_DENSITY);
+      applyFontDensity(opts.font || _defaultFontForTheme(slug), opts.density || DEFAULT_DENSITY);
       applyBgEffectColor(opts.bgEffectColor || '');
       applyBgPattern(opts.bgPattern || 'none');
       importAreaEl.classList.add('hidden');

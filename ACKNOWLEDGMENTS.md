@@ -1,5 +1,9 @@
 # Acknowledgments
 
+Novum Xenium builds on [Odysseus](https://github.com/odysseus-dev/odysseus) and [NX-Odysseus](https://github.com/nerdrx/nx-odysseus). Their source history, copyright notices and AGPL-3.0 license are retained.
+
+The desktop app uses [Tauri](https://github.com/tauri-apps/tauri) (MIT or Apache-2.0). The compact NX wordmark and app icon come from [NX Hub](https://github.com/nerdrx/nx-hub) (MIT, copyright nerdrx).
+
 Odysseus stands on the shoulders of a lot of open-source work. This file
 credits the projects whose code, assets, or designs are included in or
 adapted by this repository, and notes their licenses.

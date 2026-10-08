@@ -1,6 +1,27 @@
-# NX Odysseus
+# Novum Xenium
 
-Odysseus, expanded by NX and tested on real project work.
+A self-hosted agent workspace. Coding, research, images and longer jobs, with a lightweight desktop app to run the backend.
+
+Built on [Odysseus](https://github.com/odysseus-dev/odysseus) and the NX-Odysseus fork. The original history and AGPL-3.0 license stay with it.
+
+## Desktop app
+
+The Tauri app uses the system webview. It manages an existing Docker Compose installation and opens the same frontend you can use in a browser. No separate desktop copy of chat, tools or memory.
+
+- Start and stop the selected backend, check its health and read logs.
+- Open the workspace in its own window.
+- Review backend updates, back up persistent data and check recovery if startup fails.
+- Install desktop release artifacts through [NX Hub](https://github.com/nerdrx/nx-hub).
+
+The first desktop release adopts an existing checkout; it does not silently install Docker, WSL or Git. Linux is tested locally. Windows builds run in CI; a successful build alone does not establish Windows runtime support. See [desktop setup and update behavior](docs/desktop.md).
+
+```bash
+cd desktop
+npm ci
+npm run dev
+```
+
+Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/). Backend setup below remains available without the desktop app.
 
 This started with installing Odysseus and using it. Then fixing the things that got in the way: agents losing their tools, chats stopping after one turn, unclear errors, context problems, missing workspace access. It grew into a fork with its own workflow.
 
@@ -54,8 +75,8 @@ The [validation record](FORK-CHANGES.md#validation) says what ran and what used 
 Install Git and Docker Compose, then:
 
 ```bash
-git clone https://github.com/nerdrx/nx-odysseus.git
-cd nx-odysseus
+git clone https://github.com/nerdrx/novum-xenium.git
+cd novum-xenium
 cp .env.example .env
 docker compose up -d --build
 ```

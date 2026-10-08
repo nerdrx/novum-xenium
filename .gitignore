@@ -128,3 +128,10 @@ _scratch/
 /docker.host-local.yml
 /config/ollama/
 /config/searxng/settings.local.yml
+
+# Desktop build products
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+
+dist-desktop/

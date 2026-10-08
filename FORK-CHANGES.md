@@ -1,8 +1,21 @@
-# NX Odysseus fork changes
+# Novum Xenium and NX Odysseus changes
 
 Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`.
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
+
+## Novum Xenium desktop preview
+
+- Preserves the complete Odysseus and NX-Odysseus source history and AGPL-3.0-or-later notices in the new repository.
+- Adds a Tauri desktop manager for an existing Docker Compose checkout: start, stop, health, bounded logs and a separate workspace window. Only the bundled manager has native management permissions.
+- Adds source updates with clean-tree/fast-forward checks, stopped-service snapshots and source/image/data recovery on failed health checks. Updates retain private recovery archives. Docker, WSL and Git installation remain manual.
+- Adds NX Hub artifact metadata and Linux AppImage / Windows portable ZIP build workflows. Windows build checks do not establish Windows runtime compatibility.
+- Adds a quieter shared browser theme and Novum Xenium labels while retaining existing saved themes, APIs and storage keys.
+- Fixes required web tools being crowded out by optional browser schemas under small tool budgets. The regression reproduces a tiny follow-up failing before any model request.
+
+Validation: 60 focused Python checks passed, with the optional browser wrapper skipped in the container. Direct Chromium checks passed for desktop/mobile shared branding and the manager UI. A real Tauri/WebKit session under headless Gamescope saved isolated configuration, identified the existing host-network backend, retrieved bounded logs and opened the workbench; the workbench was denied native manager access. Updater transaction tests use disposable Git repositories, a fake Docker CLI and a real loopback health server; they do not establish real Windows Docker recovery.
+
+See [desktop setup](docs/desktop.md). Packaging results are recorded with the desktop release.
 
 ## Included changes
 

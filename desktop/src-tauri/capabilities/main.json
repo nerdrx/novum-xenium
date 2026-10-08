@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Native manager access for the bundled Novum Xenium window.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

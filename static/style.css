@@ -17,11 +17,11 @@
 
 :root {
   /* Core palette */
-  --bg: #060606;
-  --fg: #ded9e3;
-  --panel: #0a0a0b;
-  --border: #413550;
-  --red: #7700ff;
+  --bg: #100f14;
+  --fg: #e9e6ef;
+  --panel: #19171e;
+  --border: #37323e;
+  --red: #a88bd6;
   /* Were `var(--green)` / `var(--warn)` — self-referential, so they
      resolved to invalid and every site fell back to its own literal
      (or, for sites with no fallback, painted as transparent/inherit).
@@ -107,6 +107,76 @@ body {
   height: 100%;
   height: 100dvh; /* dynamic viewport height — adapts when mobile keyboard opens */
   overflow: hidden;
+}
+
+/* Novum Xenium default: quiet surfaces, readable prose, and no animated
+   background. Rules are scoped so saved alternate and custom themes retain
+   their own visual treatment. */
+html.theme-novum-xenium {
+  --bg: #100f14;
+  --fg: #e9e6ef;
+  --panel: #19171e;
+  --border: #37323e;
+  --red: #a88bd6;
+  --color-accent: #b29add;
+  --sidebar-bg: #151319;
+  --input-bg: #17151b;
+  --input-border: #393440;
+  --send-btn-bg: #a88bd6;
+  --send-btn-hover: #b49cdd;
+  --user-bubble-bg: #211e28;
+  --ai-bubble-bg: #15141a;
+  --bubble-border: transparent;
+  --font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+html.theme-novum-xenium .sidebar {
+  background: var(--sidebar-bg);
+  border-color: color-mix(in srgb, var(--fg) 7%, transparent);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+html.theme-novum-xenium .msg-user,
+html.theme-novum-xenium .msg-ai {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+html.theme-novum-xenium .chat-input-bar {
+  gap: 10px;
+  padding: 14px 16px;
+  border-color: color-mix(in srgb, var(--fg) 13%, transparent);
+  border-radius: 18px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+}
+
+html.theme-novum-xenium .sidebar-brand-title {
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+html.theme-novum-xenium .welcome-name {
+  color: var(--brand-color, var(--red));
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+
+html.theme-novum-xenium pre,
+html.theme-novum-xenium code,
+html.theme-novum-xenium kbd,
+html.theme-novum-xenium samp {
+  font-family: 'Fira Code', 'Courier New', monospace;
+}
+
+@media (max-width: 768px) {
+  html.theme-novum-xenium .chat-input-bar {
+    padding: 12px;
+    border-radius: 16px;
+  }
 }
 
 /* Self-hosted Fira Code font */

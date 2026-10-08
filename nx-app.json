@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nerdrx/nx-hub/main/registry/nx-app.schema.json",
+  "nxApp": 1,
+  "name": "Novum Xenium",
+  "tagline": "A self-hosted agent workspace. A small desktop app to run it.",
+  "homepage": "https://github.com/nerdrx/novum-xenium",
+  "sandbox": "none",
+  "keepAlive": false,
+  "configPaths": [
+    "~/.config/dev.novum.xenium",
+    "~/AppData/Roaming/dev.novum.xenium"
+  ],
+  "artifacts": [
+    {
+      "assetPattern": "Novum-Xenium-*-linux-x86_64.AppImage",
+      "label": "Desktop app (Linux)",
+      "platform": "linux",
+      "kind": "appimage",
+      "postInstallNote": "Docker with Compose is required. Open the app and select your existing Novum Xenium or NX-Odysseus checkout."
+    },
+    {
+      "assetPattern": "Novum-Xenium-*-windows-x86_64.zip",
+      "label": "Desktop app (Windows)",
+      "platform": "windows",
+      "kind": "windows-zip",
+      "binHint": "novum-xenium-desktop.exe",
+      "postInstallNote": "Requires Docker Desktop in Linux-container mode, Git and Microsoft Edge WebView2. Select your backend checkout in the app."
+    }
+  ]
+}

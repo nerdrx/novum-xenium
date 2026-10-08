@@ -295,19 +295,22 @@ function initializeEventListeners() {
   });
 
   // Paste handler
+  // Linux desktop file-manager paste supplies bytes through the native bridge.
+  // Use the same pending attachments as the picker; sending remains explicit.
+  window.__nxReceiveClipboardFiles = async (files) => {
+    try {
+      await fileHandlerModule.addFiles(files.map(file => new File(
+        [Uint8Array.from(atob(file.data), char => char.charCodeAt(0))],
+        file.name, { type: file.type }
+      )));
+    } catch (_) { uiModule.showToast('Could not attach copied files'); }
+  };
   window.addEventListener('paste', async (e)=>{
-    if (!e.clipboardData) return;
-    let changed = false;
-    for (const item of e.clipboardData.items){
-      if (item.kind === 'file'){
-        const f = item.getAsFile();
-        if (f) {
-          await fileHandlerModule.addFiles([f]);
-          changed = true;
-        }
-      }
-    }
-    if (changed) fileHandlerModule.renderAttachStrip();
+    if (e.defaultPrevented || !e.clipboardData) return;
+    const files = Array.from(e.clipboardData.files || []);
+    if (!files.length) return;
+    e.preventDefault();
+    await fileHandlerModule.addFiles(files);
   });
 
   // Message count in the header — recount on any DOM change in

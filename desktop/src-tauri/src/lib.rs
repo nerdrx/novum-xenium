@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
+mod linux_file_paste;
+#[cfg(target_os = "linux")]
 mod linux_rendering;
 use std::{
     collections::HashMap,
@@ -1304,6 +1306,7 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
     #[cfg(target_os = "linux")]
     if let Some(window) = app.get_webview_window("workbench") {
         linux_rendering::prefer_display_refresh(&window);
+        linux_file_paste::install(&window, state.workbench_port.clone());
     }
     state
         .zoom_levels

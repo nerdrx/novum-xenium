@@ -76,6 +76,8 @@ The workspace supports Ctrl+R (Command+R on macOS) and F5 to reload its current 
 
 ## Workbench window controls
 
+Copy files in your file manager, focus the chat composer and press Ctrl+V (or Shift+Insert) to attach them. Linux uses a native clipboard fallback because WebKitGTK suppresses local file entries. Files remain in the attachment strip until you send. The fallback accepts up to 10 regular local files and 50 MB combined; folders are not attached. Text and screenshot paste keep their usual behavior. Other platforms use the webview's standard clipboard file support.
+
 Linux and Windows manager and workspace windows use the same compact title bar matched to the NX theme. Minimize, maximize/restore and close work through window-only controls; the workspace does not gain backend-management permissions. Double-click the title area to maximize. Right-click it to restore your system title bar if needed. macOS keeps its native frame.
 
 After replacing an installed desktop build, use **Quit** in the tray menu and reopen the app. Closing its window can leave the previous process running in the tray.

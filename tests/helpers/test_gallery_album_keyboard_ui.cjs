@@ -68,7 +68,10 @@ const server = http.createServer((req, res) => {
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(() => window.fixture?.ready);
-    await page.locator('.gallery-tab[data-tab="albums"]').click();
+    const albumsTab = page.locator('.gallery-tab[data-tab="albums"]');
+    await albumsTab.click();
+    assert.equal(await albumsTab.evaluate(el => el.classList.contains('active')), true,
+      'Albums is active before opening a card');
     const create = page.locator('#gallery-albums-new');
     await create.waitFor();
     assert.equal(await create.getAttribute('role'), 'button');
@@ -94,6 +97,11 @@ const server = http.createServer((req, res) => {
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => document.querySelector('.gallery-tab[data-tab="images"]')?.classList.contains('active'));
     await page.waitForFunction(() => fetch('/__queries').then(r => r.json()).then(items => items.includes('album-a')));
+    assert.equal(await page.locator('.gallery-tab[data-tab="albums"]').evaluate(el => el.classList.contains('active')), false);
+    assert.equal(await page.locator('.gallery-tab[data-tab="images"]').evaluate(el => el.classList.contains('active')), true,
+      'opening the card switches from Albums to Photos');
+    assert.match(await page.locator('#gallery-filter-chips').textContent(), /Album Alpha/,
+      'Photos displays the selected album filter');
 
     await page.locator('.gallery-tab[data-tab="albums"]').click();
     await page.locator('#gallery-albums-select-btn').click();

@@ -4,6 +4,8 @@ and _append_tool_results. Uses mock imports to avoid loading the full app stack.
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 _MOCKED_IMPORTS = [
     'sqlalchemy', 'sqlalchemy.orm', 'sqlalchemy.ext', 'sqlalchemy.ext.declarative',
     'sqlalchemy.ext.hybrid', 'sqlalchemy.sql', 'sqlalchemy.sql.expression',
@@ -129,6 +131,76 @@ def test_polish_internet_search_request_classifies_as_web():
 
     assert intent["low_signal"] is False
     assert "web" in intent["domains"]
+
+
+def test_natural_explicit_continuation_retains_original_coding_request():
+    original = (
+        "Clone this git repository into the disposable workspace, inspect it, "
+        "implement the requested change, and run focused tests."
+    )
+    latest = (
+        "Yes, continue this exact task in the disposable workspace, "
+        "following the original request."
+    )
+    messages = [
+        {"role": "user", "content": original},
+        {"role": "assistant", "content": "A rollback snapshot could not be created."},
+        {"role": "user", "content": latest},
+    ]
+
+    intent = _classify_agent_request(messages, latest)
+
+    assert intent["continuation"] is True
+    assert intent["low_signal"] is False
+    assert "files" in intent["domains"]
+    assert original in intent["retrieval_query"]
+
+
+def test_natural_continuation_does_not_inherit_new_topics_or_greetings():
+    messages = [
+        {"role": "user", "content": "Fix the project files and run its tests."},
+        {"role": "assistant", "content": "A rollback snapshot could not be created."},
+    ]
+
+    new_topic = "What is the weather in Berlin today?"
+    intent = _classify_agent_request([*messages, {"role": "user", "content": new_topic}], new_topic)
+    assert intent["continuation"] is False
+    assert intent["retrieval_query"] == new_topic
+    assert "web" in intent["domains"]
+    assert "files" not in intent["domains"]
+
+    greeting = "hey there"
+    intent = _classify_agent_request([*messages, {"role": "user", "content": greeting}], greeting)
+    assert intent["continuation"] is False
+    assert intent["low_signal"] is True
+    assert intent["retrieval_query"] == greeting
+
+
+@pytest.mark.parametrize("latest", ["Resume that project.", "continue with the same task"])
+def test_natural_continuation_accepts_explicit_reusable_referents(latest):
+    original = "Fix this git repository and run its tests."
+    messages = [{"role": "user", "content": original}]
+
+    intent = _classify_agent_request([*messages, {"role": "user", "content": latest}], latest)
+
+    assert intent["continuation"] is True
+    assert "files" in intent["domains"]
+    assert original in intent["retrieval_query"]
+
+
+@pytest.mark.parametrize("latest", [
+    "Continue learning Python with me",
+    "Resume writing a new poem",
+])
+def test_continue_or_resume_new_requests_do_not_inherit_prior_files(latest):
+    original = "Fix this git repository and run its tests."
+    messages = [{"role": "user", "content": original}]
+
+    intent = _classify_agent_request([*messages, {"role": "user", "content": latest}], latest)
+
+    assert intent["continuation"] is False
+    assert intent["retrieval_query"] == latest
+    assert "files" not in intent["domains"]
 
 
 def test_online_generator_lookup_drops_unrelated_retrieval_tools():

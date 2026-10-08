@@ -1329,6 +1329,18 @@ _EXPLICIT_CONTINUATION_RE = re.compile(
     r")\s*(?:[.!?]+\s*)?$",
     re.IGNORECASE,
 )
+_NATURAL_EXPLICIT_CONTINUATION_RE = re.compile(
+    r"^\s*(?:(?:yes|yeah|yep|ok|okay|sure)[, ]+)?"
+    r"(?:please\s+)?(?:continue|resume|carry on|keep going)\s+"
+    r"(?:with\s+)?(?:this|that|the same|the exact|the original)"
+    r"(?:\s+(?:same|exact|original))?\s+"
+    r"(?:task|request|work|project|issue)"
+    r"(?:\s+(?:in|on)\s+(?:the\s+)?(?:(?:same|original|disposable)\s+)?"
+    r"(?:workspace|repo(?:sitory)?))?"
+    r"(?:,\s*following\s+(?:the\s+)?original\s+(?:request|task))?"
+    r"\s*(?:[.!?]+\s*)?$",
+    re.IGNORECASE,
+)
 _RETRY_CONTINUATION_RE = re.compile(
     r"\b(?:try again|retry|again|rerun|re-run|run it again|launch it again|"
     r"start it again|failed|fails?|died|crashed|broke|insta|instantly)\b",
@@ -1341,8 +1353,12 @@ _COOKBOOK_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 def _is_explicit_continuation(text: str) -> bool:
-    """Only these terse replies may inherit older user turns for tool retrieval."""
-    return bool(_EXPLICIT_CONTINUATION_RE.match(str(text or "").strip()))
+    """Recognize terse confirmations and narrow, explicit task continuations."""
+    value = str(text or "").strip()
+    return bool(
+        _EXPLICIT_CONTINUATION_RE.match(value)
+        or _NATURAL_EXPLICIT_CONTINUATION_RE.match(value)
+    )
 
 
 def _is_casual_low_signal(text: str) -> bool:

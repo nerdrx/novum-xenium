@@ -6,7 +6,7 @@
   --nx-soft-border: color-mix(in srgb, var(--fg) 9%, transparent);
   --nx-hover: color-mix(in srgb, var(--fg) 5%, transparent);
   --nx-selected: color-mix(in srgb, var(--red) 12%, transparent);
-  --nx-muted: color-mix(in srgb, var(--fg) 62%, transparent);
+  --nx-muted: color-mix(in srgb, var(--fg) 75%, transparent);
 }
 
 /* Keep the sidebar calm and legible in every saved theme. */
@@ -174,7 +174,7 @@ html.nx-workspace .chat-input-bar textarea#message {
 }
 html.nx-workspace .input-icon-btn {
   border-radius: var(--nx-control-radius);
-  opacity: 0.68;
+  opacity: 0.82;
 }
 html.nx-workspace .input-icon-btn:hover,
 html.nx-workspace .input-icon-btn.active,
@@ -344,10 +344,98 @@ a:focus-visible,
   outline-offset: 2px;
 }
 
+/* Settings and menus share the same restrained hierarchy. */
+html.nx-workspace .settings-nav-item {
+  min-height: 36px;
+  color: color-mix(in srgb, var(--fg) 75%, transparent);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+html.nx-workspace .settings-nav-item.active {
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: inset 2px 0 var(--red);
+}
+html.nx-workspace .settings-sidebar-label {
+  opacity: 1;
+  color: var(--nx-muted);
+  letter-spacing: 0.08em;
+}
+html.nx-workspace .settings-sidebar-divider {
+  background: var(--nx-soft-border);
+  margin: 10px 8px;
+}
+html.nx-workspace .settings-panels .admin-card {
+  padding: 16px;
+  margin-bottom: 12px;
+}
+html.nx-workspace .settings-panels .admin-card:not(.admin-danger-card) {
+  border-color: color-mix(in srgb, var(--border) 65%, transparent);
+}
+html.nx-workspace .settings-panels .admin-card h2 {
+  letter-spacing: 0;
+  line-height: 1.4;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom-color: var(--nx-soft-border);
+}
+html.nx-workspace .settings-col {
+  gap: 10px;
+}
+html.nx-workspace .settings-modal-content :is(.settings-input, .settings-select, .admin-input, .admin-select) {
+  min-height: 34px;
+}
+html.nx-workspace .settings-modal-content :is(.admin-btn-add, .admin-btn-delete, .admin-btn-sm) {
+  min-height: 32px;
+}
+html.nx-workspace :is(.dropdown-item-compact, .sort-dropdown-item, .settings-search-result) {
+  min-height: 34px;
+  padding: 8px 10px;
+  border-radius: var(--nx-control-radius);
+}
+html.nx-workspace :is(.dropdown-item-compact, .sort-dropdown-item, .settings-search-result):hover {
+  background: var(--nx-hover);
+}
+html.nx-workspace .settings-nav-search-results {
+  border-radius: var(--nx-panel-radius);
+  border-color: var(--nx-soft-border);
+}
+html.nx-workspace .dropdown-item-compact .dropdown-shortcut {
+  opacity: 0.65;
+}
+html.nx-workspace.density-compact .settings-nav-item {
+  min-height: 32px;
+}
+html.nx-workspace.density-spacious .settings-nav-item {
+  min-height: 42px;
+}
+@media (min-width: 769px) {
+  html.nx-workspace .modal-header :is(.close-btn, .modal-close, .minimize-btn, .modal-minimize-btn) {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    border-radius: var(--nx-control-radius);
+  }
+}
+
 @media (max-width: 768px) {
+  html.nx-workspace .settings-modal-content .modal-header {
+    padding: 8px 12px;
+  }
+  /* Keep a visible dismissal control alongside the sheet swipe gesture. */
+  html.nx-workspace .settings-modal-content :is(.close-btn, .modal-close) {
+    display: inline-flex !important;
+  }
   html.nx-workspace #welcome-screen .welcome-logo {
     width: 120px;
     height: 64px;
+  }
+  html.nx-workspace .settings-panels .admin-card {
+    padding: 12px;
+  }
+  html.nx-workspace .settings-sidebar .settings-nav-item,
+  html.nx-workspace :is(.dropdown-item-compact, .sort-dropdown-item, .settings-search-result) {
+    min-height: 44px;
   }
   html.nx-workspace .chat-container {
     padding-left: 10px;
@@ -369,7 +457,9 @@ a:focus-visible,
   html.nx-workspace .sidebar .list-item,
   html.nx-workspace .sidebar .models-row,
   html.nx-workspace .input-icon-btn,
-  html.nx-workspace .send-btn {
+  html.nx-workspace .send-btn,
+  html.nx-workspace .settings-nav-item,
+  html.nx-workspace :is(.dropdown-item-compact, .sort-dropdown-item, .settings-search-result) {
     transition-duration: 0.01ms;
   }
 }

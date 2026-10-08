@@ -266,6 +266,15 @@ function noOverflow(metrics, label) {
         sidebar: !!el.querySelector('.settings-sidebar'),
       }));
       assert.ok(settingsSurface.radius > 0 && settingsSurface.sidebar, 'settings surface and navigation stay styled');
+      await settings.evaluate(el => Promise.all(el.getAnimations({ subtree: true })
+        .filter(animation => animation.effect.getTiming().iterations !== Infinity)
+        .map(animation => animation.finished.catch(() => {}))));
+      const settingsControls = await settings.evaluate(el => ({
+        navHeight: el.querySelector('.settings-nav-item').getBoundingClientRect().height,
+        closeWidth: el.querySelector('.close-btn, .modal-close').getBoundingClientRect().width,
+      }));
+      assert.ok(settingsControls.navHeight >= (viewport.name === 'mobile' ? 44 : 32), `settings navigation stays comfortably clickable: ${viewport.name} ${JSON.stringify(settingsControls)}`);
+      assert.ok(settingsControls.closeWidth >= (viewport.name === 'mobile' ? 44 : 32), 'window close control has a usable target');
       await settings.screenshot({ path: path.join(screenshotDir, `nx-skin-settings-${viewport.name}.png`) });
       await settings.evaluate(el => el.classList.add('hidden'));
       assert.equal(await settings.isVisible(), false, 'settings modal closes');

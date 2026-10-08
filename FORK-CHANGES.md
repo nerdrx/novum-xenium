@@ -47,6 +47,13 @@ Validation: desktop/mobile Chromium checks cover rendering, controls, repeated s
 
 - Adds Ctrl+R / Command+R and F5 reload shortcuts to the native workspace, plus Reload workspace in the tray menu. Reloading does not restart Docker or grant the workspace native management access.
 
+## Settings and menu polish
+
+- Gives settings clearer selected rows, quieter card separators and consistent form spacing. Small navigation labels and idle composer icons have stronger visibility. Colours still come from the selected theme.
+- Aligns compact menus, sort menus and settings search with shared corner and hover styles. Desktop window controls have larger targets; phone settings retain a visible close button alongside the swipe gesture.
+
+Validation: Chromium desktop/mobile checks cover settings target sizes, visible dismissal, theme customization and background effect lifecycle.
+
 ## Included changes
 
 - Tab and Shift+Tab keep native composer focus navigation instead of accidentally switching Plan mode. Plan mode has a visible toggle under More tools, with its pressed state exposed to assistive technology.

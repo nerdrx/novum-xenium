@@ -2995,9 +2995,12 @@ def setup_chat_routes(
             return []
 
         _user = effective_user(request)
+        # Transcript search owns a synchronous SQLAlchemy session, so keep its
+        # database work off the event loop. Request ownership is resolved first.
         return [
             result.to_dict()
-            for result in search_session_messages(
+            for result in await asyncio.to_thread(
+                search_session_messages,
                 q,
                 limit=limit,
                 owner=_user,

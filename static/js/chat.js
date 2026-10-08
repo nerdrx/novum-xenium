@@ -1019,9 +1019,10 @@ import { loadPanel } from './panels.js';
 
   const _queuedAgentRequests = [];
   let _queuedDrainTimer = null;
-  let _queuedPromoteTimer = null;
   let _queuedRequestSeq = 0;
   let _queuedBubbleHost = null;
+  let _queuedBubbleRenderKey = '';
+  let _queuedBubbleObserver = null;
   let _pendingApprovedPlan = null;
 
   function _extractPlanText(text) {
@@ -1123,26 +1124,57 @@ import { loadPanel } from './panels.js';
     return wrap;
   }
 
+  function _renderQueuedRequestsForCurrentSession() {
+    const sessionId = String(sessionModule?.getCurrentSessionId?.() || '');
+    const matching = sessionId
+      ? _queuedAgentRequests.filter(item => item.sessionId === sessionId)
+      : [];
+    const renderKey = `${sessionId}:${matching.map(item => item.id).join(',')}`;
+    if (_queuedBubbleHost && _queuedBubbleHost.isConnected && _queuedBubbleRenderKey === renderKey) return;
+    if (_queuedBubbleHost && _queuedBubbleHost.isConnected) _queuedBubbleHost.remove();
+    _queuedBubbleHost = null;
+    _queuedBubbleRenderKey = renderKey;
+    if (!matching.length) return;
+    const host = _ensureQueuedBubbleHost();
+    if (!host) return;
+    for (const item of matching) item.el = _createQueuedBubble(item);
+  }
+
+  function _watchQueuedSessionChanges() {
+    const queuedHistory = document.getElementById('chat-history');
+    if (queuedHistory && !_queuedBubbleObserver && typeof MutationObserver !== 'undefined') {
+      _queuedBubbleObserver = new MutationObserver(() => {
+        _renderQueuedRequestsForCurrentSession();
+        _drainQueuedAgentRequests();
+      });
+      _queuedBubbleObserver.observe(queuedHistory, { childList: true });
+    }
+    _renderQueuedRequestsForCurrentSession();
+  }
+
   function _removeQueuedRequest(id) {
     const idx = _queuedAgentRequests.findIndex(item => item.id === id);
     if (idx < 0) return null;
     const [item] = _queuedAgentRequests.splice(idx, 1);
     if (item && item.el && item.el.parentNode) item.el.remove();
+    _renderQueuedRequestsForCurrentSession();
     return item;
   }
 
-  function _setComposerAndSend(message, expectedSessionId = null, pendingPlan = null) {
+  function _setComposerAndSend(message, expectedSessionId = null, pendingPlan = null, queuedItem = null) {
     const input = uiModule.el('message');
     if (!input) return false;
-    input.value = message;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    if (uiModule.autoResize) uiModule.autoResize(input);
     setTimeout(() => {
       if (expectedSessionId
           && String(sessionModule?.getCurrentSessionId?.() || '') !== String(expectedSessionId)) {
         if (_pendingApprovedPlan === pendingPlan) _pendingApprovedPlan = null;
         return;
       }
+      if (queuedItem && (!_queuedAgentRequests.includes(queuedItem) || isStreaming || _sendInFlight)) return;
+      if (queuedItem) _removeQueuedRequest(queuedItem.id);
+      input.value = message;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      if (uiModule.autoResize) uiModule.autoResize(input);
       handleChatSubmit({ preventDefault() {}, expectedSessionId, pendingPlan }).catch(err => {
         console.error('queued send failed', err);
         try { uiModule.showError && uiModule.showError('Queued send failed: ' + (err?.message || err)); } catch (_) {}
@@ -1151,28 +1183,27 @@ import { loadPanel } from './panels.js';
     return true;
   }
 
-  function _sendQueuedWhenIdle(item) {
-    if (!item) return;
-    const trySend = () => {
-      if (isStreaming || _sendInFlight) {
-        _queuedPromoteTimer = setTimeout(trySend, 220);
-        return;
-      }
-      _queuedPromoteTimer = null;
-      _setComposerAndSend(item.message);
-    };
-    if (_queuedPromoteTimer) clearTimeout(_queuedPromoteTimer);
-    _queuedPromoteTimer = setTimeout(trySend, 320);
-  }
-
   function _promoteQueuedRequest(id) {
-    const item = _removeQueuedRequest(id);
+    const item = _queuedAgentRequests.find(queued => queued.id === id);
     if (!item) return;
-    if (!isStreaming && !_sendInFlight) {
-      _setComposerAndSend(item.message);
+    const currentSessionId = String(sessionModule?.getCurrentSessionId?.() || '');
+    if (currentSessionId !== item.sessionId) {
+      try { uiModule.showToast && uiModule.showToast('Open the chat that contains this queued message first'); } catch (_) {}
       return;
     }
-    try { uiModule.showToast && uiModule.showToast('Sending queued request now'); } catch (_) {}
+    if (!isStreaming && !_sendInFlight) {
+      _setComposerAndSend(item.message, item.sessionId, null, item);
+      return;
+    }
+    const firstForSession = _queuedAgentRequests.findIndex(queued => queued.sessionId === item.sessionId);
+    const itemIndex = _queuedAgentRequests.indexOf(item);
+    if (itemIndex > firstForSession) {
+      _queuedAgentRequests.splice(itemIndex, 1);
+      _queuedAgentRequests.splice(firstForSession, 0, item);
+      _renderQueuedRequestsForCurrentSession();
+    }
+    try { uiModule.showToast && uiModule.showToast('Stopping this chat before sending the queued request'); } catch (_) {}
+    if (!isStreaming) return; // The current request is still starting; it will drain when its send flag clears.
     const input = uiModule.el('message');
     const submitBtn = document.querySelector('.send-btn');
     if (input) {
@@ -1180,15 +1211,15 @@ import { loadPanel } from './panels.js';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
     if (submitBtn) submitBtn.click();
-    _sendQueuedWhenIdle(item);
   }
 
   function _queueAgentRequest(message) {
     const msg = String(message || '').trim();
-    if (!msg) return false;
-    const item = { id: `q${++_queuedRequestSeq}`, message: msg, createdAt: Date.now(), el: null };
-    item.el = _createQueuedBubble(item);
+    const sessionId = String(sessionModule?.getCurrentSessionId?.() || '');
+    if (!msg || !sessionId) return false;
+    const item = { id: `q${++_queuedRequestSeq}`, sessionId, message: msg, createdAt: Date.now(), el: null };
     _queuedAgentRequests.push(item);
+    _renderQueuedRequestsForCurrentSession();
     try { uiModule.showToast && uiModule.showToast(_queuedAgentRequests.length === 1 ? 'Queued for after this response' : `${_queuedAgentRequests.length} requests queued`); } catch (_) {}
     return true;
   }
@@ -1213,14 +1244,20 @@ import { loadPanel } from './panels.js';
 
   function _drainQueuedAgentRequests() {
     if (isStreaming || _sendInFlight || !_queuedAgentRequests.length) return;
+    const sessionId = String(sessionModule?.getCurrentSessionId?.() || '');
+    if (!sessionId || !_queuedAgentRequests.some(item => item.sessionId === sessionId)) return;
     if (_queuedDrainTimer) return;
     _queuedDrainTimer = setTimeout(() => {
       _queuedDrainTimer = null;
       if (isStreaming || _sendInFlight || !_queuedAgentRequests.length) return;
-      const next = _queuedAgentRequests[0];
+      const currentSessionId = String(sessionModule?.getCurrentSessionId?.() || '');
+      if (currentSessionId !== sessionId) {
+        _drainQueuedAgentRequests();
+        return;
+      }
+      const next = _queuedAgentRequests.find(item => item.sessionId === sessionId);
       if (!next) return;
-      _removeQueuedRequest(next.id);
-      _setComposerAndSend(next.message);
+      _setComposerAndSend(next.message, next.sessionId, null, next);
     }, 180);
   }
 
@@ -1233,7 +1270,7 @@ import { loadPanel } from './panels.js';
     const expectedSessionId = e.expectedSessionId ? String(e.expectedSessionId) : '';
     if (expectedSessionId
         && (String(sessionModule.getCurrentSessionId() || '') !== expectedSessionId
-            || _pendingApprovedPlan !== e.pendingPlan)) {
+            || (e.pendingPlan && _pendingApprovedPlan !== e.pendingPlan))) {
       if (_pendingApprovedPlan === e.pendingPlan) _pendingApprovedPlan = null;
       return;
     }
@@ -1248,7 +1285,8 @@ import { loadPanel } from './panels.js';
     // An approval belongs to the chat where its plan was shown. Discard it as
     // soon as a send begins in another chat (or with no active chat).
     if (expectedSessionId) {
-      _pendingPlanForSession(sessionId);
+      if (e.pendingPlan) _pendingPlanForSession(sessionId);
+      else _pendingApprovedPlan = null;
     } else {
       _pendingApprovedPlan = null;
     }
@@ -1424,6 +1462,7 @@ import { loadPanel } from './panels.js';
       _syncForegroundStreamGlobals();
       if (_earlyMessageInput) _earlyMessageInput.disabled = false;
       if (submitBtn) submitBtn.classList.remove('send-pending');
+      _drainQueuedAgentRequests();
     };
 
     // --- Setup mode: intercept next message (but let slash commands through) ---
@@ -5662,6 +5701,8 @@ import { loadPanel } from './panels.js';
    * Initialize event listeners
    */
   export function initListeners() {
+    _watchQueuedSessionChanges();
+
     // Global event delegation for copy-code buttons
     document.addEventListener('click', (e) => {
       const btn = e.target.closest('.copy-code');

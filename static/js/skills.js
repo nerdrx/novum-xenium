@@ -15,6 +15,7 @@ let skills = [];
 let builtinSkills = [];   // read-only agent tool capabilities (TOOL_SECTIONS)
 let loaded = false;
 let _loadPromise = null;
+let _bulkOperation = false;
 
 function esc(s) { return uiModule.esc(String(s ?? '')); }
 
@@ -663,7 +664,7 @@ function renderSkillsList() {
   }
 
   const selectBtn = document.getElementById('skills-select-btn');
-  if (selectBtn) selectBtn.disabled = false;
+  if (selectBtn) selectBtn.disabled = _bulkOperation;
 
   // Library-style cards: a compact bar that expands in-place to show the
   // SKILL.md, with a footer (Delete left; Edit / Run / Approve right).
@@ -1711,7 +1712,8 @@ function _enterSelectMode() {
   renderSkillsList();
 }
 
-function _exitSelectMode() {
+function _exitSelectMode(force = false) {
+  if (_bulkOperation && !force) return;
   _selectMode = false;
   _selectedNames.clear();
   const bar = document.getElementById('skills-bulk-bar');
@@ -1729,12 +1731,17 @@ function _updateBulkBar() {
   const delNonPassingBtn = document.getElementById('skills-bulk-delete-nonpassing');
   const pubBtn = document.getElementById('skills-bulk-publish');
   const auditBtn = document.getElementById('skills-bulk-audit');
+  const selectBtn = document.getElementById('skills-select-btn');
+  const cancelBtn = document.getElementById('skills-bulk-cancel');
+  if (selectBtn && _bulkOperation) selectBtn.disabled = true;
+  else if (selectBtn && skills.length) selectBtn.disabled = false;
+  if (cancelBtn) cancelBtn.disabled = _bulkOperation;
   if (countEl) countEl.textContent = `${_selectedNames.size} Selected`;
-  if (delBtn) delBtn.disabled = _selectedNames.size === 0;
-  if (auditBtn) auditBtn.disabled = _selectedNames.size === 0;
+  if (delBtn) delBtn.disabled = _bulkOperation || _selectedNames.size === 0;
+  if (auditBtn) auditBtn.disabled = _bulkOperation || _selectedNames.size === 0;
   if (delNonPassingBtn) {
     const count = _selectedNonPassingSkills().length;
-    delNonPassingBtn.disabled = count === 0;
+    delNonPassingBtn.disabled = _bulkOperation || count === 0;
     delNonPassingBtn.title = count
       ? `Delete ${count} selected non-passing ${count === 1 ? 'skill' : 'skills'}`
       : 'No selected non-passing skills';
@@ -1744,7 +1751,70 @@ function _updateBulkBar() {
     const sk = skills.find(s => (s.name || s.id) === n);
     return sk && (sk.status || 'draft') !== 'published';
   });
-  if (pubBtn) pubBtn.disabled = !anyDraft;
+  if (pubBtn) pubBtn.disabled = _bulkOperation || !anyDraft;
+}
+
+function _beginBulkOperation() {
+  if (_bulkOperation) return false;
+  _bulkOperation = true;
+  _updateBulkBar();
+  return true;
+}
+
+function _endBulkOperation() {
+  _bulkOperation = false;
+  _updateBulkBar();
+}
+
+async function _runBulkRequests(names, { method, body, verb, successLabel, deleteCache = false }) {
+  const succeeded = [];
+  const failed = [];
+  for (const name of names) {
+    try {
+      const options = { method };
+      if (body) {
+        options.headers = { 'Content-Type': 'application/json' };
+        options.body = JSON.stringify(body);
+      }
+      const res = await fetch(`${API}/api/skills/${encodeURIComponent(name)}`, options);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      succeeded.push(name);
+    } catch {
+      failed.push(name);
+    }
+  }
+
+  if (deleteCache) {
+    succeeded.forEach(name => _mdCache.delete(name));
+    const succeededSet = new Set(succeeded);
+    skills = skills.filter(sk => !succeededSet.has(sk.name || sk.id));
+    succeeded.forEach(name => {
+      const card = document.querySelector(`.skill-card[data-skill-name="${CSS.escape(name)}"]`);
+      if (card) card.classList.add('doclib-card-deleting');
+    });
+    if (succeeded.length) await new Promise(resolve => setTimeout(resolve, 320));
+  } else if (method === 'PUT' && body?.status) {
+    const succeededSet = new Set(succeeded);
+    skills.forEach(sk => {
+      if (succeededSet.has(sk.name || sk.id)) sk.status = body.status;
+    });
+  }
+
+  succeeded.forEach(name => _selectedNames.delete(name));
+  failed.forEach(name => _selectedNames.add(name));
+  if (_selectedNames.size) {
+    _updateBulkBar();
+    renderSkillsList();
+  } else {
+    _exitSelectMode(true);
+  }
+  await loadSkills();
+
+  if (failed.length) {
+    uiModule.showError(`${succeeded.length} of ${names.length} ${verb} succeeded; ${failed.length} failed and remain selected. Review selection, then retry.`);
+  } else {
+    uiModule.showToast(`${successLabel || `${verb[0].toUpperCase()}${verb.slice(1)}`} ${succeeded.length}`);
+  }
 }
 
 function _toggleSelectAll() {
@@ -1758,32 +1828,18 @@ function _toggleSelectAll() {
 }
 
 async function _bulkDelete() {
-  if (!_selectedNames.size) return;
-  const n = _selectedNames.size;
-  const ok = await uiModule.styledConfirm(
-    `Delete ${n} ${n === 1 ? 'skill' : 'skills'}? This removes their SKILL.md files.`,
-    { confirmText: 'Delete', danger: true }
-  );
-  if (!ok) return;
-  let deleted = 0;
-  const deletedNames = [];
-  for (const name of _selectedNames) {
-    try {
-      const res = await fetch(`${API}/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      if (res.ok) {
-        deleted++;
-        deletedNames.push(name);
-      }
-    } catch {}
+  const names = [..._selectedNames];
+  if (!names.length || !_beginBulkOperation()) return;
+  try {
+    const ok = await uiModule.styledConfirm(
+      `Delete ${names.length} ${names.length === 1 ? 'skill' : 'skills'}? This removes their SKILL.md files.`,
+      { confirmText: 'Delete', danger: true }
+    );
+    if (!ok) return;
+    await _runBulkRequests(names, { method: 'DELETE', verb: 'deleted', deleteCache: true });
+  } finally {
+    _endBulkOperation();
   }
-  for (const name of deletedNames) {
-    const card = document.querySelector(`.skill-card[data-skill-name="${CSS.escape(name)}"]`);
-    if (card) card.classList.add('doclib-card-deleting');
-  }
-  if (deletedNames.length) await new Promise(resolve => setTimeout(resolve, 320));
-  _exitSelectMode();
-  await loadSkills();
-  uiModule.showToast(`Deleted ${deleted}`);
 }
 
 async function _loadSkillApprovalThreshold() {
@@ -1811,58 +1867,38 @@ function _selectedNonPassingSkills() {
 }
 
 async function _bulkDeleteNonPassing() {
+  if (!_beginBulkOperation()) return;
   const targets = _selectedNonPassingSkills();
   if (!targets.length) {
     uiModule.showToast('No selected non-passing skills');
+    _endBulkOperation();
     return;
   }
   const thresholdPct = Math.round(_skillApprovalThreshold * 100);
   const names = targets.map(sk => sk.name || sk.id).filter(Boolean);
-  const ok = await uiModule.styledConfirm(
-    `Delete ${names.length} selected non-passing ${names.length === 1 ? 'skill' : 'skills'}? This removes duplicates, generic/irrelevant skills, failed audits, and anything below ${thresholdPct}%.`,
-    { confirmText: 'Delete non passing', danger: true }
-  );
-  if (!ok) return;
-  let deleted = 0;
-  const deletedNames = [];
-  for (const name of names) {
-    try {
-      const res = await fetch(`${API}/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      if (res.ok) {
-        deleted++;
-        deletedNames.push(name);
-        _mdCache.delete(name);
-      }
-    } catch {}
+  try {
+    const ok = await uiModule.styledConfirm(
+      `Delete ${names.length} selected non-passing ${names.length === 1 ? 'skill' : 'skills'}? This removes duplicates, generic/irrelevant skills, failed audits, and anything below ${thresholdPct}%.`,
+      { confirmText: 'Delete non passing', danger: true }
+    );
+    if (!ok) return;
+    await _runBulkRequests(names, { method: 'DELETE', verb: 'deleted', successLabel: 'Deleted non-passing', deleteCache: true });
+  } finally {
+    _endBulkOperation();
   }
-  for (const name of deletedNames) {
-    const card = document.querySelector(`.skill-card[data-skill-name="${CSS.escape(name)}"]`);
-    if (card) card.classList.add('doclib-card-deleting');
-  }
-  if (deletedNames.length) await new Promise(resolve => setTimeout(resolve, 320));
-  _exitSelectMode();
-  await loadSkills();
-  uiModule.showToast(`Deleted ${deleted} non-passing`);
 }
 
 async function _bulkApprove() {
-  if (!_selectedNames.size) return;
-  let published = 0;
-  for (const name of _selectedNames) {
+  const names = [..._selectedNames].filter(name => {
     const sk = skills.find(s => (s.name || s.id) === name);
-    if (sk && sk.status === 'published') continue;
-    try {
-      const res = await fetch(`${API}/api/skills/${encodeURIComponent(name)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'published' }),
-      });
-      if (res.ok) published++;
-    } catch {}
+    return sk && (sk.status || 'draft') !== 'published';
+  });
+  if (!names.length || !_beginBulkOperation()) return;
+  try {
+    await _runBulkRequests(names, { method: 'PUT', body: { status: 'published' }, verb: 'published' });
+  } finally {
+    _endBulkOperation();
   }
-  _exitSelectMode();
-  await loadSkills();
-  uiModule.showToast(`Published ${published}`);
 }
 
 async function _bulkAudit() {

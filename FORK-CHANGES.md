@@ -6,6 +6,10 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Queued composer requests retain their source chat. Switching chats defers the send, keeps the other chat's draft intact and restores the queued message on return. Send now only stops the originating chat and prioritizes the selected queued item. This browser queue is not durable across a tab reload.
+- Transcript search runs its synchronous database work in a worker thread, preserving existing full-text/substring matching and owner restrictions while allowing unrelated requests to respond.
+- Bulk Skill Delete and Publish capture their targets, suppress duplicate operations and retain failed items plus later selections for review and retry. Confirmed changes remain visible even if the following inventory refresh fails; the refresh error keeps its own Retry control.
+
 - Inline plan execution uses the selected bubble's plan and its source chat. A session change, composer edit or competing submit cannot transfer the one-shot approval to another request. The unused global plan cache is discarded; this does not add a persistent plan editor.
 - Endpoint Delete and Enable/Disable wait for successful server responses, keep failed changes retryable and avoid clearing a pending chat route on failure. Repeated clicks are suppressed; a confirmed deletion and a failed subsequent list refresh are reported separately.
 - Skills list failures preserve the previous list and offer Retry. Failed individual Delete or Publish actions no longer claim success. Saving captures the submitted text and retains any newer edits for another save.

@@ -20,7 +20,7 @@ def test_inline_plan_approval_uses_its_chat_and_cannot_cross_navigation():
     helper_end = source.index("function _escapeQueueText", helper_start)
     helper_source = source[helper_start:helper_end]
     composer_start = source.index("function _setComposerAndSend(message")
-    composer_end = source.index("function _sendQueuedWhenIdle", composer_start)
+    composer_end = source.index("function _promoteQueuedRequest", composer_start)
     composer_source = source[composer_start:composer_end]
     submit_start = source.index("export async function handleChatSubmit")
     request_start = source.index("const toggleState = Storage.loadToggleState();", submit_start)

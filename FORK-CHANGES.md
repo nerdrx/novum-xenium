@@ -6,6 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Tab and Shift+Tab keep native composer focus navigation instead of accidentally switching Plan mode. Plan mode has a visible toggle under More tools, with its pressed state exposed to assistive technology.
 - Notes list refreshes cannot overwrite newer edits or a different archive view. Failed loads retain matching cached rows and show Retry instead of claiming the list is empty.
 - Gallery rotation and replacement run off the event loop and recheck ownership before saving. Rotation, replacement and deletion share the image-persistence lock; failed database commits restore the previous bytes. Replacement updates the stored hash so an older rotation cannot overwrite it. Image-history cleanup remains scoped to the image owner. This coordinates one app process, not multiple workers or crash recovery.
 - Failed default-chat setup keeps composer text and pending attachments. Guidance distinguishes missing configuration from an unavailable settings request and offers a retry or model selection.
@@ -318,3 +319,5 @@ The first manually dispatched GitHub CI run exposed two test files using f-strin
 The deployed Gallery passed authenticated HTTP upload, rotation, replacement and deletion using one owned tiny PNG. Fetched PNG dimensions, exact replacement bytes and file sizes matched; read-only database inspection confirmed the stored replacement hash and inactive row. A post-delete replacement returned 404, and the physical image file remained absent. No model inference ran in this check.
 
 The deployed full-app UI also retained a draft and showed recovery guidance when its default settings request returned 503. That controlled browser check supplied empty session/model GET responses to represent an unconfigured installation and blocked all API writes; it is not native backend integration proof. An earlier attempt reached the configured app's fallback model instead of the intended error path, and its safety guard prevented session creation. Both attempts are retained as evidence.
+
+October 8 composer keyboard follow-up: an authenticated, read-only check of the deployed app at 390 and 1,440 pixels reproduced plain Tab trapping focus in the composer and changing Plan mode. The fixed full-static-app fixture verifies Tab advances to the model picker, Shift+Tab returns to the composer, neither changes the mode, and the visible More tools entry toggles Plan mode without clearing the draft. The frozen suite passed **6,740 tests with 17 skips**, and all **44 UI helpers** passed offline. These are targeted keyboard and layout checks, not a full accessibility or cross-browser audit.

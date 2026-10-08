@@ -232,7 +232,7 @@ function render() {
       finally { sourceBusy = false; render(); }
     });
     sourceForm.append(sourceLabel, sourceUrl, addSource);
-    sourceBox.append(sourceForm, element('p', 'modules-detail modules-install-note', 'Source installs and updates stay disabled until you review and enable them.'));
+    sourceBox.append(sourceForm, element('p', 'modules-detail modules-install-note', 'Review permissions, then tick to install and enable. Updates stay disabled until you enable the reviewed version.'));
     if (sourceLoadError) {
       const retry = control('Retry source list', async () => { if (await refreshSources()) { setStatus('Source list loaded.'); render(); } });
       retry.setAttribute('aria-label', 'Retry loading GitHub sources');
@@ -242,7 +242,7 @@ function render() {
     sources.forEach(source => {
       const card = element('article', 'modules-card modules-source-card');
       const head = element('div', 'modules-card-heading');
-      head.append(element('h3', '', source.id || source.url), element('span', 'modules-badge', source.commit ? `Pinned ${String(source.commit).slice(0, 12)}` : 'Source'));
+      head.append(element('h3', '', String(source.url || source.id).replace('https://github.com/', '')), element('span', 'modules-badge', source.commit ? `Pinned ${String(source.commit).slice(0, 12)}` : 'Source'));
       card.append(head, element('p', 'modules-detail', source.url));
       const actions = element('div', 'modules-actions');
       const busy = sourceOps.has(source.id);
@@ -267,6 +267,8 @@ function render() {
         if (conflict) info.append(element('p', 'modules-source-error', 'This module ID is already installed from another source or ZIP. Remove the existing module or use a different ID.'));
         row.append(info);
         const controls = element('div', 'modules-actions');
+        const installedPanel = modules.find(item => item.id === mod.id && item.enabled && item.panel_url);
+        if (!conflict && mod.enabled && installedPanel) controls.append(control('Open panel', () => openPanel(installedPanel)));
         const operation = `module:${mod.id}`;
         const busyModule = sourceOps.has(operation);
         if (!conflict && !mod.installed_version) {

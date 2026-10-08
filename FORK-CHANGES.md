@@ -6,6 +6,10 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Managed worktree removal reserves its target while Git runs outside the registry lock. Verification and duplicate removal reject the busy target without freezing unrelated async work; failed validation releases the reservation for retry.
+- Gallery saved-project cards support keyboard Resume/Select, expose selection state and keep their Delete control independent.
+- Evaluation setup failures write a sanitized failed-case report and stop before creating later cases.
+
 - Task deletion and remote Ollama port discovery offload blocking network/subprocess work, keeping the async app responsive. Calendar cleanup runs after the task transaction closes, using detached task values.
 - Rollback failures retain the safety gate while distinguishing size, permissions, storage, stale chat and changing-workspace failures. Unknown details stay in server logs rather than the public tool response.
 - Gallery album cards and action tiles support Enter and Space, show keyboard focus and keep nested menu controls independent.
@@ -289,3 +293,7 @@ October 8 team interruption and Gallery mutation follow-up: the frozen suite pas
 October 8 responsiveness, rollback diagnostics and keyboard follow-up: the frozen suite passed **6,723 tests with 17 skips**, and all **39** hidden-browser helpers passed offline. Controlled handler fixtures keep the event loop moving while calendar cleanup or a remote SSH port probe is blocked. Snapshot failures remain fail-closed, expose safe actionable guidance and retain exceptions in server logs. Album fixtures load the production stylesheet, check visible keyboard focus and exercise opening, selection and nested controls. The evaluation runner sends POST to the exact-run Stop route and discards unused verifier output while preserving timeout cleanup.
 
 A live `gpt-6.1-sol` coding task cloned this public repository with a sparse checkout, changed two benchmark files and completed in **80.78 seconds**, with one task-scoped approval. Independent read-only, network-disabled validation passed **28 tests**; the reviewed output-bounding patch was integrated. An earlier attempt was blocked during rollback preparation; a fresh exact-workspace retry succeeded, but the historical exception had been suppressed and its root cause remains unconfirmed. Disposable chats and workspaces were removed. This is one small cloud coding workflow, not a general coding-quality benchmark.
+
+October 8 worktree responsiveness and evaluation recovery follow-up: the frozen suite passed **6,725 tests with 17 skips**, and all **40** hidden-browser helpers passed offline. A disposable real-Git fixture holds removal I/O while verification returns its busy-target error and an event-loop callback responds; duplicate removal is rejected and dirty-target failure permits a later retry. Browser fixtures cover saved-project Resume, Space selection, selection state and independent Delete confirmation. Evaluation fixtures confirm a session-create HTTP failure writes a sanitized report and stops before another case starts.
+
+The deployed Gallery also passed a hidden full-app check with no source or provider overrides: an owned album opened through Enter, made the request for its exact album filter, selected through Space and showed a visible two-pixel focus outline, with no page errors. Its screenshot was visually inspected and the owned album removed afterwards. This targeted check does not certify all keyboard or screen-reader flows.

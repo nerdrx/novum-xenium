@@ -2122,6 +2122,7 @@ function initializeEventListeners() {
     const ownerWrap = menu.parentElement;
     const pickerWrap = el('model-picker-wrap');
     let _vvReposition = null;
+    let _closeTimer = null;
     // Pin the menu's bottom 8px above the chevron (viewport-relative, since it's
     // portaled to <body>). Only cap height + show a scrollbar when the list is
     // genuinely taller than the room above the button.
@@ -2156,6 +2157,10 @@ function initializeEventListeners() {
         return;
       }
       // Re-opening while a fold-in is mid-animation: cancel it cleanly.
+      if (_closeTimer !== null) {
+        clearTimeout(_closeTimer);
+        _closeTimer = null;
+      }
       menu.classList.remove('closing');
       menu.classList.remove('hidden');
       plusBtn.classList.add('expanded');
@@ -2190,7 +2195,8 @@ function initializeEventListeners() {
       if (pickerWrap) pickerWrap.style.visibility = '';
       // Item delays max at 0.18s + 0.20s anim = 0.38s for items, container
       // delay 0.16s + 0.22s = 0.38s. 400ms covers both with margin.
-      setTimeout(() => {
+      _closeTimer = setTimeout(() => {
+        _closeTimer = null;
         const shouldRestoreFocus = !!focusBeforeClose && document.activeElement === focusBeforeClose;
         menu.classList.add('hidden');
         menu.classList.remove('closing');

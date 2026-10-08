@@ -132,6 +132,19 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator('#plan-toggle-btn').getAttribute('aria-pressed'), 'false', `${viewport.name}: pointer Plan entry toggles off`);
       assert.equal(await composer.inputValue(), 'Keep this draft while I navigate controls', `${viewport.name}: pointer Plan toggle retains text`);
 
+      // Reopening during the fold-in cancels its pending hide and focus work.
+      await trigger.click();
+      await planToggle.waitFor({ state: 'visible' });
+      await trigger.click();
+      assert.equal(await page.locator('#overflow-menu').evaluate(menu => menu.classList.contains('closing')), true, `${viewport.name}: close animation started`);
+      await trigger.click();
+      await planToggle.waitFor({ state: 'visible' });
+      await page.waitForTimeout(450);
+      assert.equal(await planToggle.isVisible(), true, `${viewport.name}: rapid reopen stays visible beyond old timer`);
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'message', `${viewport.name}: stale close does not steal focus`);
+      await composer.click();
+      await planToggle.waitFor({ state: 'hidden' });
+
       // Existing mouse activation remains unchanged.
       await trigger.click();
       await planToggle.waitFor({ state: 'visible' });

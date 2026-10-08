@@ -379,13 +379,39 @@ class _DegenerateStreamGuard:
         self.same_run = 0
         self.recent_tokens: List[str] = []
         self.total_chars = 0
+        self.leading_punctuation = None
+        self.leading_punctuation_count = 0
+        self.leading_punctuation_open = True
 
     def check(self, text: str) -> Optional[str]:
         if not text:
             return None
         self.total_chars += len(text)
+        reason = None
+        if self.leading_punctuation_open:
+            for char in text:
+                if char.isspace():
+                    continue
+                if char not in "/\\":
+                    self.leading_punctuation_open = False
+                    break
+                if self.leading_punctuation is None:
+                    self.leading_punctuation = char
+                elif char != self.leading_punctuation:
+                    self.leading_punctuation_open = False
+                    break
+                self.leading_punctuation_count += 1
+                if self.leading_punctuation_count >= 96:
+                    reason = (
+                        f"repeated leading '{char}' "
+                        f"{self.leading_punctuation_count} times"
+                    )
+                    break
+
         tokens = [t.lower() for t in _DEGENERATE_WORD_RE.findall(text) if len(t) >= 2]
         if not tokens:
+            if reason:
+                return self._error(reason)
             return None
         for token in tokens:
             if token == self.last_token:
@@ -397,8 +423,7 @@ class _DegenerateStreamGuard:
         if len(self.recent_tokens) > 96:
             self.recent_tokens = self.recent_tokens[-96:]
 
-        reason = None
-        if self.same_run >= 28 and self.total_chars >= 100:
+        if not reason and self.same_run >= 28 and self.total_chars >= 100:
             reason = f"repeated '{self.last_token}' {self.same_run} times"
         elif len(self.recent_tokens) >= 72:
             top = max(set(self.recent_tokens), key=self.recent_tokens.count)
@@ -421,9 +446,12 @@ class _DegenerateStreamGuard:
         if not reason:
             return None
 
+        return self._error(reason)
+
+    def _error(self, reason: str) -> str:
         logger.warning("[degenerate-stream] aborting model=%s reason=%s", self.model, reason)
         message = (
-            f"Stopped generation: {self.model} started repeating tokens "
+            f"Stopped generation: {self.model} started repeating output "
             f"({reason}). Try a different model or lower temperature."
         )
         return f'event: error\ndata: {json.dumps({"status": 502, "text": message, "error": message, "fallback_eligible": False})}\n\n'

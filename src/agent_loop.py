@@ -5107,7 +5107,7 @@ async def stream_agent_loop(
         # original result for integrity checks and the UI bubble.
         raw_context = json.dumps(
             {key: value for key, value in result.items()
-             if key not in {"images", "screenshot", "image_base64", "image_data"}},
+             if key not in {"images", "screenshot", "image_base64", "image_data", "browser_preview"}},
             ensure_ascii=False, default=str,
         )
         # The fixed size guard avoids stuffing clearly bulk output into normal
@@ -5315,6 +5315,8 @@ async def stream_agent_loop(
             approved_event["screenshot"] = (
                 f"data:{approved_image['mimeType']};base64,{approved_image['data']}"
             )
+        if isinstance(approved_result.get("browser_preview"), dict):
+            approved_event["browser_preview"] = approved_result["browser_preview"]
         yield "data: " + json.dumps(approved_event) + "\n\n"
         if approved_result.get("image_url"):
             yield (
@@ -6663,6 +6665,8 @@ async def stream_agent_loop(
 
             # Emit tool_output (include ui_event data if present)
             tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}
+            if isinstance(result.get("browser_preview"), dict):
+                tool_output_data["browser_preview"] = result["browser_preview"]
             if isinstance(result.get("subagent"), dict):
                 card = result["subagent"]
                 tool_output_data["subagent"] = {key: str(card[key])[:120] for key in ("session_id", "title", "icon", "status") if isinstance(card.get(key), str)}

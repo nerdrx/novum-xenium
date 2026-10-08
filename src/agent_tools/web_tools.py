@@ -142,7 +142,15 @@ class WebFetchTool:
                     "exit_code": 1,
                     "untrusted_content": True,
                 }
-            return {"error": f"web_fetch: {url}: no readable text content (not HTML, or the page needs JS/login)", "exit_code": 1}
+            return {
+                "error": (
+                    f"web_fetch: {url}: no readable text content (not HTML, or the page needs JS/login). "
+                    "This is a fetch failure, not evidence that the requested information does not exist. "
+                    "If browser tools are available, navigate to the specific page and inspect it there; "
+                    "otherwise search for a different accessible source."
+                ),
+                "exit_code": 1,
+            }
 
         # Tell the model when the download budget cut the body short and how
         # to get the rest, instead of silently presenting a partial page as

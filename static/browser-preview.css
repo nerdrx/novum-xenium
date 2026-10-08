@@ -1,0 +1,42 @@
+.browser-preview-card {
+  display: flex; align-items: center; gap: 9px; max-width: min(760px, 100%);
+  margin: 10px 0; padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: 10px; color: var(--fg); background: var(--bg);
+  cursor: pointer; text-align: left; font: inherit;
+}
+.browser-preview-card:hover, .browser-preview-card:focus-visible {
+  border-color: var(--accent, var(--red)); outline-offset: 2px;
+}
+.browser-preview-card-icon { flex: 0 0 auto; color: var(--accent, var(--red)); font-size: 18px; line-height: 1; }
+.browser-preview-card-label { font-weight: 650; white-space: nowrap; }
+.browser-preview-card-title {
+  min-width: 0; overflow: hidden; opacity: .68; text-overflow: ellipsis; white-space: nowrap;
+}
+.browser-preview-panel {
+  position: fixed; z-index: 18000; top: var(--nx-window-bar-height, 48px); right: 18px;
+  display: flex; flex-direction: column; gap: 9px; width: min(520px, calc(100vw - 36px));
+  max-height: calc(100vh - 60px); padding: 12px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 14px; color: var(--fg);
+  background: var(--bg); box-shadow: 0 16px 48px #0006;
+}
+.browser-preview-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.browser-preview-header h2 { margin: 0; font-size: 14px; }
+.browser-preview-close {
+  width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--fg); background: transparent; cursor: pointer; font-size: 22px; line-height: 1;
+}
+.browser-preview-close:focus-visible { outline: 2px solid var(--accent, var(--red)); outline-offset: 2px; }
+.browser-preview-title { font-weight: 650; overflow-wrap: anywhere; }
+.browser-preview-status, .browser-preview-empty { font-size: 12px; opacity: .72; overflow-wrap: anywhere; }
+.browser-preview-image {
+  display: block; width: 100%; max-height: min(62vh, 720px); object-fit: contain;
+  border: 1px solid var(--border); border-radius: 8px; background: #111;
+}
+.browser-preview-url { color: var(--accent, var(--red)); font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .browser-preview-panel {
+    z-index: 25000; inset: auto 10px 10px; width: auto; max-height: 72dvh;
+    border-radius: 14px; box-shadow: 0 8px 36px #0008;
+  }
+  .browser-preview-image { max-height: 48dvh; }
+}

@@ -4,6 +4,16 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Watch browser activity
+
+- Browser actions automatically capture a viewport preview. The chat opens a themed viewer with the latest page, address and action; closing it leaves a Watch browser button.
+- Captures share the browser action's lock so another chat cannot change the page between that action and its preview. The existing browser context is still shared within the backend process.
+- Preview images stay out of model context and saved chat history. Capture failures leave the original browser result intact. Search and text fetches do not open the viewer.
+
+## Task continuity in tight contexts
+
+When a route's context budget requires dropping older turns, retain a bounded copy of the original user request alongside the latest follow-up and tool exchange when it fits. A short “you can do it” should not become the only surviving description of the task. Unknown model limits still use the conservative budget.
+
 ## Desktop bug and usability pass
 
 - Manager status checks keep the window controls usable. Content scrolls below the title bar, with the workspace scrollbar styling.

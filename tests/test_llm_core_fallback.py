@@ -1068,6 +1068,38 @@ def test_degenerate_stream_error_is_not_availability_evidence():
     assert json.loads(chunk.split("data: ", 1)[1])["fallback_eligible"] is False
 
 
+@pytest.mark.parametrize("punctuation", ["/", "\\"])
+def test_degenerate_stream_stops_repeated_leading_slashes_across_chunks(punctuation):
+    guard = llm_core._DegenerateStreamGuard("looping-model")
+
+    assert guard.check(punctuation * 40 + " \n") is None
+    assert guard.check(punctuation * 35) is None
+    error = guard.check("\t" + punctuation * 21)
+
+    assert error is not None
+    payload = json.loads(error.split("data: ", 1)[1])
+    assert payload["fallback_eligible"] is False
+    assert "repeating output" in payload["text"]
+    assert "96 times" in payload["text"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "// A code comment " + "/" * 120,
+        "\\\\server\\share\\file.txt",
+        "```python\n" + "\\" * 120 + "\n```",
+        "---" * 50,
+        "//// finished banner ////",
+        "The answer contains / " + "/" * 120,
+    ],
+)
+def test_degenerate_stream_leaves_code_prose_and_banners_alone(text):
+    guard = llm_core._DegenerateStreamGuard("ordinary-model")
+
+    assert guard.check(text) is None
+
+
 @pytest.mark.parametrize(
     ("error", "expected_status"),
     [

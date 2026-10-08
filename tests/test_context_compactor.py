@@ -186,6 +186,58 @@ class TestTrimForContext:
                 assert set(tool_results) == call_ids
         assert "round-7-result" in "\n".join(str(m.get("content", "")) for m in trimmed)
 
+    def test_preserves_bounded_original_task_with_short_followup_and_recent_tools(self):
+        original = {
+            "role": "user",
+            "content": "Find recent news about me, excluding DeviantArt and unrelated mentions. " * 80,
+            "metadata": {"request_id": "original-task", "trusted": True},
+        }
+        calls = [
+            {"id": f"browser-{index}", "type": "function", "function": {
+                "name": "browser_navigate", "arguments": "{}",
+            }}
+            for index in range(2)
+        ]
+        messages = [
+            {"role": "system", "content": "Long agent instructions. " * 360},
+            original,
+            {"role": "assistant", "content": "Old search and tool output. " * 1800},
+            {"role": "user", "content": "you can do it"},
+            {"role": "assistant", "content": None, "tool_calls": calls},
+            *[
+                {"role": "tool", "tool_call_id": call["id"],
+                 "content": f"Recent browser result {index}. " + ("page detail " * 120)}
+                for index, call in enumerate(calls)
+            ],
+        ]
+
+        budget = 4096 - 512
+        trimmed = trim_for_context(messages, context_length=4096, reserve_tokens=512)
+
+        user_messages = [message for message in trimmed if message.get("role") == "user"]
+        assert len(user_messages) == 2
+        assert user_messages[0]["metadata"] == original["metadata"]
+        assert "Find recent news about me" in user_messages[0]["content"]
+        assert estimate_tokens([user_messages[0]]) <= 512
+        assert user_messages[-1]["content"] == "you can do it"
+        assert estimate_tokens(trimmed) <= budget
+        assert not any(
+            message.get("role") == "assistant"
+            and "Old search and tool output" in str(message.get("content", ""))
+            for message in trimmed
+        )
+        anchor_index = trimmed.index(user_messages[0])
+        latest_index = trimmed.index(user_messages[-1])
+        assert anchor_index < latest_index
+        tool_call_index = next(
+            i for i, message in enumerate(trimmed)
+            if message.get("role") == "assistant" and message.get("tool_calls")
+        )
+        assert tool_call_index > latest_index
+        assert [message.get("tool_call_id") for message in trimmed[tool_call_index + 1:]] == [
+            call["id"] for call in calls
+        ]
+
     def test_tight_budget_truncates_but_never_drops_latest_user_prompt(self):
         messages = [
             {"role": "system", "content": "Be helpful."},

@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'novum-xenium-v390-solar-navigation-layout';
+const CACHE_NAME = 'novum-xenium-v391-browser-preview';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -44,6 +44,8 @@ const PRECACHE = [
   '/static/js/usage.js',
   '/static/modules.css?v=20261008a',
   '/static/js/modules.js',
+  '/static/js/browserPreview.js',
+  '/static/browser-preview.css?v=20261008a',
   '/static/app.js',
   '/static/js/storage.js',
   '/static/js/appConfig.js',

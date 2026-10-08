@@ -292,13 +292,26 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
     # Keep the latest user prompt: after tool execution the final conversation
     # messages are often tool results, not the user message that began the turn.
     # Treat each assistant tool call and its full result batch as one trim unit.
-    latest_user = max(
-        (i for i, msg in enumerate(convo_msgs) if msg.get("role") == "user"
-         and msg.get("_agent_injected") != "context"
-         and (msg.get("metadata") or {}).get("trusted") is not False),
-        default=len(convo_msgs) - 1,
-    )
+    actual_user_indices = [
+        i for i, msg in enumerate(convo_msgs)
+        if msg.get("role") == "user"
+        and msg.get("_agent_injected") != "context"
+        and (msg.get("metadata") or {}).get("trusted") is not False
+    ]
+    latest_user = actual_user_indices[-1] if actual_user_indices else len(convo_msgs) - 1
     current_user = convo_msgs[latest_user:latest_user + 1]
+    # Keep a bounded copy of the session's original request when a later short
+    # follow-up becomes the newest user turn. Without this anchor, a tight
+    # route budget can preserve "you can do it" plus recent tool output while
+    # trimming the task those words refer to. Keep it as user content, never as
+    # trusted system instructions.
+    task_anchor = None
+    anchor_turn = None
+    if len(actual_user_indices) > 1:
+        anchor_index = actual_user_indices[0]
+        anchor_end = actual_user_indices[1]
+        task_anchor = _truncate_message_to_token_budget(convo_msgs[anchor_index], 512)
+        anchor_turn = (anchor_index, anchor_end)
     post_user = convo_msgs[latest_user + 1:]
     exchanges = []
     i = 0
@@ -318,7 +331,13 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
          if exchange[0].get("role") == "assistant" and exchange[0].get("tool_calls")),
         [],
     )
-    required_tail = estimate_tokens(current_user + latest_native)
+    required_tail_messages = current_user + latest_native
+    if task_anchor and estimate_tokens(required_tail_messages + [task_anchor]) <= budget:
+        required_tail_messages = [task_anchor] + required_tail_messages
+    else:
+        task_anchor = None
+        anchor_turn = None
+    required_tail = estimate_tokens(required_tail_messages)
     if essential_system and required_tail <= budget:
         system_allowance = max(0, budget - required_tail - estimate_tokens(essential_system[1:]))
         if estimate_tokens(essential_system[:1]) > system_allowance:
@@ -347,6 +366,9 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
             user_cost = estimate_tokens(current_user)
         remaining = max(0, remaining - user_cost)
 
+    if task_anchor:
+        remaining = max(0, remaining - estimate_tokens([task_anchor]))
+
     kept_exchanges = []
     for exchange in reversed(exchanges):
         cost = estimate_tokens(exchange)
@@ -368,7 +390,9 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
 
     # Fill remaining space with whole earlier user turns when possible.
     prior_turns = []
-    for message in convo_msgs[:latest_user]:
+    for message_index, message in enumerate(convo_msgs[:latest_user]):
+        if anchor_turn and anchor_turn[0] <= message_index < anchor_turn[1]:
+            continue
         if (message.get("role") == "user"
                 and message.get("_agent_injected") != "context"
                 and (message.get("metadata") or {}).get("trusted") is not False and prior_turns):
@@ -390,7 +414,7 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
         kept_prior[:0] = turn
         remaining -= cost
 
-    convo_msgs = kept_prior + current_user + kept_exchanges
+    convo_msgs = ([task_anchor] if task_anchor else []) + kept_prior + current_user + kept_exchanges
 
     result = _sanitize_tool_messages(essential_system + protected_msgs + convo_msgs)
     logger.info(f"Trimmed to {estimate_tokens(result)} tokens ({len(result)} messages)")

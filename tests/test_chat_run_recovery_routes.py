@@ -585,6 +585,36 @@ def test_recovery_search_tool_and_archive_pointer_survive_real_route_budget(monk
     assert "Before acting on the task, retrieve it completely" in sent_prompt
 
 
+def test_recovery_archive_pointer_is_exact_and_deduplicated_across_reroutes():
+    from src.agent_loop import _strip_agent_injected_messages
+    from src.prompt_security import untrusted_context_message
+
+    result_id = "0123456789abcdef0123456789abcdef"
+    recovery = untrusted_context_message(
+        "interrupted agent run",
+        f'Recovery excerpt. Read it with JSON {{"query":"","result_id":"{result_id}","offset":0}}.',
+        provenance_origin="agent_run_recovery",
+    )
+
+    rerouted = _strip_agent_injected_messages(_strip_agent_injected_messages([recovery]))
+    pointers = [
+        message for message in rerouted
+        if (message.get("metadata") or {}).get("agent_run_recovery_archive_pointer")
+    ]
+    assert len(pointers) == 1
+    assert pointers[0]["metadata"]["agent_run_recovery_archive_pointer"] == result_id
+
+    malformed = untrusted_context_message(
+        "interrupted agent run",
+        f'Recovery excerpt. Read it with JSON {{"query":"","result_id":"{result_id}x","offset":0}}.',
+        provenance_origin="agent_run_recovery",
+    )
+    assert not any(
+        (message.get("metadata") or {}).get("agent_run_recovery_archive_pointer")
+        for message in _strip_agent_injected_messages([malformed])
+    )
+
+
 def test_archive_failure_does_not_consume_recovery_checkpoint(tmp_path, monkeypatch, caplog):
     from src import tool_result_store
 

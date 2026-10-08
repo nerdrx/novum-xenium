@@ -12,6 +12,7 @@ import { bindMenuDismiss } from './escMenuStack.js';
 import { loadPanel } from './panels.js';
 import { matchModelKey } from './model/matchKey.js';
 import { getTools } from './appConfig.js';
+import { copyImageToClipboard } from './imageClipboard.js';
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>';
 const REPORT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
@@ -1525,6 +1526,27 @@ export function buildImageBubble(imageUrl, prompt, model, size, quality, imageId
     setTimeout(() => { copyBtn.innerHTML = COPY_ICON; }, 1500);
   });
   actions.appendChild(copyBtn);
+
+  const imageCopyBtn = document.createElement('button');
+  imageCopyBtn.className = 'footer-copy-btn';
+  imageCopyBtn.type = 'button';
+  imageCopyBtn.title = 'Copy image';
+  imageCopyBtn.setAttribute('aria-label', 'Copy image');
+  imageCopyBtn.innerHTML = COPY_ICON;
+  imageCopyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    copyImageToClipboard(img.currentSrc || img.src).then(() => {
+      imageCopyBtn.innerHTML = CHECK_ICON;
+      uiModule.showToast('Image copied to clipboard');
+      setTimeout(() => { imageCopyBtn.innerHTML = COPY_ICON; }, 1500);
+    }, (err) => {
+      console.warn('Copy image failed', err);
+      imageCopyBtn.textContent = '\u2717';
+      uiModule.showToast('Could not copy image pixels');
+      setTimeout(() => { imageCopyBtn.innerHTML = COPY_ICON; }, 1500);
+    });
+  });
+  actions.appendChild(imageCopyBtn);
 
   const dlBtn = document.createElement('button');
   dlBtn.className = 'footer-copy-btn';

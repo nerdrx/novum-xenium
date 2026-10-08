@@ -58,6 +58,55 @@ async function clipboardCase(mode) {
   } else assert.deepEqual(toasts, ['Layer copied (editor only)']);
 }
 
+async function imageClipboardCase(mode) {
+  const writes = [];
+  const png = new Blob(['png pixels'], { type: 'image/png' });
+  const canvases = [];
+  const context = {
+    Blob, Promise,
+    navigator: mode === 'unavailable' ? {} : { clipboard: {
+      write(items) { writes.push(items); return Promise.resolve(); },
+    } },
+    ClipboardItem: class { constructor(data) { this.data = data; } },
+    fetch: async () => ({ ok: mode !== 'http-error', status: 403,
+      blob: async () => mode === 'jpeg' ? new Blob(['jpeg pixels'], { type: 'image/jpeg' }) : png }),
+    createImageBitmap: async blob => {
+      assert.equal(blob.type, 'image/jpeg');
+      return { width: 2, height: 3, close() {} };
+    },
+    document: { createElement(tag) {
+      assert.equal(tag, 'canvas');
+      const canvas = { getContext: () => ({ drawImage(bitmap) { canvas.bitmap = bitmap; } }),
+        toBlob(callback, type) { assert.equal(type, 'image/png'); callback(png); } };
+      canvases.push(canvas); return canvas;
+    } },
+  };
+  const source = fs.readFileSync(path.join(repo, 'static/js/imageClipboard.js'), 'utf8')
+    .replace(/^export /gm, '') + '\nglobalThis.copyImageToClipboard = copyImageToClipboard;';
+  vm.createContext(context);
+  vm.runInContext(source, context);
+
+  if (mode === 'unavailable') {
+    await assert.rejects(context.copyImageToClipboard('/image.png'), /unavailable/);
+    assert.equal(writes.length, 0);
+    return;
+  }
+
+  const write = context.copyImageToClipboard('/image.png');
+  assert.equal(writes.length, 1, 'OS clipboard write must start during the click handler');
+  assert.deepEqual(Object.keys(writes[0][0].data), ['image/png']);
+  await write;
+  if (mode === 'http-error') {
+    await assert.rejects(writes[0][0].data['image/png'], /HTTP 403/);
+  } else if (mode === 'jpeg') {
+    assert.equal((await writes[0][0].data['image/png']).type, 'image/png');
+    assert.equal(canvases[0].width, 2);
+    assert.equal(canvases[0].height, 3);
+  } else {
+    assert.equal((await writes[0][0].data['image/png']).type, 'image/png');
+  }
+}
+
 async function downloadCase(file, ok) {
   const code = fs.readFileSync(path.join(repo, file), 'utf8');
   const match = code.match(/dlBtn\.addEventListener\('click', (async \(e\) => \{[\s\S]*?\})\);\s*actions\.appendChild\(dlBtn\)/);
@@ -133,10 +182,11 @@ async function editorDownloadCase(mode) {
 
 (async () => {
   for (const mode of ['success', 'denied', 'no-constructor', 'no-clipboard', 'constructor-error']) await clipboardCase(mode);
+  for (const mode of ['success', 'jpeg', 'unavailable', 'http-error']) await imageClipboardCase(mode);
   for (const file of ['static/js/chatRenderer.js', 'static/js/compare/stream.js']) {
     await downloadCase(file, false);
     await downloadCase(file, true);
   }
   for (const mode of ['success', 'empty', 'encoding-error']) await editorDownloadCase(mode);
-  console.log('PASS: image clipboard capability/error fallbacks, internal snapshot, promise PNG, HTTP download failures, delayed blob release, editor blob download/encoding errors');
+  console.log('PASS: image clipboard capability/error fallbacks, PNG ClipboardItem Promise, internal snapshot, HTTP download failures, delayed blob release, editor blob download/encoding errors');
 })().catch(error => { console.error(error); process.exitCode = 1; });

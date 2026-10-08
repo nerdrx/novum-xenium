@@ -80,10 +80,16 @@ After replacing an installed desktop build, use **Quit** in the tray menu and re
 
 Open image in new window and ordinary external HTTP(S) links open your system browser. The browser has its own login cookies: a private image served by the local backend may require signing in there separately. Embedded `blob:` and `data:` image addresses stay inside the workspace; save those images instead.
 
-Save image as and workspace download buttons use a native Save dialog. Cancel leaves the download unsaved. Linux needs a functioning desktop file-chooser portal (GTK or KDE), with Zenity as the fallback. Clipboard access is enabled for the workspace so its Copy image action can use the platform clipboard, without granting container-management IPC permissions.
+Save image as and workspace download buttons use a native Save dialog. Cancel leaves the download unsaved. Linux needs a functioning desktop file-chooser portal (GTK or KDE), with Zenity as the fallback. Copy image writes PNG pixels to the system clipboard; Copy image address writes the URL. Generated images also have a Copy image toolbar button. The desktop image menu replaces WebKit’s stock image menu and keeps these two actions separate, without granting container-management IPC permissions.
 
 Some WebKitGTK versions retain a failed-download flag after cancellation. If a later download produces a file but the engine still reports failure, the app asks you to check the saved file rather than claiming either verified success or definite failure.
 
 On Linux, WebKit blob downloads use a MIME-based suggested name (for example `image.png`) when the browser does not provide a filename. The Save dialog lets you rename it. Blob download cancellation is tracked per download, so cancelling does not mark a later saved blob as failed.
 
 Validation: an isolated Linux KWin/WebKit session verified an actual PNG OS-clipboard roundtrip, exact-byte blob saves, cancellation followed by a successful retry, and HTTP(S) default-browser dispatch. The test used controlled replies from a private file-chooser portal and an opener stub; it verifies native integration without claiming manual dialog interaction, direct native context-menu selection, or Windows runtime coverage.
+
+## Desktop notifications
+
+Settings → Communications → Reminders has a desktop-notifications switch and a test button in the desktop app. It starts off and is saved on this device. Existing background-response, research, task and reminder alerts use system notifications when enabled; in-app notices keep working when it is off. The app must remain running. OS notification settings and Do Not Disturb can suppress alerts.
+
+Notifications use a small native route restricted to the configured local backend, with bounded text and a one-per-second limit. The workbench still has no container-management IPC access. Notification clicks do not currently navigate to the related chat. Linux delivery was checked against a private D-Bus notification service; Windows runtime behavior is not yet verified.

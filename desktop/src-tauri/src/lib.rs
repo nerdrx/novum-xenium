@@ -87,6 +87,7 @@ struct UpdateResult {
 struct NativeState {
     operation: Arc<Mutex<()>>,
     workbench_port: Arc<std::sync::atomic::AtomicU16>,
+    last_workbench_notification: Mutex<Option<Instant>>,
     tray_created: AtomicBool,
     tray_icon: Mutex<Option<TrayIcon>>,
     quit_pending: Arc<AtomicBool>,
@@ -772,6 +773,69 @@ fn workbench_window_action(url: &tauri::Url) -> Option<&str> {
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct WorkbenchNotification {
+    title: String,
+    body: String,
+}
+
+fn workbench_notification(url: &tauri::Url) -> Option<WorkbenchNotification> {
+    let authority = url
+        .as_str()
+        .strip_prefix("nx-workbench://")?
+        .split(['/', '?', '#'])
+        .next()?;
+    if url.scheme() != "nx-workbench"
+        || url.host_str() != Some("notify")
+        || url.port().is_some()
+        || !url.path().is_empty()
+        || url.fragment().is_some()
+        || authority.contains('@')
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+
+    let query = url.query()?;
+    if query.split('&').count() != 2 {
+        return None;
+    }
+    let mut title = None;
+    let mut body = None;
+    for (key, value) in url.query_pairs() {
+        let target = match key.as_ref() {
+            "title" if title.is_none() => &mut title,
+            "body" if body.is_none() => &mut body,
+            _ => return None,
+        };
+        *target = Some(value.into_owned());
+    }
+    let title = title?;
+    let body = body?;
+    if query.is_empty()
+        || title.trim().is_empty()
+        || title.chars().count() > 120
+        || body.chars().count() > 500
+    {
+        return None;
+    }
+    Some(WorkbenchNotification { title, body })
+}
+
+fn allow_workbench_notification(state: &NativeState) -> bool {
+    let mut last = state
+        .last_workbench_notification
+        .lock()
+        .expect("notification throttle lock poisoned");
+    let now = Instant::now();
+    if last.is_some_and(|previous| now.duration_since(previous) < Duration::from_secs(1)) {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
 fn workbench_control_origin_allowed(url: &tauri::Url, port: u16) -> bool {
     // Match app_url exactly, even though the pre-existing navigation policy
     // accepts loopback aliases. Embedded providers never get this bridge.
@@ -1020,6 +1084,8 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
         .title("Novum Xenium Workbench")
         .initialization_script(include_str!("workspace_reload.js"))
         .initialization_script(include_str!("workspace_chrome.js"))
+        .initialization_script(include_str!("workspace_notifications.js"))
+        .initialization_script(include_str!("workspace_image_actions.js"))
         .enable_clipboard_access()
         .inner_size(1360.0, 900.0)
         .on_new_window(move |url, _features| {
@@ -1086,22 +1152,39 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
         .on_navigation(move |next| {
             let port = allowed_port.load(Ordering::Acquire);
             if next.scheme() == "nx-workbench" {
-                if let (Some(action), Some(window)) = (
-                    workbench_window_action(next),
-                    navigation_app.get_webview_window("workbench"),
-                ) {
-                    // Only the validated backend document can request window actions.
-                    // This callback exposes no source-frame identity; the protocol has
-                    // no file/process/container operations and never grants native IPC.
+                if let Some(window) = navigation_app.get_webview_window("workbench") {
+                    // This custom URL route is available only to the currently validated
+                    // local backend. It grants no Tauri IPC or general native commands.
                     if window
                         .url()
                         .is_ok_and(|url| workbench_control_origin_allowed(&url, port))
                     {
-                        if let Err(error) = handle_workbench_window_action(&window, action) {
-                            eprintln!("Workspace window action {action} failed: {error}");
-                            let _ = window.set_decorations(true);
-                            let _ = window
-                                .eval("document.documentElement.dataset.nxWindowFrame='native';");
+                        if let Some(notification) = workbench_notification(next) {
+                            let state = navigation_app.state::<NativeState>();
+                            if allow_workbench_notification(&state) {
+                                use tauri_plugin_notification::NotificationExt;
+                                if navigation_app
+                                    .notification()
+                                    .builder()
+                                    .title(&notification.title)
+                                    .body(&notification.body)
+                                    .show()
+                                    .is_err()
+                                {
+                                    workbench_notice(
+                                        &window,
+                                        "Could not show the desktop notification.",
+                                    );
+                                }
+                            }
+                        } else if let Some(action) = workbench_window_action(next) {
+                            if let Err(error) = handle_workbench_window_action(&window, action) {
+                                eprintln!("Workspace window action {action} failed: {error}");
+                                let _ = window.set_decorations(true);
+                                let _ = window.eval(
+                                    "document.documentElement.dataset.nxWindowFrame='native';",
+                                );
+                            }
                         }
                     }
                 }
@@ -2035,6 +2118,7 @@ fn write_manifest(
 
 fn app_startup() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_manager(app);
         }))
@@ -2158,6 +2242,41 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn workbench_notification_accepts_only_bounded_title_and_body() {
+        let url = tauri::Url::parse("nx-workbench://notify?title=Ready&body=Done%20now").unwrap();
+        assert_eq!(
+            workbench_notification(&url),
+            Some(WorkbenchNotification {
+                title: "Ready".into(),
+                body: "Done now".into(),
+            })
+        );
+        let long_title = format!("nx-workbench://notify?title={}&body=x", "a".repeat(121));
+        let long_body = format!("nx-workbench://notify?title=x&body={}", "a".repeat(501));
+        assert!(workbench_notification(&tauri::Url::parse(&long_title).unwrap()).is_none());
+        assert!(workbench_notification(&tauri::Url::parse(&long_body).unwrap()).is_none());
+    }
+
+    #[test]
+    fn workbench_notification_rejects_malformed_routes_and_parameters() {
+        for raw in [
+            "nx-workbench://notify?title=x", // missing body
+            "nx-workbench://notify?title=x&body=y&extra=z",
+            "nx-workbench://notify?title=x&title=y&body=z",
+            "nx-workbench://notify?title=x&body=y&",
+            "nx-workbench://notify/path?title=x&body=y",
+            "nx-workbench://notify:80?title=x&body=y",
+            "nx-workbench://user@notify?title=x&body=y",
+            "nx-workbench://notify?title=x&body=y#fragment",
+            "nx-workbench://ready?title=x&body=y",
+            "nx-workbench://notify?title=%20%20&body=y",
+        ] {
+            let url = tauri::Url::parse(raw).unwrap();
+            assert!(workbench_notification(&url).is_none(), "accepted {raw}");
+        }
+    }
 
     #[test]
     fn external_browser_accepts_only_web_urls_without_credentials() {

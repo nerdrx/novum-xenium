@@ -4,6 +4,14 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Desktop notifications and image clipboard
+
+- Home is a normal sidebar row with a house icon, using the same layout as Search and New Chat.
+- Settings → Communications → Reminders adds an opt-in desktop notification switch and test button. Existing background alerts use the native notification service while the app is running. The preference stays on this device.
+- Copy image writes PNG pixels; Copy image address writes the URL. A desktop image menu and generated-image toolbar make the distinction explicit. No URL fallback is reported as a successful image copy.
+
+Validation: desktop UI tests and 23 Rust checks passed. A headless Linux WebKit session clicked the image menu for an actual served image and read the decoded 1668×890 pixels through another native process. The notification route delivered its title and body to a private D-Bus service. Windows runtime and notification click navigation remain unverified or unsupported, respectively.
+
 ## Desktop image and link actions
 
 - Routes HTTP(S) new windows and external navigation to the system browser. Embedded blob/data addresses show guidance instead of silently disappearing; private backend URLs may require signing in separately in the browser.

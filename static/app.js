@@ -2172,9 +2172,12 @@ function initializeEventListeners() {
         window.visualViewport.addEventListener('scroll', _vvReposition);
       }
     });
-    function closeOverflowMenu() {
+    function closeOverflowMenu({ restoreFocus = false } = {}) {
       if (menu.classList.contains('hidden')) return;
       if (menu.classList.contains('closing')) return;
+      const focusBeforeClose = restoreFocus && menu.contains(document.activeElement)
+        ? document.activeElement
+        : null;
       if (_vvReposition && window.visualViewport) {
         window.visualViewport.removeEventListener('resize', _vvReposition);
         window.visualViewport.removeEventListener('scroll', _vvReposition);
@@ -2188,9 +2191,11 @@ function initializeEventListeners() {
       // Item delays max at 0.18s + 0.20s anim = 0.38s for items, container
       // delay 0.16s + 0.22s = 0.38s. 400ms covers both with margin.
       setTimeout(() => {
+        const shouldRestoreFocus = !!focusBeforeClose && document.activeElement === focusBeforeClose;
         menu.classList.add('hidden');
         menu.classList.remove('closing');
         if (ownerWrap) ownerWrap.appendChild(menu);  // restore from <body> portal
+        if (shouldRestoreFocus) plusBtn.focus();
       }, 400);
     }
     // Close menu when clicking any item inside it. preventDefault on pointerdown
@@ -2198,13 +2203,15 @@ function initializeEventListeners() {
     // box — keeps the mobile keyboard up.
     menu.querySelectorAll('.overflow-menu-item').forEach(item => {
       item.addEventListener('pointerdown', (e) => { e.preventDefault(); });
-      item.addEventListener('click', () => closeOverflowMenu());
+      item.addEventListener('click', (e) => closeOverflowMenu({ restoreFocus: e.detail === 0 }));
     });
     document.addEventListener('click', (e) => {
       if (!menu.contains(e.target) && e.target !== plusBtn) closeOverflowMenu();
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !menu.classList.contains('hidden')) closeOverflowMenu();
+      if (e.key === 'Escape' && !menu.classList.contains('hidden')) {
+        closeOverflowMenu({ restoreFocus: menu.contains(document.activeElement) });
+      }
     });
 
     // Research toggle

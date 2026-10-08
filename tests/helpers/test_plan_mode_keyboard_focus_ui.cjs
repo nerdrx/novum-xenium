@@ -21,7 +21,9 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Content-Type', 'application/json');
-    return res.end(url.pathname === '/api/presets/templates' ? '[]' : '{}');
+    if (url.pathname === '/api/presets/templates') return res.end('[]');
+    if (url.pathname === '/api/prefs/tool_approval_mode') return res.end('{"value":"auto"}');
+    return res.end('{}');
   }
   const relative = url.pathname.startsWith('/static/')
     ? url.pathname.slice('/static/'.length)
@@ -48,8 +50,24 @@ const server = http.createServer((req, res) => {
       const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
+      await page.addInitScript(() => {
+        const nativeSetTimeout = window.setTimeout.bind(window);
+        window.__initialComposerFocusDone = false;
+        window.setTimeout = (callback, delay, ...args) => {
+          if (typeof callback === 'function' && String(callback).includes('messageInput.focus()')) {
+            return nativeSetTimeout(() => {
+              try { callback(...args); }
+              finally { window.__initialComposerFocusDone = true; }
+            }, delay);
+          }
+          return nativeSetTimeout(callback, delay, ...args);
+        };
+      });
       await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: 'domcontentloaded' });
       await page.waitForFunction(() => typeof window.__odysseusSetPlanMode === 'function');
+      // Wait for app.js's known 100ms startup autofocus timer, so it cannot
+      // steal focus midway through the keyboard assertions.
+      await page.waitForFunction(() => window.__initialComposerFocusDone === true);
       await page.evaluate(() => window.__odysseusSetPlanMode(false));
       const composer = page.locator('#message');
       await composer.fill('Keep this draft while I navigate controls');
@@ -62,12 +80,63 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.evaluate(() => document.activeElement.id), 'message', `${viewport.name}: Shift+Tab returns to composer`);
       assert.equal(await page.evaluate(() => document.body.classList.contains('plan-mode-active')), false, `${viewport.name}: Shift+Tab does not toggle Plan mode`);
 
-      await page.locator('#overflow-plus-btn').click();
       const planToggle = page.locator('#plan-toggle-btn');
-      await planToggle.waitFor({ state: 'visible' });
       assert.equal(await planToggle.getAttribute('aria-pressed'), 'false', `${viewport.name}: Plan entry starts off`);
+
+      // Escape from a keyboard-focused menu item returns focus to its opener.
+      const trigger = page.locator('#overflow-plus-btn');
+      await trigger.focus();
+      await page.keyboard.press('Enter');
+      await planToggle.waitFor({ state: 'visible' });
+      for (let i = 0; i < 30 && await page.evaluate(() => document.activeElement.id) !== 'plan-toggle-btn'; i++) {
+        await page.keyboard.press('Tab');
+      }
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'plan-toggle-btn', `${viewport.name}: Tab reaches Plan entry`);
+      await page.keyboard.press('Escape');
+      await planToggle.waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => document.activeElement.id === 'overflow-plus-btn');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'overflow-plus-btn', `${viewport.name}: Escape returns focus to trigger`);
+      assert.equal(await page.evaluate(() => document.body.classList.contains('plan-mode-active')), false, `${viewport.name}: Escape does not toggle Plan mode`);
+
+      // Escape while focus remains on the trigger closes without changing it.
+      await page.keyboard.press('Enter');
+      await planToggle.waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape');
+      await planToggle.waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'overflow-plus-btn', `${viewport.name}: Escape at trigger keeps focus there`);
+
+      // Keyboard activation closes and returns focus; draft and mode survive.
+      await page.keyboard.press('Enter');
+      await planToggle.waitFor({ state: 'visible' });
+      for (let i = 0; i < 30 && await page.evaluate(() => document.activeElement.id) !== 'plan-toggle-btn'; i++) {
+        await page.keyboard.press('Tab');
+      }
+      await page.keyboard.press('Enter');
+      await planToggle.waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'overflow-plus-btn', `${viewport.name}: keyboard activation returns focus`);
+      assert.equal(await page.locator('#plan-toggle-btn').getAttribute('aria-pressed'), 'true', `${viewport.name}: keyboard Plan entry toggles on`);
+      assert.equal(await composer.inputValue(), 'Keep this draft while I navigate controls', `${viewport.name}: keyboard Plan toggle retains text`);
+
+      // Pointer-driven close paths must not steal focus from the composer.
+      await composer.focus();
+      await trigger.click();
+      await planToggle.waitFor({ state: 'visible' });
+      await composer.click();
+      await planToggle.waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'message', `${viewport.name}: outside pointer close preserves focus`);
+      await trigger.click();
+      await planToggle.waitFor({ state: 'visible' });
       await planToggle.click();
-      assert.equal(await planToggle.getAttribute('aria-pressed'), 'true', `${viewport.name}: Plan entry toggles on`);
+      await planToggle.waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'message', `${viewport.name}: pointer action preserves composer focus`);
+      assert.equal(await page.locator('#plan-toggle-btn').getAttribute('aria-pressed'), 'false', `${viewport.name}: pointer Plan entry toggles off`);
+      assert.equal(await composer.inputValue(), 'Keep this draft while I navigate controls', `${viewport.name}: pointer Plan toggle retains text`);
+
+      // Existing mouse activation remains unchanged.
+      await trigger.click();
+      await planToggle.waitFor({ state: 'visible' });
+      await planToggle.click();
+      assert.equal(await planToggle.getAttribute('aria-pressed'), 'true', `${viewport.name}: Plan entry toggles on with mouse`);
       assert.equal(await page.evaluate(() => document.body.classList.contains('plan-mode-active')), true, `${viewport.name}: Plan state is active`);
       assert.equal(await composer.inputValue(), 'Keep this draft while I navigate controls', `${viewport.name}: Plan toggle retains text`);
       await planToggle.waitFor({ state: 'hidden' });

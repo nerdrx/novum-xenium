@@ -1103,7 +1103,14 @@ class TaskScheduler:
 
             # Update task
             task.last_run = _utcnow()
-            task.run_count = (task.run_count or 0) + 1
+            # Force-runs may complete concurrently from the same ORM snapshot;
+            # increment in SQL so neither completion overwrites the other's
+            # counter update. COALESCE keeps legacy NULL rows at zero first.
+            from sqlalchemy import func
+            db.query(ScheduledTask).filter(ScheduledTask.id == task_id).update(
+                {ScheduledTask.run_count: func.coalesce(ScheduledTask.run_count, 0) + 1},
+                synchronize_session=False,
+            )
             self._task_defer_counts.pop(task_id, None)
 
             # Compute next run only for schedule-triggered tasks

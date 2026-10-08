@@ -1333,29 +1333,35 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
       xml: '.xml', toml: '.toml', ini: '.ini',
     };
 
-    const docs = await Promise.all([..._librarySelectedIds].map(async id => {
+    const results = await Promise.all([..._librarySelectedIds].map(async id => {
       try {
         const res = await fetch(`${API_BASE}/api/document/${id}`);
-        if (!res.ok) return null;
-        return await res.json();
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const doc = await res.json();
+        if (!doc || typeof doc.current_content !== 'string') throw new Error('Invalid document response');
+        return doc;
       } catch (e) {
         console.error('Failed to export document:', id, e);
         return null;
       }
     }));
-    for (const doc of docs) {
+    let exported = 0;
+    for (const doc of results) {
       if (!doc) continue;
       const ext = extMap[doc.language] || '.txt';
       const filename = (doc.title || 'document') + (doc.title && doc.title.includes('.') ? '' : ext);
-      const blob = new Blob([doc.current_content || ''], { type: 'text/plain' });
+      const blob = new Blob([doc.current_content], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+      exported++;
     }
-    if (uiModule) uiModule.showToast(`Exported ${_librarySelectedIds.size} document${_librarySelectedIds.size !== 1 ? 's' : ''}`);
+    const failed = results.length - exported;
+    const message = `${exported} of ${results.length} documents exported; ${failed} failed`;
+    if (uiModule) (failed ? uiModule.showError : uiModule.showToast)(message);
   }
 
   /** Lazy-load SheetJS for spreadsheet parsing */

@@ -72,7 +72,7 @@ def set_rag_manager(rag_mgr, personal_docs_mgr=None):
 # ---------------------------------------------------------------------------
 
 from src.endpoint_resolver import build_chat_url, build_headers, build_models_url, resolve_endpoint_runtime
-from src.image_model_ids import looks_like_image_generation_model, model_id_leaf
+from src.image_model_ids import is_gpt_image_model, looks_like_image_generation_model, model_id_leaf
 
 
 def _resolve_model(spec: str, owner: Optional[str] = None, model_type: Optional[str] = None) -> Tuple[str, str, Dict]:
@@ -1046,7 +1046,7 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
 
     # Detect if this is a GPT image model vs DALL-E vs local diffusion
     _model_leaf = model_id_leaf(model_id)
-    is_gpt_image = _model_leaf.startswith("gpt-image") or (_model_leaf.startswith("gpt-") and "-image" in _model_leaf)
+    is_gpt_image = is_gpt_image_model(_model_leaf)
     is_dalle = _model_leaf.startswith("dall-e")
     is_local_diffusion = not is_gpt_image and not is_dalle
 

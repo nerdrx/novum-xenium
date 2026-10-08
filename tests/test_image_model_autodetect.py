@@ -45,6 +45,44 @@ async def test_auto_detect_uses_bridge_auth_and_endpoint_name(monkeypatch, empty
     engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("model", "size", "expected_size", "expected_quality"),
+    [
+        ("chatgpt-image-codex", "512x512", "1024x1024", "high"),
+        ("flux-schnell", "512x512", "512x512", "high"),
+    ],
+)
+async def test_direct_image_generation_uses_model_specific_size_policy(
+    monkeypatch, model, size, expected_size, expected_quality,
+):
+    import src.settings as settings
+
+    monkeypatch.setattr(settings, "load_settings", lambda: {})
+    monkeypatch.setattr(images, "_resolve_model", lambda *a, **k: (
+        "http://127.0.0.1:8111/v1/chat/completions", model,
+        {"Authorization": "Bearer test-token"}))
+    calls = []
+
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, *, json, headers):
+            calls.append((url, json, headers))
+            return httpx.Response(400, json={"error": {"message": "Fixture rejection"}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    result = await images.do_generate_image(
+        f"fixture prompt\n{model}\n{size}\nhigh", owner="alice",
+    )
+
+    assert "Fixture rejection" in result["error"]
+    assert calls[0][1] == {
+        "model": model, "prompt": "fixture prompt", "n": 1,
+        "size": expected_size, "quality": expected_quality,
+    }
+
+
 async def test_mcp_auto_detect_forwards_bridge_auth_and_quality(monkeypatch):
     from mcp_servers import image_gen_server
     import src.settings as settings
@@ -65,7 +103,9 @@ async def test_mcp_auto_detect_forwards_bridge_auth_and_quality(monkeypatch):
             calls.append((url, json, headers))
             return httpx.Response(400, json={"error": {"message": "Fixture rejection"}})
     monkeypatch.setattr(httpx, "AsyncClient", Client)
-    result = await image_gen_server.call_tool("generate_image", {"prompt": "a cat", "quality": "high"})
+    result = await image_gen_server.call_tool("generate_image", {
+        "prompt": "a cat", "size": "512x512", "quality": "high",
+    })
     assert "Fixture rejection" in result[0].text
     assert calls == [("http://127.0.0.1:8111/v1/images/generations",
                       {"model": "chatgpt-image-codex", "prompt": "a cat", "n": 1,

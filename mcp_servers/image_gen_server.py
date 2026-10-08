@@ -116,7 +116,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 raise
             url, model_id, headers = await asyncio.to_thread(_resolve_model, model_spec, owner=owner)
 
-        is_gpt_image = "gpt-image" in model_id.lower()
+        from src.image_model_ids import is_gpt_image_model
+        is_gpt_image = is_gpt_image_model(model_id)
         base_url = url.replace("/chat/completions", "").replace("/v1/messages", "").rstrip("/")
         images_url = base_url + "/images/generations"
 
@@ -128,7 +129,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             size = "1024x1024"
 
         payload = {"model": model_id, "prompt": prompt, "n": 1, "size": size}
-        if is_gpt_image or model_id == "chatgpt-image-codex":
+        if is_gpt_image:
             payload["quality"] = quality if quality in ("low", "medium", "high", "auto") else "medium"
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)) as client:

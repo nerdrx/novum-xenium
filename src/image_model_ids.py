@@ -40,3 +40,12 @@ def looks_like_image_generation_model(model_id: str) -> bool:
     # gpt-image-1. Keep this pattern provider-agnostic.
     return leaf.startswith("gpt-") and "-image" in leaf
 
+
+def is_gpt_image_model(model_id: str) -> bool:
+    """Return whether an image model uses the GPT image size/quality policy."""
+    leaf = model_id_leaf(model_id)
+    return (
+        leaf.startswith("gpt-image")
+        or (leaf.startswith("gpt-") and "-image" in leaf)
+        or leaf == "chatgpt-image-codex"
+    )

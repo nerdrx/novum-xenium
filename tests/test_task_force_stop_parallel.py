@@ -146,3 +146,97 @@ def test_stop_cancels_captured_force_runs_but_not_replacement(
             db.close()
 
     asyncio.run(drive())
+
+
+@pytest.mark.parametrize("initial_run_count", [0, None])
+def test_concurrent_force_successes_atomically_increment_run_count(
+    tmp_path, monkeypatch, real_database_imports, initial_run_count,
+):
+    import core.database as database
+    import src.interactive_gate as interactive_gate
+    from src.task_scheduler import TaskScheduler
+
+    engine = create_engine(f"sqlite:///{tmp_path}/force-run-count.db")
+    database.Base.metadata.create_all(
+        engine,
+        tables=[database.Session.__table__, database.ScheduledTask.__table__, database.TaskRun.__table__],
+    )
+    sessions = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    monkeypatch.setattr(database, "SessionLocal", sessions)
+    db = sessions()
+    db.add(database.ScheduledTask(
+        id="force-count", owner="alice", name="Force count regression",
+        task_type="action", action="test_action", trigger_type="schedule",
+        schedule="daily", scheduled_time="08:00", status="active",
+        run_count=initial_run_count,
+    ))
+    db.commit()
+    if initial_run_count is None:
+        db.query(database.ScheduledTask).filter_by(id="force-count").update(
+            {database.ScheduledTask.run_count: None}, synchronize_session=False,
+        )
+        db.commit()
+        assert db.query(database.ScheduledTask).filter_by(id="force-count").one().run_count is None
+    db.close()
+
+    async def quiet(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(interactive_gate, "wait_for_interactive_quiet", quiet)
+    monkeypatch.setattr(interactive_gate, "has_foreground_activity", lambda: False)
+
+    async def drive():
+        scheduler = TaskScheduler.__new__(TaskScheduler)
+        scheduler._task_handles = {}
+        scheduler._all_task_handles = {}
+        scheduler._execution_handles = {}
+        scheduler._executing = set()
+        scheduler._executing_lock = asyncio.Lock()
+        scheduler._run_semaphore = asyncio.Semaphore(1)
+        scheduler._task_defer_counts = {}
+        scheduler._pending_notifications = []
+        scheduler._last_run_model = None
+        scheduler._task_needs_model_slot = lambda _task_id: False
+        starts = []
+        releases = {}
+
+        async def execute_action(_task, *, run_id):
+            event = asyncio.Event()
+            releases[run_id] = event
+            starts.append(run_id)
+            await event.wait()
+            return f"done:{run_id}", True
+
+        scheduler._execute_action = execute_action
+        scheduler._deliver_task_result = quiet
+        scheduler._log_to_assistant = lambda *_args, **_kwargs: None
+
+        assert await scheduler.run_task_now("force-count", force=True)
+        first = scheduler._task_handles["force-count"]
+        assert await scheduler.run_task_now("force-count", force=True)
+        second = scheduler._task_handles["force-count"]
+        for _ in range(100):
+            if len(starts) == 2:
+                break
+            await asyncio.sleep(0)
+        assert len(starts) == 2
+
+        releases[starts[0]].set()
+        await first
+        releases[starts[1]].set()
+        await second
+
+    asyncio.run(drive())
+    db = sessions()
+    try:
+        task = db.query(database.ScheduledTask).filter_by(id="force-count").one()
+        runs = db.query(database.TaskRun).filter_by(task_id="force-count").all()
+        assert len(runs) == 2
+        assert all(run.status == "success" for run in runs)
+        assert task.run_count == 2
+        assert task.last_run is not None
+        assert task.schedule == "daily"
+        assert task.scheduled_time == "08:00"
+        assert task.next_run is not None
+    finally:
+        db.close()

@@ -275,6 +275,22 @@ function noOverflow(metrics, label) {
       }));
       assert.ok(settingsControls.navHeight >= (viewport.name === 'mobile' ? 44 : 32), `settings navigation stays comfortably clickable: ${viewport.name} ${JSON.stringify(settingsControls)}`);
       assert.ok(settingsControls.closeWidth >= (viewport.name === 'mobile' ? 44 : 32), 'window close control has a usable target');
+      const joined = await settings.evaluate(el => {
+        const select = el.querySelector('#adm-epLocalType');
+        const input = el.querySelector('#adm-epLocalUrl');
+        const a = select.getBoundingClientRect(), b = input.getBoundingClientRect();
+        return {
+          top: Math.abs(a.top - b.top), height: Math.abs(a.height - b.height),
+          selectFont: getComputedStyle(select).font, inputFont: getComputedStyle(input).font,
+          appearance: getComputedStyle(select).appearance,
+          border: getComputedStyle(select.parentElement).borderTopWidth,
+        };
+      });
+      assert.ok(joined.top < 1 && joined.height < 1, 'joined fields have matching top and height');
+      assert.equal(joined.selectFont, joined.inputFont, 'joined fields share text metrics');
+      assert.equal(joined.appearance, 'none', 'platform select bezel cannot change field alignment');
+      assert.equal(joined.border, '2px', 'joined field has a continuous two-pixel border');
+
       await settings.screenshot({ path: path.join(screenshotDir, `nx-skin-settings-${viewport.name}.png`) });
       await settings.evaluate(el => el.classList.add('hidden'));
       assert.equal(await settings.isVisible(), false, 'settings modal closes');

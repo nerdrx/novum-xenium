@@ -344,6 +344,54 @@ a:focus-visible,
   outline-offset: 2px;
 }
 
+/* Joined endpoint fields use one outline and consistent text metrics instead
+   of combining the platform select bezel with a separately styled input. */
+html.nx-workspace .adm-fused-group {
+  position: relative;
+  align-items: stretch;
+  border: 2px solid var(--border);
+  border-radius: var(--nx-control-radius);
+  background: var(--bg);
+  overflow: hidden;
+}
+html.nx-workspace .adm-fused-group:focus-within {
+  border-color: var(--red);
+}
+html.nx-workspace .adm-fused-group > :is(input, select) {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 34px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  background: transparent;
+  color: var(--fg);
+}
+html.nx-workspace .adm-fused-group > select {
+  text-indent: 3px;
+  box-shadow: inset -1px 0 var(--border);
+}
+html.nx-workspace .adm-fused-group::after {
+  content: '';
+  position: absolute;
+  left: 49px;
+  top: calc(50% - 4px);
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--fg);
+  border-bottom: 1.5px solid var(--fg);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+html.nx-workspace :is(.chat-input-bar, .modal-content, .admin-card,
+    .settings-input, .settings-select, .admin-input, .admin-select,
+    .settings-nav-search, .model-picker-menu, .export-dropdown-menu) {
+  border-width: 2px;
+}
+
 /* Settings and menus share the same restrained hierarchy. */
 html.nx-workspace .settings-nav-item {
   min-height: 36px;
@@ -369,7 +417,7 @@ html.nx-workspace .settings-panels .admin-card {
   margin-bottom: 12px;
 }
 html.nx-workspace .settings-panels .admin-card:not(.admin-danger-card) {
-  border-color: color-mix(in srgb, var(--border) 65%, transparent);
+  border-color: var(--border);
 }
 html.nx-workspace .settings-panels .admin-card h2 {
   letter-spacing: 0;

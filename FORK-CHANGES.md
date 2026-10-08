@@ -54,6 +54,13 @@ Validation: desktop/mobile Chromium checks cover rendering, controls, repeated s
 
 Validation: Chromium desktop/mobile checks cover settings target sizes, visible dismissal, theme customization and background effect lifecycle.
 
+## Form alignment and outlines
+
+- Gives the local endpoint type and URL one continuous outline, matching field heights and text metrics. Removes the platform select bezel while retaining native select interaction.
+- Strengthens rounded panel and control outlines to two pixels, preserving theme border colours.
+
+Validation: desktop/mobile browser checks verify matching field geometry and fonts, native appearance removal, and continuous border width.
+
 ## Included changes
 
 - Tab and Shift+Tab keep native composer focus navigation instead of accidentally switching Plan mode. Plan mode has a visible toggle under More tools, with its pressed state exposed to assistive technology.

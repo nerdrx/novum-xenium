@@ -1442,8 +1442,11 @@ async def do_edit_image(
     except httpx.TimeoutException:
         return {"error": "Image edit timed out. The model may still be loading or overloaded."}
     except Exception as e:
+        detail = str(e).strip()
+        if not detail:
+            detail = f"{type(e).__name__} with no provider error details"
         return {
-            "error": f"Image edit error: {str(e)}",
+            "error": f"Image edit error: {detail}",
             "untrusted_content": True,
         }
 

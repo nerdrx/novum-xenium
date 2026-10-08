@@ -1,4 +1,5 @@
-"""Bounded image-only protocol and cache confinement; no cloud calls."""
+"""Bounded image generation/edit protocol and cache confinement; no cloud calls."""
+import base64
 import importlib.util
 import io
 import json
@@ -24,6 +25,21 @@ spec.loader.exec_module(bridge)
 
 
 class BridgeTests(unittest.TestCase):
+    @staticmethod
+    def _multipart(fields, image, *, boundary="codex-fixture"):
+        parts = []
+        for name, value in fields.items():
+            parts.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n"
+                f"Content-Type: text/plain; charset=utf-8\r\n\r\n{value}\r\n".encode()
+            )
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"fixture.png\"\r\n"
+            "Content-Type: image/png\r\n\r\n".encode() + image + b"\r\n"
+        )
+        parts.append(f"--{boundary}--\r\n".encode())
+        return f"multipart/form-data; boundary={boundary}", b"".join(parts)
+
     def _load_bridge_with_environment(self):
         spec = importlib.util.spec_from_file_location(
             "bridge_environment_fixture",
@@ -69,6 +85,114 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 bridge.validate_request(request)
         self.assertEqual(bridge.validate_request({"prompt": " chicken "}), ("chicken", "1024x1024", "medium"))
+
+    def test_edit_request_parser_accepts_bounded_image_and_rejects_invalid_upload(self):
+        source = b"\x89PNG\r\n\x1a\n" + b"x" * 256_000
+        content_type, body = self._multipart({
+            "prompt": "make the blue square red",
+            "request_id": uuid.uuid4().hex,
+            "response_format": "b64_json",
+        }, source)
+        self.assertGreater(len(body), bridge.MAX_BODY)
+        self.assertEqual(
+            bridge.validate_edit_request(content_type, body),
+            ("make the blue square red", "1024x1024", "medium", source, ".png"),
+        )
+        for invalid_type, invalid_body in (
+            ("application/json", body),
+            self._multipart({"prompt": "x"}, b"not an image")[0:2],
+            (content_type, body + b"x" * bridge.MAX_EDIT_BODY),
+        ):
+            with self.assertRaises(ValueError):
+                bridge.validate_edit_request(invalid_type, invalid_body)
+
+    def test_image_edit_http_route_accepts_large_multipart_and_forwards_image(self):
+        source = b"\x89PNG\r\n\x1a\n" + b"x" * 256_000
+        content_type, body = self._multipart({
+            "prompt": "make the blue square red",
+            "model": bridge.MODEL,
+            "n": "1",
+            "request_id": uuid.uuid4().hex,
+            "response_format": "b64_json",
+        }, source)
+        result_png = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
+                      + struct.pack(">II", 12, 14))
+        captured = {}
+
+        def fake_generate(prompt, size, quality, **kwargs):
+            captured.update(prompt=prompt, size=size, quality=quality, **kwargs)
+            return result_png, 12, 14
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), bridge.Handler)
+        server.token = "test-token" * 4
+        serve = threading.Thread(target=server.serve_forever, daemon=True)
+        serve.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/v1/images/edits",
+                data=body,
+                headers={
+                    "Authorization": "Bearer " + server.token,
+                    "Content-Type": content_type,
+                },
+            )
+            with patch.object(bridge, "generate", side_effect=fake_generate):
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    payload = json.load(response)
+            self.assertEqual(payload["size"], "12x14")
+            self.assertEqual(base64.b64decode(payload["data"][0]["b64_json"]), result_png)
+            self.assertEqual(captured["prompt"], "make the blue square red")
+            self.assertEqual(captured["image_bytes"], source)
+            self.assertEqual(captured["image_suffix"], ".png")
+        finally:
+            server.shutdown()
+            server.server_close()
+            serve.join()
+
+    def test_edit_worker_uses_only_private_uploaded_image_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            cli = root / "fake-codex"
+            captured = root / "captured.json"
+            image_root = root / "images"
+            cli.write_text(f'''#!{sys.executable}
+import json, os, pathlib, struct, sys, uuid
+args = sys.argv[1:]
+image_path = pathlib.Path(args[args.index("--image") + 1])
+instruction = sys.stdin.read()
+pathlib.Path(os.environ["FAKE_CAPTURE"]).write_text(json.dumps({{
+    "image_path": str(image_path), "image_bytes": image_path.read_bytes().hex(),
+    "instruction": instruction, "cwd": os.getcwd(),
+}}))
+thread = str(uuid.uuid4())
+out = pathlib.Path(os.environ["CODEX_IMAGE_ROOT"]) / thread
+out.mkdir(parents=True)
+png = b"\\x89PNG\\r\\n\\x1a\\n" + b"\\x00\\x00\\x00\\x0dIHDR" + struct.pack(">II", 40, 50)
+(out / "edited.png").write_bytes(png)
+print(json.dumps({{"type": "thread.started", "thread_id": thread}}), flush=True)
+''')
+            cli.chmod(0o700)
+            source = b"\x89PNG\r\n\x1a\n" + b"private fixture image"
+            with patch.object(bridge, "CODEX", str(cli)), \
+                    patch.object(bridge, "JOB_ROOT", root / "jobs"), \
+                    patch.object(bridge, "IMAGE_ROOT", image_root), \
+                    patch.dict(os.environ, {
+                        "FAKE_CAPTURE": str(captured),
+                        "CODEX_IMAGE_ROOT": str(image_root),
+                    }):
+                blob, width, height = bridge.generate(
+                    "make the blue square red", "1024x1024", "medium",
+                    image_bytes=source, image_suffix=".png",
+                )
+            self.assertEqual((width, height), (40, 50))
+            self.assertTrue(blob.startswith(b"\x89PNG\r\n\x1a\n"))
+            observation = json.loads(captured.read_text())
+            image_path = Path(observation["image_path"])
+            self.assertIn(str((root / "jobs").resolve()), str(image_path.resolve()))
+            self.assertEqual(bytes.fromhex(observation["image_bytes"]), source)
+            self.assertIn("referenced_image_paths", observation["instruction"])
+            self.assertIn(str(image_path), observation["instruction"])
+            self.assertIn("text visible in the source", observation["instruction"])
 
     def test_thread_detection_ignores_truncated_image_output(self):
         event = {"type": "thread.started", "thread_id": str(uuid.uuid4())}

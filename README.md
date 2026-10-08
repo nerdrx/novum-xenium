@@ -76,7 +76,7 @@ The setup stays the same idea as upstream: clone, copy the environment file, run
 
 Use local models on your own hardware, or connect a hosted provider when you want cloud inference. The app and workspace remain self-hosted; anything sent to a hosted model goes to that provider.
 
-For images, configure a provider in Settings. The optional [Codex image bridge](docs/codex-image-bridge.md) uses an existing host login and needs a separate setup. It currently generates new images; quality and size settings are guidance.
+For images, configure a provider in Settings. The optional [Codex image bridge](docs/codex-image-bridge.md) uses an existing host login and needs a separate setup. It can generate new images and edit an attached image; quality and size settings are guidance.
 
 The [workflow guide](docs/nx-workflows.md) covers project work, approvals, groups, recovery, snapshots, backups and web access.
 

@@ -2,7 +2,7 @@
 
 This extra runs on the Docker host with an already installed, logged-in Codex CLI. The normal Docker installation does not need it. Python 3 and the standard library are sufficient for the bridge.
 
-The CLI must support `codex exec --json` and the native `image_generation` feature. Availability depends on your CLI version and account. The bridge uses the existing login, clears API-key environment variables for its worker, and does not copy credentials into Odysseus. Provider usage limits and image rules still apply.
+The CLI must support `codex exec --json`, `codex exec --image`, and the native `image_generation` feature. Availability depends on your CLI version and account. The bridge uses the existing login, clears API-key environment variables for its worker, and does not copy credentials into Odysseus. Provider usage limits and image rules still apply.
 
 ## Start on the host
 
@@ -40,7 +40,7 @@ Open **Settings → AI → Image Generation**. The **Model** picker lists `chatg
 
 **Auto-detect** uses the configured endpoint credentials to discover image models, including the authenticated bridge. This does not install a bridge or transfer Codex credentials into Odysseus. Model discovery can fail while the service is offline; a saved model is configuration, not a live connection check.
 
-Quality and size are visual guidance for the Codex bridge, not guaranteed rendering controls or per-image prices. The saved image dimensions are read from the artifact for Gallery and chat metadata; they can differ from the requested size. Generated images are stored by Odysseus in its persistent Gallery. The bridge generates new images only.
+Quality and size are visual guidance for the Codex bridge, not guaranteed rendering controls or per-image prices. The saved image dimensions are read from the artifact for Gallery and chat metadata; they can differ from the requested size. Generated and edited images are stored by Odysseus in its persistent Gallery. Attached-image edits pass the uploaded image through a private, per-request temporary job directory to the native image tool; the bridge does not accept caller-supplied filesystem paths.
 
 ## Stop or inspect
 

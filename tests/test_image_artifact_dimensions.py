@@ -92,6 +92,30 @@ async def test_edit_uses_saved_png_dimensions(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_edit_transport_errors_with_empty_detail_remain_actionable(monkeypatch, tmp_path):
+    from src import ai_interaction as images
+    import src.settings as settings
+
+    monkeypatch.setattr(settings, "load_settings", lambda: {})
+    monkeypatch.setattr(images, "_resolve_model", lambda *a, **k: (
+        "http://fixture/v1/chat/completions", "chatgpt-image-codex", {}))
+    source = tmp_path / "source.png"
+    source.write_bytes(_png(64, 64))
+
+    class Client:
+        def __init__(self, **_kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+        async def post(self, *_args, **_kwargs):
+            raise httpx.ReadError("")
+
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    result = await images.do_edit_image("fixture edit", str(source), "chatgpt-image-codex")
+
+    assert result["error"] == "Image edit error: ReadError with no provider error details"
+
+
+@pytest.mark.asyncio
 async def test_mcp_generation_uses_saved_png_dimensions(monkeypatch, tmp_path):
     from mcp_servers import image_gen_server
     from src import ai_interaction as images

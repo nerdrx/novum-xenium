@@ -133,5 +133,17 @@ def test_gallery_file_operations_use_confining_resolver():
     assert 'Path("data/generated_images") / img.filename' not in source
     assert 'os.path.join("data", "generated_images", img.filename)' not in source
     assert 'os.path.join("data", "generated_images", img_filename)' not in source
-    assert source.count("_gallery_image_path(img.filename)") >= 3
+    assert source.count("_gallery_image_path(img.filename)") >= 2
     assert "_gallery_image_path(img_filename)" in source
+
+    replace_helper = source.split("def _replace_gallery_image_sync", 1)[1].split(
+        "def _delete_gallery_image_sync", 1
+    )[0]
+    assert "filename = img.filename" in replace_helper
+    assert "if img.filename != filename" in replace_helper
+    assert "img_path = _gallery_image_path(filename)" in replace_helper
+
+    replace_route = source.split(
+        '@router.post("/api/gallery/{image_id}/replace")', 1
+    )[1].split("# ---- POST /api/gallery/{image_id}/rename", 1)[0]
+    assert "asyncio.to_thread(_replace_gallery_image_sync, image_id, user, content)" in replace_route

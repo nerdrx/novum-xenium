@@ -116,6 +116,9 @@ function _computeFetchLimit() {
 let _searchDebounce = null;
 let _escHandler = null;
 let _albums = [];
+let _albumsLoaded = false;
+let _albumsLoadFailed = false;
+let _albumsLoadSequence = 0;
 // Albums tab — search filter + multi-select state. Mirrors what the
 // Photos tab does (_search, _selectMode) but scoped to the albums grid.
 let _albumSearch = '';
@@ -232,12 +235,59 @@ function _galleryLibraryFilterKey() {
 }
 
 async function _fetchAlbums() {
+  const sequence = ++_albumsLoadSequence;
+  const current = () => _open && sequence === _albumsLoadSequence;
+  const container = document.getElementById('gallery-albums-container');
+  container?.setAttribute('aria-busy', 'true');
   try {
     const res = await fetch(`${API_BASE}/api/gallery/albums`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    _albums = data.albums || [];
+    if (!Array.isArray(data?.albums) || !data.albums.every(album =>
+      album && typeof album.id === 'string' && typeof album.name === 'string')) {
+      throw new Error('Invalid album list');
+    }
+    if (!current()) return false;
+    _albums = data.albums;
+    _albumsLoaded = true;
+    _albumsLoadFailed = false;
+    for (const id of _albumSelected) {
+      if (!_albums.some(album => album.id === id)) _albumSelected.delete(id);
+    }
     _renderAlbums();
-  } catch (e) { console.error('Albums fetch error:', e); }
+    _renderAlbumsGrid();
+    return true;
+  } catch (e) {
+    if (!current()) return false;
+    console.error('Albums fetch error:', e);
+    _albumsLoadFailed = true;
+    _renderAlbumsGrid();
+    return false;
+  } finally {
+    if (current()) container?.removeAttribute('aria-busy');
+  }
+}
+
+function _renderAlbumsLoadError(wrap) {
+  if (!_albumsLoadFailed) return;
+  const error = document.createElement('div');
+  error.id = 'gallery-albums-load-error';
+  error.className = 'gallery-albums-empty';
+  error.setAttribute('role', 'alert');
+  const text = document.createElement('p');
+  text.textContent = _albumsLoaded
+    ? 'Could not refresh albums. The last successful list is kept below.'
+    : 'Could not load albums. Try again.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'gallery-select-btn';
+  retry.textContent = 'Retry';
+  retry.addEventListener('click', async () => {
+    retry.disabled = true;
+    try { await _fetchAlbums(); } finally { retry.disabled = false; }
+  });
+  error.append(text, retry);
+  wrap.prepend(error);
 }
 
 
@@ -635,6 +685,11 @@ function _renderAlbumsGrid() {
   if (!wrap) return;
 
   const albums = _filteredAlbums();
+  if (!_albums.length && (!_albumsLoaded || _albumsLoadFailed)) {
+    wrap.innerHTML = _albumsLoadFailed ? '' : '<div class="gallery-albums-empty" role="status">Loading albums…</div>';
+    _renderAlbumsLoadError(wrap);
+    return;
+  }
   if (!_albums.length) {
     wrap.innerHTML = `
       <div class="gallery-albums-empty">
@@ -646,6 +701,7 @@ function _renderAlbumsGrid() {
   }
   if (!albums.length) {
     wrap.innerHTML = `<div class="gallery-albums-empty"><p>No albums match "${_esc(_albumSearch)}".</p></div>`;
+    _renderAlbumsLoadError(wrap);
     return;
   }
 
@@ -718,6 +774,7 @@ function _renderAlbumsGrid() {
   });
   html += '</div>';
   wrap.innerHTML = html;
+  _renderAlbumsLoadError(wrap);
   _updateAlbumBulkCount();
   _wireAlbumsEvents(wrap);
 }

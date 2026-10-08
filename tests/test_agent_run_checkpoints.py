@@ -53,9 +53,26 @@ async def test_run_manager_persists_completed_tool_outcome(tmp_path, monkeypatch
     }]
     assert checkpoint["context"] == {
         "original_request": "Do the task", "workspace": "/workspace", "model": "local",
-        "endpoint_id": "ep-1",
+        "endpoint_id": "ep-1", "original_request_complete": True,
     }
     assert agent_runs.get_checkpoint(session_id, "bob") is None
+
+
+def test_original_request_is_preserved_through_the_raw_chat_limit(tmp_path):
+    request = "start " + ("x" * 49_980) + " TAIL"
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "long-request.db"), recover_on_open=False)
+    store.begin("long-run", "long-session", "alice", {"original_request": request})
+    checkpoint = store.get("long-session", "alice")
+    assert checkpoint["context"]["original_request"] == request
+    assert checkpoint["context"]["original_request_complete"] is True
+
+
+def test_original_request_over_limit_is_marked_incomplete(tmp_path):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "oversize-request.db"), recover_on_open=False)
+    store.begin("long-run", "long-session", "alice", {"original_request": "x" * 50_001})
+    checkpoint = store.get("long-session", "alice")
+    assert len(checkpoint["context"]["original_request"]) == 50_000
+    assert checkpoint["context"]["original_request_complete"] is False
 
 
 @pytest.mark.asyncio

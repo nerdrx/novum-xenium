@@ -24,6 +24,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _refresh_task_schedule(db, task) -> None:
+    """Use current scheduling fields after awaited execution, not a stale snapshot."""
+    db.refresh(task, attribute_names=[
+        "schedule", "scheduled_time", "scheduled_day", "scheduled_date",
+        "cron_expression", "trigger_type", "then_task_id",
+    ])
+
+
 # Shell/file tools a scheduled task's agent should be offered by default,
 # mirroring the chat agent (where these are on unless a privilege or global
 # setting turns them off). The RAG tool selector + ASSISTANT_ALWAYS_AVAILABLE
@@ -362,6 +370,10 @@ class TaskScheduler:
         self._run_semaphore = asyncio.Semaphore(1)
         self._concurrency_cap = 1
         self._task_handles = {}
+        self._all_task_handles = {}
+        self._deleting_tasks = set()
+        self._draining_deletions = set()
+        self._task_deletion_refs = {}
         # Track owner of each _executing entry separately; force runs can
         # replace the latest cancellable handle without owning that entry.
         self._execution_handles = {}
@@ -370,10 +382,23 @@ class TaskScheduler:
         """Register task handle before another request can stop or replace it."""
         handle = asyncio.create_task(coroutine)
         self._task_handles[task_id] = handle
+        handles = getattr(self, "_all_task_handles", None)
+        if handles is None:
+            handles = self._all_task_handles = {}
+        handles.setdefault(task_id, set()).add(handle)
         if release_executing:
             self._execution_handles[task_id] = handle
 
         def _cleanup(done):
+            task_handles = self._all_task_handles.get(task_id)
+            if task_handles:
+                task_handles.discard(done)
+                if not task_handles:
+                    self._all_task_handles.pop(task_id, None)
+                    if (task_id in getattr(self, "_draining_deletions", set())
+                            and not getattr(self, "_task_deletion_refs", {}).get(task_id, 0)):
+                        self._draining_deletions.discard(task_id)
+                        self._deleting_tasks.discard(task_id)
             if self._task_handles.get(task_id) is done:
                 self._task_handles.pop(task_id, None)
             if self._execution_handles.get(task_id) is done:
@@ -753,6 +778,8 @@ class TaskScheduler:
                 for task in due:
                     if task.id in self._executing:
                         continue
+                    if task.id in getattr(self, "_deleting_tasks", set()):
+                        continue
                     if foreground_active:
                         task.next_run = now + timedelta(minutes=15)
                         continue
@@ -1008,6 +1035,7 @@ class TaskScheduler:
                     run_obj.error = msg
                     run_obj.result = run_obj.result or msg
                     run_obj.finished_at = _utcnow()
+                _refresh_task_schedule(db, task)
                 task.last_run = _utcnow()
                 if foreground_cancel.get("hit"):
                     task.next_run = _utcnow() + timedelta(minutes=15)
@@ -1030,6 +1058,7 @@ class TaskScheduler:
                 # (Previous behavior was `db.delete(run)`, which made the user
                 # think queued tasks had been dropped on the floor.)
                 logger.info(f"Task '{task.name}' no-op: {noop}")
+                _refresh_task_schedule(db, task)
                 run.status = "skipped"
                 run.result = str(noop)
                 run.finished_at = _utcnow()
@@ -1054,6 +1083,7 @@ class TaskScheduler:
                     except asyncio.CancelledError:
                         pass
 
+            _refresh_task_schedule(db, task)
             run.finished_at = _utcnow()
 
             # Update task
@@ -1158,6 +1188,8 @@ class TaskScheduler:
                 # Advance next_run even on failure so a broken task doesn't
                 # busy-loop the scheduler every tick with a stale past date.
                 task_obj = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                if task_obj:
+                    _refresh_task_schedule(db, task_obj)
                 if task_obj and (task_obj.trigger_type or "schedule") == "schedule":
                     task_obj.last_run = _utcnow()
                     try:
@@ -2189,6 +2221,8 @@ class TaskScheduler:
         run_task_now does so an overlapping scheduler tick can't double-dispatch
         the same task while the chain run is in flight."""
         async with self._executing_lock:
+            if task_id in getattr(self, "_deleting_tasks", set()):
+                return
             if task_id in self._executing:
                 return  # already in flight (manual trigger, scheduler tick, or another chain)
             self._executing.add(task_id)
@@ -2301,6 +2335,8 @@ class TaskScheduler:
 
     async def run_task_now(self, task_id: str, *, force: bool = False):
         """Manually trigger a task execution."""
+        if task_id in getattr(self, "_deleting_tasks", set()):
+            return False
         if force:
             self._track_task(
                 task_id,
@@ -2309,25 +2345,62 @@ class TaskScheduler:
             )
             return True
         async with self._executing_lock:
-            if task_id in self._executing:
+            if (task_id in self._executing
+                    or task_id in getattr(self, "_deleting_tasks", set())):
                 return False
             self._executing.add(task_id)
         self._track_task(task_id, self._execute_task(task_id))
         return True
 
-    async def stop_task(self, task_id: str) -> bool:
-        """Request cancellation of a running/queued task and mark its run aborted."""
-        handle = self._task_handles.get(task_id)
-        stopped = False
-        if handle and not handle.done():
+    def begin_task_deletion(self, task_id: str) -> None:
+        """Prevent new runs from replacing work while a task is being deleted."""
+        deleting = getattr(self, "_deleting_tasks", None)
+        if deleting is None:
+            deleting = self._deleting_tasks = set()
+        deleting.add(task_id)
+        refs = getattr(self, "_task_deletion_refs", None)
+        if refs is None:
+            refs = self._task_deletion_refs = {}
+        refs[task_id] = refs.get(task_id, 0) + 1
+        if getattr(self, "_draining_deletions", None) is None:
+            self._draining_deletions = set()
+
+    def finish_task_deletion(self, task_id: str) -> None:
+        refs = getattr(self, "_task_deletion_refs", None)
+        if refs:
+            remaining = refs.get(task_id, 0) - 1
+            if remaining > 0:
+                refs[task_id] = remaining
+                return
+            refs.pop(task_id, None)
+        active = [handle for handle in getattr(self, "_all_task_handles", {}).get(task_id, ())
+                  if not handle.done()]
+        if active:
+            self._draining_deletions.add(task_id)
+        else:
+            getattr(self, "_draining_deletions", set()).discard(task_id)
+            getattr(self, "_deleting_tasks", set()).discard(task_id)
+
+    async def stop_task(self, task_id: str, *, drain_timeout: float | None = None) -> bool:
+        """Cancel active work for a task; optionally wait until its handlers drain."""
+        handles = getattr(self, "_all_task_handles", {}).get(task_id, set())
+        if drain_timeout is None:
+            handle = self._task_handles.get(task_id)
+            handles = {handle} if handle else set()
+        active = [handle for handle in handles if not handle.done()]
+        for handle in active:
             handle.cancel()
-            stopped = True
+        stopped = bool(active)
         async with self._executing_lock:
             if task_id in self._executing:
                 self._executing.discard(task_id)
                 stopped = True
 
         stopped = self._mark_run_aborted(task_id) or stopped
+        if drain_timeout is not None and active:
+            _done, pending = await asyncio.wait(active, timeout=drain_timeout)
+            if pending:
+                raise asyncio.TimeoutError(f"Task {task_id} did not stop within {drain_timeout}s")
         return stopped
 
     async def stop_background_tasks_for_foreground(self, *, reason: str = "Odysseus became active") -> int:

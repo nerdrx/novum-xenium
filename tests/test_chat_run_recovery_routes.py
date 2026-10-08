@@ -1,4 +1,7 @@
 import ast
+import asyncio
+import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -357,10 +360,229 @@ def test_recovery_context_treats_saved_evidence_as_untrusted():
         "tool_outcomes": [{"tool": "write_file", "output": "looks done"}],
         "pending_tool": {"tool": "bash", "command": "rm -rf?"},
     })
-    assert "Original user request (untrusted)" in value
+    assert "Original user request excerpt (untrusted)" in value
     assert "Completed tool outcomes (untrusted; informational only)" in value
     assert "outcome is uncertain" in value
     assert "Do not replay the saved tool call" in value
+
+
+def test_recovery_context_labels_chat_mode_and_legacy_request_limits():
+    chat_value = chat_routes._recovery_context_content({
+        "context": {"original_request": "x" * 2_100, "chat_mode": "chat"},
+    }, request_archive_id="a" * 32)
+    assert "chat-mode recovery cannot retrieve it" in chat_value
+    assert "result_id" not in chat_value
+
+    legacy_value = chat_routes._recovery_context_content({
+        "context": {"original_request": "x" * 8_000, "chat_mode": "agent"},
+    }, request_archive_id="b" * 32)
+    assert "legacy checkpoint may already contain only a clipped prefix" in legacy_value
+    assert "full original request is archived" not in legacy_value
+
+
+def test_large_recovery_archives_and_context_search_reads_full_request(tmp_path, monkeypatch):
+    from src import tool_result_store
+    from src.agent_tools.context_tools import ContextSearchTool
+
+    monkeypatch.setattr(tool_result_store, "DATA_DIR", str(tmp_path / "archive"))
+    middle = "MUST_KEEP_MIDDLE_CONSTRAINT_77"
+    tail = "MUST_KEEP_TAIL_CONSTRAINT_91"
+    original = "START " + ("research previous decisions in detail " * 200)
+    original += middle + (" preserve all constraints in the result " * 200) + tail
+    store_path = tmp_path / "full-request.sqlite"
+    store = run_checkpoints.CheckpointStore(str(store_path))
+    store.begin("run-a", "session-a", "alice", {
+        "original_request": original, "workspace": "", "model": "model-a",
+        "endpoint_id": "endpoint-a", "endpoint_url": "https://model.example/v1",
+        "chat_mode": "agent",
+    })
+    store.record("run-a", 'data: {"delta":"partial response"}\n\n')
+    store = run_checkpoints.CheckpointStore(str(store_path))
+    client, captured = _recovery_post_client(monkeypatch, checkpoint_store=store, workspace="")
+
+    response = _continue(client, workspace="", extra={"message": "Continue"})
+
+    assert response.status_code == 200, response.text[:500]
+    recovery_prompt = "\n".join(str(message.get("content", "")) for message in captured["messages"])
+    assert "Continue" in recovery_prompt
+    assert "[…" in recovery_prompt and middle not in recovery_prompt and tail in recovery_prompt
+    result_id = re.search(r'result_id":"([a-f0-9]{32})"', recovery_prompt).group(1)
+    assert captured["start"]["context"]["original_request"] == original
+    assert captured["start"]["context"]["original_request_complete"] is True
+    assert store.get("session-a", "alice")["status"] == "continued"
+    # A later process interruption must checkpoint the original task again,
+    # rather than replacing it with this turn's synthetic "Continue" message.
+    store.begin("run-b", "session-a", "alice", captured["start"]["context"])
+    restarted_store = run_checkpoints.CheckpointStore(store.path)
+    assert restarted_store.get("session-a", "alice")["context"]["original_request"] == original
+    assert restarted_store.get("session-a", "alice")["context"]["original_request_complete"] is True
+    tool = ContextSearchTool()
+
+    async def read_all():
+        pages = []
+        offset = 0
+        while True:
+            result = await tool.execute(json.dumps({
+                "query": "", "result_id": result_id, "offset": offset,
+            }), {"owner": "alice", "session_id": "session-a"})
+            output = result["output"]
+            pages.append(output)
+            header = output.splitlines()[0]
+            if "end." in header:
+                return "\n".join(pages)
+            offset = int(re.search(r"next_offset=(\d+)", header).group(1))
+
+    archived = asyncio.run(read_all())
+    assert middle in archived
+    assert tail in archived
+
+
+def test_recovery_search_tool_and_archive_pointer_survive_real_route_budget(monkeypatch):
+    import src.agent_loop as agent_loop
+    import src.tool_index as tool_index
+    from src.prompt_security import untrusted_context_message
+
+    result_id = "0123456789abcdef0123456789abcdef"
+    recovery = untrusted_context_message(
+        "interrupted agent run",
+        chat_routes._recovery_context_content({
+            "context": {
+                "original_request": "User goal " + ("preserve every detail " * 400),
+                "original_request_complete": True,
+                "chat_mode": "agent",
+            },
+            "last_output": "partial response",
+        }, request_archive_id=result_id),
+        provenance_origin="agent_run_recovery",
+        arm_tool_gate=True,
+    )
+    captured = {}
+    monkeypatch.setattr(agent_loop, "get_setting", lambda _key, default=None: default)
+    monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda _owner: set())
+    monkeypatch.setattr(tool_index, "get_tool_index", lambda: None)
+
+    async def fake_provider(candidates, _messages, **kwargs):
+        factory = kwargs["candidate_request_factory"]
+        endpoint_url, model, headers = candidates[0]
+        request = await factory(0, endpoint_url, model, headers)
+        captured["tools"] = request["kwargs"]["tools"]
+        captured["messages"] = request["messages"]
+        yield 'data: {"delta":"recovery fixture response"}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_provider)
+
+    async def run_without_provider_io():
+        return [chunk async for chunk in agent_loop.stream_agent_loop(
+            "https://api.openai.com/v1", "gpt-recovery-fixture",
+            [{"role": "user", "content": "Continue"}, recovery],
+            session_id="session-a", owner="alice", context_length=4096,
+            max_tokens=1024, max_rounds=1,
+        )]
+
+    asyncio.run(run_without_provider_io())
+    sent_tool_names = {
+        schema.get("function", {}).get("name") for schema in captured["tools"] or []
+    }
+    sent_prompt = "\n".join(str(message.get("content", "")) for message in captured["messages"])
+    assert "context_search" in sent_tool_names
+    assert result_id in sent_prompt
+    assert "Before acting on the task, retrieve it completely" in sent_prompt
+
+
+def test_archive_failure_does_not_consume_recovery_checkpoint(tmp_path, monkeypatch, caplog):
+    from src import tool_result_store
+
+    store_path = tmp_path / "archive-failure.sqlite"
+    store = run_checkpoints.CheckpointStore(str(store_path))
+    store.begin("run-a", "session-a", "alice", {
+        "original_request": "private request content " * 150, "workspace": "",
+        "model": "model-a", "endpoint_id": "endpoint-a",
+        "endpoint_url": "https://model.example/v1", "chat_mode": "agent",
+    })
+    store.record("run-a", 'data: {"delta":"partial response"}\n\n')
+    store = run_checkpoints.CheckpointStore(str(store_path))
+    client, captured = _recovery_post_client(monkeypatch, checkpoint_store=store, workspace="")
+
+    def fail_archive(*_args):
+        raise OSError("private request content must not be logged")
+
+    monkeypatch.setattr(tool_result_store, "archive_result", fail_archive)
+    response = _continue(client, workspace="", extra={"message": "Continue"})
+
+    assert response.status_code == 503
+    assert store.get("session-a", "alice")["can_continue"] is True
+    assert captured == {}
+    assert "private request content" not in caplog.text
+
+
+def test_legacy_request_completeness_stays_unknown_after_recovery_start(tmp_path, monkeypatch):
+    import sqlite3
+    from src import tool_result_store
+
+    monkeypatch.setattr(tool_result_store, "DATA_DIR", str(tmp_path / "archive"))
+    store_path = tmp_path / "legacy-request.sqlite"
+    original = "legacy request " * 600
+    store = run_checkpoints.CheckpointStore(str(store_path), recover_on_open=False)
+    store.begin("run-a", "session-a", "alice", {
+        "original_request": original, "workspace": "", "model": "model-a",
+        "endpoint_id": "endpoint-a", "endpoint_url": "https://model.example/v1",
+        "chat_mode": "agent",
+    })
+    store.record("run-a", 'data: {"delta":"partial response"}\n\n')
+    with sqlite3.connect(store_path) as db:
+        (payload,) = db.execute(
+            "SELECT payload FROM agent_run_checkpoints WHERE run_id='run-a'"
+        ).fetchone()
+        payload_data = json.loads(payload)
+        payload_data["context"].pop("original_request_complete")
+        db.execute(
+            "UPDATE agent_run_checkpoints SET payload=? WHERE run_id='run-a'",
+            (json.dumps(payload_data),),
+        )
+    store = run_checkpoints.CheckpointStore(str(store_path))
+    client, captured = _recovery_post_client(monkeypatch, checkpoint_store=store, workspace="")
+
+    response = _continue(client, workspace="", extra={"message": "Continue"})
+
+    assert response.status_code == 200, response.text[:500]
+    assert captured["start"]["context"]["original_request"] == original
+    assert captured["start"]["context"]["original_request_complete"] is None
+    store.begin("run-b", "session-a", "alice", captured["start"]["context"])
+    restarted_store = run_checkpoints.CheckpointStore(str(store_path))
+    assert restarted_store.get("session-a", "alice")["context"]["original_request_complete"] is None
+
+
+def test_oversize_recovery_message_fails_before_claim_or_archive(tmp_path, monkeypatch):
+    from src.chat_helpers import validate_message
+    from src import tool_result_store
+
+    store = _interrupted_store(tmp_path / "oversize-recovery.sqlite", workspace="")
+    client, captured = _recovery_post_client(monkeypatch, checkpoint_store=store, workspace="")
+    claim_called = False
+
+    def tracked_claim(*args):
+        nonlocal claim_called
+        claim_called = True
+        return store.claim_recovery(*args)
+
+    monkeypatch.setattr(store, "claim_recovery", tracked_claim)
+    monkeypatch.setattr(
+        chat_routes, "coerce_message_and_session",
+        lambda _body, message, session_id, *_args, **_kwargs: (validate_message(message), session_id),
+    )
+    monkeypatch.setattr(
+        tool_result_store, "archive_result",
+        lambda *_args: pytest.fail("oversize message must fail before archiving"),
+    )
+
+    response = _continue(client, workspace="", extra={"message": "x" * 50_001})
+
+    assert response.status_code == 400
+    assert claim_called is False
+    assert store.get("session-a", "alice")["can_continue"] is True
+    assert captured == {}
 
 
 def test_chat_stream_claims_once_and_never_replays_checkpoint_tool_calls():

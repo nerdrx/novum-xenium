@@ -29,6 +29,15 @@ const _icon = (svg) => `<span class="dropdown-icon">${svg}</span>`;
 const _replySeparator = '---------- Previous message ----------';
 const _DONE_RESPONSE_TAGS = new Set(['urgent', 'reply-soon', 'action-needed']);
 
+async function _requireEmailMutation(res) {
+  let data = null;
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.error || data?.detail || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
 function _splitEmailAddresses(raw) {
   return (typeof raw === 'string' ? raw : '')
     .split(',')
@@ -117,6 +126,7 @@ function _cleanAiReplyText(text) {
 }
 
 let _emails = [];
+let _loadedEmailsKey = null;
 let _currentFolder = 'INBOX';
 let _offset = 0;
 let _total = 0;
@@ -146,6 +156,8 @@ window.addEventListener('email-answered', (e) => {
   });
 });
 let _loading = false;
+let _emailsLoadSeq = 0;
+let _queuedEmailsLoad = null;
 let _expanded = false;
 let _docModule = null;
 let _listSpinner = null;
@@ -383,8 +395,19 @@ export function markInboxAsSeen() {
 }
 
 export async function loadEmails(append = false) {
-  if (_loading) return;
+  const requestSeq = ++_emailsLoadSeq;
+  if (_loading) {
+    // Keep only the latest requested mode; a replacement always supersedes a
+    // queued append so a changed folder/sender cannot inherit the old page.
+    _queuedEmailsLoad = _queuedEmailsLoad === false || !append ? false : true;
+    return;
+  }
   _loading = true;
+
+  const requestFolder = _currentFolder;
+  const requestOffset = _offset;
+  const requestSender = _senderFilter;
+  const requestKey = JSON.stringify([requestFolder, requestSender, requestOffset]);
 
   const list = document.getElementById('email-list');
   if (!list) { _loading = false; return; }
@@ -399,10 +422,12 @@ export async function loadEmails(append = false) {
   }
 
   try {
-    const fromQS = _senderFilter ? `&from=${encodeURIComponent(_senderFilter)}` : '';
+    const fromQS = requestSender ? `&from=${encodeURIComponent(requestSender)}` : '';
     const applyListData = (data) => {
+      if (requestSeq !== _emailsLoadSeq) return;
       if (!append) _emails = [];
       _emails.push(...(data.emails || []));
+      _loadedEmailsKey = requestKey;
       _total = data.total || 0;
       if (_listSpinner) { _listSpinner.destroy(); _listSpinner = null; }
       _renderList();
@@ -412,26 +437,55 @@ export async function loadEmails(append = false) {
     };
     if (!append && !_senderFilter) {
       try {
-        const cachedRes = await fetch(`${API_BASE}/api/email/list?folder=${encodeURIComponent(_currentFolder)}&limit=50&offset=${_offset}&cached_only=1${_acct()}`);
-        const cachedData = await cachedRes.json();
-        if (!cachedData.error && (cachedData.emails || []).length) {
-          applyListData(cachedData);
+        const cachedRes = await fetch(`${API_BASE}/api/email/list?folder=${encodeURIComponent(requestFolder)}&limit=50&offset=${requestOffset}&cached_only=1${_acct()}`);
+        if (cachedRes.ok) {
+          const cachedData = await cachedRes.json();
+          if (!cachedData.error && (cachedData.emails || []).length) applyListData(cachedData);
         }
       } catch (_) {}
     }
-    const res = await fetch(`${API_BASE}/api/email/list?folder=${encodeURIComponent(_currentFolder)}&limit=50&offset=${_offset}${fromQS}${_acct()}`);
+    if (requestSeq !== _emailsLoadSeq) return;
+    const res = await fetch(`${API_BASE}/api/email/list?folder=${encodeURIComponent(requestFolder)}&limit=50&offset=${requestOffset}${fromQS}${_acct()}`);
+    if (!res.ok) {
+      let detail = '';
+      try { const error = await res.json(); detail = error.detail || error.error || ''; } catch (_) {}
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     applyListData(data);
   } catch (e) {
+    if (requestSeq !== _emailsLoadSeq) return;
     console.error('Failed to load emails:', e);
     if (_listSpinner) { _listSpinner.destroy(); _listSpinner = null; }
     if (!append && list) {
       const msg = e && e.message ? `Failed to load: ${e.message}` : 'Failed to load';
-      list.innerHTML = `<div class="email-loading">${msg.replace(/&/g, '&amp;').replace(/</g, '&lt;')}${_emailSetupHint()}</div>`;
+      const error = document.createElement('div');
+      error.className = 'email-loading';
+      const copy = document.createElement('span');
+      copy.textContent = msg;
+      error.appendChild(copy);
+      error.insertAdjacentHTML('beforeend', _emailSetupHint());
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'email-load-retry';
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => loadEmails(false));
+      error.appendChild(retry);
+      if (_loadedEmailsKey === requestKey && _emails.length > 0) {
+        _renderList();
+        list.prepend(error);
+      } else {
+        list.replaceChildren(error);
+      }
     }
   } finally {
     _loading = false;
+    if (_queuedEmailsLoad !== null) {
+      const nextAppend = _queuedEmailsLoad;
+      _queuedEmailsLoad = null;
+      loadEmails(nextAppend);
+    }
   }
 }
 
@@ -731,7 +785,7 @@ function _createEmailItem(em) {
         item.style.transform = 'translateX(-100%)';
         item.style.opacity = '0';
         setTimeout(() => {
-          _archiveEmail(em);
+          _archiveEmail(em, item);
           delete item.dataset.swipeBlock;
         }, 200);
       } else {
@@ -1249,32 +1303,62 @@ async function _createReplyReminder(em, dueDate) {
   }
 }
 
-async function _archiveEmail(em) {
+async function _archiveEmail(em, itemEl = null) {
+  const folder = _currentFolder;
+  const listSeq = _emailsLoadSeq;
+  const accountQuery = _acct();
   try {
-    await fetch(`${API_BASE}/api/email/archive/${em.uid}?folder=${encodeURIComponent(_currentFolder)}${_acct()}`, { method: 'POST' });
-    _emails = _emails.filter(e => e.uid !== em.uid);
-    _renderList();
+    const res = await fetch(`${API_BASE}/api/email/archive/${em.uid}?folder=${encodeURIComponent(folder)}${accountQuery}`, { method: 'POST' });
+    await _requireEmailMutation(res);
+    if (folder === _currentFolder) {
+      if (listSeq === _emailsLoadSeq) {
+        _emails = _emails.filter(e => e.uid !== em.uid);
+        _renderList();
+      } else {
+        loadEmails(false);
+      }
+    }
   } catch (e) {
+    if (itemEl?.isConnected) {
+      itemEl.style.transform = '';
+      itemEl.style.opacity = '';
+      itemEl.style.background = '';
+      delete itemEl.dataset.swipeBlock;
+    }
     console.error('Failed to archive:', e);
+    import('./ui.js').then(m => m.showError && m.showError('Could not archive this email. It is still in the list; please retry.')).catch(() => {});
   }
 }
 
 async function _deleteEmail(em) {
+  const folder = _currentFolder;
+  const listSeq = _emailsLoadSeq;
+  const accountQuery = _acct();
   const subject = em.subject || '(no subject)';
   const { styledConfirm } = await import('./ui.js');
   const ok = await styledConfirm(`Delete "${subject}"?`, { confirmText: 'Delete', cancelText: 'Cancel', danger: true });
   if (!ok) return;
-  const row = document.querySelector(`.email-item[data-uid="${CSS.escape(String(em.uid))}"]`);
+  const row = folder === _currentFolder && listSeq === _emailsLoadSeq
+    ? document.querySelector(`.email-item[data-uid="${CSS.escape(String(em.uid))}"]`)
+    : null;
   const busy = _showEmailDeleteOverlay(row);
   await busy?.ready;
   try {
-    await fetch(`${API_BASE}/api/email/delete/${em.uid}?folder=${encodeURIComponent(_currentFolder)}${_acct()}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/api/email/delete/${em.uid}?folder=${encodeURIComponent(folder)}${accountQuery}`, { method: 'DELETE' });
+    await _requireEmailMutation(res);
     busy?.remove?.();
-    _emails = _emails.filter(e => e.uid !== em.uid);
-    _renderList();
+    if (folder === _currentFolder) {
+      if (listSeq === _emailsLoadSeq) {
+        _emails = _emails.filter(e => e.uid !== em.uid);
+        _renderList();
+      } else {
+        loadEmails(false);
+      }
+    }
   } catch (e) {
     busy?.remove?.();
     console.error('Failed to delete:', e);
+    import('./ui.js').then(m => m.showError && m.showError('Could not delete this email. It is still in the list; please retry.')).catch(() => {});
   }
 }
 
@@ -1303,7 +1387,22 @@ function _showEmailDeleteOverlay(target) {
   };
 }
 
+const _doneOperations = new WeakMap();
+const _doneInFlight = new WeakSet();
 async function _toggleDone(em, itemEl) {
+  if (_doneInFlight.has(em)) return;
+  _doneInFlight.add(em);
+  const operation = (_doneOperations.get(em) || 0) + 1;
+  _doneOperations.set(em, operation);
+  const folder = _currentFolder;
+  const accountQuery = _acct();
+  const previousAnswered = !!em.is_answered;
+  const previousRead = !!em.is_read;
+  const previousTags = Array.isArray(em.tags) ? [...em.tags] : null;
+  const listSeq = _emailsLoadSeq;
+  const doneButton = itemEl?.querySelector('.email-done-check');
+  const wasDisabled = doneButton?.disabled;
+  if (doneButton && 'disabled' in doneButton) doneButton.disabled = true;
   const newState = !em.is_answered;
   em.is_answered = newState;
   if (newState) em.is_read = true; // mark-done implies mark-read
@@ -1320,13 +1419,31 @@ async function _toggleDone(em, itemEl) {
   }
   try {
     if (newState) {
-      await fetch(`${API_BASE}/api/email/mark-answered/${em.uid}?folder=${encodeURIComponent(_currentFolder)}${_acct()}`, { method: 'POST' });
-      await fetch(`${API_BASE}/api/email/mark-read/${em.uid}?folder=${encodeURIComponent(_currentFolder)}${_acct()}`, { method: 'POST' });
+      const answered = await fetch(`${API_BASE}/api/email/mark-answered/${em.uid}?folder=${encodeURIComponent(folder)}${accountQuery}`, { method: 'POST' });
+      await _requireEmailMutation(answered);
+      const read = await fetch(`${API_BASE}/api/email/mark-read/${em.uid}?folder=${encodeURIComponent(folder)}${accountQuery}`, { method: 'POST' });
+      await _requireEmailMutation(read);
     } else {
-      await fetch(`${API_BASE}/api/email/clear-answered/${em.uid}?folder=${encodeURIComponent(_currentFolder)}${_acct()}`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/email/clear-answered/${em.uid}?folder=${encodeURIComponent(folder)}${accountQuery}`, { method: 'POST' });
+      await _requireEmailMutation(res);
     }
   } catch (e) {
     console.error('Failed to toggle done:', e);
+    if (_doneOperations.get(em) === operation) {
+      em.is_answered = previousAnswered;
+      em.is_read = previousRead;
+      if (previousTags) em.tags = previousTags;
+      if (itemEl?.isConnected) {
+        _renderList();
+      }
+      import('./ui.js').then(m => m.showError && m.showError('Email status update failed; checking the server state.')).catch(() => {});
+      if (folder === _currentFolder && accountQuery === _acct() && listSeq === _emailsLoadSeq) {
+        await loadEmails(false);
+      }
+    }
+  } finally {
+    _doneInFlight.delete(em);
+    if (doneButton?.isConnected && 'disabled' in doneButton) doneButton.disabled = !!wasDisabled;
   }
 }
 

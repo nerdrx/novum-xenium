@@ -102,12 +102,25 @@ class CheckpointStore:
         saved_context = {
             key: _clip(context.get(key), limit)
             for key, limit in {
-                "original_request": 8_000,
+                "original_request": 50_000,
                 "workspace": 32_768,
                 "model": 256, "endpoint_id": 256, "endpoint_url": 2_048,
                 "chat_mode": 16,
             }.items() if isinstance(context.get(key), str)
         }
+        original_request = context.get("original_request")
+        if isinstance(original_request, str):
+            completeness = context.get("original_request_complete")
+            if isinstance(completeness, bool):
+                saved_context["original_request_complete"] = (
+                    completeness and len(original_request) <= 50_000
+                )
+            elif "original_request_complete" in context:
+                # None carries the unknown state from a pre-marker legacy
+                # checkpoint; do not turn its clipped prefix into a claim.
+                saved_context["original_request_complete"] = None
+            else:
+                saved_context["original_request_complete"] = len(original_request) <= 50_000
         if isinstance(context.get("plan_mode"), bool):
             saved_context["plan_mode"] = context["plan_mode"]
         payload = {

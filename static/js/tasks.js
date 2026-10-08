@@ -17,6 +17,8 @@ let _open = false;
 let _tasksCascadeNext = false;   // play the domino-in entrance on the next render
 let _tasks = [];
 let _tasksFetched = false;   // first-fetch sentinel — `false` → show loading row instead of "No tasks yet"
+let _tasksLoadError = null;
+let _tasksLoadSeq = 0;
 let _escHandler = null;
 let _viewingRuns = null; // task id when viewing run history
 let _clockInterval = null;
@@ -41,15 +43,24 @@ function _setTaskCompletionPending(active) {
 // ---- API ----
 
 async function _fetchTasks() {
+  const requestSeq = ++_tasksLoadSeq;
   try {
     const res = await fetch(`${API_BASE}/api/tasks`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (!Array.isArray(data.tasks)) throw new Error('Invalid task list response');
+    if (requestSeq !== _tasksLoadSeq) return false;
     _tasks = data.tasks || [];
+    _tasksLoadError = null;
+    _tasksFetched = true;
+    return true;
   } catch (e) {
+    if (requestSeq !== _tasksLoadSeq) return false;
     console.error('Failed to fetch tasks:', e);
-    _tasks = [];
+    _tasksLoadError = e;
+    _tasksFetched = true;
+    return false;
   }
-  _tasksFetched = true;
 }
 
 async function _runFirstOpenOnboarding() {
@@ -808,13 +819,37 @@ function _renderList() {
   const _headCount = document.getElementById('tasks-head-count');
   if (_headCount) _headCount.textContent = _tasks.length ? `${_tasks.length} task${_tasks.length !== 1 ? 's' : ''}` : '';
 
+  if (_tasksLoadError) {
+    const error = document.createElement('div');
+    error.className = 'task-load-error';
+    error.setAttribute('role', 'status');
+    error.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;margin-bottom:8px;border:1px solid var(--border);border-radius:8px;font-size:12px;';
+    const copy = document.createElement('span');
+    copy.textContent = _tasks.length ? 'Could not refresh tasks. Showing the last loaded list.' : 'Could not load tasks.';
+    error.appendChild(copy);
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'task-load-retry memory-toolbar-btn';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', () => {
+      retry.disabled = true;
+      retry.textContent = 'Retrying…';
+      _fetchTasks().then(() => {
+        _renderList();
+        _syncPauseAllButton();
+      });
+    });
+    error.appendChild(retry);
+    list.appendChild(error);
+  }
+
   if (_tasks.length === 0) {
     // Differentiate "still loading" from "really empty" so the first paint
     // shows the app whirlpool (matching the document library) rather than a
     // misleading "No tasks yet" message before the fetch completes.
     if (!_tasksFetched) {
       list.appendChild(spinnerModule.createLoadingRow('Loading…'));
-    } else {
+    } else if (!_tasksLoadError) {
       list.innerHTML = '<div style="opacity:0.4;font-size:12px;text-align:center;padding:24px 0;">No tasks yet. Create one to get started.</div>';
     }
     return;
@@ -844,7 +879,10 @@ function _renderList() {
     return (a.name || '').localeCompare(b.name || '');
   });
   if (visible.length === 0) {
-    list.innerHTML = '<div style="opacity:0.4;font-size:12px;text-align:center;padding:24px 0;">No matching tasks.</div>';
+    const empty = document.createElement('div');
+    empty.style.cssText = 'opacity:0.4;font-size:12px;text-align:center;padding:24px 0;';
+    empty.textContent = 'No matching tasks.';
+    list.appendChild(empty);
     return;
   }
 

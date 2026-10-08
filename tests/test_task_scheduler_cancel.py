@@ -399,3 +399,215 @@ def test_force_runs_remain_parallel_and_track_latest_handle(tmp_path, monkeypatc
             pass
 
     asyncio.run(drive())
+
+
+def test_delete_task_drains_active_run_before_removing_task(tmp_path, monkeypatch):
+    session_local, ScheduledTask, TaskRun = _setup_db(tmp_path, monkeypatch)
+    db = session_local()
+    db.add(ScheduledTask(
+        id="delete-active-task", owner="alice", name="Delete active task",
+        task_type="llm", status="active",
+    ))
+    db.commit()
+    db.close()
+
+    import routes.task.task_routes as task_routes
+    from src.task_scheduler import TaskScheduler
+
+    async def drive():
+        scheduler = TaskScheduler.__new__(TaskScheduler)
+        scheduler._executing = set()
+        scheduler._executing_lock = asyncio.Lock()
+        scheduler._task_handles = {}
+        scheduler._execution_handles = {}
+        scheduler._run_semaphore = asyncio.Semaphore(1)
+        scheduler._task_defer_counts = {}
+        scheduler._task_needs_model_slot = lambda _task_id: False
+        started = asyncio.Event()
+        release = asyncio.Event()
+        side_effects = []
+        replacement_results = []
+
+        async def paused_run(_task_id, _run_id, **_kwargs):
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                replacement_results.append(
+                    await scheduler.run_task_now("delete-active-task", force=True)
+                )
+                raise
+            side_effects.append("ran after deletion")
+
+        scheduler._execute_task_locked = paused_run
+        assert await scheduler.run_task_now("delete-active-task") is True
+        handle = scheduler._task_handles["delete-active-task"]
+        await started.wait()
+
+        monkeypatch.setattr(task_routes, "SessionLocal", session_local)
+        monkeypatch.setattr(task_routes, "ScheduledTask", ScheduledTask)
+        monkeypatch.setattr(task_routes, "get_current_user", lambda _request: "alice")
+        router = task_routes.setup_task_routes(scheduler)
+        delete_endpoint = next(
+            route.endpoint for route in router.routes
+            if getattr(route, "path", None) == "/api/tasks/{task_id}"
+            and "DELETE" in getattr(route, "methods", set())
+        )
+
+        await delete_endpoint(SimpleNamespace(), "delete-active-task")
+        assert handle.done()
+        assert replacement_results == [False]
+
+        release.set()
+        await asyncio.sleep(0)
+        assert side_effects == []
+
+        db = session_local()
+        try:
+            assert db.query(ScheduledTask).filter_by(id="delete-active-task").first() is None
+            run = db.query(TaskRun).filter_by(task_id="delete-active-task").one()
+            assert run.status == "aborted"
+        finally:
+            db.close()
+
+    asyncio.run(drive())
+
+
+def test_timed_out_delete_keeps_dispatch_fence_until_cancelled_run_exits(tmp_path, monkeypatch):
+    _setup_db(tmp_path, monkeypatch)
+    from src.task_scheduler import TaskScheduler
+
+    async def drive():
+        scheduler = TaskScheduler.__new__(TaskScheduler)
+        scheduler._executing = set()
+        scheduler._executing_lock = asyncio.Lock()
+        scheduler._task_handles = {}
+        scheduler._execution_handles = {}
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def ignores_first_cancel():
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+
+        handle = scheduler._track_task("slow-delete", ignores_first_cancel(), release_executing=False)
+        await started.wait()
+        scheduler.begin_task_deletion("slow-delete")
+        try:
+            await scheduler.stop_task("slow-delete", drain_timeout=0.01)
+        except asyncio.TimeoutError:
+            pass
+        else:
+            raise AssertionError("stubborn run should exceed the bounded drain")
+        scheduler.finish_task_deletion("slow-delete")
+
+        assert "slow-delete" in scheduler._deleting_tasks
+        assert await scheduler.run_task_now("slow-delete", force=True) is False
+        release.set()
+        await handle
+        await asyncio.sleep(0)
+        assert "slow-delete" not in scheduler._deleting_tasks
+
+    asyncio.run(drive())
+
+
+def test_task_delete_owner_check_precedes_run_cancellation(tmp_path, monkeypatch):
+    session_local, ScheduledTask, _ = _setup_db(tmp_path, monkeypatch)
+    db = session_local()
+    db.add(ScheduledTask(
+        id="bob-task", owner="bob", name="Bob task", task_type="llm", status="active",
+    ))
+    db.commit()
+    db.close()
+
+    import routes.task.task_routes as task_routes
+    from fastapi import HTTPException
+    from src.task_scheduler import TaskScheduler
+
+    async def drive():
+        scheduler = TaskScheduler.__new__(TaskScheduler)
+        scheduler._executing = set()
+        scheduler._executing_lock = asyncio.Lock()
+        scheduler._task_handles = {}
+        scheduler._execution_handles = {}
+        scheduler._run_semaphore = asyncio.Semaphore(1)
+        scheduler._task_defer_counts = {}
+        scheduler._task_needs_model_slot = lambda _task_id: False
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def paused_run(_task_id, _run_id, **_kwargs):
+            started.set()
+            await release.wait()
+
+        scheduler._execute_task_locked = paused_run
+        assert await scheduler.run_task_now("bob-task") is True
+        handle = scheduler._task_handles["bob-task"]
+        await started.wait()
+
+        monkeypatch.setattr(task_routes, "SessionLocal", session_local)
+        monkeypatch.setattr(task_routes, "ScheduledTask", ScheduledTask)
+        monkeypatch.setattr(task_routes, "get_current_user", lambda _request: "alice")
+        router = task_routes.setup_task_routes(scheduler)
+        delete_endpoint = next(
+            route.endpoint for route in router.routes
+            if getattr(route, "path", None) == "/api/tasks/{task_id}"
+            and "DELETE" in getattr(route, "methods", set())
+        )
+        try:
+            await delete_endpoint(SimpleNamespace(), "bob-task")
+        except HTTPException as exc:
+            assert exc.status_code == 403
+        else:
+            raise AssertionError("another owner's task must not be deleted")
+        assert not handle.done()
+        assert "bob-task" not in getattr(scheduler, "_deleting_tasks", set())
+
+        release.set()
+        await handle
+        db = session_local()
+        try:
+            assert db.query(ScheduledTask).filter_by(id="bob-task").first() is not None
+        finally:
+            db.close()
+
+    asyncio.run(drive())
+
+
+def test_overlapping_deletes_keep_fence_until_last_request_and_run_finish(tmp_path, monkeypatch):
+    _setup_db(tmp_path, monkeypatch)
+    from src.task_scheduler import TaskScheduler
+
+    async def drive():
+        scheduler = TaskScheduler.__new__(TaskScheduler)
+        scheduler._task_handles = {}
+        scheduler._execution_handles = {}
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def paused_run():
+            started.set()
+            await release.wait()
+
+        handle = scheduler._track_task("overlap-delete", paused_run(), release_executing=False)
+        await started.wait()
+        scheduler.begin_task_deletion("overlap-delete")  # first DELETE
+        scheduler.begin_task_deletion("overlap-delete")  # overlapping retry
+
+        scheduler.finish_task_deletion("overlap-delete")
+        handle.cancel()
+        try:
+            await handle
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0)  # run the handle's cleanup callback
+
+        assert "overlap-delete" in scheduler._deleting_tasks
+        assert scheduler._task_deletion_refs["overlap-delete"] == 1
+        scheduler.finish_task_deletion("overlap-delete")
+        assert "overlap-delete" not in scheduler._deleting_tasks
+
+    asyncio.run(drive())

@@ -1,5 +1,6 @@
 """CRUD routes for scheduled tasks."""
 
+import asyncio
 import json
 import logging
 import secrets
@@ -763,17 +764,37 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                 raise HTTPException(404, "Task not found")
             if user and task.owner != user:
                 raise HTTPException(403, "Access denied")
-            # Cascade: cookbook_serve tasks may have a linked calendar
-            # event (created via the "Create event in calendar" toggle
-            # in the schedule modal). If so, delete the calendar event
-            # too so the calendar doesn't end up holding a phantom event
-            # for a task that no longer exists.
-            _maybe_cascade_calendar_event(task)
-            db.delete(task)
-            db.commit()
-            return {"ok": True}
         finally:
             db.close()
+
+        # Fence dispatches while active runs are cancelled and drained. The
+        # task row is reloaded below so deletion only proceeds after every
+        # matching run has finished its cancellation persistence.
+        task_scheduler.begin_task_deletion(task_id)
+        try:
+            try:
+                await task_scheduler.stop_task(task_id, drain_timeout=5)
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(409, "Task is still stopping; retry deletion") from exc
+
+            db = SessionLocal()
+            try:
+                task = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                if not task:
+                    raise HTTPException(404, "Task not found")
+                if user and task.owner != user:
+                    raise HTTPException(403, "Access denied")
+                # Cascade: cookbook_serve tasks may have a linked calendar
+                # event (created via the "Create event in calendar" toggle
+                # in the schedule modal). If so, delete it too.
+                _maybe_cascade_calendar_event(task)
+                db.delete(task)
+                db.commit()
+                return {"ok": True}
+            finally:
+                db.close()
+        finally:
+            task_scheduler.finish_task_deletion(task_id)
 
     @router.post("/{task_id}/pause")
     async def pause_task(request: Request, task_id: str):

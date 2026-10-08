@@ -31,7 +31,12 @@ def _load_module(name, path):
     if spec is None or spec.loader is None:
         raise ValueError("zVram installation is incomplete")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(name, None)
+        raise
     return module
 
 
@@ -43,8 +48,11 @@ def _load_runtime(root):
     manager_file = root / "zvram_manager.py"
     if not model_file.is_file() or not manager_file.is_file():
         raise ValueError("zVram installation is incomplete")
-    model = _load_module("_novum_zvram_model", model_file)
-    manager = _load_module("_novum_zvram_manager", manager_file)
+    # The native picker/discovery validates this trusted local installation.
+    # -I excludes the working directory; zVram's own sibling modules still need it.
+    sys.path.insert(0, str(root))
+    model = _load_module("zvram_model", model_file)
+    manager = _load_module("zvram_manager", manager_file)
     if Path(model.ROOT).resolve() != root or Path(manager.ROOT).resolve() != root:
         raise ValueError("zVram installation root does not match its helpers")
     return model, manager
@@ -480,7 +488,7 @@ def main(argv=None):
         result = dispatch(root, backend_checkout, cookie_path, backend_port, request)
         print(json.dumps(result, separators=(",", ":")))
         return 0
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, ImportError, AttributeError, RuntimeError) as exc:
         message = _clean_text(exc, 400) or "zVram request failed"
         print(json.dumps({"error": message}, separators=(",", ":")))
         return 1

@@ -1,10 +1,13 @@
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout
 from unittest import mock
 
 
@@ -120,6 +123,35 @@ class BridgeTests(unittest.TestCase):
                    "alias": "tiny"}
         request.update(extra)
         return request
+
+    def test_missing_dependency_returns_a_structured_error(self):
+        output = io.StringIO()
+        with mock.patch.object(bridge, "dispatch", side_effect=ModuleNotFoundError("No module named 'zvram_control'")):
+            with redirect_stdout(output):
+                result = bridge.main(["/install", "/backend", "/cookie", "7000", '{"action":"status"}'])
+        self.assertEqual(result, 1)
+        self.assertIn("zvram_control", json.loads(output.getvalue())["error"])
+
+    def test_isolated_runtime_can_import_its_sibling_modules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "zvram_model.py").write_text("from pathlib import Path\nROOT=Path(__file__).parent\n")
+            (root / "zvram_manager.py").write_text(
+                "from pathlib import Path\nfrom dataclasses import dataclass\nROOT=Path(__file__).parent\n"
+                "@dataclass\nclass Manager:\n value: int = 0\n"
+                " def __post_init__(self):\n  import zvram_control\n  self.value=zvram_control.value()\n")
+            (root / "zvram_control.py").write_text(
+                "def value():\n from zvram_manager import Manager\n return 42\n")
+            code = (
+                "import importlib.util,sys; "
+                "s=importlib.util.spec_from_file_location('bridge',sys.argv[1]); "
+                "b=importlib.util.module_from_spec(s);s.loader.exec_module(b); "
+                "model,manager=b._load_runtime(sys.argv[2]); "
+                "assert manager.Manager().value==42"
+            )
+            result = subprocess.run([sys.executable, "-I", "-c", code, str(BRIDGE_PATH), directory],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_request_rejects_unknown_fields(self):
         with self.assertRaisesRegex(ValueError, "unsupported fields"):

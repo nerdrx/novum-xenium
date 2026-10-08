@@ -14,6 +14,44 @@ html.nx-workspace .sidebar {
   border-color: var(--nx-soft-border);
   box-shadow: none;
 }
+/* Keep the sidebar toggle beside Home instead of reserving a logo row. */
+html.nx-workspace .sidebar .sidebar-header {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+}
+html.nx-workspace .sidebar .sidebar-hamburger {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--nx-control-radius);
+  background: transparent;
+  color: var(--hamburger-color, var(--fg));
+  cursor: pointer;
+}
+html.nx-workspace .sidebar .sidebar-hamburger:hover {
+  background: var(--nx-hover);
+}
+html.nx-workspace .sidebar .sidebar-hamburger:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: -2px;
+}
+html.nx-workspace #sidebar-brand-btn {
+  padding-right: 40px;
+}
+html.nx-workspace body:has(#sidebar:not(.hidden)) #hamburger-btn {
+  display: none;
+}
+html.nx-workspace[data-nx-window-frame="custom"] #hamburger-btn {
+  top: 44px;
+}
 html.nx-workspace .sidebar-inner {
   padding: 8px 9px 10px;
   gap: 2px;

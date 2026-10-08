@@ -1924,6 +1924,81 @@ async def test_probe_local_skips_tailscale_proxy_endpoint(monkeypatch):
     assert pinged == ["http://127.0.0.1:8000/v1"]
 
 
+@pytest.mark.asyncio
+async def test_probe_local_shared_task_survives_waiter_cancellation(monkeypatch):
+    local = _route_ep("local", "http://127.0.0.1:8000/v1", endpoint_kind="local")
+    db = _RouteDb([local])
+    router = model_routes.setup_model_routes(model_discovery=None)
+
+    monkeypatch.setattr(model_routes, "ModelEndpoint", _RouteModelEndpoint)
+    monkeypatch.setattr(model_routes, "SessionLocal", lambda: db)
+    monkeypatch.setattr(model_routes, "require_admin", lambda _request: None)
+    monkeypatch.setattr(model_routes, "_disable_stale_cookbook_local_endpoints", lambda _db: False)
+
+    started = threading.Event()
+    release = threading.Event()
+    pinged = []
+
+    def blocked_ping(base_url, api_key=None, timeout=1.5):
+        pinged.append(base_url)
+        started.set()
+        assert release.wait(3)
+        return {"reachable": True, "status_code": 200}
+
+    monkeypatch.setattr(model_routes, "_ping_endpoint", blocked_ping)
+    endpoint = _route_endpoint(router, "/api/model-endpoints/probe-local")
+    request = _route_request()
+
+    first = asyncio.create_task(endpoint(request))
+    assert await asyncio.to_thread(started.wait, 2)
+    second = asyncio.create_task(endpoint(request))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    third = asyncio.create_task(endpoint(request))
+    await asyncio.sleep(0.02)
+    assert pinged == ["http://127.0.0.1:8000/v1"]
+
+    release.set()
+    second_result, third_result = await asyncio.gather(second, third)
+    assert second_result == third_result
+    assert second_result["local"]["alive"] is True
+    assert pinged == ["http://127.0.0.1:8000/v1"]
+
+
+@pytest.mark.asyncio
+async def test_probe_local_failed_task_clears_inflight_for_retry(monkeypatch):
+    local = _route_ep("local", "http://127.0.0.1:8000/v1", endpoint_kind="local")
+    db = _RouteDb([local])
+    router = model_routes.setup_model_routes(model_discovery=None)
+
+    monkeypatch.setattr(model_routes, "ModelEndpoint", _RouteModelEndpoint)
+    calls = 0
+
+    def session_local():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary database failure")
+        return db
+
+    monkeypatch.setattr(model_routes, "SessionLocal", session_local)
+    monkeypatch.setattr(model_routes, "require_admin", lambda _request: None)
+    monkeypatch.setattr(model_routes, "_disable_stale_cookbook_local_endpoints", lambda _db: False)
+    monkeypatch.setattr(model_routes, "_ping_endpoint", lambda *_args, **_kwargs: {"reachable": True})
+    endpoint = _route_endpoint(router, "/api/model-endpoints/probe-local")
+
+    with pytest.raises(RuntimeError, match="temporary database failure"):
+        await endpoint(_route_request())
+    await asyncio.sleep(0)
+
+    result = await endpoint(_route_request())
+    assert calls == 2
+    assert result["local"]["alive"] is True
+
+
 def test_background_refresh_deduplicates_same_base_url(monkeypatch):
     ep1 = _route_ep("a", "http://127.0.0.1:8000/v1", endpoint_kind="local")
     ep2 = _route_ep("b", "http://127.0.0.1:8000/v1", endpoint_kind="local")

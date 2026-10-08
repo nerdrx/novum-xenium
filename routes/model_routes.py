@@ -1698,7 +1698,9 @@ def setup_model_routes(model_discovery):
         import asyncio as _asyncio
         task = _local_probe_inflight.get("task")
         if task is not None and not task.done():
-            return await task
+            # This task is shared across requests. A caller disconnecting must
+            # not cancel the probe for every other waiter.
+            return await _asyncio.shield(task)
 
         async def _compute_local_probe() -> Dict[str, Any]:
             db = SessionLocal()
@@ -1756,11 +1758,17 @@ def setup_model_routes(model_discovery):
 
         task = _asyncio.create_task(_compute_local_probe())
         _local_probe_inflight["task"] = task
-        try:
-            return await task
-        finally:
+
+        def _clear_completed_probe(completed):
             if _local_probe_inflight.get("task") is task:
                 _local_probe_inflight["task"] = None
+            # If every HTTP waiter disconnected before a failed task completed,
+            # consume its exception so asyncio does not report it as unhandled.
+            if not completed.cancelled():
+                completed.exception()
+
+        task.add_done_callback(_clear_completed_probe)
+        return await _asyncio.shield(task)
 
     @router.get("/ping")
     def ping_endpoints(request: Request):

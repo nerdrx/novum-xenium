@@ -2,36 +2,38 @@
 layout: default
 ---
 
-# Odysseus Setup Guide
+# NX Odysseus Setup Guide
 
 This page keeps the detailed install, deployment, troubleshooting, and configuration notes out of the front README.
 
 ## Quick Start
 
-> **Branch note:** `dev` is the default branch and contains the latest development changes, but it may be unstable. For the more stable curated branch, use [`main`](https://github.com/odysseus-dev/odysseus/tree/main).
+> This guide installs NX Odysseus from the `main` branch of [nerdrx/nx-odysseus](https://github.com/nerdrx/nx-odysseus).
 
 Defaults work out of the box: clone, run, then configure models/search/email
 inside **Settings**. Only edit `.env` for deployment-level overrides like
 `APP_BIND`, `APP_PORT`, `AUTH_ENABLED`, `DATABASE_URL`, or a pre-seeded admin password.
 
 On first setup, Odysseus creates an admin account (`admin` unless
-`ODYSSEUS_ADMIN_USER` is set) and prints a temporary password in the terminal.
-For Docker installs, the same line is in `docker compose logs odysseus`.
-Use that for the first login, then change it in **Settings**.
+`ODYSSEUS_ADMIN_USER` is set). If you did not set `ODYSSEUS_ADMIN_PASSWORD`,
+it prints a temporary password in the terminal. For Docker installs, find it
+with `docker compose logs odysseus`. If you pre-seeded a password, use that
+value; it is not printed. Change the password after first login if needed.
 
-Contributing? See [CONTRIBUTING.md](https://github.com/odysseus-dev/odysseus/blob/dev/CONTRIBUTING.md) for setup, testing, and pull request guidelines.
+Contributing? See [CONTRIBUTING.md](https://github.com/nerdrx/nx-odysseus/blob/main/CONTRIBUTING.md) for setup, testing, and pull request guidelines.
 
 ### Docker (recommended)
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/nerdrx/nx-odysseus.git
+cd nx-odysseus
 cp .env.example .env       # optional, but recommended for explicit defaults
 docker compose up -d --build
 ```
 To include optional extras in the image (PDF viewer, Office extraction; includes AGPL PyMuPDF), build with `docker compose build --build-arg INSTALL_OPTIONAL=true` before `up`.
 
-Open `http://localhost:7000` when the containers are healthy. Docker Compose
-binds the web UI to `127.0.0.1` by default. If the port is taken, set
+Open `http://localhost:7000` once the app has started. Compose waits for SearXNG
+to become healthy; ChromaDB is started before the app but has no Compose healthcheck.
+Docker Compose binds the web UI to `127.0.0.1` by default. If the port is taken, set
 `APP_PORT=7001` in `.env` and recreate the container. Set `APP_BIND=0.0.0.0`
 only when you intentionally want LAN/reverse-proxy access.
 
@@ -41,8 +43,8 @@ only when you intentionally want LAN/reverse-proxy access.
 
 ### Native Linux / macOS
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/nerdrx/nx-odysseus.git
+cd nx-odysseus
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -59,8 +61,8 @@ Docker on macOS cannot use the Metal GPU. For GPU-accelerated Cookbook on an
 M-series Mac, run Odysseus natively:
 
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/nerdrx/nx-odysseus.git
+cd nx-odysseus
 ./start-macos.sh
 ```
 
@@ -88,6 +90,14 @@ expose this port directly to the public internet. To build a clickable app wrapp
 ntfy. Odysseus and the bundled service ports bind to `127.0.0.1` by default, so
 they are reachable from the host but not exposed to your LAN/public internet
 unless you opt in.
+
+ChromaDB's HTTP service can be healthy while vector memory and RAG remain
+unavailable: those features also need an embedding model. Set `EMBEDDING_URL`
+and `EMBEDDING_MODEL` for an embeddings endpoint. If no endpoint is available,
+Odysseus can fall back to FastEmbed, which downloads a roughly 50 MB model on
+first use. An offline install without a cached embedding model keeps vector
+features unavailable; this does not prevent provider-backed chat or SearXNG
+search from working.
 
 **Cookbook storage in Docker.** Downloads live in `./data/huggingface`
 (`~/.cache/huggingface` in the container). Cookbook-installed Python CLIs and
@@ -361,16 +371,16 @@ do not run on macOS. MLX-only models are not served by Odysseus.
 server; safe to re-run):
 
 ```powershell
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/nerdrx/nx-odysseus.git
+cd nx-odysseus
 powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1
 ```
 
 Or do it by hand:
 
 ```powershell
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/nerdrx/nx-odysseus.git
+cd nx-odysseus
 py -3.11 -m venv venv
 venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -706,7 +716,11 @@ Key settings:
 | `DATABASE_URL` | `sqlite:///./data/app.db` | Database connection string |
 | `CHROMADB_HOST` | `localhost` | ChromaDB host for vector memory. Docker overrides this to `chromadb`. |
 | `CHROMADB_PORT` | `8100` | ChromaDB port for manual host runs. Docker overrides this to `8000`. |
-| `EMBEDDING_URL` | -- | OpenAI-compatible embeddings endpoint |
+| `EMBEDDING_URL` | `http://{LLM_HOST}:11434/v1/embeddings` | OpenAI-compatible embeddings endpoint. In Docker, set `http://host.docker.internal:11434/v1/embeddings` to use Ollama running on the host. |
+| `EMBEDDING_MODEL` | `all-minilm:l6-v2` | Model name expected by the embeddings endpoint. |
+| `EMBEDDING_API_KEY` | -- | Optional key for the embeddings endpoint. |
+| `FASTEMBED_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Local fallback model; downloads about 50 MB on first use. |
+| `FASTEMBED_CACHE_PATH` | `<app data dir>/fastembed_cache` | Persistent cache for the local fallback model. |
 | `ODYSSEUS_CHAT_UPLOAD_MAX_BYTES` | `10485760` | Chat/agent attachment cap in bytes. Raise for larger local PDFs or text documents. |
 | `ODYSSEUS_GALLERY_UPLOAD_MAX_BYTES` | `104857600` | Gallery image upload cap in bytes (100 MB). |
 | `ODYSSEUS_GALLERY_TRANSFORM_UPLOAD_MAX_BYTES` | `26214400` | Gallery transform input cap in bytes (25 MB). |

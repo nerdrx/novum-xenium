@@ -60,7 +60,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open **[localhost:7000](http://localhost:7000)** once the containers are healthy. The first admin password is in:
+Open **[localhost:7000](http://localhost:7000)** once the app has started. Use your `ODYSSEUS_ADMIN_PASSWORD` value if you pre-seeded one; otherwise find the temporary password with:
 
 ```bash
 docker compose logs odysseus

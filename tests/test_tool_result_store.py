@@ -18,6 +18,28 @@ def test_results_are_isolated_by_owner_and_session_and_persist(tmp_path, monkeyp
     assert stat.S_IMODE(db_file.stat().st_mode) == 0o600
 
 
+def test_auth_disabled_ownerless_archive_and_search_share_local_scope(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    result_id = store.archive_result(None, "local-run", "interrupted_request", "private local request")
+
+    assert str(result_id) in store.search_results(None, "local-run", "", result_id)
+    assert "No matching" in store.search_results("alice", "local-run", "private")
+    assert store.get_result_stats(None, "local-run") == {
+        "count": 1, "bytes": len("private local request"),
+    }
+    assert store.delete_results(None, "local-run")
+    assert "No matching" in store.search_results(None, "local-run", "private")
+
+
+def test_missing_owner_still_fails_closed_when_auth_is_enabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+
+    with pytest.raises(ValueError, match="owner is required"):
+        store.archive_result(None, "session", "tool", "must not become local")
+
+
 def test_chunk_search_finds_tail_and_empty_query_paginates(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
     result_id = store.archive_result("alice", "run", "terminal", "head " + "x " * 6000 + "tailneedle")

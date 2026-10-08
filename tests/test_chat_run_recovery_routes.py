@@ -437,6 +437,50 @@ def test_large_recovery_archives_and_context_search_reads_full_request(tmp_path,
     assert tail in archived
 
 
+def test_auth_disabled_long_recovery_archives_and_retrieves_ownerless_session(tmp_path, monkeypatch):
+    from src import tool_result_store
+    from src.agent_tools.context_tools import ContextSearchTool
+
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setattr(tool_result_store, "DATA_DIR", str(tmp_path / "archive"))
+    original = "local-only recovery goal " * 160 + "LOCAL_OWNER_TAIL_19"
+    store_path = tmp_path / "ownerless-recovery.sqlite"
+    store = run_checkpoints.CheckpointStore(str(store_path), recover_on_open=False)
+    store.begin("run-a", "session-a", None, {
+        "original_request": original, "workspace": "", "model": "model-a",
+        "endpoint_id": "endpoint-a", "endpoint_url": "https://model.example/v1",
+        "chat_mode": "agent",
+    })
+    store.record("run-a", 'data: {"delta":"partial response"}\n\n')
+    store = run_checkpoints.CheckpointStore(str(store_path))
+    client, captured = _recovery_post_client(monkeypatch, checkpoint_store=store, workspace="")
+    monkeypatch.setattr(chat_routes, "effective_user", lambda _request: None)
+
+    response = _continue(client, workspace="", extra={"message": "Continue"})
+
+    assert response.status_code == 200, response.text[:500]
+    assert captured["start"]["owner"] is None
+    recovery_prompt = "\n".join(str(message.get("content", "")) for message in captured["messages"])
+    result_id = re.search(r'result_id":"([a-f0-9]{32})"', recovery_prompt).group(1)
+    from src import tool_result_store as result_store
+    assert "No matching" in result_store.search_results("alice", "session-a", "", result_id)
+
+    async def read_local_archive():
+        pages = []
+        offset = 0
+        while True:
+            result = await ContextSearchTool().execute(json.dumps({
+                "query": "", "result_id": result_id, "offset": offset,
+            }), {"owner": None, "session_id": "session-a"})
+            pages.append(result["output"])
+            header = result["output"].splitlines()[0]
+            if "end." in header:
+                return "\n".join(pages)
+            offset = int(re.search(r"next_offset=(\d+)", header).group(1))
+
+    assert "LOCAL_OWNER_TAIL_19" in asyncio.run(read_local_archive())
+
+
 def test_recovery_search_tool_and_archive_pointer_survive_real_route_budget(monkeypatch):
     import src.agent_loop as agent_loop
     import src.tool_index as tool_index

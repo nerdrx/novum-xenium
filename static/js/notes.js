@@ -2694,8 +2694,7 @@ function _bindCardEvents(body) {
         body.classList.remove('drag-active');
         body.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
         const ids = [...body.querySelectorAll('.note-card')].map(c => c.dataset.noteId);
-        try { await fetch(`${API_BASE}/api/notes/reorder`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) }); }
-        catch {}
+        _persistNoteOrder(ids).catch(error => _showNoteReorderFailure(ids, error.sequence));
       });
     });
   }
@@ -2788,7 +2787,7 @@ function _bindCardEvents(body) {
         document.documentElement.style.touchAction = '';
         if (committed) {
           const ids = [...body.querySelectorAll('.note-card')].map(c => c.dataset.noteId);
-          fetch(`${API_BASE}/api/notes/reorder`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) }).catch(() => {});
+          _persistNoteOrder(ids).catch(error => _showNoteReorderFailure(ids, error.sequence));
         }
       }
       dragCard = null;
@@ -5288,20 +5287,69 @@ async function _commitNoteReorder() {
   const ids = Array.from(grid.querySelectorAll('.note-card')).map(c => c.dataset.noteId).filter(Boolean);
   if (!ids.length) return;
   try {
-    await fetch(`${API_BASE}/api/notes/reorder`, {
+    await _persistNoteOrder(ids);
+  } catch (error) {
+    _showNoteReorderFailure(ids, error.sequence);
+  }
+}
+
+function _setLocalNoteOrder(ids) {
+  ids.forEach((nid, i) => {
+    const note = _notes.find(n => n.id === nid);
+    if (note) note.sort_order = i;
+  });
+}
+
+let _noteOrderSeq = 0;
+let _noteOrderQueue = Promise.resolve();
+let _noteOrderFailureSeq = null;
+function _persistNoteOrder(ids) {
+  const snapshot = [...ids];
+  const sequence = ++_noteOrderSeq;
+  // Keep the user's dropped order during this session even if persistence is
+  // temporarily unavailable; the failure toast offers retry with this exact order.
+  _setLocalNoteOrder(snapshot);
+  if (_noteOrderFailureSeq !== null) {
+    _noteOrderFailureSeq = null;
+    uiModule.showToast('Saving the latest note order…', { duration: 1800, leadingIcon: 'spinner' });
+  }
+  const request = _noteOrderQueue.catch(() => {}).then(async () => {
+    const res = await fetch(`${API_BASE}/api/notes/reorder`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
+      body: JSON.stringify({ ids: snapshot }),
     });
-    // Update local sort_order so subsequent renders agree with the server.
-    ids.forEach((nid, i) => {
-      const n = _notes.find(nn => nn.id === nid);
-      if (n) n.sort_order = i;
-    });
-  } catch (e) {
-    console.warn('reorder failed', e);
-  }
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok || data.ok === false || data.success === false) {
+      throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+    }
+    return { sequence };
+  });
+  _noteOrderQueue = request.catch(() => {});
+  return request.catch(error => {
+    if (sequence !== _noteOrderSeq) return { sequence, stale: true };
+    error.sequence = sequence;
+    throw error;
+  });
+}
+
+function _showNoteReorderFailure(ids, sequence) {
+  if (sequence !== _noteOrderSeq) return;
+  _noteOrderFailureSeq = sequence;
+  uiModule.showToast('Could not save note order. Your order is still shown.', {
+    duration: 8000,
+    action: 'Retry',
+    onAction: () => {
+      if (sequence !== _noteOrderSeq) return;
+      _persistNoteOrder(ids).then(result => {
+        if (!result.stale && result.sequence === _noteOrderSeq) {
+          uiModule.showToast('Note order saved', { leadingIcon: 'check' });
+        }
+      }).catch(error => _showNoteReorderFailure(ids, error.sequence));
+    },
+  });
 }
 
 

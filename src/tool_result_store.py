@@ -25,7 +25,7 @@ _SCOPE_LOCKS = tuple(threading.RLock() for _ in range(64))
 _FENCED_SCOPES: set[str] = set()
 
 
-def _scope_key(owner: str, session_id: str) -> str:
+def _scope_key(owner: str | None, session_id: str) -> str:
     return str(_scope_file(owner, session_id).absolute())
 
 
@@ -33,38 +33,48 @@ def _scope_lock(key: str):
     return _SCOPE_LOCKS[int(hashlib.sha256(key.encode()).hexdigest()[:8], 16) % len(_SCOPE_LOCKS)]
 
 
-def fence_results(owner: str, session_id: str) -> None:
+def fence_results(owner: str | None, session_id: str) -> None:
     """Reject new archive writes for a deleted scope while its run drains."""
     key = _scope_key(owner, session_id)
     with _scope_lock(key):
         _FENCED_SCOPES.add(key)
 
 
-def release_results_fence(owner: str, session_id: str) -> None:
+def release_results_fence(owner: str | None, session_id: str) -> None:
     key = _scope_key(owner, session_id)
     with _scope_lock(key):
         _FENCED_SCOPES.discard(key)
 
 
-def results_fenced(owner: str, session_id: str) -> bool:
+def results_fenced(owner: str | None, session_id: str) -> bool:
     key = _scope_key(owner, session_id)
     with _scope_lock(key):
         return key in _FENCED_SCOPES
 
 
-def _scope_digest(owner: str, session_id: str) -> str:
-    if not isinstance(owner, str) or not owner.strip():
+def _storage_owner(owner: str | None) -> str:
+    if owner is not None and not isinstance(owner, str):
         raise ValueError("owner is required")
+    from src.owner_identity import effective_storage_owner
+
+    resolved = effective_storage_owner(owner)
+    if not isinstance(resolved, str) or not resolved.strip():
+        raise ValueError("owner is required")
+    return resolved
+
+
+def _scope_digest(owner: str | None, session_id: str) -> str:
+    owner = _storage_owner(owner)
     if not isinstance(session_id, str) or not session_id.strip():
         raise ValueError("session_id is required")
     return hashlib.sha256((owner + "\0" + session_id).encode("utf-8")).hexdigest()
 
 
-def _scope_file(owner: str, session_id: str) -> Path:
+def _scope_file(owner: str | None, session_id: str) -> Path:
     return Path(DATA_DIR) / "tool_context" / f"{_scope_digest(owner, session_id)}.sqlite3"
 
 
-def _scope_path(owner: str, session_id: str) -> Path:
+def _scope_path(owner: str | None, session_id: str) -> Path:
     path = _scope_file(owner, session_id)
     directory = path.parent
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -75,7 +85,7 @@ def _scope_path(owner: str, session_id: str) -> Path:
     return path
 
 
-def _connect(owner: str, session_id: str) -> sqlite3.Connection:
+def _connect(owner: str | None, session_id: str) -> sqlite3.Connection:
     conn = sqlite3.connect(_scope_path(owner, session_id), timeout=5)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -146,8 +156,9 @@ def _purge_expired(conn: sqlite3.Connection, owner: str, session_id: str, cutoff
     return bool(expired_ids)
 
 
-def archive_result(owner: str, session_id: str, tool_name: str, text: str) -> str:
-    """Persist an archived tool result and return its opaque ID."""
+def archive_result(owner: str | None, session_id: str, tool_name: str, text: str) -> str:
+    """Persist a result in the caller's owner/session scope."""
+    owner = _storage_owner(owner)
     if not isinstance(text, str):
         raise ValueError("text must be a string")
     if not isinstance(tool_name, str) or not tool_name:
@@ -200,8 +211,9 @@ def archive_result(owner: str, session_id: str, tool_name: str, text: str) -> st
     return result_id
 
 
-def delete_results(owner: str, session_id: str) -> bool:
+def delete_results(owner: str | None, session_id: str) -> bool:
     """Delete this exact owner's session archive without creating a store."""
+    owner = _storage_owner(owner)
     key = _scope_key(owner, session_id)
     with _scope_lock(key):
         path = _scope_file(owner, session_id)
@@ -212,9 +224,13 @@ def delete_results(owner: str, session_id: str) -> bool:
         return existed
 
 
-def get_result_stats(owner: str, session_id: str) -> dict[str, int]:
+def get_result_stats(owner: str | None, session_id: str) -> dict[str, int]:
     """Read active archive counts for this exact owner and session only."""
-    if not isinstance(owner, str) or not owner.strip() or not isinstance(session_id, str) or not session_id.strip():
+    try:
+        owner = _storage_owner(owner)
+    except ValueError:
+        return {"count": 0, "bytes": 0}
+    if not isinstance(session_id, str) or not session_id.strip():
         return {"count": 0, "bytes": 0}
     path = _scope_file(owner, session_id)
     if not path.is_file() or path.is_symlink():
@@ -254,11 +270,10 @@ def _trim_snippet(snippet: str, limit: int, focus_terms: list[str] | None = None
 
 
 def search_results(
-    owner: str, session_id: str, query: str, result_id: str | None = None, offset: int = 0
+    owner: str | None, session_id: str, query: str, result_id: str | None = None, offset: int = 0
 ) -> str:
     """Return bounded, highlighted matches within this owner's session only."""
-    if not isinstance(owner, str) or not owner.strip():
-        raise ValueError("owner is required")
+    owner = _storage_owner(owner)
     if not isinstance(session_id, str) or not session_id.strip():
         raise ValueError("session_id is required")
     if not isinstance(offset, int) or offset < 0:

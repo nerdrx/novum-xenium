@@ -4,6 +4,21 @@ from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import pytest
+
+from tests.helpers.import_state import clear_module, preserve_import_state
+
+
+@pytest.fixture
+def real_database_imports():
+    # Other legacy tests replace attributes on the cached core.database module.
+    # Re-import the real module for this test and restore the prior import graph
+    # afterward so order cannot leak a lightweight ScheduledTask stub here.
+    names = ("core.database", "src.database", "routes.task.task_routes")
+    with preserve_import_state(*names):
+        for name in names:
+            clear_module(name)
+        yield
 
 
 def _isolated_task_db(tmp_path, monkeypatch):
@@ -19,7 +34,7 @@ def _isolated_task_db(tmp_path, monkeypatch):
     return sessions
 
 
-def test_schedule_edit_during_run_survives_run_completion(tmp_path, monkeypatch):
+def test_schedule_edit_during_run_survives_run_completion(tmp_path, monkeypatch, real_database_imports):
     sessions = _isolated_task_db(tmp_path, monkeypatch)
     import core.database as database
     import routes.task.task_routes as task_routes

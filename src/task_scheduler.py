@@ -28,7 +28,7 @@ def _refresh_task_schedule(db, task) -> None:
     """Use current scheduling fields after awaited execution, not a stale snapshot."""
     db.refresh(task, attribute_names=[
         "schedule", "scheduled_time", "scheduled_day", "scheduled_date",
-        "cron_expression", "trigger_type", "then_task_id",
+        "cron_expression", "trigger_type", "then_task_id", "status",
     ])
 
 
@@ -792,7 +792,8 @@ class TaskScheduler:
         finally:
             db.close()
 
-    async def _execute_task(self, task_id: str, *, bypass_model_slot: bool = False, release_executing: bool = True):
+    async def _execute_task(self, task_id: str, *, bypass_model_slot: bool = False,
+                            release_executing: bool = True, allow_paused: bool = False):
         # Create the run record with status="queued" BEFORE waiting on the
         # semaphore so the UI can show that a manually-triggered task is in
         # line behind another. Once we acquire the slot, flip to "running"
@@ -827,6 +828,7 @@ class TaskScheduler:
                     run_id,
                     release_executing=release_executing,
                     gate_foreground=not bypass_model_slot,
+                    allow_paused=allow_paused,
                 )
                 return
 
@@ -836,6 +838,7 @@ class TaskScheduler:
                     run_id,
                     release_executing=release_executing,
                     gate_foreground=True,
+                    allow_paused=allow_paused,
                 )
         except asyncio.CancelledError:
             # If cancellation happens while queued behind the semaphore,
@@ -879,6 +882,7 @@ class TaskScheduler:
         *,
         release_executing: bool = True,
         gate_foreground: bool = True,
+        allow_paused: bool = False,
     ):
         from core.database import SessionLocal, ScheduledTask, TaskRun
 
@@ -892,7 +896,7 @@ class TaskScheduler:
         db = SessionLocal()
         try:
             task = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
-            if not task or task.status != "active":
+            if not task or (task.status != "active" and not (allow_paused and task.status == "paused")):
                 # Task was paused/deleted while queued — record that outcome
                 # so the run row doesn't sit as "queued" forever.
                 stale = db.query(TaskRun).filter(TaskRun.id == run_id).first()
@@ -1016,10 +1020,12 @@ class TaskScheduler:
                     "Task '%s' deferred for %ss after %s quiet-window hit(s): %s",
                     task.name, delay_seconds, count, defer,
                 )
+                _refresh_task_schedule(db, task)
                 run_obj = db.query(TaskRun).filter(TaskRun.id == run_id).first()
                 if run_obj:
                     db.delete(run_obj)
-                task.next_run = when
+                if task.status != "paused":
+                    task.next_run = when
                 db.commit()
                 return
             except asyncio.CancelledError:
@@ -1037,7 +1043,9 @@ class TaskScheduler:
                     run_obj.finished_at = _utcnow()
                 _refresh_task_schedule(db, task)
                 task.last_run = _utcnow()
-                if foreground_cancel.get("hit"):
+                if task.status == "paused":
+                    pass  # Keep the paused task's next_run untouched.
+                elif foreground_cancel.get("hit"):
                     task.next_run = _utcnow() + timedelta(minutes=15)
                 elif (task.trigger_type or "schedule") == "schedule":
                     task.next_run = compute_next_run(
@@ -1063,7 +1071,9 @@ class TaskScheduler:
                 run.result = str(noop)
                 run.finished_at = _utcnow()
                 task.last_run = _utcnow()
-                if (task.trigger_type or "schedule") == "schedule":
+                if task.status == "paused":
+                    pass  # Manual runs never resume or reschedule a paused task.
+                elif (task.trigger_type or "schedule") == "schedule":
                     task.next_run = compute_next_run(
                         task.schedule, task.scheduled_time,
                         task.scheduled_day, task.scheduled_date,
@@ -1092,7 +1102,9 @@ class TaskScheduler:
             self._task_defer_counts.pop(task_id, None)
 
             # Compute next run only for schedule-triggered tasks
-            if (task.trigger_type or "schedule") == "schedule":
+            if task.status == "paused":
+                pass  # Keep the paused task's schedule intact after a manual run.
+            elif (task.trigger_type or "schedule") == "schedule":
                 task.next_run = compute_next_run(
                     task.schedule, task.scheduled_time,
                     task.scheduled_day, task.scheduled_date,
@@ -1190,7 +1202,7 @@ class TaskScheduler:
                 task_obj = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
                 if task_obj:
                     _refresh_task_schedule(db, task_obj)
-                if task_obj and (task_obj.trigger_type or "schedule") == "schedule":
+                if task_obj and task_obj.status != "paused" and (task_obj.trigger_type or "schedule") == "schedule":
                     task_obj.last_run = _utcnow()
                     try:
                         task_obj.next_run = compute_next_run(
@@ -2333,14 +2345,15 @@ class TaskScheduler:
         except Exception as e:
             logger.error(f"Task {task.id} MCP delivery failed: {e}")
 
-    async def run_task_now(self, task_id: str, *, force: bool = False):
+    async def run_task_now(self, task_id: str, *, force: bool = False, allow_paused: bool = False):
         """Manually trigger a task execution."""
         if task_id in getattr(self, "_deleting_tasks", set()):
             return False
         if force:
             self._track_task(
                 task_id,
-                self._execute_task(task_id, bypass_model_slot=True, release_executing=False),
+                self._execute_task(task_id, bypass_model_slot=True, release_executing=False,
+                                   allow_paused=allow_paused),
                 release_executing=False,
             )
             return True
@@ -2349,7 +2362,7 @@ class TaskScheduler:
                     or task_id in getattr(self, "_deleting_tasks", set())):
                 return False
             self._executing.add(task_id)
-        self._track_task(task_id, self._execute_task(task_id))
+        self._track_task(task_id, self._execute_task(task_id, allow_paused=allow_paused))
         return True
 
     def begin_task_deletion(self, task_id: str) -> None:

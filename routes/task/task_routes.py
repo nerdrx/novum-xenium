@@ -886,9 +886,15 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             if user and task.owner != user:
                 raise HTTPException(403, "Access denied")
             _require_admin_for_task_action(user, task.task_type, task.action)
+            task_status = getattr(task, "status", "active")
+            if task_status not in {"active", "paused"}:
+                raise HTTPException(
+                    409,
+                    f"Task cannot be run while status is {task_status or 'unknown'}",
+                )
         finally:
             db.close()
-        started = await task_scheduler.run_task_now(task_id, force=force)
+        started = await task_scheduler.run_task_now(task_id, force=force, allow_paused=True)
         if not started:
             raise HTTPException(409, "Task is already running")
         return {"ok": True, "message": "Task triggered" + (" in parallel" if force else "")}

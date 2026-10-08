@@ -1,0 +1,372 @@
+/* Novum Xenium workspace skin. Surface colors and the selected font continue
+   to come from the active theme; these tokens only shape the interface. */
+:root.nx-workspace {
+  --nx-panel-radius: var(--panel-radius, 6px);
+  --nx-control-radius: var(--control-radius, 6px);
+  --nx-soft-border: color-mix(in srgb, var(--fg) 9%, transparent);
+  --nx-hover: color-mix(in srgb, var(--fg) 5%, transparent);
+  --nx-selected: color-mix(in srgb, var(--red) 12%, transparent);
+  --nx-muted: color-mix(in srgb, var(--fg) 62%, transparent);
+}
+
+/* Keep the sidebar calm and legible in every saved theme. */
+html.nx-workspace .sidebar {
+  border-color: var(--nx-soft-border);
+  box-shadow: none;
+}
+html.nx-workspace .sidebar-header {
+  justify-content: center;
+  padding-bottom: 6px;
+}
+html.nx-workspace #sidebar .sidebar-brand {
+  min-width: 64px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 6px 4px;
+  border: 0;
+  background: transparent;
+}
+#sidebar .sidebar-brand-logo {
+  width: 52px;
+  height: 28px;
+  object-fit: contain;
+  margin: 0;
+}
+html.nx-workspace .sidebar-inner {
+  padding: 8px 9px 10px;
+  gap: 2px;
+}
+html.nx-workspace .sidebar .list-item,
+html.nx-workspace .sidebar .models-row {
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--nx-control-radius);
+  color: var(--fg);
+  transition: background-color 120ms ease, border-color 120ms ease,
+    color 120ms ease;
+}
+html.nx-workspace .sidebar .list-item:hover,
+html.nx-workspace .sidebar .models-row:hover {
+  background: var(--nx-hover);
+  border-color: var(--nx-soft-border);
+}
+html.nx-workspace .sidebar .list-item.active,
+html.nx-workspace .sidebar .list-item.active-session {
+  background: var(--nx-selected);
+  border-color: color-mix(in srgb, var(--red) 28%, transparent);
+}
+html.nx-workspace .sidebar .section:not(:first-child) {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--nx-soft-border);
+}
+html.nx-workspace.density-compact .sidebar .list-item,
+html.nx-workspace.density-compact .sidebar .models-row {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+html.nx-workspace.density-compact .sidebar .section:not(:first-child) {
+  margin-top: 4px;
+  padding-top: 4px;
+}
+html.nx-workspace.density-spacious .sidebar .list-item,
+html.nx-workspace.density-spacious .sidebar .models-row {
+  min-height: 40px;
+  padding: 8px 12px;
+}
+html.nx-workspace.density-spacious .sidebar .section:not(:first-child) {
+  margin-top: 10px;
+  padding-top: 8px;
+}
+html.nx-workspace .section-header-flex {
+  min-height: 32px;
+  height: auto;
+  margin: 4px 0 1px;
+  padding: 6px 9px;
+  border-radius: var(--nx-control-radius);
+}
+html.nx-workspace.density-compact .section-header-flex {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+html.nx-workspace.density-spacious .section-header-flex {
+  min-height: 40px;
+  padding: 8px 12px;
+}
+html.nx-workspace .section-header-flex:hover {
+  background: var(--nx-hover);
+}
+html.nx-workspace .section-header-flex .section-title,
+html.nx-workspace .section-header-flex h4 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nx-muted);
+}
+html.nx-workspace .sidebar .section-icon,
+html.nx-workspace .sidebar .sidebar-action-icon {
+  opacity: 0.78;
+}
+html.nx-workspace .sidebar .user-bar-left,
+html.nx-workspace .icon-rail-btn {
+  border-radius: var(--nx-control-radius);
+}
+
+/* Workspace header and message rhythm. Preserve message bubble colors and
+   borders supplied by theme.js, including its advanced per-component values. */
+html.nx-workspace .chat-container {
+  padding-left: clamp(12px, 2vw, 24px);
+  padding-right: clamp(12px, 2vw, 24px);
+}
+html.nx-workspace .chat-top-bar {
+  min-height: 40px;
+  padding-top: 3px;
+}
+html.nx-workspace .chat-meta-overlay {
+  color: var(--nx-muted);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+html.nx-workspace .msg {
+  border-radius: var(--nx-panel-radius);
+  line-height: 1.55;
+}
+html.nx-workspace .msg-user {
+  border-radius: var(--nx-panel-radius) var(--nx-panel-radius) 2px var(--nx-panel-radius);
+}
+html.nx-workspace .msg-ai {
+  border-radius: var(--nx-panel-radius) var(--nx-panel-radius) var(--nx-panel-radius) 2px;
+}
+html.nx-workspace .msg-user:not(.msg-user-queued),
+html.nx-workspace .msg-ai {
+  border-color: var(--bubble-border, var(--border));
+}
+html.nx-workspace .msg .body {
+  font-size: 1em;
+  line-height: 1.65;
+}
+html.nx-workspace .msg .role {
+  font-size: 0.82em;
+  letter-spacing: 0.01em;
+}
+.msg pre,
+.msg code,
+.agent-tool-output pre,
+.agent-tool-output code {
+  font-family: 'Fira Code', 'Courier New', monospace;
+}
+
+/* Composer: a quiet, clearly bounded work surface with simple tool controls. */
+html.nx-workspace .chat-input-bar {
+  border-radius: var(--nx-panel-radius);
+  padding: 12px 14px;
+  box-shadow: 0 5px 18px color-mix(in srgb, #000 10%, transparent);
+}
+html.nx-workspace .chat-input-bar:focus-within {
+  border-color: color-mix(in srgb, var(--red) 58%, var(--input-border, var(--border)));
+}
+html.nx-workspace .chat-input-bar textarea#message {
+  font-family: var(--font-family, inherit);
+  line-height: 1.6;
+}
+html.nx-workspace .input-icon-btn {
+  border-radius: var(--nx-control-radius);
+  opacity: 0.68;
+}
+html.nx-workspace .input-icon-btn:hover,
+html.nx-workspace .input-icon-btn.active,
+html.nx-workspace .input-icon-btn.expanded {
+  opacity: 1;
+  background: var(--nx-hover);
+}
+html.nx-workspace .send-btn {
+  border-radius: var(--nx-control-radius);
+  transition: background-color 140ms ease, opacity 120ms ease,
+    transform 120ms ease;
+}
+html.nx-workspace .send-btn:hover:not(:disabled) {
+  background: var(--send-btn-hover, var(--red));
+}
+html.nx-workspace .model-picker-btn,
+html.nx-workspace .model-picker-menu,
+html.nx-workspace .model-picker-action-btn {
+  border-radius: var(--nx-control-radius);
+}
+
+/* Consistent panel and menu chrome across settings, tools, and overlays. */
+html.nx-workspace .modal-content {
+  border-radius: var(--nx-panel-radius);
+  box-shadow: 0 16px 44px color-mix(in srgb, #000 30%, transparent);
+}
+html.nx-workspace .modal-header {
+  padding: 3px 2px 8px;
+  border-bottom: 1px solid var(--nx-soft-border);
+  margin-bottom: 10px;
+}
+html.nx-workspace .modal-header h4 {
+  font-family: var(--font-family, inherit);
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--fg);
+}
+html.nx-workspace .settings-sidebar {
+  border-color: var(--nx-soft-border);
+}
+html.nx-workspace .settings-nav-item {
+  border-radius: var(--nx-control-radius);
+  min-height: 34px;
+}
+html.nx-workspace .settings-nav-item:hover {
+  background: var(--nx-hover);
+}
+html.nx-workspace .settings-nav-item.active {
+  background: var(--nx-selected);
+}
+html.nx-workspace .admin-card,
+html.nx-workspace .memory-tab-panel .admin-card,
+html.nx-workspace .theme-card {
+  border-radius: var(--nx-panel-radius);
+}
+html.nx-workspace :is(
+  .doclib-card,
+  .task-card,
+  .task-preset-card,
+  .note-card,
+  .gallery-album-card,
+  .gallery-editor-draft-card,
+  .research-job-card,
+  .ask-user-card
+) {
+  border-radius: var(--nx-panel-radius);
+}
+html.nx-workspace .dropdown,
+html.nx-workspace .export-dropdown-menu,
+html.nx-workspace .memory-sort-menu,
+html.nx-workspace .model-picker-menu {
+  border-radius: var(--nx-panel-radius);
+  border-color: var(--nx-soft-border);
+  box-shadow: 0 10px 28px color-mix(in srgb, #000 24%, transparent);
+}
+html.nx-workspace .dropdown-item,
+html.nx-workspace .export-dropdown-item {
+  border-radius: var(--nx-control-radius);
+}
+html.nx-workspace .dropdown-item:hover,
+html.nx-workspace .export-dropdown-item:hover {
+  background: var(--nx-hover);
+}
+html.nx-workspace .toast {
+  border-radius: var(--nx-panel-radius);
+}
+html.nx-workspace .agent-tool-output {
+  border-radius: var(--nx-panel-radius);
+}
+
+/* The brand asset carries its own mark and wordmark. */
+html.nx-workspace #welcome-screen .welcome-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+html.nx-workspace #welcome-screen .welcome-logo {
+  width: 140px;
+  height: 75px;
+  margin: 0;
+  object-fit: contain;
+}
+
+/* Reuse the same compact control language in memory tools and settings. */
+html.nx-workspace .memory-tab,
+html.nx-workspace .memory-toolbar-btn,
+html.nx-workspace .settings-nav-item,
+html.nx-workspace .section-header-btn,
+html.nx-workspace .admin-btn-sm,
+html.nx-workspace .close-btn {
+  border-radius: var(--nx-control-radius);
+}
+html.nx-workspace .memory-tab {
+  font-weight: 550;
+}
+html.nx-workspace .memory-tab.active {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--red) 70%, transparent);
+}
+html.nx-workspace :is(.lib-tab, .admin-tab, .gallery-tab, .preset-tab) {
+  border-radius: var(--nx-control-radius);
+}
+html.nx-workspace :is(.lib-tab, .admin-tab, .gallery-tab, .preset-tab):not(.active):hover {
+  background: var(--nx-hover);
+}
+html.nx-workspace .memory-toolbar-btn,
+html.nx-workspace .section-header-btn,
+html.nx-workspace .admin-btn-sm {
+  min-height: 28px;
+  transition: background-color 120ms ease, border-color 120ms ease,
+    color 120ms ease;
+}
+html.nx-workspace .settings-modal-content .modal-header {
+  padding: 14px 18px;
+}
+html.nx-workspace .settings-modal-content .settings-layout {
+  padding: 0 8px 8px;
+}
+html.nx-workspace .settings-modal-content .settings-sidebar {
+  margin: 0 8px 0 0;
+  border-right-color: var(--nx-soft-border);
+}
+html.nx-workspace .settings-modal-content .settings-panels {
+  padding: 10px 12px;
+}
+html.nx-workspace :is(.admin-btn-add, .admin-btn-delete) {
+  border-radius: var(--nx-control-radius);
+}
+
+/* Shared controls: avoid media, color, range, and editor widgets. */
+:is(.settings-select, .settings-input, .admin-input, .admin-select,
+    .memory-search-input, .memory-sort-btn, .memory-toolbar-btn,
+    .model-picker-action-btn, .close-btn, .admin-btn, .admin-btn-sm) {
+  border-radius: var(--nx-control-radius);
+}
+:is(input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]),
+    select, textarea):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--red) 70%, transparent);
+  outline-offset: 1px;
+}
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--red) 72%, transparent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+  html.nx-workspace #welcome-screen .welcome-logo {
+    width: 120px;
+    height: 64px;
+  }
+  html.nx-workspace .chat-container {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  html.nx-workspace .chat-input-bar {
+    padding: 10px 11px;
+  }
+  html.nx-workspace .msg {
+    max-width: 94%;
+  }
+  html.nx-workspace .msg-user,
+  html.nx-workspace .msg-ai {
+    max-width: 94%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.nx-workspace .sidebar .list-item,
+  html.nx-workspace .sidebar .models-row,
+  html.nx-workspace .input-icon-btn,
+  html.nx-workspace .send-btn {
+    transition-duration: 0.01ms;
+  }
+}

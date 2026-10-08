@@ -26,6 +26,13 @@ See [desktop setup](docs/desktop.md). Packaging results are recorded with the de
 
 Validation: all 17 native Rust tests and the desktop browser regression passed. Headless Gamescope checks covered native IPC boundaries, same-window tray restore, single-instance handoff, one-click Quit, missing tray hosts and watcher loss. Direct Chromium checks passed shared branding at desktop/mobile widths and preserved route-specific icons. Documentation and branding Python checks passed; the optional browser wrapper was skipped in the container and run directly instead. Live Windows runtime acceptance remains pending.
 
+## Workspace styling
+
+- Applies a shared NX layout across the sidebar, composer, messages, settings, menus and tool panels, including saved themes. Uses the supplied logo alone in the sidebar and new-chat screen.
+- Retains colour and background settings, fonts, density, frost effects, full-width chat and advanced component colours. The sidebar brand visibility control now hides the complete logo button.
+
+Validation: headless Chromium checks cover desktop and mobile layouts, logo-only branding, keyboard focus, settings and theme panels, and customization through the existing theme module.
+
 ## Included changes
 
 - Tab and Shift+Tab keep native composer focus navigation instead of accidentally switching Plan mode. Plan mode has a visible toggle under More tools, with its pressed state exposed to assistive technology.

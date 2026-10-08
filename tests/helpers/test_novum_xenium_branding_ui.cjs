@@ -13,7 +13,7 @@ const routeScriptStart = sourceHtml.indexOf('<!-- Per-route favicon.');
 const routeScript = sourceHtml.slice(routeScriptStart).match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/i)?.[0];
 const html = sourceHtml
   .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (script) => script === routeScript ? script : '')
-  .replace(/<html\b([^>]*)>/i, '<html$1 class="theme-novum-xenium">');
+;
 
 const server = http.createServer((req, res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://fixture').pathname);
@@ -32,6 +32,7 @@ const server = http.createServer((req, res) => {
       const page = await browser.newPage({ viewport });
       await page.goto(`http://127.0.0.1:${server.address().port}/`);
       await page.evaluate(() => {
+        document.documentElement.classList.add('theme-novum-xenium');
         document.getElementById('app-loader')?.remove();
         document.activeElement?.blur?.();
         // Match the wired idle shell: startup removes the splash, restores the
@@ -72,7 +73,7 @@ const server = http.createServer((req, res) => {
       assert.equal(new URL(metrics.rootFavicon.href).pathname, '/static/icons/icon-192.png');
       assert.equal(metrics.rootFavicon.type, 'image/png');
       assert.equal(metrics.logos.length, 2);
-      assert.ok(metrics.logos.every((logo) => logo.width > 0 && logo.height > 0 && logo.alt === '' && logo.ariaHidden === 'true'), `brand images: ${JSON.stringify(metrics.logos)}`);
+      assert.ok(metrics.logos.every((logo) => logo.width > 0 && logo.height > 0 && (logo.alt === 'Novum Xenium' || (logo.alt === '' && logo.ariaHidden === 'true'))), `brand images: ${JSON.stringify(metrics.logos)}`);
       assert.ok(metrics.documentWidth <= metrics.viewportWidth, `${viewport.name} horizontal overflow: ${JSON.stringify(metrics)}`);
       assert.ok(metrics.bodyWidth <= metrics.viewportWidth, `${viewport.name} body overflow: ${JSON.stringify(metrics)}`);
       assert.ok(metrics.composerRight <= metrics.viewportWidth + 1, `${viewport.name} composer outside viewport`);

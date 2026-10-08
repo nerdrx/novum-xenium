@@ -147,7 +147,7 @@ function noOverflow(metrics, label) {
       assert.ok(baseline.sidebarItemRadius > 0, 'skin applies a rounded control surface');
       assert.ok(baseline.messageRadius > 0, 'chat message surface receives workspace treatment');
       assert.ok(baseline.toolRadius > 0, 'tool output surface receives workspace treatment');
-      assert.equal(baseline.brandLabel, 'New chat', 'logo-only sidebar button keeps its accessible action name');
+      assert.equal(baseline.brandLabel, 'Home', 'logo-only sidebar button keeps its accessible action name');
       assert.equal(baseline.hasSidebarBrandTitle, false, 'sidebar brand displays logo without adjacent title text');
       assert.equal(baseline.brandLogoFit, 'contain', 'sidebar logo preserves its image ratio');
       assert.equal(baseline.brandLogoAlt, '', 'sidebar logo remains decorative');

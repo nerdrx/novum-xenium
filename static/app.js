@@ -3381,12 +3381,14 @@ function initializeEventListeners() {
     });
   }
 
-  // Logo click → new chat (same logic as rail new-session button)
+  // The brand opens Home; New Chat keeps the preferred-model shortcut.
   const brandBtn = el('sidebar-brand-btn');
   if (brandBtn) {
     brandBtn.addEventListener('click', async (e) => {
       if (e) { e.preventDefault(); e.stopPropagation(); }
-      await _handleNewChatAction();
+      await _handleNewChatAction({ preferModel: false, focus: false });
+      el('message')?.blur();
+      if (window.innerWidth <= 768) el('sidebar')?.classList.add('hidden');
     });
   }
 

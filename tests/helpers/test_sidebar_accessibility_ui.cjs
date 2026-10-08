@@ -19,7 +19,7 @@ assert(triggerStart >= 0 && triggerEnd > triggerStart && menuStart >= 0 && menuE
 const exportTrigger = source.slice(triggerStart, triggerEnd);
 const exportMenu = source.slice(menuStart, menuEnd);
 const controls = [
-  ['sidebar-brand-btn', 'New chat'], ['sidebar-new-chat-btn', 'New Chat'],
+  ['sidebar-brand-btn', 'Home'], ['sidebar-new-chat-btn', 'New Chat'],
   ['sidebar-search-btn', 'Search'], ['tool-memory-btn', 'Brain'],
   ['tool-calendar-btn', 'Calendar'], ['tool-compare-btn', 'Compare'],
   ['tool-cookbook-btn', 'Cookbook'], ['tool-research-btn', 'Deep Research'],

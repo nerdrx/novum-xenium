@@ -7,7 +7,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 ## Usage analytics and home dashboard
 
 - Adds Settings → Usage with 7/30-day activity charts, input/output token totals and a model breakdown for the signed-in account.
-- Replaces the empty welcome area with a weekly overview, recent chats, chat streak, most-used model, busiest day and words written.
+- Replaces the empty welcome area with a weekly overview, recent chats, chat streak, most-used model, busiest day and words written. The sidebar logo opens Home; New Chat keeps the preferred-model shortcut.
 - Uses retained chat records, including archived chats. Deleted and Nobody chats are excluded. Missing token metadata and estimates are labelled; these numbers are not provider billing or subscription limits. Dates use UTC and streaks cover the selected period.
 - Keeps theme colours, backgrounds, keyboard navigation and narrow screens supported. No analytics service or chart dependency is added.
 

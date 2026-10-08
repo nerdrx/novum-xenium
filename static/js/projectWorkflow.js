@@ -191,11 +191,12 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
           for (const path of value.workspace_map) map.append(el("li", path));
           report.append(map);
         }
+        if (value.map_truncated) report.append(el("p", "This workspace map is partial. Files omitted here are still on disk."));
         if (value.instructions?.length) {
           report.append(el("h4", "Repository guidance (review only)"));
           for (const instruction of value.instructions) {
             const section = el("section");
-            section.append(el("h4", instruction.path || "Guidance"), el("p", instruction.content || ""));
+            section.append(el("h4", instruction.path || (instruction.path_available === false ? "Guidance (filename unavailable)" : "Guidance")), el("p", instruction.content || ""));
             report.append(section);
           }
         }

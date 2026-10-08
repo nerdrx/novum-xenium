@@ -96,6 +96,16 @@ async def start_team_run(request: Request, session_id: str, body: dict):
         scope = getattr(request, "scope", {})
         safe_headers = [(key, value) for key, value in scope.get("headers", [])
                         if key.lower() in {b"accept-language", b"user-agent", b"x-timezone", b"x-user-timezone"}]
+        app_state = getattr(getattr(request, "app", None), "state", None)
+        session_manager = getattr(app_state, "session_manager", None)
+        models = {}
+        if session_manager is not None:
+            for child_session in sessions.values():
+                child = session_manager.get_session(child_session)
+                model = getattr(child, "model", None)
+                if not model:
+                    raise HTTPException(409, "Team participant session is unavailable; reopen the team chat")
+                models[child_session] = model
         context = {
             "request_scope": {
                 "app": getattr(request, "app", None),
@@ -105,7 +115,7 @@ async def start_team_run(request: Request, session_id: str, body: dict):
                 "headers": safe_headers,
             },
             "options": options,
-            "models": {sid: mid for mid, sid in sessions.items()},
+            "models": models,
             "isolate_worktrees": isolate_worktrees,
             "source_workspace": source_workspace,
         }

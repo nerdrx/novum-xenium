@@ -599,6 +599,8 @@ async function initImageSettings() {
 
   let _endpoints = [];
   let _savedModelSpec = '';
+  let _imageSaveQueue = Promise.resolve();
+  let _imageSaveSequence = 0;
   const _imagePrefixes = [
     'gpt-image', 'dall-e', 'chatgpt-image', 'hidream', 'qwen-image',
     'z-image', 'flux', 'stable-diffusion', 'sdxl', 'boogu', 'krea-2',
@@ -714,12 +716,32 @@ async function initImageSettings() {
   syncImgDisabled();
 
   async function saveSettings() {
-    try {
-      const res = await _postSettings({ image_gen_enabled: enabledToggle ? enabledToggle.checked : false, image_model: modelSel.value, image_quality: qualSel.value });
-      if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
-      _savedModelSpec = modelSel.value;
-      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)'; setTimeout(() => { msg.textContent = ''; }, 2000);
-    } catch (e) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
+    const sequence = ++_imageSaveSequence;
+    const snapshot = {
+      image_gen_enabled: enabledToggle ? enabledToggle.checked : false,
+      image_model: modelSel.value,
+      image_quality: qualSel.value,
+    };
+    msg.textContent = 'Saving…'; msg.style.color = 'var(--fg)';
+    const save = async () => {
+      try {
+        const res = await _postSettings(snapshot);
+        if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+        _savedModelSpec = snapshot.image_model;
+        if (sequence === _imageSaveSequence) {
+          msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
+          setTimeout(() => {
+            if (sequence === _imageSaveSequence && msg.textContent === 'Saved') msg.textContent = '';
+          }, 2000);
+        }
+      } catch (e) {
+        if (sequence === _imageSaveSequence) {
+          msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)';
+        }
+      }
+    };
+    _imageSaveQueue = _imageSaveQueue.then(save, save);
+    return _imageSaveQueue;
   }
   modelSel.addEventListener('change', function() { updateBackendMessage(); saveSettings(); });
   qualSel.addEventListener('change', saveSettings);

@@ -43,8 +43,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, {worktrees: worktree ? [worktree] : []});
     }
     if (url.pathname === '/api/project-workflows/inspect' && req.method === 'POST') {
-      return json(res, {repository: '/workspace', project_id: 'fixture-project', workspace_map: ['README.md'],
-        instructions: [{path: 'AGENTS.md', content: '<img id="injected"> guidance', notice: 'Review only'}]});
+      return json(res, {repository: '/workspace', project_id: 'fixture-project', workspace_map: ['README.md'], map_truncated: true,
+        instructions: [{path: 'AGENTS.md', content: '<img id="injected"> guidance', notice: 'Review only'},
+          {path: null, path_available: false, content: 'Retained guidance from an unavailable filename'}]});
     }
     if (url.pathname === '/api/project-workflows/worktrees' && req.method === 'POST') {
       worktree = {id: 'a'.repeat(32), repository: '/workspace', path: '/workspace/.nx-worktrees/feature', commit: 'b'.repeat(40)};
@@ -96,6 +97,9 @@ const server = http.createServer(async (req, res) => {
     const report = panel.getByLabel('Project workflow results');
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('AGENTS.md'));
     assert.match(await report.textContent(), /<img id=/);
+    assert.match(await report.textContent(), /workspace map is partial/);
+    assert.match(await report.textContent(), /Guidance \(filename unavailable\)/);
+    assert.match(await report.textContent(), /Retained guidance/);
     assert.equal(await report.locator('#injected').count(), 0, 'repo text must render as text, not HTML');
 
     await panel.getByRole('button', {name: 'Create worktree'}).click();

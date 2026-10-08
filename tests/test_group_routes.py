@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 
 from routes import group_routes
 from src.group_coordination import GroupCoordinationStore
@@ -77,6 +78,66 @@ def test_server_run_owner_checks_parent_and_participant_sessions(tmp_path, monke
     assert result["run"]["status"] == "running"  # status at accepted time
     assert store.get_run("parent", "alice")["status"] == "completed"
     assert verified == ["parent", "child-session"]
+
+
+@pytest.mark.parametrize("change_model_after_queue", [False, True])
+def test_server_run_binds_real_runner_to_verified_child_model(tmp_path, monkeypatch, change_model_after_queue):
+    from src import agent_runs, auth_helpers, group_chat_runner
+    from routes import session_routes
+
+    store = GroupCoordinationStore(str(tmp_path / "model-bound-route.db"))
+    monkeypatch.setattr(group_routes, "_store", store)
+    monkeypatch.setattr(group_routes, "_require_interactive", lambda _request: None)
+    monkeypatch.setattr(group_routes, "_verify_session_owner", lambda _request, _sid: None)
+    monkeypatch.setattr(group_routes, "storage_owner_for_request", lambda request: request.owner)
+    monkeypatch.setattr(session_routes, "_verify_session_owner", lambda _request, _sid: None)
+    monkeypatch.setattr(auth_helpers, "storage_owner_for_request", lambda request: request.state.current_user)
+    monkeypatch.setattr(agent_runs, "is_active", lambda _session_id: False)
+
+    class Sessions:
+        child = SimpleNamespace(model="gpt-6-luna")
+
+        def get_session(self, session_id):
+            return self.child if session_id == "child-session" else None
+
+    sessions = Sessions()
+    calls = []
+
+    async def chat_stream(request):
+        calls.append(request.state.current_user)
+
+        async def events():
+            yield 'data: {"delta":"did work"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(events(), headers={"X-Odysseus-Run-Id": "team-child-run"})
+
+    runner = group_chat_runner.create_assignment_runner(chat_stream, sessions)
+    manager = GroupRunManager(store, runner=runner)
+    monkeypatch.setattr(group_routes, "_runs", manager)
+    request = SimpleNamespace(
+        owner="alice", state=SimpleNamespace(current_user="alice"), headers={},
+        scope={"state": {"current_user": "alice"}},
+        app=SimpleNamespace(state=SimpleNamespace(session_manager=sessions)),
+    )
+
+    async def scenario():
+        result = await group_routes.start_team_run(
+            request, "parent", {"board": _board(), "participant_sessions": {"builder": "child-session"}}
+        )
+        if change_model_after_queue:
+            sessions.child.model = "gpt-6-astra"
+        await manager._tasks[result["run"]["job_id"]]
+        return store.get_run("parent", "alice")
+
+    record = asyncio.run(scenario())
+    if change_model_after_queue:
+        assert record["status"] == "failed"
+        assert "model changed" in record["state"]["message"]
+        assert calls == []
+    else:
+        assert record["status"] == "completed"
+        assert calls == ["alice"]
 
 
 def test_server_run_rejects_incognito_before_queueing(tmp_path, monkeypatch):

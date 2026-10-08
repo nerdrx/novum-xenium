@@ -43,6 +43,46 @@ def test_inspect_returns_bounded_reviewable_guidance(repo):
     assert "never executed automatically" in report["instructions"][0]["notice"]
 
 
+def test_project_inspect_api_omits_non_utf8_paths_but_keeps_guidance(repo, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    raw_path = os.fsencode(str(repo)) + b"/bad-\xff.bin"
+    fd = os.open(raw_path, os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.write(fd, b"fixture")
+    finally:
+        os.close(fd)
+    bad_dir = os.fsencode(str(repo)) + b"/rules-\xff"
+    os.mkdir(bad_dir)
+    rules_path = bad_dir + b"/AGENTS.md"
+    fd = os.open(rules_path, os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.write(fd, b"path rules stay available\n")
+    finally:
+        os.close(fd)
+    app = FastAPI()
+    app.include_router(setup_project_routes())
+    monkeypatch.setattr("routes.project_routes.get_current_user", lambda _request: "admin")
+    monkeypatch.setattr("routes.project_routes.storage_owner_for_request", lambda _request: "alice")
+    monkeypatch.setattr("routes.project_routes.owner_is_admin_or_single_user", lambda _user: True)
+
+    response = TestClient(app).post("/api/project-workflows/inspect", json={"workspace": str(repo)})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["map_truncated"] is True
+    assert all("bad-" not in path and "rules-" not in path for path in payload["workspace_map"])
+    guidance = next(item for item in payload["instructions"] if item["path_available"] is False)
+    assert guidance["path"] is None
+    assert "path rules stay available" in guidance["content"]
+    encoded = response.content.decode("utf-8")
+    assert "\\udcff" not in encoded
+    context = workflows.project_prompt_context("alice", os.fsdecode(bad_dir))
+    assert "path rules stay available" in context
+    assert "Repository map is partial" in context
+    assert "\udcff" not in context
+
+
 def test_inspect_skips_gitignored_artifacts_before_map_budget(repo):
     (repo / ".gitignore").write_text("ignored.txt\nz-cache/\n", encoding="utf-8")
     source = repo / "src"

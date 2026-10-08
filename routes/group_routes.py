@@ -124,8 +124,9 @@ async def start_team_run(request: Request, session_id: str, body: dict):
             validate_parent=lambda: _verify_session_owner(request, session_id),
         )
     except RuntimeError as exc:
-        status = 409 if "already running" in str(exc) or "queued" in str(exc) else 503
-        raise HTTPException(status, str(exc)) from exc
+        detail = str(exc)
+        status = 409 if any(marker in detail for marker in ("already running", "queued", "still marked working")) else 503
+        raise HTTPException(status, detail) from exc
     return {"run": run}
 
 

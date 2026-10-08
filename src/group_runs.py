@@ -63,6 +63,12 @@ class GroupRunManager:
             with self._registry_lock:
                 if validate_parent is not None:
                     validate_parent()
+                if any(task.get("status") == "working" for task in board.get("tasks", [])
+                       if isinstance(task, dict)):
+                    raise RuntimeError(
+                        "A team task is still marked working. Inspect its participant chat, "
+                        "then explicitly retry the task before starting another pass."
+                    )
                 active = any(self._scopes.get(job_id) == (session_id, str(owner or ""))
                              and not task.done() for job_id, task in self._tasks.items())
                 if self.store.active_run(session_id, owner) or active:

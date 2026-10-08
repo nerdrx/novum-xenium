@@ -11,6 +11,7 @@ This is the single place that handles:
 import json
 import uuid
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional
 
@@ -60,6 +61,9 @@ def _parse_msg_content(raw):
         except (json.JSONDecodeError, ValueError):
             pass
     return raw
+
+
+_SESSION_NAME_LOCK = threading.Lock()
 
 
 class SessionManager:
@@ -670,27 +674,45 @@ class SessionManager:
     # Session updates
     # ------------------------------------------------------------------
 
-    def update_session_name(self, session_id: str, name: str, *, name_is_custom: bool = True):
-        """Update session name."""
-        if session_id not in self.sessions:
-            return
-
-        db = SessionLocal()
-        try:
-            db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
-            if db_session:
-                db_session.name = name
-                db_session.name_is_custom = name_is_custom
-                db_session.updated_at = datetime.now(timezone.utc)
+    def update_session_name(self, session_id: str, name: str, *, name_is_custom: bool = True,
+                            expected_name: Optional[str] = None):
+        """Update a title; automatic names use a conditional database write."""
+        # Rename routes run in worker threads while generated titles arrive on
+        # the event loop. Keep their database and cache updates in the same order.
+        with _SESSION_NAME_LOCK:
+            cached = self.sessions.get(session_id)
+            if cached is None:
+                return False
+            if not name_is_custom and getattr(cached, "name_is_custom", None) is True:
+                return False
+            if expected_name is not None and cached.name != expected_name:
+                return False
+            db = SessionLocal()
+            try:
+                query = db.query(DbSession).filter(DbSession.id == session_id)
+                if not name_is_custom:
+                    query = query.filter(DbSession.name_is_custom.is_not(True))
+                if expected_name is not None:
+                    query = query.filter(DbSession.name == expected_name)
+                changed = query.update({
+                    DbSession.name: name,
+                    DbSession.name_is_custom: name_is_custom,
+                    DbSession.updated_at: datetime.now(timezone.utc),
+                }, synchronize_session=False)
+                if not changed:
+                    return False
                 db.commit()
-                self.sessions[session_id].name = name
-                self.sessions[session_id].name_is_custom = name_is_custom
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Error updating session name: {e}")
-            raise
-        finally:
-            db.close()
+                cached = self.sessions.get(session_id)
+                if cached is not None:
+                    cached.name = name
+                    cached.name_is_custom = name_is_custom
+                return True
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Error updating session name: {e}")
+                raise
+            finally:
+                db.close()
 
     def archive_session(self, session_id: str):
         """Archive a session."""

@@ -366,6 +366,44 @@ def test_parent_is_reverified_after_delete_before_team_run_enqueue(tmp_path, mon
     assert store.get_run("parent", "alice") is None
 
 
+def test_team_run_rejects_uncertain_working_task_before_queueing(tmp_path, monkeypatch):
+    store = GroupCoordinationStore(str(tmp_path / "uncertain-task.db"))
+    starts = []
+
+    async def runner(*_args, **_kwargs):
+        starts.append(True)
+        return "unexpected"
+
+    class Sessions:
+        def get_session(self, _session_id):
+            return SimpleNamespace(model="gpt-6-luna")
+
+    manager = GroupRunManager(store, runner=runner)
+    monkeypatch.setattr(group_routes, "_store", store)
+    monkeypatch.setattr(group_routes, "_runs", manager)
+    monkeypatch.setattr(group_routes, "_require_interactive", lambda _request: None)
+    monkeypatch.setattr(group_routes, "_verify_session_owner", lambda _request, _sid: None)
+    monkeypatch.setattr(group_routes, "storage_owner_for_request", lambda _request: "alice")
+    request = SimpleNamespace(
+        state=SimpleNamespace(), headers={}, scope={},
+        app=SimpleNamespace(state=SimpleNamespace(session_manager=Sessions())),
+    )
+    board = _board()
+    board["tasks"][0]["status"] = "working"
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(group_routes.start_team_run(
+            request, "parent", {"board": board, "participant_sessions": {"builder": "builder-session"}}
+        ))
+
+    assert exc.value.status_code == 409
+    assert "inspect" in exc.value.detail.lower() and "retry" in exc.value.detail.lower()
+    assert not starts
+    assert not manager._tasks
+    assert store.get("parent", "alice") is None
+    assert store.get_run("parent", "alice") is None
+
+
 def test_server_run_rejects_incognito_before_queueing(tmp_path, monkeypatch):
     store = GroupCoordinationStore(str(tmp_path / "route.db"))
     monkeypatch.setattr(group_routes, "_store", store)

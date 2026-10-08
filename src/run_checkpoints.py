@@ -102,7 +102,8 @@ class CheckpointStore:
         saved_context = {
             key: _clip(context.get(key), limit)
             for key, limit in {
-                "original_request": 8_000, "workspace": 512,
+                "original_request": 8_000,
+                "workspace": 32_768,
                 "model": 256, "endpoint_id": 256, "endpoint_url": 2_048,
                 "chat_mode": 16,
             }.items() if isinstance(context.get(key), str)

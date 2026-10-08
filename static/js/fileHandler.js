@@ -8,6 +8,8 @@ import uiModule from './ui.js';
 import spinnerModule from './spinner.js';
 
 let pendingFiles = [];
+let pendingFileIds = [];
+let _nextPendingFileId = 1;
 let uploaded = [];
 // Holds the full meta (id/name/mime/size/width/height/…) from the most recent
 // uploadPending() so callers can stamp width/height onto their attachment
@@ -261,6 +263,7 @@ export function removePending(idx) {
   if (_uploading) cancelUpload();
   _revokePreviewUrl(pendingFiles[idx]);
   pendingFiles.splice(idx, 1);
+  pendingFileIds.splice(idx, 1);
   renderAttachStrip();
 }
 
@@ -270,6 +273,8 @@ export function removePending(idx) {
 export async function uploadPending(opts = {}) {
   if (pendingFiles.length === 0) return [];
   _lastUploadCancelled = false;
+  const submittedFiles = pendingFiles.slice();
+  const submittedIds = pendingFileIds.slice();
 
   // The message bubble is shown immediately, but the upload can take a moment —
   // dim the chips and overlay a whirlpool so it's clear the files are still
@@ -293,7 +298,7 @@ export async function uploadPending(opts = {}) {
   }
 
   const fd = new FormData();
-  pendingFiles.forEach(f => fd.append('files', f, f.name || 'paste.png'));
+  submittedFiles.forEach(f => fd.append('files', f, f.name || 'paste.png'));
   if (opts.sessionId) fd.append('session_id', opts.sessionId);
   _uploadAbortCtrl = new AbortController();
   _uploading = true;
@@ -326,7 +331,20 @@ export async function uploadPending(opts = {}) {
       try { localStorage.setItem('gallery-fresh-chat-upload', String(Date.now())); } catch (_) {}
       window.dispatchEvent(new CustomEvent('gallery-refresh', { detail: { source: 'chat-upload' } }));
     }
-    pendingFiles = [];          // clear only on success
+    const submittedIdSet = new Set(submittedIds);
+    const remainingFiles = [];
+    const remainingIds = [];
+    const currentFiles = pendingFiles;
+    const currentIds = pendingFileIds;
+    // Keep files added while this request was in flight for the next send.
+    // Stable per-entry IDs also distinguish a removed/re-added same File object.
+    for (let i = 0; i < currentIds.length; i++) {
+      if (submittedIdSet.has(currentIds[i])) continue;
+      remainingFiles.push(currentFiles[i]);
+      remainingIds.push(currentIds[i]);
+    }
+    pendingFiles = remainingFiles;
+    pendingFileIds = remainingIds;
     // Stash the full meta (incl. width/height for images) on the module so
     // callers that want it can grab it via getLastUploadedMeta(). Keep the
     // returned shape as `ids` for backward-compatibility with existing call sites.
@@ -372,6 +390,7 @@ export async function addFiles(files, opts = {}) {
       if (!nextFile) continue;
     }
     pendingFiles.push(nextFile);
+    pendingFileIds.push(_nextPendingFileId++);
   }
   renderAttachStrip();
 }
@@ -437,6 +456,7 @@ export function clearPending() {
   if (_uploading) cancelUpload();
   pendingFiles.forEach(_revokePreviewUrl);
   pendingFiles = [];
+  pendingFileIds = [];
   renderAttachStrip();
 }
 

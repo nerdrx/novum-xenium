@@ -171,3 +171,85 @@ async def test_client_cancellation_deletes_worker_job(tmp_path, monkeypatch):
             task.cancel()
         worker.shutdown()
         worker.server_close()
+
+
+@pytest.mark.parametrize("stalled_poll", [False, True])
+@pytest.mark.asyncio
+async def test_client_deadline_cleans_up_worker_that_never_finishes(tmp_path, monkeypatch, stalled_poll):
+    execution_runtime = importlib.import_module("src.execution_runtime")
+    tool_execution = importlib.import_module("src.tool_execution")
+    monkeypatch.setattr(tool_execution, "get_active_workspace", lambda: str(tmp_path))
+    monkeypatch.setattr(tool_execution, "agent_cwd", lambda: str(tmp_path))
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", "http://worker.invalid")
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_TOKEN", "t" * 32)
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_ROOT", str(tmp_path))
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_TIMEOUT", "1")
+
+    now = [0.0]
+    monkeypatch.setattr(execution_runtime.time, "monotonic", lambda: now[0])
+
+    async def advance(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(execution_runtime.asyncio, "sleep", advance)
+
+    async def poll_with_optional_timeout(awaitable, timeout):
+        if stalled_poll:
+            awaitable.close()
+            raise asyncio.TimeoutError
+        return await awaitable
+
+    monkeypatch.setattr(execution_runtime.asyncio, "wait_for", poll_with_optional_timeout)
+    deleted = []
+    polls = []
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.body
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def post(self, *_args, **_kwargs):
+            return Response({"id": "stuck"})
+
+        async def get(self, *_args, **_kwargs):
+            polls.append(True)
+            return Response({"status": "running", "output": ""})
+
+        async def delete(self, *_args, **_kwargs):
+            deleted.append(True)
+            return Response({"stopped": True})
+
+    monkeypatch.setattr(execution_runtime.httpx, "AsyncClient", Client)
+
+    result = await execution_runtime.execute_isolated("print('hello')", {}, language="python")
+
+    if stalled_poll:
+        assert result == {
+            "error": "Separate execution worker did not respond within 15s; command was not retried locally",
+            "exit_code": 1,
+        }
+        assert now[0] == 0
+        assert not polls
+    else:
+        assert result == {
+            "error": "Separate execution worker did not complete within 1s plus 15s polling grace",
+            "exit_code": 124,
+        }
+        assert now[0] == pytest.approx(16)  # Configured timeout plus the bounded poll grace.
+        assert 0 < len(polls) <= 17
+    assert deleted == [True]

@@ -237,6 +237,26 @@ def test_chat_stream_continue_claims_once_and_preserves_saved_read_only_mode(tmp
     assert captured["loop_kwargs"]["plan_mode"] is True
 
 
+def test_chat_stream_recovery_preserves_deep_valid_workspace_path(tmp_path, monkeypatch):
+    workspace_path = tmp_path
+    for index in range(6):
+        workspace_path = workspace_path / (f"d{index}-" + "x" * 95)
+        workspace_path.mkdir()
+    workspace = str(workspace_path)
+    assert len(workspace.encode("utf-8")) > 512
+
+    store = _interrupted_store(tmp_path / "deep-workspace.sqlite", workspace=workspace)
+    client, captured = _recovery_post_client(
+        monkeypatch, checkpoint_store=store, workspace=workspace,
+    )
+
+    response = _continue(client, workspace=workspace)
+
+    assert response.status_code == 200, response.text[:500]
+    assert captured["loop_kwargs"]["workspace"] == workspace
+    assert store.get("session-a", "alice")["context"]["workspace"] == workspace
+
+
 def test_recovery_copy_does_not_override_explicit_bash_off(tmp_path, monkeypatch):
     from src.action_intents import classify_tool_intent
 

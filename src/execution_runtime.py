@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -26,15 +27,34 @@ async def execute_isolated(content, ctx: dict, *, language: str):
     job = None
     headers = {"Authorization": f"Bearer {token}"}
     try:
+        worker_timeout = min(int(os.getenv("ODYSSEUS_EXECUTOR_TIMEOUT", "3600")), 3600)
         async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
             response = await client.post(f"{url}/jobs", headers=headers, json={
                 "code": str(content), "language": language, "cwd": cwd,
-                "timeout": min(int(os.getenv("ODYSSEUS_EXECUTOR_TIMEOUT", "3600")), 3600),
+                "timeout": worker_timeout,
             })
             response.raise_for_status()
             job = response.json()["id"]
+            # The worker enforces this timeout for the command itself. Keep a
+            # client-side bound too, so a lost/stuck worker cannot pin a run
+            # forever; the extra 15s covers one bounded in-flight HTTP poll.
+            deadline = time.monotonic() + worker_timeout + 15
             while True:
-                response = await client.get(f"{url}/jobs/{job}", headers=headers)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return {"error": f"Separate execution worker did not complete within {worker_timeout}s plus 15s polling grace",
+                            "exit_code": 124}
+                try:
+                    response = await asyncio.wait_for(
+                        client.get(f"{url}/jobs/{job}", headers=headers),
+                        timeout=min(15, remaining),
+                    )
+                except asyncio.TimeoutError:
+                    if time.monotonic() >= deadline:
+                        return {"error": f"Separate execution worker did not complete within {worker_timeout}s plus 15s polling grace",
+                                "exit_code": 124}
+                    return {"error": "Separate execution worker did not respond within 15s; command was not retried locally",
+                            "exit_code": 1}
                 response.raise_for_status()
                 result = response.json()
                 if result["status"] != "running":
@@ -44,7 +64,7 @@ async def execute_isolated(content, ctx: dict, *, language: str):
                 if ctx.get("progress_cb"):
                     await ctx["progress_cb"]({"output": result.get("output", "")[-2000:],
                                                "execution": "separate_container"})
-                await asyncio.sleep(1)
+                await asyncio.sleep(min(1, max(0, deadline - time.monotonic())))
     except asyncio.CancelledError:
         raise
     except Exception:

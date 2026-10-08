@@ -286,15 +286,19 @@ async def auto_name_session(session_manager, sess):
         # via the central helper.
         from src.text_helpers import strip_think
         title = strip_think(title, prose=False, prompt_echo=False)
+        checked_name = getattr(sess, "name", "")
         if title and len(title) < 80 and needs_auto_name(
-            getattr(sess, "name", ""), getattr(sess, "model", ""),
+            checked_name, getattr(sess, "model", ""),
             getattr(sess, "name_is_custom", None), first_msg,
         ):
             group = (getattr(sess, "name", "") or "").startswith("[GRP] ")
             if group:
                 title = "[GRP] " + title.removeprefix("[GRP] ")
-            session_manager.update_session_name(sess.id, title, name_is_custom=False)
-            logger.info(f"Auto-named session {sess.id}: {title}")
+            saved = session_manager.update_session_name(
+                sess.id, title, name_is_custom=False, expected_name=checked_name,
+            )
+            if saved is not False:
+                logger.info(f"Auto-named session {sess.id}: {title}")
 
     except Exception as e:
         import traceback

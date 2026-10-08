@@ -55,6 +55,10 @@ async function fetchModels() {
     return state._fetchModelsCache;
   }
   const res = await fetch(`${state.API_BASE}/api/models`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
   const data = await res.json();
   const models = [];
   if (data.items && data.items.length > 0) {

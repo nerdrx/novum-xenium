@@ -308,6 +308,9 @@ function initializeEventListeners() {
   window.addEventListener('paste', async (e)=>{
     if (e.defaultPrevented || !e.clipboardData) return;
     const files = Array.from(e.clipboardData.files || []);
+    // WebKit can expose screenshot pixels as an item without a FileList entry.
+    if (!files.length) files.push(...Array.from(e.clipboardData.items || [])
+      .filter(item => item.kind === 'file').map(item => item.getAsFile()).filter(Boolean));
     if (!files.length) return;
     e.preventDefault();
     await fileHandlerModule.addFiles(files);

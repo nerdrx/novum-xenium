@@ -7,7 +7,9 @@ use webkit2gtk::{gio, WebViewExt};
 const MAX_BYTES: usize = 50 * 1024 * 1024;
 
 fn read_files(uris: &[String]) -> Result<Vec<serde_json::Value>, String> {
-    if uris.len() > 10 { return Err("Paste up to 10 files at a time".into()) }
+    if uris.len() > 10 {
+        return Err("Paste up to 10 files at a time".into());
+    }
     let mut files = Vec::new();
     let mut remaining = MAX_BYTES;
     for uri in uris {
@@ -52,7 +54,12 @@ pub fn install(
             }
             let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
             let uris: Vec<String> = clipboard.wait_for_uris().iter().map(ToString::to_string).collect();
-            if uris.is_empty() { return gtk::glib::Propagation::Proceed }
+            let png = if uris.is_empty() {
+                clipboard.wait_for_contents(&gdk::Atom::intern("image/png"))
+                    .map(|selection| selection.data())
+                    .filter(|data| data.starts_with(b"\x89PNG\r\n\x1a\n"))
+            } else { None };
+            if uris.is_empty() && png.is_none() { return gtk::glib::Propagation::Proceed }
             let view = view.clone();
             let fallback = view.clone();
             let owner = owner.clone();
@@ -64,7 +71,12 @@ pub fn install(
                 let composer = result.ok().and_then(|r| r.js_value()).is_some_and(|v| v.to_boolean());
                 if !composer { fallback.execute_editing_command("Paste"); return }
                 std::thread::spawn(move || {
-                    match read_files(&uris) {
+                    let result = match png {
+                        Some(data) if data.len() > MAX_BYTES => Err("Copied image exceeds 50 MB".into()),
+                        Some(data) => Ok(vec![serde_json::json!({"name":"clipboard.png","type":"image/png","data":STANDARD.encode(data)})]),
+                        None => read_files(&uris),
+                    };
+                    match result {
                         Ok(files) if owner.url().is_ok_and(|u| crate::workbench_control_origin_allowed(&u, port)) => {
                             let payload = serde_json::to_string(&files).expect("clipboard files serialize");
                             let _ = owner.eval(&format!("window.__nxReceiveClipboardFiles?.({payload});"));

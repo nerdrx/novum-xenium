@@ -12,6 +12,8 @@ from core.middleware import require_admin
 from src.auth_helpers import require_user
 from src.constants import DATA_DIR
 from src.module_store import MAX_PACKAGE_BYTES, ModulePackageError, ModuleStore
+from src.module_sources import ModuleSources
+from routes.module_data_routes import setup_module_data_routes
 
 
 def _public_module(item: dict, configured: dict, mcp_manager=None) -> dict:
@@ -38,6 +40,7 @@ def _public_module(item: dict, configured: dict, mcp_manager=None) -> dict:
     result = {
         "id": item["id"], "name": item["name"], "version": item["version"],
         "description": item.get("description", ""), "enabled": bool(item.get("enabled")),
+        "permissions": list(item.get("permissions", [])),
         "panel_url": f"/api/modules/{item['id']}/panel" if item.get("enabled") and item.get("panel") else None,
         "mcp": item.get("mcp"), "mcp_servers": servers,
         "previous_version": (item.get("previous") or {}).get("version"),
@@ -48,6 +51,8 @@ def _public_module(item: dict, configured: dict, mcp_manager=None) -> dict:
 def setup_module_routes(data_dir: str | Path | None = None, mcp_manager=None) -> APIRouter:
     router = APIRouter(prefix="/api/modules", tags=["modules"])
     store = ModuleStore(data_dir or DATA_DIR)
+    sources = ModuleSources(data_dir or DATA_DIR, store)
+    router.include_router(setup_module_data_routes(store))
 
     def configured_servers(ids, mcp=None):
         if not ids and not mcp:
@@ -65,6 +70,38 @@ def setup_module_routes(data_dir: str | Path | None = None, mcp_manager=None) ->
 
     def translate_error(error: ModulePackageError):
         raise HTTPException(error.status_code, error.detail) from None
+
+    @router.get("/sources")
+    def list_module_sources(_user: str = Depends(require_user)):
+        return {"sources": sources.list()}
+
+    @router.post("/sources")
+    def add_module_source(payload: dict = Body(...), _admin: None = Depends(require_admin)):
+        try:
+            if not isinstance(payload, dict) or set(payload) != {"url"}:
+                raise ModulePackageError(400, "Request must contain only url")
+            return {"source": sources.add(payload["url"])}
+        except ModulePackageError as error:
+            translate_error(error)
+
+    @router.delete("/sources/{source_id}")
+    def delete_module_source(source_id: str, _admin: None = Depends(require_admin)):
+        try:
+            sources.delete(source_id)
+            return {"ok": True}
+        except ModulePackageError as error:
+            translate_error(error)
+
+    @router.post("/sources/{source_id}/install")
+    def install_source_module(source_id: str, payload: dict = Body(...), _admin: None = Depends(require_admin)):
+        try:
+            if not isinstance(payload, dict) or set(payload) != {"module_id"}:
+                raise ModulePackageError(400, "Request must contain only module_id")
+            item = sources.install(source_id, payload["module_id"])
+            configured = configured_servers(item.get("mcp_server_ids", []), item.get("mcp"))
+            return {"module": _public_module(item, configured, mcp_manager)}
+        except ModulePackageError as error:
+            translate_error(error)
 
     @router.get("")
     def list_modules(request: Request, _user: str = Depends(require_user)):

@@ -1,0 +1,11 @@
+{
+  "api_version": 1,
+  "id": "research-shelf",
+  "name": "Research shelf",
+  "version": "1.0.0",
+  "description": "Saved research reports and their source counts.",
+  "panel": "panel.html",
+  "permissions": [
+    "research"
+  ]
+}

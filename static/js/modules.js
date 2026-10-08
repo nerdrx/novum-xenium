@@ -2,13 +2,19 @@ import { makeWindowDraggable } from './windowDrag.js';
 
 /* Optional panels stay in opaque sandbox frames. Tools use the MCP registry. */
 let modules = [];
+let sources = [];
 let admin = false;
 let options = {};
 let initialized = false;
 let refreshing = null;
+let refreshingSources = null;
+let sourceBusy = false;
+let sourceLoadError = '';
+const sourceOps = new Set();
 let activeFrame = null;
 let activeId = null;
 let activeVersion = null;
+let activeModule = null;
 let returnFocus = null;
 let statusText = '';
 let statusError = false;
@@ -75,6 +81,7 @@ function closePanel() {
   activeFrame = null;
   activeId = null;
   activeVersion = null;
+  activeModule = null;
   if (returnFocus?.isConnected) returnFocus.focus();
 }
 function openPanel(item) {
@@ -84,9 +91,11 @@ function openPanel(item) {
   returnFocus = document.activeElement;
   activeId = item.id;
   activeVersion = item.version;
+  activeModule = item;
   document.getElementById('module-window-title').textContent = item.name;
   const tools = element('div', 'modules-frame-controls');
-  const note = element('span', 'modules-detail', 'Isolated panel. It cannot access your chats, app cookies or desktop controls.');
+  const granted = (item.permissions || []).filter(value => ['downloads', 'git', 'models', 'images', 'research', 'runs'].includes(value));
+  const note = element('span', 'modules-detail', `Isolated panel. Read permissions: ${granted.length ? granted.join(', ') : 'none'}. It cannot access chats, cookies or desktop controls.`);
   const reload = control('Reload panel', () => {
     if (activeFrame) activeFrame.src = `/api/modules/${encodeURIComponent(item.id)}/panel`;
   });
@@ -102,6 +111,95 @@ function openPanel(item) {
   modal.classList.remove('hidden');
   document.getElementById('module-window-close')?.focus();
 }
+const SOURCE_CAPABILITIES = ['downloads', 'git', 'models', 'images', 'research', 'runs'];
+const MODULE_DESTINATIONS = {
+  gallery: '#tool-gallery-btn', research: '#tool-research-btn',
+  tasks: '#tool-tasks-btn',
+};
+function moduleMessage(event) {
+  const frame = activeFrame;
+  const item = activeModule;
+  const request = event.data;
+  if (!frame?.contentWindow || event.source !== frame.contentWindow || !item || !request || typeof request !== 'object') return;
+  if (request.type === 'novum:open') {
+    if (request.action === 'integrations') {
+      if (typeof options.openIntegrations === 'function') options.openIntegrations();
+      return;
+    }
+    if (typeof request.action !== 'string' || !Object.hasOwn(MODULE_DESTINATIONS, request.action)) return;
+    const selector = MODULE_DESTINATIONS[request.action];
+    if (!selector) return;
+    document.querySelector(selector)?.click();
+    return;
+  }
+  if (request.type !== 'novum:request' || typeof request.id !== 'string' || request.id.length < 1 || request.id.length > 80) return;
+  const capability = request.capability;
+  if (!SOURCE_CAPABILITIES.includes(capability) || !Array.isArray(item.permissions) || !item.permissions.includes(capability)) {
+    frame.contentWindow.postMessage({ type: 'novum:response', id: request.id, error: 'Permission denied.' }, '*');
+    return;
+  }
+  const moduleId = activeId;
+  if (request.workspace !== undefined && (capability !== 'git' || typeof request.workspace !== 'string' || request.workspace.length > 4096)) {
+    frame.contentWindow.postMessage({ type: 'novum:response', id: request.id, error: 'Invalid workspace.' }, '*');
+    return;
+  }
+  const workspace = capability === 'git' && typeof request.workspace === 'string' ? `?workspace=${encodeURIComponent(request.workspace)}` : '';
+  api(`/api/modules/${encodeURIComponent(moduleId)}/data/${encodeURIComponent(capability)}${workspace}`)
+    .then(data => {
+      if (activeFrame !== frame || activeId !== moduleId || activeModule !== item || frame.contentWindow !== event.source) return;
+      frame.contentWindow.postMessage({ type: 'novum:response', id: request.id, data }, '*');
+    })
+    .catch(error => {
+      if (activeFrame !== frame || activeId !== moduleId || activeModule !== item || frame.contentWindow !== event.source) return;
+      frame.contentWindow.postMessage({ type: 'novum:response', id: request.id, error: error.message }, '*');
+    });
+}
+async function refreshSources() {
+  if (refreshingSources) return refreshingSources;
+  refreshingSources = (async () => {
+    try {
+      const result = await api('/api/modules/sources');
+      if (!Array.isArray(result.sources)) throw new Error('Source list returned an incomplete response.');
+      sources = result.sources;
+      sourceLoadError = '';
+      return true;
+    } catch (error) {
+      sourceLoadError = error.message;
+      setStatus(error.message, true);
+      return false;
+    } finally { refreshingSources = null; }
+  })();
+  return refreshingSources;
+}
+async function mutateSource(key, label, request) {
+  if (sourceOps.has(key)) return;
+  sourceOps.add(key); render(); setStatus(`${label}…`);
+  try {
+    await request();
+    if (!await refreshSources()) return;
+    setStatus(`${label} complete.`);
+  } catch (error) { setStatus(error.message, true); }
+  finally { sourceOps.delete(key); render(); }
+}
+async function installSourceModule(button, source, item, update = false) {
+  const operation = `module:${item.id}`;
+  if (sourceOps.has(operation)) return;
+  sourceOps.add(operation);
+  if (button) button.disabled = true;
+  render();
+  setStatus(`${update ? 'Updating' : 'Installing'} ${item.name}…`);
+  try {
+    const result = await api(`/api/modules/sources/${encodeURIComponent(source.id)}/install`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ module_id: item.id }),
+    });
+    setStatus(`${result.module?.name || item.name} ${update ? 'updated' : 'installed'} disabled. Review and enable it when ready.`);
+    await refreshModules();
+  } catch (error) {
+    const message = error.message;
+    await refreshModules();
+    setStatus(message, true);
+  } finally { sourceOps.delete(operation); render(); }
+}
 function render() {
   const panel = document.getElementById('modules-panel');
   if (!panel) return;
@@ -112,6 +210,105 @@ function render() {
   heading.append(intro);
   panel.append(heading);
   if (admin) {
+    const sourceBox = element('section', 'modules-installer modules-sources');
+    sourceBox.append(element('h3', '', 'GitHub module sources'));
+    const sourceForm = element('form', 'modules-source-form');
+    const sourceLabel = element('label', 'modules-file-label', 'Repository URL');
+    sourceLabel.htmlFor = 'modules-source-url';
+    const sourceUrl = element('input'); sourceUrl.type = 'url'; sourceUrl.id = 'modules-source-url'; sourceUrl.required = true;
+    sourceUrl.placeholder = 'https://github.com/owner/repository'; sourceUrl.autocomplete = 'url';
+    const addSource = element('button', 'modules-button', 'Add repo');
+    addSource.type = 'submit'; addSource.disabled = sourceBusy;
+    sourceForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const url = sourceUrl.value.trim();
+      if (!url || sourceBusy) return;
+      sourceBusy = true; addSource.disabled = true; setStatus('Adding or refreshing repository…');
+      try {
+        await api('/api/modules/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+        sourceUrl.value = '';
+        if (await refreshSources()) setStatus('Repository added or refreshed.');
+      } catch (error) { setStatus(error.message, true); }
+      finally { sourceBusy = false; render(); }
+    });
+    sourceForm.append(sourceLabel, sourceUrl, addSource);
+    sourceBox.append(sourceForm, element('p', 'modules-detail modules-install-note', 'Source installs and updates stay disabled until you review and enable them.'));
+    if (sourceLoadError) {
+      const retry = control('Retry source list', async () => { if (await refreshSources()) { setStatus('Source list loaded.'); render(); } });
+      retry.setAttribute('aria-label', 'Retry loading GitHub sources');
+      sourceBox.append(element('p', 'modules-detail modules-source-error', sourceLoadError), retry);
+    }
+    const sourceList = element('div', 'modules-source-list');
+    sources.forEach(source => {
+      const card = element('article', 'modules-card modules-source-card');
+      const head = element('div', 'modules-card-heading');
+      head.append(element('h3', '', source.id || source.url), element('span', 'modules-badge', source.commit ? `Pinned ${String(source.commit).slice(0, 12)}` : 'Source'));
+      card.append(head, element('p', 'modules-detail', source.url));
+      const actions = element('div', 'modules-actions');
+      const busy = sourceOps.has(source.id);
+      actions.append(control(busy ? 'Refreshing…' : 'Refresh', () => mutateSource(source.id, 'Refreshing repository', async () => {
+        await api('/api/modules/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: source.url }) });
+      })));
+      actions.lastChild.disabled = busy;
+      const forget = control('Forget source', () => mutateSource(source.id, 'Forgetting repository', async () => {
+        await api(`/api/modules/sources/${encodeURIComponent(source.id)}`, { method: 'DELETE' });
+      }));
+      forget.disabled = busy; forget.setAttribute('aria-label', `Forget source ${source.url}; installed modules stay installed`); actions.append(forget);
+      card.append(actions, element('p', 'modules-detail', 'Forgetting this source keeps its installed modules.'));
+      const catalog = element('div', 'modules-source-modules');
+      (source.modules || []).forEach(mod => {
+        const row = element('div', 'modules-source-module');
+        const info = element('div');
+        info.append(element('strong', '', mod.name), element('p', 'modules-detail', `Version ${mod.version}${mod.installed_version ? ` · Installed ${mod.installed_version}` : ''}${mod.enabled ? ' · Enabled' : ''}`));
+        if (mod.description) info.append(element('p', 'modules-detail', mod.description));
+        const declared = (mod.permissions || []).filter(value => SOURCE_CAPABILITIES.includes(value));
+        info.append(element('p', 'modules-detail', `Declared permissions: ${declared.length ? declared.join(', ') : 'none'}. Review before enabling.`));
+        const conflict = mod.conflict === true;
+        if (conflict) info.append(element('p', 'modules-source-error', 'This module ID is already installed from another source or ZIP. Remove the existing module or use a different ID.'));
+        row.append(info);
+        const controls = element('div', 'modules-actions');
+        const operation = `module:${mod.id}`;
+        const busyModule = sourceOps.has(operation);
+        if (!conflict && !mod.installed_version) {
+          const install = control('Install disabled', () => installSourceModule(install, source, mod));
+          install.disabled = busyModule; controls.append(install);
+        } else if (!conflict && mod.version !== mod.installed_version) {
+          const update = control(`Update to ${mod.version}`, () => installSourceModule(update, source, mod, true));
+          update.disabled = busyModule; controls.append(update);
+        }
+        const toggleLabel = element('label', 'modules-source-toggle');
+        const toggle = element('input');
+        toggle.type = 'checkbox'; toggle.checked = mod.enabled === true;
+        toggle.disabled = busyModule || conflict;
+        toggle.setAttribute('aria-label', `${mod.enabled ? 'Disable' : 'Enable'} ${mod.name}`);
+        toggleLabel.append(toggle, document.createTextNode(` ${conflict ? 'Unavailable' : mod.enabled ? 'Enabled' : mod.installed_version ? 'Disabled' : 'Install and enable'}`));
+        toggle.addEventListener('change', async () => {
+          if (sourceOps.has(operation)) { toggle.checked = mod.enabled === true; return; }
+          toggle.disabled = true; sourceOps.add(operation);
+          controls.querySelectorAll('button').forEach(button => { button.disabled = true; });
+          try {
+            if (toggle.checked && !mod.installed_version) {
+              await api(`/api/modules/sources/${encodeURIComponent(source.id)}/install`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ module_id: mod.id }),
+              });
+            }
+            await api(`/api/modules/${encodeURIComponent(mod.id)}/enabled`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: toggle.checked }) });
+            setStatus(`${mod.name} ${toggle.checked ? 'enabled' : 'disabled'}.`);
+            await refreshModules();
+          } catch (error) {
+            const message = error.message;
+            await refreshModules();
+            setStatus(message, true);
+          } finally { sourceOps.delete(operation); render(); }
+        });
+        controls.append(toggleLabel);
+        row.append(controls); catalog.append(row);
+      });
+      if (!source.modules?.length) catalog.append(element('p', 'modules-empty', 'No modules found in this source. Refresh to retry.'));
+      card.append(catalog); sourceList.append(card);
+    });
+    sourceBox.append(sourceList);
+    panel.append(sourceBox);
     const installer = element('section', 'modules-installer');
     const label = element('label', 'modules-file-label', 'Module ZIP');
     label.htmlFor = 'modules-file';
@@ -145,6 +342,8 @@ function render() {
     header.append(name, element('span', 'modules-badge', item.enabled ? 'Enabled' : 'Disabled'));
     card.append(header, element('p', 'modules-detail', `Version ${item.version}`));
     if (item.description) card.append(element('p', 'modules-description', item.description));
+    const permissions = (item.permissions || []).filter(value => SOURCE_CAPABILITIES.includes(value));
+    card.append(element('p', 'modules-detail', `Declared permissions: ${permissions.length ? permissions.join(', ') : 'none'}. Review before enabling.`));
     const actions = element('div', 'modules-actions');
     if (item.enabled && item.panel_url) actions.append(control('Open panel', () => openPanel(item)));
     if (admin) {
@@ -201,6 +400,7 @@ export async function refreshModules() {
       const result = await api('/api/modules');
       if (!Array.isArray(result.modules)) throw new Error('Module list returned an incomplete response.');
       modules = result.modules; admin = result.is_admin === true;
+      if (admin) await refreshSources(); else sources = [];
       if (activeId && !modules.some(item => item.id === activeId && item.enabled && item.version === activeVersion)) closePanel();
       render();
     } catch (error) {
@@ -221,6 +421,7 @@ export function initModules(config = {}) {
   document.getElementById('module-window')?.addEventListener('keydown', event => {
     if (event.key === 'Escape') { event.stopPropagation(); closePanel(); }
   });
-  // Theme updates are one-way. No module messages invoke application actions.
+  // Messages can only request explicitly granted data from the active frame.
+  window.addEventListener('message', moduleMessage);
   new MutationObserver(themeMessage).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
 }

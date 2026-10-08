@@ -96,7 +96,7 @@ Coordinated task passes run on the server, so closing the tab doesn't stop those
 
 ### Add the bits you need
 
-Install small panels and MCP tool connections from **Settings → Modules**. Update a ZIP, review it, enable it. No rebuild for each change. Panels run in an isolated frame; tools keep their own MCP permissions. [Build a module](docs/modules.md), or start with the included Focus timer.
+Paste a public GitHub repository URL in **Settings → Modules**, then tick the panels you want. This repo ships seven examples under [`modules/`](modules/), including Model monitor, Git desk and Image studio. ZIP installation still works. Refresh a repository to discover updates, review each version, and enable it. No rebuild for each module change. Panels run in an isolated frame; tools keep their own MCP permissions. [Build a module](docs/modules.md), or start with the included Focus timer.
 
 ### Still your workspace
 

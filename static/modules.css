@@ -5,6 +5,20 @@
 .modules-heading p { margin:6px 0 0; }
 .modules-installer, .modules-card { border:2px solid var(--border); border-radius:var(--nx-panel-radius,12px); padding:16px; background:var(--bg); }
 .modules-installer { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+.modules-sources { display:block; }
+.modules-sources > h3 { margin:0 0 12px; font-size:15px; }
+.modules-source-form { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.modules-source-form input[type="url"] { flex:1; min-width:220px; max-width:100%; background:var(--bg); color:var(--fg); border:2px solid var(--border); border-radius:var(--nx-control-radius,8px); padding:8px 10px; font:inherit; font-size:12px; }
+.modules-source-form input:focus-visible, .modules-source-toggle input:focus-visible { outline:2px solid var(--red); outline-offset:3px; }
+.modules-source-list { display:grid; gap:10px; margin-top:14px; }
+.modules-source-error { color:var(--red); }
+.modules-source-card { padding:12px; }
+.modules-source-modules { display:grid; gap:8px; margin-top:12px; }
+.modules-source-module { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-top:10px; border-top:1px solid var(--border); }
+.modules-source-module p { margin:4px 0 0; }
+.modules-source-module .modules-actions { margin-top:0; }
+.modules-source-toggle { display:inline-flex; align-items:center; gap:7px; font-size:12px; cursor:pointer; }
+.modules-source-toggle input { accent-color:var(--red); width:18px; height:18px; }
 .modules-file-label { font-size:12px; }
 .modules-installer input[type="file"] { min-width:0; max-width:100%; flex:1; color:var(--fg); font:inherit; font-size:12px; }
 .modules-installer input::file-selector-button { background:var(--panel); color:var(--fg); border:2px solid var(--border); padding:7px 9px; border-radius:var(--nx-control-radius,8px); margin-right:8px; cursor:pointer; }
@@ -36,6 +50,9 @@
   .modules-button { min-height:42px; }
   .modules-installer { align-items:stretch; flex-direction:column; gap:10px; }
   .modules-installer input[type="file"] { flex:none; width:100%; }
+  .modules-source-form { align-items:stretch; flex-direction:column; }
+  .modules-source-form input[type="url"] { box-sizing:border-box; width:100%; min-width:0; }
+  .modules-source-module { align-items:flex-start; flex-direction:column; }
   .modules-frame-controls { align-items:flex-start; }
   #module-window .modal-content { width:calc(100vw - 16px); height:calc(100dvh - 32px); }
 }

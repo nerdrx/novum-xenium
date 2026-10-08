@@ -55,7 +55,7 @@ def _validate_manifest(raw: bytes) -> dict:
         raise ModulePackageError(400, "module.json must be valid UTF-8 JSON") from None
     if not isinstance(manifest, dict):
         raise ModulePackageError(400, "module.json must contain an object")
-    allowed = {"api_version", "id", "name", "version", "description", "panel", "mcp_server_ids", "mcp"}
+    allowed = {"api_version", "id", "name", "version", "description", "panel", "mcp_server_ids", "mcp", "permissions"}
     if set(manifest) - allowed:
         raise ModulePackageError(400, "module.json contains unsupported fields")
     if isinstance(manifest.get("api_version"), bool) or manifest.get("api_version") != 1:
@@ -84,6 +84,13 @@ def _validate_manifest(raw: bytes) -> dict:
     ):
         raise ModulePackageError(400, "mcp_server_ids must be a list of configured server ids")
     manifest["mcp_server_ids"] = list(dict.fromkeys(refs))
+    permissions = manifest.get("permissions", [])
+    allowed_permissions = {"downloads", "git", "models", "images", "research", "runs"}
+    if not isinstance(permissions, list) or len(permissions) > len(allowed_permissions) or any(
+        not isinstance(item, str) or item not in allowed_permissions for item in permissions
+    ) or len(set(permissions)) != len(permissions):
+        raise ModulePackageError(400, "permissions must be a unique list of supported capabilities")
+    manifest["permissions"] = permissions
     mcp = manifest.get("mcp")
     if mcp is not None:
         if not isinstance(mcp, dict) or set(mcp) - {"name", "transport", "url"}:
@@ -211,7 +218,7 @@ class ModuleStore:
             item = self._state()["modules"].get(module_id)
             return dict(item) if item else None
 
-    def install(self, package: bytes) -> tuple[dict, bool]:
+    def install(self, package: bytes, source: dict | None = None) -> tuple[dict, bool]:
         manifest, contents, digest = _read_package(package)
         module_id, version = manifest["id"], manifest["version"]
         package_key = self._package_key(module_id, version, digest)
@@ -219,6 +226,8 @@ class ModuleStore:
         with _LOCK:
             state = self._state()
             current = state["modules"].get(module_id)
+            if current and current.get("source") != source:
+                raise ModulePackageError(409, "Module id is already installed from another source")
             if current and current["version"] == version:
                 if current["digest"] != digest:
                     raise ModulePackageError(409, "This module version is immutable and already installed")
@@ -244,10 +253,13 @@ class ModuleStore:
                 "id": module_id, "name": manifest["name"].strip(), "version": version,
                 "description": manifest.get("description", "").strip(), "panel": manifest.get("panel"),
                 "mcp": manifest.get("mcp"), "mcp_server_ids": manifest["mcp_server_ids"],
+                "permissions": manifest["permissions"],
                 "digest": digest, "package_key": package_key, "enabled": False,
             }
+            if source:
+                item["source"] = dict(source)
             if current:
-                item["previous"] = {key: current.get(key) for key in ("version", "digest", "package_key", "enabled", "name", "description", "panel", "mcp", "mcp_server_ids")}
+                item["previous"] = {key: current.get(key) for key in ("version", "digest", "package_key", "enabled", "name", "description", "panel", "mcp", "mcp_server_ids", "permissions", "source")}
             state["modules"][module_id] = item
             self._save(state)
             return dict(item), True
@@ -276,7 +288,7 @@ class ModuleStore:
             restored = dict(previous)
             restored["id"] = module_id
             restored["enabled"] = False
-            restored["previous"] = {key: item.get(key) for key in ("version", "digest", "package_key", "enabled", "name", "description", "panel", "mcp", "mcp_server_ids")}
+            restored["previous"] = {key: item.get(key) for key in ("version", "digest", "package_key", "enabled", "name", "description", "panel", "mcp", "mcp_server_ids", "permissions", "source")}
             state["modules"][module_id] = restored
             self._save(state)
             return dict(restored)

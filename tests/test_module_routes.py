@@ -18,7 +18,7 @@ from routes import module_routes
 from src.module_store import MAX_EXPANDED_BYTES, ModulePackageError, ModuleStore
 
 
-def package(version="1.0.0", *, panel="<h1>Hello</h1>", extras=None, mcp=None, refs=None):
+def package(version="1.0.0", *, panel="<h1>Hello</h1>", extras=None, mcp=None, refs=None, permissions=None):
     manifest = {
         "api_version": 1,
         "id": "sample-module",
@@ -30,6 +30,8 @@ def package(version="1.0.0", *, panel="<h1>Hello</h1>", extras=None, mcp=None, r
     }
     if mcp is not None:
         manifest["mcp"] = mcp
+    if permissions is not None:
+        manifest["permissions"] = permissions
     if panel is None:
         manifest["panel"] = None
     return zip_package(manifest, ({"panel.html": panel.encode()} if panel is not None else {}) | (extras or {}))
@@ -122,12 +124,13 @@ def test_install_enable_panel_and_asset_are_authenticated_and_sandboxed(client, 
 
 
 def test_updates_disable_and_rollback_restores_previous_enabled_release(client):
-    first = client.post("/api/modules/install", headers=admin(client), files={"file": ("v1.zip", package(), "application/zip")})
+    first = client.post("/api/modules/install", headers=admin(client), files={"file": ("v1.zip", package(permissions=["models"]), "application/zip")})
     assert first.status_code == 200
+    assert first.json()["module"]["permissions"] == ["models"]
     client.post("/api/modules/sample-module/enabled", headers=admin(client), json={"enabled": True})
 
     second = client.post("/api/modules/install", headers=admin(client), files={
-        "file": ("v2.zip", package("2.0.0", panel="<h1>Updated</h1>"), "application/zip")
+        "file": ("v2.zip", package("2.0.0", panel="<h1>Updated</h1>", permissions=["images"]), "application/zip")
     })
     assert second.status_code == 200
     assert second.json()["updated"] is True
@@ -139,6 +142,7 @@ def test_updates_disable_and_rollback_restores_previous_enabled_release(client):
     assert rolled_back.status_code == 200
     assert rolled_back.json()["module"]["version"] == "1.0.0"
     assert rolled_back.json()["module"]["enabled"] is False
+    assert rolled_back.json()["module"]["permissions"] == ["models"]
     assert client.get("/api/modules/sample-module/panel", headers={"x-test-user": "reader"}).status_code == 404
     enabled = client.post("/api/modules/sample-module/enabled", headers=admin(client), json={"enabled": True})
     assert enabled.json()["module"]["enabled"] is True
@@ -225,8 +229,37 @@ def test_rejects_boolean_api_version_empty_package_and_preserves_bad_state(tmp_p
     assert store.state_path.read_text(encoding="utf-8") == "{broken"
 
 
+@pytest.mark.parametrize("permissions", [["unknown"], ["runs", "runs"], "models", [1]])
+def test_rejects_invalid_module_permissions(tmp_path, permissions):
+    with pytest.raises(ModulePackageError, match="permissions"):
+        ModuleStore(tmp_path).install(package(permissions=permissions))
+
+
 def test_delete_is_admin_only_and_removes_module_from_listing(client):
     client.post("/api/modules/install", headers=admin(client), files={"file": ("v1.zip", package(), "application/zip")})
     assert client.delete("/api/modules/sample-module", headers={"x-test-user": "reader"}).status_code == 403
     assert client.delete("/api/modules/sample-module", headers=admin(client)).json() == {"ok": True}
     assert client.get("/api/modules", headers={"x-test-user": "reader"}).json()["modules"] == []
+
+
+def test_module_source_routes_validate_admin_and_preserve_installs(client):
+    assert client.get("/api/modules/sources").status_code == 401
+    assert client.get("/api/modules/sources", headers={"x-test-user": "reader"}).json() == {"sources": []}
+    assert client.post("/api/modules/sources", headers={"x-test-user": "reader"},
+                       json={"url": "https://github.com/acme/tools"}).status_code == 403
+    assert client.post("/api/modules/sources", headers=admin(client),
+                       json={"url": "https://github.com.evil/acme/tools"}).status_code == 400
+    assert client.delete("/api/modules/sources/missing", headers=admin(client)).status_code == 404
+    assert client.post("/api/modules/sources/missing/install", headers=admin(client),
+                       json={"module_id": "focus-timer"}).status_code == 404
+
+
+def test_module_data_routes_require_enabled_grant_and_admin_for_git(client):
+    uploaded = client.post("/api/modules/install", headers=admin(client), files={
+        "file": ("data.zip", package(permissions=["git"]), "application/zip")
+    })
+    assert uploaded.status_code == 200
+    assert client.get("/api/modules/sample-module/data/git", headers={"x-test-user": "reader"}).status_code == 404
+    client.post("/api/modules/sample-module/enabled", headers=admin(client), json={"enabled": True})
+    assert client.get("/api/modules/sample-module/data/research", headers={"x-test-user": "reader"}).status_code == 403
+    assert client.get("/api/modules/sample-module/data/git", headers={"x-test-user": "reader"}).status_code == 403

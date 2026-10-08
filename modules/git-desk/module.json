@@ -1,0 +1,11 @@
+{
+  "api_version": 1,
+  "id": "git-desk",
+  "name": "Git desk",
+  "version": "1.0.0",
+  "description": "Read-only branch and tracked working-tree status.",
+  "panel": "panel.html",
+  "permissions": [
+    "git"
+  ]
+}

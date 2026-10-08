@@ -1,0 +1,11 @@
+{
+  "api_version": 1,
+  "id": "run-inbox",
+  "name": "Run inbox",
+  "version": "1.0.0",
+  "description": "Recent agent runs and interrupted work.",
+  "panel": "panel.html",
+  "permissions": [
+    "runs"
+  ]
+}

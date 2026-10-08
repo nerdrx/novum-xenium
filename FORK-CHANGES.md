@@ -463,3 +463,11 @@ The final candidate also passed a fresh standard Compose smoke with a project br
 October 8 direct image chat repair: generated-image finalization no longer references a variable scoped to the streaming loop. A hidden-browser regression exercises the real chat module with duplicate image events, checks one rendered image and a normal completion, and fails against the preceding implementation. The Codex bridge now accepts bounded multipart image edits and passes the single uploaded image through a private temporary job directory to the native tool. It accepts no caller filesystem path. Empty edit transport errors include their exception type instead of a blank message.
 
 Validation for this repair: 72 focused bridge, image routing, cancellation, ownership, recovery and stream checks passed, plus the hidden-browser regression. A real cloud edit through the candidate bridge changed a neutral red circle to blue while retaining a green triangle and the composition; its returned PNG was visually inspected at 1254 by 1254 pixels. This checks the installed CLI and account's image-edit path, not every provider or prompt. No local model inference ran.
+
+## GitHub module repositories
+
+Administrators can add a public GitHub repository URL, browse its `modules/index.json` catalog and tick a module to install and enable it. Catalogs pin a default-branch commit; refreshing discovers new versions, and updating leaves the package disabled until reviewed. Source collisions cannot replace another repository's module or a ZIP installation. Forgetting a source retains installed packages.
+
+This repository includes Downloads watch, Git desk, Model monitor, Image studio, Research shelf, Run inbox and Focus timer under `modules/`. The six data panels use explicit read grants, a sandbox frame message bridge and the app's existing ownership checks. They do not receive arbitrary API, shell, cookie or desktop access. Existing MCP connection permissions remain independent. The module guide documents each initial panel's limits.
+
+Validation: package/catalog, URL boundaries, source conflicts, pinned downloads, update/rollback, read grants and owner filtering have focused Python coverage. Browser checks cover repository checkboxes, updates, failures, untrusted frame messages and all six data panels. No model generation is invoked by these checks.

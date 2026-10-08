@@ -4,6 +4,53 @@ Small panels and extra agent tools, installed from Settings → Modules. No cont
 
 Administrators install a ZIP, review it and enable it. Ordinary signed-in users can open enabled panels. Installing a new version closes the old panel and leaves the new version disabled. Restore brings back the previous package, also disabled until reviewed.
 
+## Install from a GitHub repository
+
+In **Settings → Modules**, paste `https://github.com/nerdrx/novum-xenium` and choose **Add repository**. Tick a module to download and enable it. The catalog includes Model monitor, Downloads watch, Git desk, Image studio, Research shelf, Run inbox and Focus timer. Permissions appear beside each module before activation.
+
+A repository is pinned to its current default-branch commit. **Refresh** checks its latest catalog; **Update** downloads a new module version and leaves it disabled for review. Unticking disables a module. Forgetting a repository keeps installed modules. Public GitHub repositories are supported; private repositories and custom Git hosts are not yet supported.
+
+## Publish a repository
+
+Use this layout in any public GitHub repository:
+
+```text
+modules/
+  index.json
+  my-panel/
+    module.json
+    panel.html
+```
+
+`modules/index.json` lists each module directory and its package files:
+
+```json
+{
+  "api_version": 1,
+  "modules": [
+    {"path": "my-panel", "files": ["module.json", "panel.html"]}
+  ]
+}
+```
+
+Paths are relative to `modules/`; files are relative to that module directory. Include assets explicitly. Keep IDs unique in the catalog. Follow the same package validation and version rules as ZIP modules. Bump the module version when changing its bytes. See the [working catalog](../modules/index.json).
+
+## Optional read permissions
+
+A manifest can declare `"permissions": ["models"]`. Supported grants: `downloads`, `git`, `models`, `images`, `research`, `runs`. The host mediates these requests; panels do not receive cookies or arbitrary API access. Git and model-download data require an admin account. Images, research and runs retain the signed-in user's existing ownership rules.
+
+```js
+parent.postMessage({type: 'novum:request', id: 'refresh-1', capability: 'models'}, '*');
+window.addEventListener('message', event => {
+  if (event.source !== parent || event.data?.type !== 'novum:response') return;
+  // Match event.data.id to the request; use event.data.data or show event.data.error.
+});
+```
+
+Responses contain `title`, `summary`, `items` and an optional `notice`. Git requests may include a `workspace` folder, checked against the existing allowed workspace policy. Fixed `novum:open` actions (`gallery`, `research`, `tasks`, `integrations`) open the app's existing tools; arbitrary URLs and commands are not accepted.
+
+These first panels provide read-only views, refreshed every 15 seconds while visible and on demand. Image editing and generation remain in Gallery/chat; research detail remains in Research; run approvals remain in their chats. Downloads watch covers Cookbook model downloads, not browser downloads. It does not run after its panel closes or deliver background completion alerts. Git desk shows tracked local changes, not remote pull requests or CI. Model monitor shows available models and, for administrators, loaded Ollama models and VRAM bytes; it does not unload models. These limits appear in the panels themselves.
+
 ## Try a panel
 
 The [Focus timer](../examples/modules/focus-timer) is a working, self-contained example. Package it from its own directory so the manifest sits at the ZIP root:
@@ -70,7 +117,7 @@ Installation never connects a tool server. Choose Connect MCP server explicitly,
 
 ## Panel boundaries
 
-A panel is an opaque sandboxed iframe. It cannot read chats, cookies, local storage, parent DOM or desktop management commands. Network requests, forms, nested frames and external scripts are blocked. There are no package install scripts, Python hooks or native plugins.
+A panel is an opaque sandboxed iframe. It cannot read chats, cookies, local storage, parent DOM or desktop management commands. Direct network requests, forms, nested frames and external scripts are blocked. Declared data requests travel through the host bridge. There are no package install scripts, Python hooks or native plugins.
 
 The host sends a one-way theme message after the frame loads and when the theme changes:
 
@@ -83,4 +130,4 @@ window.addEventListener('message', event => {
 });
 ```
 
-Tokens are `bg`, `fg`, `panel`, `border` and `red` (the existing accent token). Panels cannot send commands back to the app. Use MCP for agent tools. This first module API does not include a marketplace, automatic downloads or access to application data.
+Tokens are `bg`, `fg`, `panel`, `border` and `red` (the existing accent token). Panels may request only the declared read permissions and fixed tool-opening actions described above. Use MCP for agent tools. Downloads happen only when an administrator installs or updates a module; there is no automatic marketplace installation.

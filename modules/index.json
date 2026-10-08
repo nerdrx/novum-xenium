@@ -1,0 +1,54 @@
+{
+  "api_version": 1,
+  "modules": [
+    {
+      "path": "downloads-watch",
+      "files": [
+        "module.json",
+        "panel.html"
+      ]
+    },
+    {
+      "path": "git-desk",
+      "files": [
+        "module.json",
+        "panel.html"
+      ]
+    },
+    {
+      "path": "model-monitor",
+      "files": [
+        "module.json",
+        "panel.html"
+      ]
+    },
+    {
+      "path": "image-studio",
+      "files": [
+        "module.json",
+        "panel.html"
+      ]
+    },
+    {
+      "path": "research-shelf",
+      "files": [
+        "module.json",
+        "panel.html"
+      ]
+    },
+    {
+      "path": "run-inbox",
+      "files": [
+        "module.json",
+        "panel.html"
+      ]
+    },
+    {
+      "path": "focus-timer",
+      "files": [
+        "module.json",
+        "panel.html"
+      ]
+    }
+  ]
+}

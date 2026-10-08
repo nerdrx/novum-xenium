@@ -25,6 +25,7 @@ use tauri::{
 use tauri::{
     path::BaseDirectory, AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
+mod zvram;
 
 const DEFAULT_PROJECT: &str = "odysseus-local";
 const COMMAND_OUTPUT_LIMIT: usize = 128 * 1024;
@@ -90,6 +91,7 @@ struct UpdateResult {
 #[derive(Default)]
 struct NativeState {
     operation: Arc<Mutex<()>>,
+    zvram_operation: Arc<Mutex<()>>,
     workbench_port: Arc<std::sync::atomic::AtomicU16>,
     last_workbench_notification: Mutex<Option<Instant>>,
     zoom_levels: Mutex<HashMap<String, usize>>,
@@ -2326,7 +2328,10 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
             read_logs,
             open_workbench,
             check_update,
-            update_backend
+            update_backend,
+            zvram::zvram_status,
+            zvram::zvram_choose_installation,
+            zvram::zvram_action
         ])
 }
 

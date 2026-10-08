@@ -96,6 +96,51 @@
               <button class="button button-warning" type="button" data-action="update" disabled>Apply update</button>
             </div>
           </section>
+
+          <details class="panel zvram-panel" id="zvram-panel">
+            <summary class="zvram-summary">
+              <span><span class="eyebrow">Experimental provider</span><strong>zVram model server</strong></span>
+              <span class="zvram-summary-note">Separate from Ollama · manual controls only</span>
+            </summary>
+            <p class="panel-description">Installed zVram is detected automatically. Choose a model to manage a separate local Vulkan server. This does not change Ollama or your default model.</p>
+            <div class="zvram-toolbar">
+              <button class="button button-secondary" type="button" id="zvram-choose">Choose installation</button>
+              <button class="button button-quiet button-small" type="button" id="zvram-refresh">Refresh</button>
+              <span id="zvram-installation" class="zvram-installation">No installation selected.</span>
+            </div>
+            <p id="zvram-error" class="zvram-error" role="alert" hidden></p>
+            <p id="zvram-status" class="zvram-status" role="status" aria-live="polite">Open this panel to find zVram and inspect local models.</p>
+            <div class="zvram-hardware" id="zvram-hardware" hidden>
+              <div><span>GPU</span><strong id="zvram-gpu">—</strong></div>
+              <div><span>Memory status</span><strong id="zvram-memory">—</strong></div>
+            </div>
+            <form id="zvram-profile-form" class="zvram-form">
+              <h3>Save model profile</h3>
+              <label class="field"><span>GGUF model</span><select id="zvram-model" required disabled><option value="">Choose an installation first</option></select></label>
+              <div class="zvram-form-grid">
+                <label class="field"><span>Model alias</span><input id="zvram-alias" type="text" maxlength="80" required placeholder="nx-my-model"></label>
+                <label class="field field-port"><span>Port</span><input id="zvram-port" type="number" min="1" max="65535" value="8097" required></label>
+                <label class="field"><span>Context size</span><input id="zvram-context" type="number" min="256" step="256" value="4096" required></label>
+              </div>
+              <label class="zvram-optin"><input id="zvram-compressed" type="checkbox"><span>Enable experimental BP16 paging</span></label>
+              <p class="zvram-budget-note">These are eligible allocation budgets, not reserved physical VRAM. Native and untracked allocations remain outside the resident limit.</p>
+              <details class="zvram-budget-details" id="zvram-budget-details">
+                <summary>Memory budgets (MiB)</summary>
+                <div class="zvram-form-grid">
+                  <label class="field"><span>Resident</span><input id="zvram-resident" type="number" min="1" value="12288" disabled></label>
+                  <label class="field"><span>Cold</span><input id="zvram-cold" type="number" min="1" value="8192" disabled></label>
+                  <label class="field"><span>Clean cache</span><input id="zvram-clean-cache" type="number" min="1" value="1024" disabled></label>
+                  <label class="field"><span>Headroom</span><input id="zvram-headroom" type="number" min="1" value="1024" disabled></label>
+                  <label class="field"><span>Virtual heap (GiB)</span><input id="zvram-virtual" type="number" min="1" value="40" disabled></label>
+                </div>
+              </details>
+              <button class="button button-primary" type="submit" id="zvram-save" disabled>Save profile</button>
+            </form>
+            <section class="zvram-profiles" aria-labelledby="zvram-profiles-heading">
+              <h3 id="zvram-profiles-heading">Saved profiles</h3>
+              <div id="zvram-profile-list" class="zvram-profile-list"><p class="panel-description">Profiles appear after a refresh.</p></div>
+            </section>
+          </details>
         </div>
         <p class="privacy-note">This manager runs locally. It does not store credentials.</p>
       </main>

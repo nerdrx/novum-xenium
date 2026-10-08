@@ -75,6 +75,29 @@ def test_approval_and_error_never_look_complete(monkeypatch, event):
         asyncio.run(runner("builder-session", "Do work", read_only=False, owner="alice", context=context))
 
 
+@pytest.mark.parametrize("event", [
+    'data: {"type":"ask_user","data":{"kind":"tool_approval","approval_id":"a1"}}\n\n',
+    'data: {"type":"ask_user","data":{"kind":"question","question":"Which option?"}}\n\n',
+])
+def test_user_gate_is_reported_only_after_terminal_sse_is_consumed(monkeypatch, event):
+    consumed = []
+
+    async def stream(_request):
+        async def events():
+            yield event
+            consumed.append("metrics")
+            yield 'data: {"type":"metrics","data":{"tool_events":[{"ask_user":{"kind":"question"}}]}}\n\n'
+            consumed.append("done")
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(events(), headers={"X-Odysseus-Run-Id": "run-gated"})
+
+    runner, context, stopped = _wire(monkeypatch, stream)
+    with pytest.raises(RuntimeError, match="needs your approval or input"):
+        asyncio.run(runner("builder-session", "Do work", read_only=False, owner="alice", context=context))
+    assert consumed == ["metrics", "done"]
+    assert stopped == []
+
+
 @pytest.mark.parametrize("owner,expected_model", [("bob", "builder-model"), ("alice", "wrong-model")])
 def test_runner_rejects_owner_or_participant_model_mismatch(monkeypatch, owner, expected_model):
     async def stream(_request):

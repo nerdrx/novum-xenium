@@ -98,7 +98,7 @@ docker compose -f docker-compose.yml -f docker.executor.yml up -d --build
 
 The worker mounts only the standard `/workspace` code folder. It receives no model keys, application data, Docker socket or SSH identity. Its root filesystem is read-only, privileges are dropped, and process, memory and CPU limits apply. Bash and Python commands run there; native file tools and browser tools remain in the app. Shell state is not shared with the application's tmux terminal. Network access remains available for package downloads. The container is a practical separation boundary, not a claim that arbitrary hostile code is harmless.
 
-Select a workspace inside `/workspace`; a different mount requires matching `ODYSSEUS_EXECUTOR_ROOT` and worker volume configuration. A missing worker fails the command without retrying it inside the app. Existing host-network installation overrides need an explicit reachable worker URL; the optional file above targets the normal Docker network.
+Select a workspace inside `/workspace`; a different mount requires matching `ODYSSEUS_EXECUTOR_ROOT` and worker volume configuration. A missing worker fails the command without retrying it inside the app. After updating the app, rebuild the optional worker with the same Compose command above: older workers without caller-owned job IDs reject execution before any command is sent. These IDs let Stop clean up even when a job was accepted but its response was lost. Existing host-network installation overrides need an explicit reachable worker URL; the optional file above targets the normal Docker network.
 
 ## Preflight, run evidence and coding evaluations
 

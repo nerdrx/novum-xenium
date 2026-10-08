@@ -51,6 +51,7 @@ def create_assignment_runner(chat_stream, session_manager):
         tools = 0
         failed = False
         complete = False
+        needs_user_input = False
         verification_passed = None
         required_verification_failed = False
         try:
@@ -88,7 +89,7 @@ def create_assignment_runner(chat_stream, session_manager):
                         ask_user = event.get("ask_user") or (event.get("data") if event.get("type") == "ask_user" else {})
                         if (event.get("type") in {"tool_approval", "ask_user"} or event.get("approval_id")
                                 or isinstance(ask_user, dict) and ask_user.get("kind") == "tool_approval"):
-                            raise RuntimeError("Assignment needs your approval or input. Open the participant chat; inspect before retrying the team pass.")
+                            needs_user_input = True
                         if isinstance(event.get("delta"), str):
                             output.append(event["delta"])
                             if sum(map(len, output)) > 24_000:
@@ -115,6 +116,8 @@ def create_assignment_runner(chat_stream, session_manager):
                 raise RuntimeError("Assignment stopped before completion; inspect the participant chat")
             if not complete:
                 raise RuntimeError("Assignment ended without a completion signal")
+            if needs_user_input:
+                raise RuntimeError("Assignment needs your approval or input. Open the participant chat; inspect before retrying the team pass.")
             if verification_passed is False and required_verification_failed:
                 raise RuntimeError("Required project checks failed; inspect the participant chat before review")
             result = "\n\n".join(part for part in ["".join(output).strip(), *tool_reports] if part)

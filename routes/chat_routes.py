@@ -2109,30 +2109,38 @@ def setup_chat_routes(
                     ))
                 else:
                     _img_task = asyncio.create_task(do_generate_image(f"{_user_msg}\n{sess.model}\n512x512", session, owner=_user))
-                _img_started = time.time()
-                _img_tick = 0
-                while not _img_task.done():
+                try:
+                    _img_started = time.time()
+                    _img_tick = 0
+                    while not _img_task.done():
+                        try:
+                            _progress = await asyncio.wait_for(_progress_queue.get(), timeout=2.0)
+                        except asyncio.TimeoutError:
+                            _progress = None
+                        _img_tick += 1
+                        _elapsed = int(time.time() - _img_started)
+                        _label = "Editing image" if _image_upload else "Generating image"
+                        yield ": image generation still running\n\n"
+                        _progress_data = {"type": "tool_progress", "tool": _image_tool_name, "message": f"{_label}… {_elapsed}s", "elapsed": _elapsed, "tick": _img_tick}
+                        if isinstance(_progress, dict) and _progress.get("total"):
+                            _step = int(_progress.get("step") or 0)
+                            _total = int(_progress.get("total") or 0)
+                            _percent = _progress.get("percent")
+                            _progress_data.update({
+                                "step": _step,
+                                "total": _total,
+                                "percent": _percent,
+                                "message": f"{_label}… {_step}/{_total}",
+                            })
+                        yield f'data: {json.dumps(_progress_data)}\n\n'
+                    _img_result = await _img_task
+                finally:
+                    if not _img_task.done():
+                        _img_task.cancel()
                     try:
-                        _progress = await asyncio.wait_for(_progress_queue.get(), timeout=2.0)
-                    except asyncio.TimeoutError:
-                        _progress = None
-                    _img_tick += 1
-                    _elapsed = int(time.time() - _img_started)
-                    _label = "Editing image" if _image_upload else "Generating image"
-                    yield ": image generation still running\n\n"
-                    _progress_data = {"type": "tool_progress", "tool": _image_tool_name, "message": f"{_label}… {_elapsed}s", "elapsed": _elapsed, "tick": _img_tick}
-                    if isinstance(_progress, dict) and _progress.get("total"):
-                        _step = int(_progress.get("step") or 0)
-                        _total = int(_progress.get("total") or 0)
-                        _percent = _progress.get("percent")
-                        _progress_data.update({
-                            "step": _step,
-                            "total": _total,
-                            "percent": _percent,
-                            "message": f"{_label}… {_step}/{_total}",
-                        })
-                    yield f'data: {json.dumps(_progress_data)}\n\n'
-                _img_result = await _img_task
+                        await _img_task
+                    except asyncio.CancelledError:
+                        pass
                 _img_output = _img_result.get("results", _img_result.get("error", ""))
                 _img_tool_data = {"type": "tool_output", "tool": _image_tool_name, "command": _user_msg[:100], "output": _img_output, "exit_code": 0 if "error" not in _img_result else 1}
                 for _k in ("image_url", "image_id", "image_prompt", "image_model", "image_size", "image_quality"):

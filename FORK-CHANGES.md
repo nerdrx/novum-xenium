@@ -6,6 +6,12 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Team passes finish saving a participant's approval or question before handing control back. Reopening that chat retains its actionable controls instead of only a bare request for permission; no approval is granted automatically.
+
+- Worktree removal distinguishes confirmed deletion from a failed list refresh, hides stale removed rows and offers Retry. Older load failures cannot replace a newer inspection status.
+- Image chat Stop cancels and awaits its child operation. A disconnected bridge request stops and reaps its owned CLI group; browser disconnects retain ordinary detached-run behavior. Saved image metadata uses artifact dimensions instead of assuming the requested size.
+- Separate workers accept caller-owned job IDs so cancellation can target accepted jobs even when the POST reply is lost. A bounded cancellation fence rejects late creation after Stop; older workers require a rebuild before receiving a command.
+
 - Archive bulk restore keeps failed chats selected for retry, reports actual outcomes and ignores repeated restore clicks while preserving new selections.
 - Foreground activity requests Stop for every captured scheduled run, including forced runs, while preserving later replacement-run ownership.
 - The Codex image bridge follows a custom CODEX_HOME image cache unless CODEX_IMAGE_ROOT explicitly overrides it.
@@ -208,3 +214,5 @@ October 8 cancellation and Calendar follow-up: the frozen suite passed **6,654 t
 October 8 image sizing and concurrent-outcome follow-up: the frozen suite passed **6,658 tests with 17 skips**. Fixtures verify supported Codex image sizes for native chat and MCP payloads while preserving local diffusion sizes and owner forwarding. SQLite regressions complete two forced runs from the same starting counter, including a persisted legacy null. Hidden Chrome checks mixed and total Library export failures without real downloads. A fresh standard Docker app passed login, title save, team-task rejection, manifest and scheduled-task create/delete checks. Actual image generation remains separate from these fixture checks.
 
 October 8 archive and background-stop follow-up: the frozen suite passed **6,661 tests with 17 skips**. Hidden Chrome exercises mixed and total restore failures, successful retry, duplicate clicks and selections added during a pending restore. SQLite cancellation fixtures stop normal and forced runs before their side effects, preserve a later replacement run and verify its completion. Synthetic cache tests follow custom CODEX_HOME and explicit image-root precedence without reading credentials or generating images. These fixtures verify app-side cancellation and cache lookup, not upstream-provider cancellation or image quality.
+
+The deployed image-model chat path generated a new chicken illustration through `chatgpt-image-codex` in **26.39 seconds**, with a completed stream and no error events. The saved PNG was fetched, decoded and visually inspected; its actual dimensions were 1254 by 1254 despite a 1024-square request, exposing the metadata mismatch repaired in the subsequent fixture-tested change. The owned Gallery item was deleted and test chat archived. This establishes one end-to-end generation, not arbitrary prompt quality, edit support or provider-side cancellation. No local model was loaded. Actual deployed welcome CSS also passed hidden Chrome checks at 320 and 390 pixels without a fixture stylesheet.

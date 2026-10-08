@@ -2,6 +2,8 @@ import ast
 import asyncio
 import json
 import re
+import threading
+from urllib.parse import urlencode
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -70,7 +72,7 @@ class _NullDb:
         return None
 
 
-def _recovery_post_client(monkeypatch, *, checkpoint_store, workspace, model="model-a", endpoint_url="https://model.example/v1"):
+def _recovery_post_client(monkeypatch, *, checkpoint_store, workspace, model="model-a", endpoint_url="https://model.example/v1", expose_route_context=False):
     from types import SimpleNamespace
     import src.foreground_model_routing as foreground_model_routing
 
@@ -141,7 +143,12 @@ def _recovery_post_client(monkeypatch, *, checkpoint_store, workspace, model="mo
     app = FastAPI()
     app.add_middleware(_IdentityMiddleware)
     app.dependency_overrides[chat_routes.require_chat_api_token_scope] = lambda: None
-    app.include_router(chat_routes.setup_chat_routes(manager, SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace()))
+    router = chat_routes.setup_chat_routes(manager, SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
+    app.include_router(router)
+    if expose_route_context:
+        captured["app"] = app
+        captured["manager"] = manager
+        captured["router"] = router
     return TestClient(app), captured
 
 
@@ -216,6 +223,49 @@ def test_checkpoint_endpoint_is_owner_scoped_and_browser_only(recovery_client):
     assert client.get("/api/chat/checkpoint/session-a", headers={
         "x-test-user": "alice", INTERNAL_TOOL_HEADER: "internal",
     }).status_code == 403
+
+
+def test_group_approval_stream_saves_reloadable_gate_before_runner_returns(tmp_path, monkeypatch):
+    from src import auth_helpers, group_chat_runner
+    from routes import session_routes
+
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "gate-runs.sqlite"), recover_on_open=False)
+    client, captured = _recovery_post_client(monkeypatch, checkpoint_store=store, workspace=str(tmp_path), expose_route_context=True)
+    payload = {"kind": "tool_approval", "approval_id": "approval-1", "question": "Allow?", "options": ["Yes", "No"]}
+    persisted = []
+
+    async def ask_user_loop(*_args, **_kwargs):
+        yield 'data: {"delta":"Allow this task to continue?"}\n\n'
+        yield f'data: {json.dumps({"type": "ask_user", "data": payload})}\n\n'
+        yield f'data: {json.dumps({"type": "metrics", "data": {"tool_events": [{"ask_user": payload}]}})}\n\n'
+        yield "data: [DONE]\n\n"
+
+    def save_gate(_db, _manager, _session_id, content, metrics, **_kwargs):
+        persisted.append({"role": "assistant", "content": content, "metadata": dict(metrics)})
+        return "saved-gate"
+
+    monkeypatch.setattr(chat_routes, "stream_agent_loop", ask_user_loop)
+    monkeypatch.setattr(chat_routes, "save_assistant_response", save_gate)
+    monkeypatch.setattr(auth_helpers, "storage_owner_for_request", lambda request: request.state.current_user)
+    monkeypatch.setattr(session_routes, "_verify_session_owner", lambda *_args, **_kwargs: None)
+    matching_routes = [route for route in captured["router"].routes if getattr(route, "path", None) == "/api/chat_stream"]
+    assert matching_routes, [getattr(route, "path", None) for route in client.app.routes]
+    endpoint = matching_routes[0].endpoint
+    runner = group_chat_runner.create_assignment_runner(endpoint, captured["manager"])
+    context = {
+        "request_scope": {"app": client.app, "state": {"current_user": "alice"}, "headers": [],
+                          "client": ("127.0.0.1", 1), "server": ("test", 80)},
+        "options": {"workspace": str(tmp_path)},
+        "models": {"session-a": "model-a"},
+    }
+
+    with pytest.raises(RuntimeError, match="needs your approval or input"):
+        asyncio.run(runner("session-a", "Do work", read_only=False, owner="alice", context=context))
+
+    assert persisted and persisted[0]["metadata"]["tool_events"][0]["ask_user"] == payload
+    # This is the exact history shape chatRenderer consumes when the participant chat is reopened.
+    reopened = persisted[0]
+    assert reopened["metadata"]["tool_events"][-1]["ask_user"]["approval_id"] == "approval-1"
 
 
 def test_chat_stream_continue_claims_once_and_preserves_saved_read_only_mode(tmp_path, monkeypatch):
@@ -559,6 +609,127 @@ def test_archive_failure_does_not_consume_recovery_checkpoint(tmp_path, monkeypa
     assert store.get("session-a", "alice")["can_continue"] is True
     assert captured == {}
     assert "private request content" not in caplog.text
+
+
+@pytest.mark.parametrize(("editing", "end_mode"), [
+    (False, "stop"), (True, "stop"), (False, "complete"),
+    (True, "complete"), (False, "disconnect"),
+])
+def test_image_run_child_lifecycle(tmp_path, monkeypatch, editing, end_mode):
+    from src import agent_runs, ai_interaction
+    from starlette.requests import Request
+
+    actual_start = agent_runs.start
+    actual_subscribe = agent_runs.subscribe
+    store = _interrupted_store(
+        tmp_path / f"image-{editing}-{end_mode}.sqlite", workspace="",
+    )
+    client, _captured = _recovery_post_client(
+        monkeypatch, checkpoint_store=store, workspace="",
+    )
+    monkeypatch.setattr(chat_routes, "_is_image_generation_session", lambda *_args, **_kwargs: True)
+    if editing:
+        monkeypatch.setattr(
+            chat_routes, "_first_image_attachment",
+            lambda *_args, **_kwargs: {"path": "/tmp/fixture.png", "id": "fixture-image"},
+        )
+
+    started = threading.Event()
+    child_cancelled = threading.Event()
+    child_finished = threading.Event()
+    release_child = None
+
+    async def blocked_image(*_args, **_kwargs):
+        started.set()
+        try:
+            if end_mode != "complete":
+                await release_child.wait()
+            return {"results": "fixture completed"}
+        except asyncio.CancelledError:
+            child_cancelled.set()
+            raise
+        finally:
+            child_finished.set()
+
+    monkeypatch.setattr(
+        ai_interaction, "do_edit_image" if editing else "do_generate_image", blocked_image,
+    )
+    # Use the actual detached-run manager; the helper normally replaces start
+    # and subscribe to inspect the generated recovery context.
+    monkeypatch.setattr(chat_routes.agent_runs, "start", actual_start)
+    monkeypatch.setattr(chat_routes.agent_runs, "subscribe", actual_subscribe)
+
+    included_router = next(
+        route.original_router for route in client.app.routes
+        if getattr(route, "original_router", None) is not None
+    )
+    endpoint = next(
+        route.endpoint for route in included_router.routes
+        if getattr(route, "path", "") == "/api/chat_stream"
+    )
+    fields = urlencode({
+        "session": "session-a", "message": "Continue", "mode": "agent",
+        "recovery_run_id": "run-a", "workspace": "",
+    }).encode()
+
+    async def exercise_stop():
+        nonlocal release_child
+        release_child = asyncio.Event()
+        received = False
+
+        async def receive():
+            nonlocal received
+            if not received:
+                received = True
+                return {"type": "http.request", "body": fields, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        request = Request({
+            "type": "http", "asgi": {"version": "3.0"},
+            "http_version": "1.1", "method": "POST", "scheme": "http",
+            "path": "/api/chat_stream", "raw_path": b"/api/chat_stream",
+            "query_string": b"", "headers": [(b"content-type", b"application/x-www-form-urlencoded"),
+                                                   (b"x-test-user", b"alice")],
+            "client": ("test", 123), "server": ("test", 80), "app": client.app,
+        }, receive)
+        request.state.current_user = "alice"
+        response = await endpoint(request)
+        assert response.status_code == 200
+        run_id = response.headers.get("X-Odysseus-Run-Id")
+        assert run_id
+        if not await asyncio.to_thread(started.wait, 3):
+            run = agent_runs._RUNS.get("session-a")
+            raise AssertionError(f"image child task did not start: {getattr(run, 'buffer', None)}")
+        if end_mode == "stop":
+            assert agent_runs.stop("session-a", run_id)
+            cancelled = await asyncio.to_thread(child_cancelled.wait, 0.5)
+            if not cancelled:
+                # Keep the regression failure bounded and do not leave its fixture
+                # child blocked on a closed event loop.
+                release_child.set()
+                await asyncio.to_thread(child_finished.wait, 2)
+            return cancelled
+        if end_mode == "disconnect":
+            await asyncio.wait_for(anext(response.body_iterator), timeout=3)
+            await response.body_iterator.aclose()
+            assert not child_cancelled.is_set()
+            release_child.set()
+            finished = await asyncio.to_thread(child_finished.wait, 2)
+            run = agent_runs._RUNS.get("session-a")
+            if finished and run and run.task:
+                await asyncio.wait_for(run.task, timeout=2)
+            return finished and not child_cancelled.is_set()
+        chunks = [chunk async for chunk in response.body_iterator]
+        body = b"".join(chunk if isinstance(chunk, bytes) else chunk.encode() for chunk in chunks)
+        assert b"fixture completed" in body
+        assert not child_cancelled.is_set()
+        return True
+
+    assert asyncio.run(exercise_stop()), (
+        "Stop left the image child task running" if end_mode == "stop"
+        else "image run did not complete"
+    )
+    assert child_finished.is_set()
 
 
 def test_legacy_request_completeness_stays_unknown_after_recovery_start(tmp_path, monkeypatch):

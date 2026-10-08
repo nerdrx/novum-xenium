@@ -21,6 +21,18 @@ def _pid_running(pid):
         return False
 
 
+def _start_worker(monkeypatch, tmp_path, handler=None):
+    token = "t" * 32
+    monkeypatch.setattr(server, "TOKEN", token)
+    monkeypatch.setattr(server, "ROOT", tmp_path.resolve())
+    monkeypatch.setattr(server, "JOBS", {})
+    monkeypatch.setattr(server, "_CANCELLED_IDS", {})
+    worker = ThreadingHTTPServer(("127.0.0.1", 0), handler or server.Handler)
+    thread = threading.Thread(target=worker.serve_forever, daemon=True)
+    thread.start()
+    return worker, token
+
+
 def test_validate_rejects_symlink_escape(tmp_path, monkeypatch):
     root = tmp_path / "workspace"
     root.mkdir()
@@ -173,6 +185,145 @@ async def test_client_cancellation_deletes_worker_job(tmp_path, monkeypatch):
         worker.server_close()
 
 
+@pytest.mark.asyncio
+async def test_client_cancellation_during_job_creation_deletes_accepted_job(tmp_path, monkeypatch):
+    execution_runtime = importlib.import_module("src.execution_runtime")
+    tool_execution = importlib.import_module("src.tool_execution")
+    response_entered = threading.Event()
+    release_response = threading.Event()
+    base_handler = server.Handler
+
+    class DelayedResponseHandler(base_handler):
+        def reply(self, status, body):
+            if status == 202:
+                response_entered.set()
+                release_response.wait(3)
+            try:
+                super().reply(status, body)
+            except BrokenPipeError:
+                pass  # Client canceled the accepted POST before its response.
+
+    worker, token = _start_worker(monkeypatch, tmp_path, DelayedResponseHandler)
+    monkeypatch.setattr(tool_execution, "get_active_workspace", lambda: str(tmp_path))
+    monkeypatch.setattr(tool_execution, "agent_cwd", lambda: str(tmp_path))
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", f"http://127.0.0.1:{worker.server_port}")
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_TOKEN", token)
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_ROOT", str(tmp_path))
+    marker = tmp_path / "created-after-cancel"
+    code = f"import time,pathlib;time.sleep(1);pathlib.Path({str(marker)!r}).write_text('x')"
+    task = asyncio.create_task(execution_runtime.execute_isolated(code, {}, language="python"))
+    try:
+        assert await asyncio.to_thread(response_entered.wait, 3)
+        deadline = time.monotonic() + 3
+        while (not server.JOBS or not next(iter(server.JOBS.values())).get("proc")) and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert len(server.JOBS) == 1  # POST accepted; only the response is held.
+        assert next(iter(server.JOBS.values())).get("proc") is not None
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        deadline = time.monotonic() + 3
+        while server.JOBS and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert not server.JOBS
+        release_response.set()
+        await asyncio.sleep(1.2)
+        assert not marker.exists()
+    finally:
+        release_response.set()
+        if not task.done():
+            task.cancel()
+        worker.shutdown()
+        worker.server_close()
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_old_worker_before_post(tmp_path, monkeypatch):
+    import uuid
+
+    execution_runtime = importlib.import_module("src.execution_runtime")
+    tool_execution = importlib.import_module("src.tool_execution")
+    post_seen = threading.Event()
+    base_handler = server.Handler
+
+    class LegacyWorkerHandler(base_handler):
+        def do_GET(self):
+            if self.path == "/health":
+                if not self.authorized():
+                    return
+                self.reply(404, {"error": "Not found"})
+                return
+            super().do_GET()
+
+        def do_POST(self):
+            if not self.authorized():
+                return
+            post_seen.set()
+            self.reply(202, {"id": uuid.uuid4().hex})
+
+    worker, token = _start_worker(monkeypatch, tmp_path, LegacyWorkerHandler)
+    monkeypatch.setattr(tool_execution, "get_active_workspace", lambda: str(tmp_path))
+    monkeypatch.setattr(tool_execution, "agent_cwd", lambda: str(tmp_path))
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", f"http://127.0.0.1:{worker.server_port}")
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_TOKEN", token)
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_ROOT", str(tmp_path))
+    try:
+        result = await execution_runtime.execute_isolated("print('must not run')", {}, language="python")
+        assert result == {
+            "error": "Separate execution worker must be rebuilt to support safe job cancellation",
+            "exit_code": 1,
+        }
+        assert not post_seen.is_set()
+        assert not server.JOBS
+    finally:
+        worker.shutdown()
+        worker.server_close()
+
+
+def test_delete_before_late_post_prevents_job_creation(tmp_path, monkeypatch):
+    import httpx
+    import uuid
+
+    worker, token = _start_worker(monkeypatch, tmp_path)
+    job_id = uuid.uuid4().hex
+    headers = {"Authorization": f"Bearer {token}"}
+    marker = tmp_path / "late-job-ran"
+    try:
+        with httpx.Client() as client:
+            invalid_delete = client.delete(f"http://127.0.0.1:{worker.server_port}/jobs/junk", headers=headers)
+            assert invalid_delete.status_code == 404
+            assert not server._CANCELLED_IDS
+            deleted = client.delete(f"http://127.0.0.1:{worker.server_port}/jobs/{job_id}", headers=headers)
+            created = client.post(f"http://127.0.0.1:{worker.server_port}/jobs", headers=headers, json={
+                "id": job_id,
+                "code": f"import pathlib;pathlib.Path({str(marker)!r}).write_text('x')",
+                "language": "python", "cwd": ".", "timeout": 5,
+            })
+        assert deleted.status_code == 200
+        assert created.status_code == 410
+        assert not server.JOBS
+        assert not marker.exists()
+        with httpx.Client() as client:
+            invalid = client.post(f"http://127.0.0.1:{worker.server_port}/jobs", headers=headers, json={
+                "id": "../unvalidated", "code": "print('no')",
+                "language": "python", "cwd": ".", "timeout": 5,
+            })
+        assert invalid.status_code == 400
+        assert not server.JOBS
+        # Older clients omit the ID and keep receiving a server-generated one.
+        with httpx.Client() as client:
+            legacy = client.post(f"http://127.0.0.1:{worker.server_port}/jobs", headers=headers, json={
+                "code": "print('legacy')", "language": "python", "cwd": ".", "timeout": 5,
+            })
+            assert legacy.status_code == 202
+            legacy_id = legacy.json()["id"]
+            assert len(legacy_id) == 32
+            assert client.delete(f"http://127.0.0.1:{worker.server_port}/jobs/{legacy_id}", headers=headers).status_code == 200
+    finally:
+        worker.shutdown()
+        worker.server_close()
+
+
 @pytest.mark.parametrize("stalled_poll", [False, True])
 @pytest.mark.asyncio
 async def test_client_deadline_cleans_up_worker_that_never_finishes(tmp_path, monkeypatch, stalled_poll):
@@ -206,6 +357,7 @@ async def test_client_deadline_cleans_up_worker_that_never_finishes(tmp_path, mo
     class Response:
         def __init__(self, body):
             self.body = body
+            self.status_code = 200
 
         def raise_for_status(self):
             pass
@@ -224,9 +376,11 @@ async def test_client_deadline_cleans_up_worker_that_never_finishes(tmp_path, mo
             pass
 
         async def post(self, *_args, **_kwargs):
-            return Response({"id": "stuck"})
+            return Response({"id": _kwargs["json"]["id"]})
 
         async def get(self, *_args, **_kwargs):
+            if _args[0].endswith("/health"):
+                return Response({"client_job_ids": True})
             polls.append(True)
             return Response({"status": "running", "output": ""})
 

@@ -122,6 +122,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
   let selectedWorkspace = "";
   let closed = false;
   let busy = false;
+  let statusGeneration = 0;
   let refreshPromise = null;
   const controller = new AbortController();
   const status = (message) => { if (!closed) live.textContent = message; };
@@ -208,6 +209,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
   };
   const setBusy = (isBusy, message) => {
     if (closed) return;
+    if (isBusy) statusGeneration++;
     busy = !!isBusy;
     for (const node of panel.querySelectorAll("button, input, textarea")) node.disabled = busy;
     status(message);
@@ -222,6 +224,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
       worktreeList.replaceChildren();
       for (const worktree of data.worktrees || []) {
         const row = el("li");
+        row.dataset.worktreeId = worktree.id;
         const summary = el("span", `${worktree.repository} → ${worktree.path} (${String(worktree.commit || "").slice(0, 12)})`);
         const runButton = button("Run checks");
         const removeButton = button("Remove worktree");
@@ -240,8 +243,30 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
           setBusy(true, "Removing worktree safely…");
           try {
             show(await api(`/api/project-workflows/worktrees/${encodeURIComponent(worktree.id)}`, { method: "DELETE" }));
-            await refreshWorktrees(true);
-            status("Worktree removed. Dirty or ignored worktrees are preserved.");
+            row.remove();
+            try {
+              await refreshWorktrees(true);
+              status("Worktree removed. Dirty or ignored worktrees are preserved.");
+            } catch (error) {
+              worktreeList.querySelectorAll("li[data-worktree-id]").forEach((item) => {
+                if (item.dataset.worktreeId === worktree.id) item.remove();
+              });
+              status(`Worktree removed, but the list could not refresh: ${error.message}`);
+              const retryButton = button("Retry list refresh");
+              const retryItem = el("li");
+              retryButton.addEventListener("click", async () => {
+                if (busy || closed) return;
+                setBusy(true, "Refreshing worktree list…");
+                try {
+                  await refreshWorktrees(true);
+                  status("Worktree list refreshed.");
+                } catch (refreshError) {
+                  status(`Worktree removed, but the list could not refresh: ${refreshError.message}`);
+                } finally { setBusy(false, live.textContent); }
+              });
+              retryItem.append(retryButton);
+              worktreeList.prepend(retryItem);
+            }
           } catch (error) { status(error.message); }
           finally { setBusy(false, live.textContent); }
         });
@@ -361,7 +386,10 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
   });
 
   pathInput.addEventListener("input", () => { selectedWorkspace = ""; });
-  refreshWorktrees().catch((error) => status(error.message));
+  const initialStatusGeneration = statusGeneration;
+  refreshWorktrees().catch((error) => {
+    if (initialStatusGeneration === statusGeneration) status(error.message);
+  });
   return () => {
     closed = true;
     controller.abort();

@@ -10,6 +10,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import select
+import socket
 import shutil
 import signal
 import stat
@@ -30,12 +32,49 @@ IMAGE_ROOT = Path(os.environ.get("CODEX_IMAGE_ROOT") or (_CODEX_HOME / "generate
 MODEL = "chatgpt-image-codex"
 MAX_BODY = 128_000
 MAX_IMAGE = 32 * 1024 * 1024
+PROCESS_TERM_GRACE = 3
 LOCK = threading.Lock()
 LOG = logging.getLogger("codex_images")
 
 
 class NoImageGenerated(ValueError):
     """The worker completed without producing a new image for this request."""
+
+
+class ClientDisconnected(ConnectionError):
+    """The HTTP peer closed while the owned CLI worker was running."""
+
+
+def _client_disconnected(connection):
+    """Check EOF/reset without consuming any queued HTTP bytes."""
+    try:
+        readable, _, _ = select.select([connection], [], [], 0)
+        if not readable:
+            return False
+        return connection.recv(1, socket.MSG_PEEK) == b""
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+
+def _stop_process_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=PROCESS_TERM_GRACE)
+    except subprocess.TimeoutExpired:
+        pass
+    # The CLI may exit on TERM while one of its descendants ignores it.
+    # Escalate against the original process group, then reap the CLI itself.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    if process.poll() is None:
+        process.wait()
 
 
 def validate_request(data):
@@ -97,7 +136,7 @@ def started_thread_event(stream):
     raise ValueError("Codex returned no thread.started event")
 
 
-def generate(prompt, size, quality):
+def generate(prompt, size, quality, disconnected=None):
     if not CODEX:
         raise RuntimeError("Codex CLI was not found on PATH; set CODEX_CLI to its executable")
     JOB_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -133,22 +172,36 @@ def generate(prompt, size, quality):
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output,
                                        stderr=errors, env=environment, start_new_session=True)
             try:
-                process.communicate(instructions.encode(), timeout=270)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
-                raise TimeoutError("Codex image generation exceeded 270 seconds")
+                deadline = time.monotonic() + 270
+                worker_input = instructions.encode()
+                while True:
+                    try:
+                        process.communicate(
+                            input=worker_input,
+                            timeout=min(0.25, max(0, deadline - time.monotonic())),
+                        )
+                        break
+                    except subprocess.TimeoutExpired:
+                        # communicate() retains its partially-written stdin buffer;
+                        # retry without resending it, preserving bounded polling.
+                        worker_input = None
+                        if disconnected and disconnected():
+                            raise ClientDisconnected()
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Codex image generation exceeded 270 seconds")
+            except (TimeoutError, ClientDisconnected):
+                _stop_process_group(process)
+                raise
+            except BaseException:
+                _stop_process_group(process)
+                raise
             if process.returncode:
                 errors.seek(0)
                 LOG.error("Codex failed: %s", errors.read(2000).decode(errors="replace"))
                 raise RuntimeError("Codex image generation failed; check the bridge service log")
             output.seek(0)
             event = started_thread_event(output)
-    return image_for_thread([event])
+    return image_for_thread([event], IMAGE_ROOT)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -157,13 +210,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status, data):
         body = json.dumps(data).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+        except ConnectionError:
+            return False
+        return True
 
     def authenticated(self):
         expected = "Bearer " + self.server.token
@@ -197,9 +254,13 @@ class Handler(BaseHTTPRequestHandler):
         if not LOCK.acquire(blocking=False):
             return self.reply(429, {"error": {"message": "An image is already being generated; retry after it finishes"}})
         try:
-            blob, width, height = generate(prompt, size, quality)
+            blob, width, height = generate(
+                prompt, size, quality, disconnected=lambda: _client_disconnected(self.connection),
+            )
             self.reply(200, {"created": int(time.time()), "data": [{"b64_json": base64.b64encode(blob).decode()}],
                              "model": MODEL, "size": f"{width}x{height}"})
+        except ClientDisconnected:
+            LOG.info("Image client disconnected; stopped bridge-owned Codex worker")
         except TimeoutError as error:
             self.reply(504, {"error": {"message": str(error)}})
         except NoImageGenerated as error:

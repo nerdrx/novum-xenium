@@ -89,7 +89,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
         import httpx
         from src.settings import load_settings, get_setting
-        from src.ai_interaction import _resolve_model, _auto_detect_image_model
+        from src.ai_interaction import _resolve_model, _auto_detect_image_model, _image_dimensions
 
         if not get_setting("image_gen_enabled", True):
             return [TextContent(type="text", text="Error: Image generation is disabled by the administrator.")]
@@ -151,6 +151,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             img = images[0]
             image_url = None
+            actual_size = None
             # Prefix the instance's public base URL (existing app_public_url setting) so the
             # link is fully-qualified and clickable when the model echoes it. Empty = relative
             # same-origin path (unchanged default).
@@ -161,7 +162,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 img_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{uuid.uuid4().hex[:12]}.png"
                 img_path = img_dir / filename
-                img_path.write_bytes(base64.b64decode(img["b64_json"]))
+                image_bytes = base64.b64decode(img["b64_json"])
+                actual_size = _image_dimensions(image_bytes)
+                img_path.write_bytes(image_bytes)
                 image_url = f"{_pub_base}/api/generated-image/{filename}"
 
                 # Save to gallery
@@ -173,7 +176,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         filename=filename,
                         prompt=prompt,
                         model=model_id,
-                        size=size,
+                        size=actual_size or size,
                         quality=payload.get("quality", "medium"),
                         owner=owner,
                     ))
@@ -192,7 +195,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = (
                 f"Generated image for: {prompt[:100]}\n"
                 f"Direct link: {image_url}\n"
-                f"model: {model_id}\nsize: {size}"
+                f"model: {model_id}\nsize: {actual_size or size}"
             )
             return [TextContent(type="text", text=result)]
 

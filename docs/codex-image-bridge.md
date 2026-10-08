@@ -16,7 +16,7 @@ systemctl --user enable --now odysseus-codex-images
 
 The installer creates a private token at `data/credentials/codex-image-bridge.token`, preserves any existing token, and installs a user service. Review the token locally; never commit or share it. On a host without systemd, run the installer to create the token, then start `python3 scripts/codex_image_bridge.py` directly.
 
-The installer remembers the Codex executable found on your terminal's PATH. To override it, or if none was found, create `~/.config/odysseus/codex-images.env` containing `CODEX_CLI=/absolute/path/to/codex`. For a nonstandard native image cache, set `CODEX_IMAGE_ROOT=/absolute/path/to/generated_images` there too. Restart the bridge after changing these settings.
+The installer remembers the Codex executable found on your terminal's PATH. To override it, or if none was found, create `~/.config/odysseus/codex-images.env` containing `CODEX_CLI=/absolute/path/to/codex`. A configured `CODEX_HOME` supplies its `generated_images` cache automatically. To override only the image cache, set `CODEX_IMAGE_ROOT=/absolute/path/to/generated_images` there too. Restart the bridge after changing these settings.
 
 The server binds only `127.0.0.1:8111`, checks its bearer token, and produces at most one new PNG per request. It reads only the native image cache belonging to that CLI run. Failed or image-less runs remain failures; it does not claim an earlier Gallery image is a new result.
 
@@ -40,9 +40,11 @@ Open **Settings → AI → Image Generation**. The **Model** picker lists `chatg
 
 **Auto-detect** uses the configured endpoint credentials to discover image models, including the authenticated bridge. This does not install a bridge or transfer Codex credentials into Odysseus. Model discovery can fail while the service is offline; a saved model is configuration, not a live connection check.
 
-Quality and size are visual guidance for the Codex bridge, not guaranteed rendering controls or per-image prices. Generated images are stored by Odysseus in its persistent Gallery. The bridge generates new images only.
+Quality and size are visual guidance for the Codex bridge, not guaranteed rendering controls or per-image prices. The saved image dimensions are read from the artifact for Gallery and chat metadata; they can differ from the requested size. Generated images are stored by Odysseus in its persistent Gallery. The bridge generates new images only.
 
 ## Stop or inspect
+
+The chat Stop action cancels its image task. When that closes the bridge request, the bridge stops and reaps its owned CLI process group. Closing the browser tab alone leaves a detached chat run active. CLI cleanup does not establish that provider-side computation stops or that usage is refunded.
 
 ```bash
 journalctl --user -u odysseus-codex-images --no-pager -n 30

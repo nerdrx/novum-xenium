@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import uuid
 from pathlib import Path
 
 import httpx
@@ -29,12 +30,21 @@ async def execute_isolated(content, ctx: dict, *, language: str):
     try:
         worker_timeout = min(int(os.getenv("ODYSSEUS_EXECUTOR_TIMEOUT", "3600")), 3600)
         async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+            health = await client.get(f"{url}/health", headers=headers)
+            if health.status_code == 404:
+                return {"error": "Separate execution worker must be rebuilt to support safe job cancellation", "exit_code": 1}
+            health.raise_for_status()
+            if health.json().get("client_job_ids") is not True:
+                return {"error": "Separate execution worker must be rebuilt to support safe job cancellation", "exit_code": 1}
+            # Caller-chosen IDs let cancellation clean up if the POST response is lost.
+            job = uuid.uuid4().hex
             response = await client.post(f"{url}/jobs", headers=headers, json={
-                "code": str(content), "language": language, "cwd": cwd,
+                "id": job, "code": str(content), "language": language, "cwd": cwd,
                 "timeout": worker_timeout,
             })
             response.raise_for_status()
-            job = response.json()["id"]
+            if response.json().get("id") != job:
+                return {"error": "Separate execution worker returned an unexpected job ID", "exit_code": 1}
             # The worker enforces this timeout for the command itself. Keep a
             # client-side bound too, so a lost/stuck worker cannot pin a run
             # forever; the extra 15s covers one bounded in-flight HTTP poll.

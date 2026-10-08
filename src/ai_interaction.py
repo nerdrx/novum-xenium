@@ -67,6 +67,18 @@ def set_rag_manager(rag_mgr, personal_docs_mgr=None):
     _personal_docs_manager = personal_docs_mgr
 
 
+def _image_dimensions(image_bytes: bytes) -> Optional[str]:
+    """Return dimensions from the artifact itself, never provider metadata."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        with Image.open(BytesIO(image_bytes)) as image:
+            width, height = image.size
+        return f"{width}x{height}" if width > 0 and height > 0 else None
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Model resolution
 # ---------------------------------------------------------------------------
@@ -1103,8 +1115,9 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
             img = images[0]
             image_url = None
             image_id = None
+            actual_size = None
 
-            def _save_to_gallery(filename: str) -> str:
+            def _save_to_gallery(filename: str, image_size: Optional[str]) -> str:
                 """Insert a GalleryImage row and return the new id (or '')."""
                 try:
                     from src.database import SessionLocal as _GallerySL, GalleryImage
@@ -1115,7 +1128,7 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
                         filename=filename,
                         prompt=prompt,
                         model=model_id,
-                        size=size,
+                        size=image_size or size,
                         quality=payload.get("quality", "medium"),
                         session_id=session_id,
                         owner=owner,
@@ -1132,10 +1145,12 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
                 img_dir = Path(GENERATED_IMAGES_DIR)
                 img_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{uuid.uuid4().hex[:12]}.png"
+                image_bytes = base64.b64decode(img.get("b64_json"))
+                actual_size = _image_dimensions(image_bytes)
                 img_path = img_dir / filename
-                img_path.write_bytes(base64.b64decode(img.get("b64_json")))
+                img_path.write_bytes(image_bytes)
                 image_url = f"/api/generated-image/{filename}"
-                image_id = _save_to_gallery(filename)
+                image_id = _save_to_gallery(filename, actual_size)
 
             elif img.get("url"):
                 # Download external URL and save locally (DALL-E returns temp URLs)
@@ -1154,8 +1169,9 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
                         filename = f"{uuid.uuid4().hex[:12]}.png"
                         img_path = img_dir / filename
                         img_path.write_bytes(dl_resp.content)
+                        actual_size = _image_dimensions(dl_resp.content)
                         image_url = f"/api/generated-image/{filename}"
-                        image_id = _save_to_gallery(filename)
+                        image_id = _save_to_gallery(filename, actual_size)
                     else:
                         image_url = result_url  # fallback to external URL
                 except Exception as _dl_e:
@@ -1170,7 +1186,7 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
                 "image_id": image_id,
                 "image_prompt": prompt,
                 "image_model": model_id,
-                "image_size": size,
+                "image_size": actual_size or size,
                 "image_quality": payload.get("quality", "medium"),
             }
 
@@ -1252,7 +1268,7 @@ async def do_edit_image(
 
     logger.info("Image edit: model=%s, size=%s, quality=%s, image=%s, prompt=%s", model_id, size, quality, path.name, prompt[:80])
 
-    def _save_edited_image_to_gallery(filename: str) -> str:
+    def _save_edited_image_to_gallery(filename: str, image_size: Optional[str]) -> str:
         try:
             from src.database import SessionLocal as _GallerySL, GalleryImage
             new_id = str(uuid.uuid4())
@@ -1262,7 +1278,7 @@ async def do_edit_image(
                 filename=filename,
                 prompt=prompt,
                 model=model_id,
-                size=size,
+                size=image_size or size,
                 quality=payload.get("quality", "medium"),
                 session_id=session_id,
                 owner=owner,
@@ -1274,12 +1290,14 @@ async def do_edit_image(
             logger.warning("Failed to save edited image gallery record: %s", _ge)
             return ""
 
-    def _save_image_bytes(image_bytes: bytes, suffix: str = ".png") -> tuple[str, str]:
+    def _save_image_bytes(image_bytes: bytes, suffix: str = ".png") -> tuple[str, str, Optional[str]]:
         img_dir = Path(GENERATED_IMAGES_DIR)
         img_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{uuid.uuid4().hex[:12]}{suffix}"
         (img_dir / filename).write_bytes(image_bytes)
-        return f"/api/generated-image/{filename}", _save_edited_image_to_gallery(filename)
+        actual_size = _image_dimensions(image_bytes)
+        return (f"/api/generated-image/{filename}",
+                _save_edited_image_to_gallery(filename, actual_size), actual_size)
 
     async def _try_local_img2img_fallback(client: httpx.AsyncClient) -> Optional[Dict[str, Any]]:
         """Try Odysseus' local diffusion img2img endpoint.
@@ -1325,14 +1343,14 @@ async def do_edit_image(
             image_b64 = fallback_data.get("image")
             if not image_b64:
                 return {"error": "Image edit fallback returned no image"}
-            image_url, image_id = _save_image_bytes(base64.b64decode(image_b64))
+            image_url, image_id, actual_size = _save_image_bytes(base64.b64decode(image_b64))
             return {
                 "results": f"Edited image for: {prompt[:100]}",
                 "image_url": image_url,
                 "image_id": image_id,
                 "image_prompt": prompt,
                 "image_model": model_id,
-                "image_size": size,
+                "image_size": actual_size or size,
                 "image_quality": payload.get("quality", "medium"),
                 "edit_route": "img2img",
             }
@@ -1417,9 +1435,10 @@ async def do_edit_image(
             img = images[0]
             image_url = None
             image_id = None
+            actual_size = None
 
             if img.get("b64_json"):
-                image_url, image_id = _save_image_bytes(base64.b64decode(img.get("b64_json")))
+                image_url, image_id, actual_size = _save_image_bytes(base64.b64decode(img.get("b64_json")))
             elif img.get("url"):
                 result_url = img["url"]
                 ok, reason = check_outbound_url(
@@ -1431,7 +1450,7 @@ async def do_edit_image(
                 dl_resp = httpx.get(result_url, timeout=60)
                 if dl_resp.status_code != 200:
                     return {"error": f"Could not download edited image ({dl_resp.status_code})"}
-                image_url, image_id = _save_image_bytes(dl_resp.content)
+                image_url, image_id, actual_size = _save_image_bytes(dl_resp.content)
             else:
                 return {"error": "Image edit API returned unexpected format (no b64_json or url)"}
 
@@ -1441,7 +1460,7 @@ async def do_edit_image(
                 "image_id": image_id,
                 "image_prompt": prompt,
                 "image_model": model_id,
-                "image_size": size,
+                "image_size": actual_size or size,
                 "image_quality": payload.get("quality", "medium"),
             }
     except httpx.TimeoutException:

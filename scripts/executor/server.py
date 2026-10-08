@@ -16,6 +16,23 @@ ROOT = Path(os.getenv("EXECUTOR_ROOT", "/workspace")).resolve()
 JOBS = {}
 LOCK = threading.RLock()
 TOKEN = os.getenv("ODYSSEUS_EXECUTOR_TOKEN", "")
+_CANCELLED_IDS: dict[str, float] = {}
+_CANCEL_TTL = 60
+_MAX_CANCELLED_IDS = 128
+
+
+def _purge_cancelled_ids(now: float) -> None:
+    for job_id, expires in list(_CANCELLED_IDS.items()):
+        if expires <= now:
+            _CANCELLED_IDS.pop(job_id, None)
+
+
+def _remember_cancelled_id(job_id: str, now: float) -> None:
+    _purge_cancelled_ids(now)
+    if job_id not in _CANCELLED_IDS and len(_CANCELLED_IDS) >= _MAX_CANCELLED_IDS:
+        oldest = min(_CANCELLED_IDS, key=_CANCELLED_IDS.get)
+        _CANCELLED_IDS.pop(oldest, None)
+    _CANCELLED_IDS[job_id] = now + _CANCEL_TTL
 
 
 def harden_process() -> None:
@@ -174,15 +191,26 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Invalid request size")
             body = json.loads(self.rfile.read(size))
             args = validate(body)
+            requested_id = body.get("id")
+            if requested_id is not None and (
+                    not isinstance(requested_id, str)
+                    or uuid.UUID(requested_id).hex != requested_id):
+                raise ValueError("Invalid job ID")
         except (ValueError, TypeError, AttributeError):
             return self.reply(400, {"error": "Invalid execution request"})
         with LOCK:
+            now = time.monotonic()
+            _purge_cancelled_ids(now)
             for key, job in list(JOBS.items()):
-                if job.get("finished", time.monotonic()) < time.monotonic() - 600:
+                if job.get("finished", now) < now - 600:
                     JOBS.pop(key)
+            if requested_id in _CANCELLED_IDS:
+                return self.reply(410, {"error": "Job was canceled before it was accepted"})
             if sum(j["status"] == "running" for j in JOBS.values()) >= 4 or len(JOBS) >= 64:
                 return self.reply(429, {"error": "Worker busy"})
-            job_id = uuid.uuid4().hex
+            job_id = requested_id or uuid.uuid4().hex
+            if job_id in JOBS:
+                return self.reply(409, {"error": "Job ID is already in use"})
             job = {"id": job_id, "status": "running", "output": "", "exit_code": 1, "cancelled": False}
             JOBS[job_id] = job
             threading.Thread(target=run, args=(job, *args), daemon=True).start()
@@ -191,6 +219,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.authorized():
             return
+        if self.path == "/health":
+            return self.reply(200, {"client_job_ids": True})
         with LOCK:
             job = JOBS.get(self.path.removeprefix("/jobs/")) if self.path.startswith("/jobs/") else None
             if not job:
@@ -204,7 +234,13 @@ class Handler(BaseHTTPRequestHandler):
             key = self.path.removeprefix("/jobs/")
             job = JOBS.get(key) if self.path.startswith("/jobs/") else None
             if not job:
-                return self.reply(404, {"error": "Not found"})
+                try:
+                    if uuid.UUID(key).hex != key:
+                        raise ValueError
+                except (ValueError, AttributeError):
+                    return self.reply(404, {"error": "Not found"})
+                _remember_cancelled_id(key, time.monotonic())
+                return self.reply(200, {"stopped": True})
             if job["status"] == "running":
                 job["delete_requested"] = True
                 kill(job)

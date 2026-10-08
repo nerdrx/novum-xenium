@@ -135,3 +135,5 @@ desktop/src-tauri/target/
 desktop/src-tauri/gen/
 
 dist-desktop/
+
+!desktop/src-tauri/icons/icon.png

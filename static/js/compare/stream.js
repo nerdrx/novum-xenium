@@ -740,6 +740,7 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
         e.stopPropagation();
         try {
           const resp = await fetch(imgD.url);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const blob = await resp.blob();
           const a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
@@ -747,7 +748,7 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
           document.body.appendChild(a);
           a.click();
           a.remove();
-          URL.revokeObjectURL(a.href);
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
           dlBtn.textContent = '\u2713';
           setTimeout(() => { dlBtn.textContent = '\u2913'; }, 1500);
         } catch { dlBtn.textContent = '\u2717'; setTimeout(() => { dlBtn.textContent = '\u2913'; }, 1500); }

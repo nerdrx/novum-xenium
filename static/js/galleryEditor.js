@@ -3849,12 +3849,21 @@ function _openCookbookForImg2img() {
   if (uiModule) uiModule.showToast('Open Cookbook from the sidebar to serve an img2img model', 6000);
 }
 
-export function downloadPNG() {
-  const dataUrl = exportPNG();
-  const a = document.createElement('a');
-  a.href = dataUrl;
-  a.download = 'edited-image.png';
-  a.click();
+export async function downloadPNG() {
+  try {
+    const blob = await new Promise(resolve => flatten().toBlob(resolve, 'image/png'));
+    if (!blob || !blob.size) throw new Error('PNG encoding failed');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'edited-image.png';
+    document.body.appendChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    a.click();
+    a.remove();
+  } catch {
+    if (uiModule) uiModule.showToast('Could not prepare the PNG download. Try again.', 5000);
+  }
 }
 
 // Save the entire layered editor state as a JSON project file. Each

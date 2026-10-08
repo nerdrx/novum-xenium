@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, Read, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -779,6 +780,165 @@ fn workbench_control_origin_allowed(url: &tauri::Url, port: u16) -> bool {
         && url.host_str() == Some("127.0.0.1")
 }
 
+fn browser_url_allowed(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
+fn workbench_blob_allowed(url: &tauri::Url, port: u16) -> bool {
+    // Let WebKit process <a download> blobs produced by this exact backend.
+    // They never go to the external opener or receive native manager access.
+    url.scheme() == "blob"
+        && url
+            .as_str()
+            .strip_prefix("blob:")
+            .and_then(|inner| inner.parse::<tauri::Url>().ok())
+            .is_some_and(|inner| workbench_control_origin_allowed(&inner, port))
+}
+
+fn safe_download_name(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("download");
+    let mut safe = String::new();
+    for character in name.chars() {
+        let character = if character.is_control() || "<>:\"/\\|?*".contains(character) {
+            '_'
+        } else {
+            character
+        };
+        if safe.len() + character.len_utf8() > 180 {
+            break;
+        }
+        safe.push(character);
+    }
+    let safe = safe.trim().trim_matches('.').trim();
+    let stem = safe.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if safe.is_empty()
+        || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+    {
+        return "download".into();
+    }
+    safe.to_owned()
+}
+
+#[cfg(target_os = "linux")]
+fn download_workbench_blob(window: &WebviewWindow, url: String) {
+    let owner = window.clone();
+    let _ = window.with_webview(move |webview| {
+        use std::{
+            cell::{Cell, RefCell},
+            rc::Rc,
+        };
+        use webkit2gtk::{DownloadExt, URIResponseExt, WebViewExt};
+        let Some(download) = webview.inner().download_uri(&url) else {
+            workbench_notice(&owner, "Could not start this image download.");
+            return;
+        };
+        // WebKit blob requests have no URI; Wry skips its download callback.
+        // Handle this one returned download directly, without page IPC access.
+        let selected = Rc::new(RefCell::new(None::<PathBuf>));
+        let failed = Rc::new(Cell::new(false));
+        let destination = selected.clone();
+        let chooser_owner = owner.clone();
+        download.connect_decide_destination(move |download, name| {
+            let fallback = match download.response().and_then(|r| r.mime_type()).as_deref() {
+                Some("image/png") => "image.png",
+                Some("image/jpeg") => "image.jpg",
+                Some("image/webp") => "image.webp",
+                Some("application/zip") => "download.zip",
+                Some("application/json") => "download.json",
+                _ => "download",
+            };
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Save file")
+                .set_file_name(safe_download_name(Path::new(if name.is_empty() {
+                    fallback
+                } else {
+                    name
+                })))
+                .set_parent(&chooser_owner);
+            if let Ok(directory) = chooser_owner.app_handle().path().download_dir() {
+                dialog = dialog.set_directory(directory);
+            }
+            match dialog.save_file() {
+                Some(path) if path.is_absolute() => {
+                    download.set_destination(&path.to_string_lossy());
+                    *destination.borrow_mut() = Some(path);
+                }
+                _ => {
+                    download.cancel();
+                    workbench_notice(&chooser_owner, "Save cancelled.");
+                }
+            }
+            true
+        });
+        let failed_flag = failed.clone();
+        download.connect_failed(move |_, _| failed_flag.set(true));
+        download.connect_finished(move |_| {
+            if let Some(path) = selected.borrow().as_ref() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                workbench_notice(
+                    &owner,
+                    &if failed.get() {
+                        format!("Could not save {name}. Check the destination and try again.")
+                    } else {
+                        format!("Saved {name}.")
+                    },
+                );
+            }
+        });
+    });
+}
+
+fn workbench_notice(window: &WebviewWindow, message: &str) {
+    // textContent + JSON serialization keep filenames/URLs out of executable JS.
+    let message =
+        serde_json::to_string(message).unwrap_or_else(|_| "\"Desktop action failed\"".into());
+    let _ = window.eval(&format!(r#"(() => {{
+        document.getElementById('nx-desktop-notice')?.remove();
+        const notice=document.createElement('div'); notice.id='nx-desktop-notice'; notice.role='status';
+        notice.textContent={message};
+        notice.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;max-width:80vw;padding:12px 16px;border:2px solid var(--border,#554466);border-radius:10px;background:var(--bg,#17151b);color:var(--fg,#eee);font:13px sans-serif';
+        document.body.append(notice);setTimeout(()=>notice.remove(),8000);
+    }})()"#));
+}
+
+fn open_workbench_browser(app: &AppHandle, url: &tauri::Url) {
+    if !browser_url_allowed(url) {
+        if let Some(window) = app.get_webview_window("workbench") {
+            workbench_notice(
+                &window,
+                if matches!(url.scheme(), "blob" | "data") {
+                    "Save this image first. Embedded image addresses cannot open in your external browser."
+                } else {
+                    "Only HTTP and HTTPS links can open in your external browser."
+                },
+            );
+        }
+        return;
+    }
+    let app = app.clone();
+    let url = url.to_string();
+    thread::spawn(move || {
+        if let Err(error) = open::that(&url) {
+            eprintln!("Cannot open default browser: {error}");
+            if let Some(window) = app.get_webview_window("workbench") {
+                workbench_notice(
+                    &window,
+                    "Could not open your default browser. Check your system browser setting.",
+                );
+            }
+        }
+    });
+}
+
 fn update_workbench_chrome(window: &WebviewWindow) {
     if let Ok(maximized) = window.is_maximized() {
         let _ = window.eval(&format!(
@@ -829,7 +989,11 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
         .map_err(|e| format!("Invalid workbench URL: {e}"))?;
     if let Some(existing) = app.get_webview_window("workbench") {
         let old_port = state.workbench_port.load(Ordering::Acquire);
-        if old_port != config.port {
+        if old_port != config.port
+            || existing
+                .url()
+                .map_or(true, |url| !workbench_origin_allowed(&url, config.port))
+        {
             state.workbench_port.store(config.port, Ordering::Release);
             if let Err(error) = existing.navigate(parsed) {
                 state.workbench_port.store(old_port, Ordering::Release);
@@ -850,11 +1014,75 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
     state.workbench_port.store(config.port, Ordering::Release);
     let allowed_port = state.workbench_port.clone();
     let navigation_app = app.clone();
+    let popup_app = app.clone();
+    let downloads = Arc::new(Mutex::new(HashMap::<String, Vec<Option<PathBuf>>>::new()));
     WebviewWindowBuilder::new(app, "workbench", WebviewUrl::External(parsed))
         .title("Novum Xenium Workbench")
         .initialization_script(include_str!("workspace_reload.js"))
         .initialization_script(include_str!("workspace_chrome.js"))
+        .enable_clipboard_access()
         .inner_size(1360.0, 900.0)
+        .on_new_window(move |url, _features| {
+            open_workbench_browser(&popup_app, &url);
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .on_download(move |webview, event| {
+            match event {
+                tauri::webview::DownloadEvent::Requested { url, destination } => {
+                    let native_window = webview.window();
+                    let mut dialog = rfd::FileDialog::new().set_title("Save file")
+                        .set_file_name(safe_download_name(destination)).set_parent(&native_window);
+                    if let Ok(directory) = webview.app_handle().path().download_dir() {
+                        dialog = dialog.set_directory(directory);
+                    }
+                    match dialog.save_file() {
+                        Some(selected) if selected.is_absolute() => {
+                            downloads.lock().expect("download lock poisoned")
+                                .entry(url.to_string()).or_default().push(Some(selected.clone()));
+                            *destination = selected;
+                        }
+                        _ => {
+                            downloads.lock().expect("download lock poisoned")
+                                .entry(url.to_string()).or_default().push(None);
+                            if let Some(window) = webview.app_handle().get_webview_window("workbench") {
+                                workbench_notice(&window, "Save cancelled.");
+                            }
+                            return false;
+                        }
+                    }
+                }
+                tauri::webview::DownloadEvent::Finished { url, path, success } => {
+                    let mut pending = downloads.lock().expect("download lock poisoned");
+                    let selected = pending.get_mut(url.as_str()).and_then(|paths| {
+                        if paths.is_empty() { return None; }
+                        let index = path.as_ref().and_then(|completed| paths.iter()
+                            .position(|chosen| chosen.as_ref() == Some(completed))).unwrap_or(0);
+                        paths.remove(index)
+                    });
+                    if pending.get(url.as_str()).is_some_and(Vec::is_empty) { pending.remove(url.as_str()); }
+                    drop(pending);
+                    // Cancellations have no chosen destination and need no failure toast.
+                    if let Some(selected) = selected {
+                        let selected = path.unwrap_or(selected);
+                        let name = selected.file_name().unwrap_or_default().to_string_lossy();
+                        let message = if success {
+                            format!("Saved {name}.")
+                        } else if selected.is_file() {
+                            // WebKit/Wry can retain a cancelled download's failed flag.
+                            // Existence alone cannot prove integrity, so report uncertainty.
+                            format!("Download ended with a browser warning. Check {name} before using it.")
+                        } else {
+                            format!("Could not save {name}. Check the destination and try again.")
+                        };
+                        if let Some(window) = webview.app_handle().get_webview_window("workbench") {
+                            workbench_notice(&window, &message);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            true
+        })
         .on_navigation(move |next| {
             let port = allowed_port.load(Ordering::Acquire);
             if next.scheme() == "nx-workbench" {
@@ -879,7 +1107,23 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
                 }
                 return false;
             }
-            workbench_origin_allowed(next, port)
+            if workbench_blob_allowed(next, port) {
+                #[cfg(target_os = "linux")]
+                {
+                    // Wry's GTK navigation callback forces policy.use(), which
+                    // bypasses <a download>. Start this same-view blob download
+                    // explicitly instead of navigating away from the workspace.
+                    if let Some(window) = navigation_app.get_webview_window("workbench") {
+                        download_workbench_blob(&window, next.to_string());
+                    }
+                    return false;
+                }
+                #[cfg(not(target_os = "linux"))]
+                { return true; }
+            }
+            if workbench_origin_allowed(next, port) { return true; }
+            if browser_url_allowed(next) { open_workbench_browser(&navigation_app, next); }
+            false
         })
         .on_page_load(|window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
@@ -1914,6 +2158,57 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn external_browser_accepts_only_web_urls_without_credentials() {
+        for url in [
+            "http://127.0.0.1:7000/static/image.png",
+            "https://example.org/image.png?name=hello%20world",
+        ] {
+            assert!(browser_url_allowed(&url.parse().unwrap()));
+        }
+        for url in [
+            "blob:http://127.0.0.1:7000/id",
+            "data:image/png;base64,AA==",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "nx-workbench://close",
+            "https://user:secret@example.org/",
+        ] {
+            assert!(!browser_url_allowed(&url.parse().unwrap()));
+        }
+    }
+
+    #[test]
+    fn download_suggestions_are_portable_basenames() {
+        assert_eq!(safe_download_name(Path::new("/tmp/image.png")), "image.png");
+        assert_eq!(safe_download_name(Path::new("../photo?.png")), "photo_.png");
+        assert_eq!(
+            safe_download_name(Path::new("evil\\image\n.png")),
+            "evil_image_.png"
+        );
+        for name in ["...", "NUL", "CON.txt", "COM1.png", "LPT9", " . "] {
+            assert_eq!(safe_download_name(Path::new(name)), "download");
+        }
+        assert!(safe_download_name(Path::new(&"🐾".repeat(200))).len() <= 180);
+    }
+
+    #[test]
+    fn blob_downloads_require_the_selected_backend_origin() {
+        assert!(workbench_blob_allowed(
+            &"blob:http://127.0.0.1:7000/id".parse().unwrap(),
+            7000
+        ));
+        for url in [
+            "blob:https://evil.org/id",
+            "blob:http://127.0.0.1:7001/id",
+            "blob:file:///etc/image",
+            "data:image/png;base64,AA==",
+            "blob:null/id",
+        ] {
+            assert!(!workbench_blob_allowed(&url.parse().unwrap(), 7000));
+        }
+    }
 
     #[test]
     fn workspace_window_controls_are_narrow_and_origin_pinned() {

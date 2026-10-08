@@ -75,3 +75,15 @@ The workspace supports Ctrl+R (Command+R on macOS) and F5 to reload its current 
 Linux and Windows workbench windows use a compact title bar matched to the workspace theme. Minimize, maximize/restore and close work through window-only controls; the workspace does not gain backend-management permissions. Double-click the title area to maximize. Right-click it to restore your system title bar if needed. macOS keeps its native frame.
 
 After replacing an installed desktop build, use **Quit** in the tray menu and reopen the app. Closing its window can leave the previous process running in the tray.
+
+## Images, links and downloads
+
+Open image in new window and ordinary external HTTP(S) links open your system browser. The browser has its own login cookies: a private image served by the local backend may require signing in there separately. Embedded `blob:` and `data:` image addresses stay inside the workspace; save those images instead.
+
+Save image as and workspace download buttons use a native Save dialog. Cancel leaves the download unsaved. Linux needs a functioning desktop file-chooser portal (GTK or KDE), with Zenity as the fallback. Clipboard access is enabled for the workspace so its Copy image action can use the platform clipboard, without granting container-management IPC permissions.
+
+Some WebKitGTK versions retain a failed-download flag after cancellation. If a later download produces a file but the engine still reports failure, the app asks you to check the saved file rather than claiming either verified success or definite failure.
+
+On Linux, WebKit blob downloads use a MIME-based suggested name (for example `image.png`) when the browser does not provide a filename. The Save dialog lets you rename it. Blob download cancellation is tracked per download, so cancelling does not mark a later saved blob as failed.
+
+Validation: an isolated Linux KWin/WebKit session verified an actual PNG OS-clipboard roundtrip, exact-byte blob saves, cancellation followed by a successful retry, and HTTP(S) default-browser dispatch. The test used controlled replies from a private file-chooser portal and an opener stub; it verifies native integration without claiming manual dialog interaction, direct native context-menu selection, or Windows runtime coverage.

@@ -4,6 +4,15 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Desktop image and link actions
+
+- Routes HTTP(S) new windows and external navigation to the system browser. Embedded blob/data addresses show guidance instead of silently disappearing; private backend URLs may require signing in separately in the browser.
+- Adds a native Save dialog for webview downloads, including generated-image blobs, and enables webview clipboard support without adding manager IPC permissions to the workspace.
+- Starts editor image clipboard writes during the keyboard gesture. Unsupported or denied writes retain the internal editor copy and show a clear fallback message.
+- Rejects failed image HTTP responses before downloading and keeps blob URLs alive long enough for the webview to start reading them.
+
+Validation: focused JavaScript checks cover missing/denied clipboard support, PNG promises, internal copies, failed HTTP responses and blob lifetime. Isolated native Linux WebKit checks decoded a real PNG from the system clipboard and verified saved PNG bytes, cancellation and retry through a controlled private file-chooser portal. An opener stub verified default-browser dispatch without launching the user's browser. Windows runtime remains unverified.
+
 ## Popup movement and tab rendering fix
 
 - Removes the desktop body transform that made fixed popups use a different coordinate system from their shared drag/resize helpers. Header clicks no longer shift windows below the pointer.

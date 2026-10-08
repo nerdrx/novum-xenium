@@ -65,6 +65,25 @@ export function wireKeyboardShortcuts(deps) {
     activeLayer, uiModule,
   } = deps;
 
+  function copyCanvas(canvas, success, fallback) {
+    state.internalClipboard = canvas;
+    const editorOnly = () => uiModule.showToast(fallback);
+    if (typeof navigator.clipboard?.write !== 'function' || typeof ClipboardItem !== 'function') {
+      editorOnly();
+      return;
+    }
+    try {
+      // Start the clipboard write during the key event. WebKit needs the
+      // user gesture even while PNG encoding finishes asynchronously.
+      const png = new Promise((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('PNG encoding failed')), 'image/png');
+      });
+      png.catch(() => {}); // A denied write may never consume the image promise.
+      navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+        .then(() => uiModule.showToast(success), editorOnly);
+    } catch { editorOnly(); }
+  }
+
   document.addEventListener('keydown', (e) => {
     if (!state.editorOpen) return;
     // `?` toggles the cheatsheet. Don't fire while typing in a text
@@ -150,14 +169,7 @@ export function wireKeyboardShortcuts(deps) {
           tCtx.drawImage(src.canvas, 0, 0);
           tCtx.globalCompositeOperation = 'destination-in';
           tCtx.drawImage(state.wandMask, 0, 0);
-          state.internalClipboard = tmp;
-          tmp.toBlob(blob => {
-            if (blob && navigator.clipboard?.write) {
-              navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(() => {
-                uiModule.showToast(isCut ? 'Cut to clipboard' : 'Copied to clipboard');
-              }).catch(() => uiModule.showToast(isCut ? 'Cut (editor only)' : 'Copied (editor only)'));
-            }
-          }, 'image/png');
+          copyCanvas(tmp, isCut ? 'Cut to clipboard' : 'Copied to clipboard', isCut ? 'Cut (editor only)' : 'Copied (editor only)');
           if (isCut) {
             // Cut also moves the selection to a new layer + erases source.
             wandCopyToNewLayer();
@@ -192,15 +204,8 @@ export function wireKeyboardShortcuts(deps) {
           }
         }
         tCtx.putImageData(outData, 0, 0);
-        state.internalClipboard = tmp;
         const isCut = e.key === 'x';
-        tmp.toBlob(blob => {
-          if (blob && navigator.clipboard?.write) {
-            navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(() => {
-              uiModule.showToast(isCut ? 'Cut to clipboard' : 'Copied to clipboard');
-            }).catch(() => uiModule.showToast(isCut ? 'Cut (editor only)' : 'Copied (editor only)'));
-          }
-        }, 'image/png');
+        copyCanvas(tmp, isCut ? 'Cut to clipboard' : 'Copied to clipboard', isCut ? 'Cut (editor only)' : 'Copied (editor only)');
         if (e.key === 'x') {
           const savedPts = [...state.lassoPoints];
           state.lassoPoints = savedPts;
@@ -219,13 +224,11 @@ export function wireKeyboardShortcuts(deps) {
         const layer = activeLayer();
         if (layer && layer.canvas && layer.canvas.width > 0) {
           e.preventDefault();
-          layer.canvas.toBlob(blob => {
-            if (blob && navigator.clipboard?.write) {
-              navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-                .then(() => uiModule.showToast('Layer copied to clipboard'))
-                .catch(() => uiModule.showToast('Copy failed (clipboard permission denied?)'));
-            }
-          }, 'image/png');
+          const copy = document.createElement('canvas');
+          copy.width = layer.canvas.width;
+          copy.height = layer.canvas.height;
+          copy.getContext('2d').drawImage(layer.canvas, 0, 0);
+          copyCanvas(copy, 'Layer copied to clipboard', 'Layer copied (editor only)');
           return;
         }
       }

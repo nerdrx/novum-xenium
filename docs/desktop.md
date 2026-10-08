@@ -70,6 +70,8 @@ Optional `--tray-host none` and `--tray-host fake` modes also test graceful wind
 
 Both desktop windows support Ctrl+/Ctrl− (Command+/Command− on macOS) to zoom the whole page, and Ctrl+0 to reset. Ctrl+mouse wheel also zooms. Zoom stays within 75–200% and is independent for each window.
 
+On Linux, the app disables WebKit's `PreferPageRenderingUpdatesNear60FPS` preference when the host runtime exposes it. This lets the engine target higher refresh rates; actual frame pacing still depends on WebKit, the display server and the compositor. Older runtimes keep their defaults.
+
 The workspace supports Ctrl+R (Command+R on macOS) and F5 to reload its current page. The tray menu also offers Reload workspace. Reloading leaves Docker running but can interrupt a page response; closing to the tray preserves the page instead.
 
 ## Workbench window controls

@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+mod linux_rendering;
 use std::{
     collections::HashMap,
     fs,
@@ -1100,6 +1102,8 @@ fn handle_workbench_window_action(
 #[tauri::command]
 fn mount_manager_chrome(window: WebviewWindow) -> Result<(), String> {
     require_main(&window)?;
+    #[cfg(target_os = "linux")]
+    linux_rendering::prefer_display_refresh(&window);
     window
         .eval(&format!(
             "document.documentElement.dataset.nxWindowManager='true';\n{}",
@@ -1297,6 +1301,10 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
         })
         .build()
         .map_err(|e| format!("Cannot open workbench: {e}"))?;
+    #[cfg(target_os = "linux")]
+    if let Some(window) = app.get_webview_window("workbench") {
+        linux_rendering::prefer_display_refresh(&window);
+    }
     state
         .zoom_levels
         .lock()

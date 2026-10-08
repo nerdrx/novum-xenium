@@ -15,6 +15,7 @@ import signal
 import subprocess
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 import uuid
 
@@ -155,16 +156,29 @@ def main():
         return urllib.request.urlopen(urllib.request.Request(
             base + path, data=payload, headers=request_headers, method=method), timeout=timeout)
     report = {"model": args.model, "endpoint_id": args.endpoint_id, "cases": []}
+    report_path = Path(args.report)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     batch = "nx-eval-" + uuid.uuid4().hex[:10]
     for case in CASES:
         fixture = Path(args.workspace_root) / batch / case["name"]
         fixture.mkdir(parents=True, exist_ok=False)
         for name, content in case["files"].items():
             (fixture / name).write_text(content)
-        with request("/api/session", {"name": f"Evaluation: {case['name']}", "model": args.model,
-                    "endpoint_id": args.endpoint_id, "skip_validation": "true"}) as response:
-            session = json.load(response)["id"]
         started = time.monotonic()
+        try:
+            with request("/api/session", {"name": f"Evaluation: {case['name']}", "model": args.model,
+                        "endpoint_id": args.endpoint_id, "skip_validation": "true"}) as response:
+                session = json.load(response)["id"]
+        except Exception as exc:
+            error = (f"session_http_{exc.code}" if isinstance(exc, urllib.error.HTTPError)
+                     else f"session_{type(exc).__name__}")
+            report["cases"].append({"name": case["name"], "session_id": None, "run_id": None,
+                "seconds": round(time.monotonic() - started, 2), "tool_calls": 0,
+                "stream_complete": False, "incomplete": True, "errors": [error],
+                "stop_requested": False, "file_tests_passed": False, "passed": False,
+                "evidence": None})
+            report_path.write_text(json.dumps(report, indent=2))
+            break
         errors, tool_calls, done, run_id = [], 0, False, None
         stop_requested = False
         try:
@@ -210,7 +224,7 @@ def main():
             "passed": case_passes(done=done, errors=errors,
                                   check_returncode=check_returncode, tool_calls=tool_calls),
             "evidence": evidence})
-        Path(args.report).write_text(json.dumps(report, indent=2))
+        report_path.write_text(json.dumps(report, indent=2))
     print(f"{sum(c['passed'] for c in report['cases'])}/{len(CASES)} tasks passed; report: {args.report}")
     return 0 if all(c["passed"] for c in report["cases"]) else 1
 

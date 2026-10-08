@@ -782,7 +782,7 @@ function _renderAlbumsGrid() {
   _wireAlbumsEvents(wrap);
 }
 
-function _makeAlbumCardKeyboardAccessible(card, label, pressed = null) {
+function _makeGalleryCardKeyboardAccessible(card, label, pressed = null) {
   if (!card) return;
   card.setAttribute('role', 'button');
   card.setAttribute('tabindex', '0');
@@ -803,12 +803,12 @@ function _wireAlbumsEvents(scope) {
   const container = document.getElementById('gallery-albums-container');
   if (!container) return;
 
-  _makeAlbumCardKeyboardAccessible(container.querySelector('#gallery-albums-new.gallery-album-card-add'), 'Create a new album');
-  _makeAlbumCardKeyboardAccessible(container.querySelector('#gallery-albums-upload'), 'Upload an album folder');
+  _makeGalleryCardKeyboardAccessible(container.querySelector('#gallery-albums-new.gallery-album-card-add'), 'Create a new album');
+  _makeGalleryCardKeyboardAccessible(container.querySelector('#gallery-albums-upload'), 'Upload an album folder');
   container.querySelectorAll('.gallery-album-card[data-album]').forEach(card => {
     const album = _albums.find(a => a.id === card.dataset.album);
     const albumName = album?.name || 'Untitled album';
-    _makeAlbumCardKeyboardAccessible(
+    _makeGalleryCardKeyboardAccessible(
       card,
       _albumSelectMode ? `Select album: ${albumName}` : `Open album: ${albumName}, ${album?.count || 0} photos`,
       _albumSelectMode ? _albumSelected.has(card.dataset.album) : null,
@@ -1201,6 +1201,13 @@ function _draftsPaint() {
       </div>`;
   }).join('');
   grid.querySelectorAll('.gallery-editor-draft-card').forEach(card => {
+    const id = card.dataset.draftId;
+    const draftName = _draftsCache.find(d => d.id === id)?.name || 'Untitled';
+    _makeGalleryCardKeyboardAccessible(
+      card,
+      `${_draftsSelectMode ? 'Select' : 'Resume'} project ${draftName}`,
+      _draftsSelectMode ? _draftsSelected.has(id) : null,
+    );
     card.addEventListener('click', (e) => {
       if (e.target.closest('.gallery-editor-draft-delete')) return;
       const id = card.dataset.draftId;
@@ -1208,6 +1215,7 @@ function _draftsPaint() {
       if (_draftsSelectMode) {
         if (_draftsSelected.has(id)) _draftsSelected.delete(id);
         else _draftsSelected.add(id);
+        card.setAttribute('aria-pressed', String(_draftsSelected.has(id)));
         _draftsPaint();
         _draftsSyncBulkBar();
         return;

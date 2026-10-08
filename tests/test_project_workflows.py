@@ -4,6 +4,7 @@ import os
 import asyncio
 import subprocess
 import sys
+import threading
 
 import pytest
 from fastapi import FastAPI
@@ -207,6 +208,8 @@ def test_worktree_owner_scope_verification_and_dirty_cleanup(repo):
         workflows.remove_worktree("alice", created["id"])
     assert os.path.exists(os.path.join(path, "uncommitted.txt"))
     assert workflows.list_worktrees("alice")
+    os.unlink(os.path.join(path, "uncommitted.txt"))
+    assert workflows.remove_worktree("alice", created["id"])["removed"] is True
 
 
 def test_ignored_worktree_files_are_preserved(repo):
@@ -376,6 +379,58 @@ def test_worktree_cannot_be_removed_during_verification(repo, tmp_path):
         assert workflows.remove_worktree("alice", created["id"])["removed"] is True
 
     asyncio.run(verify_then_remove())
+
+
+def test_worktree_removal_git_io_does_not_block_async_verification_loop(repo, monkeypatch):
+    created = workflows.create_worktree("alice", str(repo))
+    entered_git = threading.Event()
+    release_git = threading.Event()
+    remove_result = {}
+    original_run_git = workflows._run_git
+
+    def gated_run_git(target, *args, **kwargs):
+        if target == created["path"] and "status" in args:
+            entered_git.set()
+            release_git.wait(3)
+        return original_run_git(target, *args, **kwargs)
+
+    monkeypatch.setattr(workflows, "_run_git", gated_run_git)
+
+    def remove():
+        try:
+            remove_result["value"] = workflows.remove_worktree("alice", created["id"])
+        except Exception as exc:  # surfaced in the test thread below
+            remove_result["error"] = exc
+
+    remover = threading.Thread(target=remove)
+    remover.start()
+    assert entered_git.wait(2)
+    # Safety release if the assertion regresses and blocks the event loop.
+    safety_release = threading.Timer(0.4, release_git.set)
+    safety_release.start()
+
+    async def verify_while_removing():
+        callback_ran = asyncio.Event()
+        asyncio.get_running_loop().call_soon(callback_ran.set)
+        with pytest.raises(workflows.ProjectWorkflowError, match="removal is running"):
+            await workflows.run_verification("alice", created["id"])
+        await asyncio.wait_for(callback_ran.wait(), timeout=0.2)
+        assert not release_git.is_set()
+        with pytest.raises(workflows.ProjectWorkflowError, match="removal is already running"):
+            workflows.remove_worktree("alice", created["id"])
+        assert not release_git.is_set()
+
+    try:
+        asyncio.run(verify_while_removing())
+    finally:
+        release_git.set()
+        safety_release.cancel()
+        remover.join(timeout=4)
+
+    assert not remover.is_alive()
+    assert "error" not in remove_result, remove_result.get("error")
+    assert remove_result["value"]["removed"] is True
+    assert workflows.list_worktrees("alice") == []
 
 
 def test_config_change_during_verification_is_incomplete_and_preserves_snapshot(repo, tmp_path):

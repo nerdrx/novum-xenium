@@ -21,6 +21,7 @@ from src.tool_execution import vet_workspace
 
 _LOCK = threading.RLock()
 _ACTIVE_VERIFICATIONS: set[tuple[str, str]] = set()
+_ACTIVE_REMOVALS: set[tuple[str, str]] = set()
 _MAX_CHECKS = 8
 _MAX_TIMEOUT = 600
 _OUTPUT_LIMIT = 6000
@@ -907,9 +908,12 @@ def list_worktrees(owner: str) -> list[dict[str, Any]]:
 def remove_worktree(owner: str, identifier: str) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{32}", identifier or ""):
         raise ProjectWorkflowError("Unknown managed worktree")
+    key = (_digest(owner), identifier)
     with _LOCK:
-        if (_digest(owner), identifier) in _ACTIVE_VERIFICATIONS:
+        if key in _ACTIVE_VERIFICATIONS:
             raise ProjectWorkflowError("Verification is running; managed worktree was preserved")
+        if key in _ACTIVE_REMOVALS:
+            raise ProjectWorkflowError("Worktree removal is already running")
         registry = _load_registry(owner)
         record = registry.get(identifier)
         if not isinstance(record, dict) or record.get("owner_key") != _digest(owner):
@@ -921,6 +925,8 @@ def remove_worktree(owner: str, identifier: str) -> dict[str, Any]:
         if (record.get("worktree_root") != expected_root or path != expected_path
                 or record.get("owner_key") != _digest(owner)):
             raise ProjectWorkflowError("Managed worktree path is outside its owner directory")
+        _ACTIVE_REMOVALS.add(key)
+    try:
         repo = record.get("repository")
         if (not isinstance(repo, str) or not os.path.isdir(repo)
                 or resolve_repository(repo) != repo or project_id(owner, repo) != project):
@@ -929,17 +935,30 @@ def remove_worktree(owner: str, identifier: str) -> dict[str, Any]:
                          "--untracked-files=normal", "--ignored=matching")
         if dirty:
             raise ProjectWorkflowError("Managed worktree has modified, untracked, or ignored files; it was preserved")
+        with _LOCK:
+            current = _load_registry(owner).get(identifier)
+            if current != record or key not in _ACTIVE_REMOVALS:
+                raise ProjectWorkflowError("Managed worktree changed during removal; it was preserved")
         # Git is a final guard against a race between status and removal.
         _run_git(repo, "-c", f"core.hooksPath={os.devnull}", "worktree", "remove", path, timeout=60)
-        registry.pop(identifier, None)
-        _save_registry(owner, registry)
+        with _LOCK:
+            registry = _load_registry(owner)
+            if registry.get(identifier) != record:
+                raise ProjectWorkflowError("Managed worktree record changed during removal")
+            registry.pop(identifier, None)
+            _save_registry(owner, registry)
         return {"id": identifier, "removed": True}
+    finally:
+        with _LOCK:
+            _ACTIVE_REMOVALS.discard(key)
 
 
 async def run_verification(owner: str, identifier: str, *, session_id: str | None = None,
                            run_id: str | None = None) -> dict[str, Any]:
     key = (_digest(owner), identifier)
     with _LOCK:
+        if key in _ACTIVE_REMOVALS:
+            raise ProjectWorkflowError("Worktree removal is running; verification was not started")
         if key in _ACTIVE_VERIFICATIONS:
             raise ProjectWorkflowError("Verification is already running for this worktree")
         _ACTIVE_VERIFICATIONS.add(key)

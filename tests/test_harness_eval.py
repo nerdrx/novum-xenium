@@ -160,6 +160,37 @@ def test_verification_timeout_still_writes_case_report(tmp_path, monkeypatch):
     assert "private verification command" not in json.dumps(report)
 
 
+def test_session_creation_http_failure_is_reported_without_response_body(tmp_path, monkeypatch):
+    import io
+    import json
+    import sys
+    import urllib.error
+
+    case = {"name": "unavailable", "files": {}, "prompt": "fixture", "check": "fixture"}
+    later_case = {"name": "must-not-start", "files": {}, "prompt": "fixture", "check": "fixture"}
+    monkeypatch.setattr(harness_eval, "CASES", [case, later_case])
+    report_path = tmp_path / "reports" / "result.json"
+    monkeypatch.setattr(sys, "argv", ["harness_eval", "--workspace-root", str(tmp_path),
+        "--app-workspace-root", "/workspace", "--model", "fixture", "--endpoint-id", "fixture",
+        "--report", str(report_path)])
+    requests = []
+
+    def unavailable(request, **_kwargs):
+        requests.append(request.full_url)
+        raise urllib.error.HTTPError(request.full_url, 503, "unavailable", {},
+                                     io.BytesIO(b"private provider response"))
+
+    monkeypatch.setattr(harness_eval.urllib.request, "urlopen", unavailable)
+    assert harness_eval.main() == 1
+    report = json.loads(report_path.read_text())
+    assert requests == ["http://localhost:7000/api/session"]
+    assert len(report["cases"]) == 1
+    assert report["cases"][0]["errors"] == ["session_http_503"]
+    assert report["cases"][0]["session_id"] is None
+    assert report["cases"][0]["passed"] is False
+    assert "private provider response" not in report_path.read_text()
+
+
 @pytest.mark.parametrize("exit_code", [0, 7])
 def test_file_check_discards_large_output(tmp_path, monkeypatch, exit_code):
     import subprocess

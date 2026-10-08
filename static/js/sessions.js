@@ -10,6 +10,7 @@ import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
 import { installSessionHistory, setSessionHistory } from './sessionHistory.js';
 import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';
+import { resetBrowserPreview } from './browserPreview.js';
 
 const API_BASE = window.location.origin;
 
@@ -315,6 +316,7 @@ function _wireSessionDropdownKeys(dropdown, trigger) {
 /** Clear current session from UI (after delete/archive). */
 function _deselectCurrentSession(sid) {
   if (currentSessionId !== sid) return;
+  resetBrowserPreview();
   currentSessionId = null;
   uiModule.el('chat-history').innerHTML = '';
   uiModule.el('current-meta').textContent = 'Novum Xenium';
@@ -1889,6 +1891,7 @@ export async function loadSessions() {
 }
 
 export async function selectSession(id, { keepSidebar = false, showLoading = true, immediateLoading = false } = {}) {
+  resetBrowserPreview(id);
   // Exit compare mode cleanly if active
   if (window.compareModule && window.compareModule.isActive()) {
     window.compareModule.deactivate(true);
@@ -2119,6 +2122,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
         document.querySelectorAll('.list-item.active-session').forEach(el => el.classList.remove('active-session'));
       }
     }
+    resetBrowserPreview(id);
     uiModule.scrollHistoryInstant();
     if (!isOC && msgHistory.length) {
       _installHistoryPager(id, pageInfo, modelName);
@@ -2280,6 +2284,7 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
   }
 
   // Don't hit the API — just store the model info and prepare the UI
+  resetBrowserPreview();
   _pendingChat = { url, modelId, endpointId, source: incomingSource };
   _pendingMaterializePromise = null;
   _skipAutoSelect = true;
@@ -2599,6 +2604,7 @@ export function initDragSort() {
 }
 
 function _showHomeFromHistory() {
+  resetBrowserPreview();
   clearSubagentInspector();
   if (currentSessionId) {
     window.chatModule?.detachCurrentStream?.(currentSessionId);

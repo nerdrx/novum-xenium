@@ -38,6 +38,7 @@ import {
 import { createTerminalStreamError, isRecoverableStreamError } from './chatStreamErrors.js';
 import { loadPanel } from './panels.js';
 import { appendSubagentCard } from './subagentCard.js';
+import { updateBrowserPreview } from './browserPreview.js';
 
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -3065,6 +3066,7 @@ import { appendSubagentCard } from './subagentCard.js';
             }
             try {
               const json = JSON.parse(data);
+              if (!_isBg) updateBrowserPreview(json, streamSessionId);
               // Handle SSE error events (e.g. HTTP 404 from provider)
               if (_nextIsError || json.status >= 400) {
                 _nextIsError = false;
@@ -5364,6 +5366,7 @@ import { appendSubagentCard } from './subagentCard.js';
           }
           let json;
           try { json = JSON.parse(payload); } catch (_) { continue; }
+          updateBrowserPreview(json, sessionId);
           if (eventIsError) {
             replayError = createTerminalStreamError(json);
           } else if (json.delta) {

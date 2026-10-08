@@ -10,7 +10,11 @@ import logging
 import os
 import re
 import asyncio 
+import base64
+import stat
+import tempfile
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlsplit
 from src.database import McpServer, SessionLocal
 
 from src.runtime_paths import get_app_root
@@ -41,6 +45,102 @@ def _format_mcp_connection_error(name: str, command: str = "", args: Optional[Li
 _MCP_PARAM_MAX = 12   # max params rendered per tool
 _MCP_TOKEN_MAX = 40   # max chars per rendered name / type token
 _MCP_HINT_MAX = 300   # total-length backstop for the whole hint
+_BROWSER_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
+_BROWSER_PREVIEW_MIMES = {"image/png", "image/jpeg", "image/webp"}
+_BROWSER_MUTATING_TOOLS = {
+    "browser_navigate", "browser_navigate_back", "browser_click", "browser_hover",
+    "browser_type", "browser_fill_form", "browser_select_option", "browser_press_key",
+    "browser_drag", "browser_scroll",
+}
+
+
+def _browser_preview(action: str, arguments: Dict, result: Dict, screenshot: Optional[Dict]) -> Dict:
+    """Build a compact metadata and safe image preview payload."""
+    output = result.get("stdout") or ""
+    if not isinstance(output, str):
+        output = ""
+    url_match = re.search(r"^\s*-?\s*Page URL:\s*(\S+)\s*$", output, re.I | re.M)
+    title_match = re.search(r"^\s*-?\s*Page Title:\s*(.*?)\s*$", output, re.I | re.M)
+    url = url_match.group(1) if url_match else (
+        arguments.get("url") if action == "browser_navigate" else None
+    )
+    title = title_match.group(1) if title_match else None
+    if isinstance(url, str):
+        url = url[:2048]
+        try:
+            parsed = urlsplit(url)
+            url = url if (
+                parsed.scheme in {"http", "https"}
+                and parsed.hostname
+                and not any(char in url for char in "<>\"'")
+            ) else None
+        except ValueError:
+            url = None
+    else:
+        url = None
+    title = title[:512] if isinstance(title, str) and not any(char in title for char in "<>") else None
+
+    preview = {"state": "unavailable", "action": action[:80]}
+    if url:
+        preview["url"] = url
+    if title:
+        preview["title"] = title
+    if isinstance(screenshot, dict) and screenshot.get("exit_code") == 0:
+        images = screenshot.get("images") or []
+        if isinstance(images, list):
+            for image in images:
+                if not isinstance(image, dict):
+                    continue
+                mime = image.get("mimeType")
+                data = image.get("data")
+                if (
+                    mime not in _BROWSER_PREVIEW_MIMES
+                    or not isinstance(data, str)
+                    or len(data) > _BROWSER_PREVIEW_MAX_BYTES
+                ):
+                    continue
+                try:
+                    raw = base64.b64decode(data, validate=True)
+                except (ValueError, TypeError):
+                    continue
+                if len(raw) > _BROWSER_PREVIEW_MAX_BYTES:
+                    continue
+                preview["screenshot"] = f"data:{mime};base64,{data}"
+                preview["state"] = "updated"
+                break
+    return preview
+
+
+def _browser_action_needs_preview(tool_name: str, arguments: Dict) -> bool:
+    if tool_name == "browser_tabs":
+        return str(arguments.get("action", "")).lower() not in {"list", "close"}
+    return tool_name in _BROWSER_MUTATING_TOOLS or tool_name.startswith("browser_mouse_")
+
+
+def _read_preview_file(path: str, mime: str) -> Optional[Dict]:
+    """Read only a regular, bounded preview file without following symlinks."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        chunks = []
+        total = 0
+        while total <= _BROWSER_PREVIEW_MAX_BYTES:
+            chunk = os.read(fd, min(64 * 1024, _BROWSER_PREVIEW_MAX_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total == 0 or total > _BROWSER_PREVIEW_MAX_BYTES:
+            return None
+        data = base64.b64encode(b"".join(chunks)).decode("ascii")
+        return {"exit_code": 0, "images": [{"mimeType": mime, "data": data}]}
+    finally:
+        os.close(fd)
 
 
 def _sanitize_schema_token(value: Any, limit: int = _MCP_TOKEN_MAX) -> str:
@@ -146,6 +246,10 @@ class McpManager:
         self._stacks: Dict[str, Any] = {}
         # server_id -> background connect task (HTTP transport / OAuth)
         self._connect_tasks: Dict[str, Any] = {}
+        # A page action and its screenshot must observe one uninterrupted browser state.
+        self._browser_call_lock = asyncio.Lock()
+        self._browser_preview_tempdir = None
+        self._browser_preview_parent_dir = None
         # Tracking updates to tools/connections for RAG indexing / prompt cache
         self._generation = 0
 
@@ -162,7 +266,10 @@ class McpManager:
         """Connect to an MCP server via stdio, SSE, or Streamable HTTP transport."""
         try:
             if transport == "stdio":
-                res = await self._connect_stdio(server_id, name, command, args or [], env or {})
+                server_args = list(args or [])
+                if server_id == "builtin_browser":
+                    server_args = self._configure_browser_output_dir(server_args)
+                res = await self._connect_stdio(server_id, name, command, server_args, env or {})
             elif transport == "sse":
                 res = await self._connect_sse(server_id, name, url)
             elif transport == "http":
@@ -434,6 +541,47 @@ class McpManager:
         ids = set(self._sessions) | set(self._connect_tasks)
         for sid in ids:
             await self.disconnect_server(sid)
+        if self._browser_preview_tempdir is not None:
+            self._browser_preview_tempdir.cleanup()
+            self._browser_preview_tempdir = None
+            self._browser_preview_parent_dir = None
+
+    def _configure_browser_output_dir(self, args: List[str]) -> List[str]:
+        """Keep Playwright's file output in a private directory it is allowed to use."""
+        output_arg_index = None
+        explicit_output_dir = None
+        for index, arg in enumerate(args):
+            if arg == "--output-dir":
+                if index + 1 < len(args) and not args[index + 1].startswith("--"):
+                    output_arg_index = index
+                    explicit_output_dir = args[index + 1]
+                break
+            if arg.startswith("--output-dir="):
+                output_arg_index = index
+                explicit_output_dir = arg.split("=", 1)[1]
+                break
+
+        parent_dir = None
+        if output_arg_index is not None and explicit_output_dir:
+            parent_dir = os.path.realpath(os.path.abspath(explicit_output_dir))
+            os.makedirs(parent_dir, exist_ok=True)
+
+        if (
+            self._browser_preview_tempdir is not None
+            and self._browser_preview_parent_dir != parent_dir
+        ):
+            self._browser_preview_tempdir.cleanup()
+            self._browser_preview_tempdir = None
+
+        if self._browser_preview_tempdir is None:
+            self._browser_preview_tempdir = tempfile.TemporaryDirectory(
+                prefix="novum-browser-preview-", dir=parent_dir
+            )
+            self._browser_preview_parent_dir = parent_dir
+
+        if output_arg_index is None:
+            args.extend(["--output-dir", self._browser_preview_tempdir.name])
+        return args
 
 
     async def connect_all_enabled(self):
@@ -492,6 +640,29 @@ class McpManager:
         if not session:
             return {"error": f"MCP server not connected: {server_id}", "exit_code": 1}
 
+        if server_id == "builtin_browser":
+            async with self._browser_call_lock:
+                result = await self._call_tool_session(server_id, tool_name, arguments)
+                if result.get("exit_code") == 0 and (
+                    _browser_action_needs_preview(tool_name, arguments)
+                    or tool_name == "browser_take_screenshot"
+                ):
+                    try:
+                        await self._attach_browser_preview(tool_name, arguments, result)
+                    except Exception as exc:
+                        logger.debug("Browser preview capture failed: %s", exc)
+                        result["browser_preview"] = {"state": "unavailable", "action": tool_name[:80]}
+                return result
+
+        return await self._call_tool_session(server_id, tool_name, arguments)
+
+    async def _call_tool_session(self, server_id: str, tool_name: str, arguments: Dict) -> Dict:
+        """Call one tool and retain the existing built-in reconnect behavior."""
+        qualified_name = f"mcp__{server_id}__{tool_name}"
+        session = self._sessions.get(server_id)
+        if not session:
+            return {"error": f"MCP server not connected: {server_id}", "exit_code": 1}
+
         try:
             result = await self._do_call(session, tool_name, arguments)
         except Exception as e:
@@ -517,6 +688,72 @@ class McpManager:
                 return {"error": str(e), "exit_code": 1}
 
         return result
+
+    async def _attach_browser_preview(self, action: str, arguments: Dict, result: Dict) -> None:
+        """Attach a bounded screenshot preview without changing model-visible output."""
+        screenshot = result if action == "browser_take_screenshot" else None
+        if screenshot is None:
+            screenshot_tool = next((
+                tool for tool in self._tools.get("builtin_browser", [])
+                if tool.get("name") == "browser_take_screenshot"
+            ), None)
+            if screenshot_tool is None or screenshot_tool.get("is_disabled"):
+                result["browser_preview"] = _browser_preview(action, arguments, result, None)
+                return
+
+            schema = screenshot_tool.get("input_schema", {})
+            properties = schema.get("properties") if isinstance(schema, dict) else None
+            properties = properties if isinstance(properties, dict) else {}
+            screenshot_args = {}
+            type_schema = properties.get("type", {})
+            type_schema = type_schema if isinstance(type_schema, dict) else {}
+            allowed_types = type_schema.get("enum") or []
+            allowed_types = allowed_types if isinstance(allowed_types, list) else []
+            if type_schema.get("type") == "string":
+                if "jpeg" in allowed_types:
+                    screenshot_type = "jpeg"
+                elif "png" in allowed_types:
+                    screenshot_type = "png"
+                else:
+                    screenshot_type = None
+                if screenshot_type:
+                    screenshot_args["type"] = screenshot_type
+            else:
+                screenshot_type = None
+            if "filename" in properties:
+                extension = "jpeg" if screenshot_type == "jpeg" else "png"
+                if self._browser_preview_tempdir is None:
+                    self._browser_preview_tempdir = tempfile.TemporaryDirectory(prefix="novum-browser-preview-")
+                    self._browser_preview_parent_dir = None
+                filename = f"novum-browser-preview.{extension}"
+                preview_path = os.path.join(self._browser_preview_tempdir.name, filename)
+                try:
+                    os.unlink(preview_path)
+                except FileNotFoundError:
+                    pass
+                screenshot_args["filename"] = preview_path
+            else:
+                preview_path = None
+            if "scale" in properties:
+                screenshot_args["scale"] = "css"
+            try:
+                screenshot = await asyncio.wait_for(
+                    self._do_call(self._sessions["builtin_browser"], "browser_take_screenshot", screenshot_args),
+                    timeout=3,
+                )
+            except Exception as exc:
+                logger.debug("Browser preview capture failed: %s", exc)
+                screenshot = None
+            if (
+                isinstance(screenshot, dict)
+                and screenshot.get("exit_code") == 0
+                and not screenshot.get("images")
+                and preview_path is not None
+            ):
+                mime = "image/jpeg" if screenshot_type == "jpeg" else "image/png"
+                screenshot = _read_preview_file(preview_path, mime)
+
+        result["browser_preview"] = _browser_preview(action, arguments, result, screenshot)
 
     async def _do_call(self, session, tool_name: str, arguments: Dict) -> Dict:
         """Execute a single MCP tool call and return result dict."""

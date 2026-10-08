@@ -33,6 +33,7 @@ import {
   applyModelMetricsState,
   applyModelRouteEventState,
   inheritModelRouteState,
+  selectModelRouteForSend,
 } from './chatModelProvenance.js';
 import { createTerminalStreamError, isRecoverableStreamError } from './chatStreamErrors.js';
 import { loadPanel } from './panels.js';
@@ -576,7 +577,9 @@ import { loadPanel } from './panels.js';
     } catch (_) {}
     try {
       const lastPicked = window.__odysseusLastPickedRoute || null;
-      if (lastPicked && lastPicked.model && Date.now() - (lastPicked.picked_at || 0) < 10 * 60 * 1000) {
+      const currentSessionId = sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId();
+      if (lastPicked && lastPicked.session_id && lastPicked.session_id === currentSessionId
+          && lastPicked.model && Date.now() - (lastPicked.picked_at || 0) < 10 * 60 * 1000) {
         return lastPicked.model;
       }
     } catch (_) {}
@@ -1435,36 +1438,11 @@ import { loadPanel } from './panels.js';
       await _adoptOpenedSessionBeforeAutoCreate();
     }
 
-    const selectedRouteForSend = (() => {
-      try {
-        const lastPicked = window.__odysseusLastPickedRoute || null;
-        if (lastPicked && lastPicked.model && Date.now() - (lastPicked.picked_at || 0) < 10 * 60 * 1000) {
-          return {
-            model: lastPicked.model || '',
-            endpoint_url: lastPicked.endpoint_url || '',
-            endpoint_id: lastPicked.endpoint_id || '',
-            source: 'last-picked',
-          };
-        }
-        const pending = sessionModule.getPendingChat && sessionModule.getPendingChat();
-        if (pending && pending.modelId) {
-          return {
-            model: pending.modelId || '',
-            endpoint_url: pending.url || '',
-            endpoint_id: pending.endpointId || '',
-            source: pending.source || '',
-          };
-        }
-        return {
-          model: sessionModule.getCurrentModel ? (sessionModule.getCurrentModel() || '') : '',
-          endpoint_url: sessionModule.getCurrentEndpointUrl ? (sessionModule.getCurrentEndpointUrl() || '') : '',
-          endpoint_id: '',
-          source: '',
-        };
-      } catch (_) {
-        return { model: '', endpoint_url: '', endpoint_id: '', source: '' };
-      }
-    })();
+    const selectedRouteForSend = selectModelRouteForSend({
+      pending: sessionModule.getPendingChat && sessionModule.getPendingChat(),
+      model: sessionModule.getCurrentModel && sessionModule.getCurrentModel(),
+      endpointUrl: sessionModule.getCurrentEndpointUrl && sessionModule.getCurrentEndpointUrl(),
+    });
 
     // Materialize pending session (deferred from model click) on first message
     if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {

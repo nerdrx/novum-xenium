@@ -988,7 +988,7 @@ async def _auto_detect_image_model(owner: Optional[str] = None) -> str:
     return ""
 
 
-async def do_generate_image(content: str, session_id: Optional[str] = None, owner: Optional[str] = None) -> Dict:
+async def do_generate_image(content: str | Dict, session_id: Optional[str] = None, owner: Optional[str] = None) -> Dict:
     """Generate an image using an image-capable model (e.g. gpt-image-1).
 
     Content format:
@@ -1003,11 +1003,17 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
     from pathlib import Path
     from src.url_safety import check_outbound_url
 
-    lines = content.strip().split("\n")
-    prompt = lines[0].strip() if lines else ""
-    model_spec = lines[1].strip() if len(lines) > 1 and lines[1].strip() else ""
-    size = lines[2].strip() if len(lines) > 2 and lines[2].strip() else "1024x1024"
-    quality = lines[3].strip() if len(lines) > 3 and lines[3].strip() else "medium"
+    if isinstance(content, dict):
+        prompt = str(content.get("prompt") or "").strip()
+        model_spec = str(content.get("model") or "").strip()
+        size = str(content.get("size") or "1024x1024").strip()
+        quality = str(content.get("quality") or "medium").strip()
+    else:
+        lines = content.strip().split("\n")
+        prompt = lines[0].strip() if lines else ""
+        model_spec = lines[1].strip() if len(lines) > 1 and lines[1].strip() else ""
+        size = lines[2].strip() if len(lines) > 2 and lines[2].strip() else "1024x1024"
+        quality = lines[3].strip() if len(lines) > 3 and lines[3].strip() else "medium"
 
     if not prompt:
         return {"error": "Image prompt is required (line 1)"}
@@ -1108,6 +1114,9 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
                 }
 
             data = resp.json()
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise asyncio.CancelledError
             images = data.get("data", [])
             if not images:
                 return {"error": "No images returned from API"}
@@ -1162,7 +1171,7 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
                 if not ok:
                     return {"error": f"Image API returned unsafe image URL: {reason}"}
                 try:
-                    dl_resp = httpx.get(result_url, timeout=60)
+                    dl_resp = await client.get(result_url, timeout=60)
                     if dl_resp.status_code == 200:
                         img_dir = Path(GENERATED_IMAGES_DIR)
                         img_dir.mkdir(parents=True, exist_ok=True)

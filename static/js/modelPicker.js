@@ -85,6 +85,9 @@ let _deps = null;
 let _autoSelectingDefault = false;
 let _defaultChatPickInFlight = false;
 let _defaultPendingSeq = 0;
+let _autoSelectSeq = 0;
+const _modelPickQueues = new Map();
+const _modelPickSeq = new Map();
 
 function _modelExists(modelId, url) {
   if (!modelId || !window.modelsModule || !window.modelsModule.getCachedItems) return false;
@@ -643,15 +646,6 @@ function _initModelPickerDropdown() {
 
 async function _pick(m) {
     _defaultPendingSeq++;
-    try {
-      window.__odysseusLastPickedRoute = {
-        model: m.mid || '',
-        endpoint_url: m.url || '',
-        endpoint_id: m.endpointId || '',
-        display: m.display || m.mid || '',
-        picked_at: Date.now(),
-      };
-    } catch (_) {}
     let switchDone = null;
     const switchPromise = new Promise(resolve => { switchDone = resolve; });
     try { window.__odysseusModelSwitchPromise = switchPromise; } catch (_) {}
@@ -663,6 +657,19 @@ async function _pick(m) {
     };
     const currentSessionId = _deps.getCurrentSessionId();
     const _pendingChat = _deps.getPendingChat();
+    const rememberRoute = () => {
+      if (_deps.getCurrentSessionId() !== currentSessionId) return;
+      try {
+        window.__odysseusLastPickedRoute = {
+          session_id: currentSessionId || null,
+          model: m.mid || '',
+          endpoint_url: m.url || '',
+          endpoint_id: m.endpointId || '',
+          display: m.display || m.mid || '',
+          picked_at: Date.now(),
+        };
+      } catch (_) {}
+    };
 
     // Remember this pick so it surfaces under "Recent" next time the picker
     // opens — the whole point of quick-switch.
@@ -683,6 +690,7 @@ async function _pick(m) {
     if (!currentSessionId && _pendingChat) {
       // Already have a deferred session — just update the model
       _deps.setPendingChat({ url: m.url, modelId: m.mid, endpointId: m.endpointId, source: 'manual' });
+      rememberRoute();
       // Header stays as session name — model switch only updates picker
       updateModelPicker();
       uiModule.showToast(`Using ${m.display}`);
@@ -692,34 +700,52 @@ async function _pick(m) {
       // No session yet — create one with this model
       try {
         await _deps.createDirectChat(m.url, m.mid, m.endpointId);
+        const pending = _deps.getPendingChat();
+        if (!currentSessionId && !_deps.getCurrentSessionId() && pending?.modelId === m.mid) rememberRoute();
       } catch (e) {
         uiModule.showError('Failed to start chat: ' + e);
         finishSwitch();
         return;
       }
     } else {
-      // Existing session with no model — PATCH it
-      const sessions = _deps.getSessions();
-      const s = sessions.find(x => x.id === currentSessionId);
-      if (s) { s.model = m.mid; s.endpoint_url = m.url; s.endpoint_id = m.endpointId || s.endpoint_id || ''; }
-      updateModelPicker();
+      // Keep the last confirmed route visible until the server accepts this pick.
+      const pickSeq = (_modelPickSeq.get(currentSessionId) || 0) + 1;
+      _modelPickSeq.set(currentSessionId, pickSeq);
       const fd = new FormData();
       fd.append('model', m.mid);
       fd.append('endpoint_url', m.url);
       if (m.endpointId) fd.append('endpoint_id', m.endpointId);
-      try {
-        const res = await fetch(`${API_BASE}/api/session/${currentSessionId}`, { method: 'PATCH', body: fd });
-        if (!res.ok) {
-          uiModule.showError('Failed to set model');
-          finishSwitch();
-          return;
+      const previousPick = _modelPickQueues.get(currentSessionId) || Promise.resolve();
+      const savePick = previousPick.catch(() => {}).then(async () => {
+        const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(currentSessionId)}`, { method: 'PATCH', body: fd });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const session = _deps.getSessions().find(x => x.id === currentSessionId);
+        if (session) {
+          session.model = m.mid;
+          session.endpoint_url = m.url;
+          session.endpoint_id = m.endpointId || session.endpoint_id || '';
         }
-        // Header stays as session name — model info shown in picker only
+        if (_deps.getCurrentSessionId() === currentSessionId) rememberRoute();
+      });
+      _modelPickQueues.set(currentSessionId, savePick);
+      try {
+        await savePick;
+        if (_modelPickSeq.get(currentSessionId) === pickSeq && _deps.getCurrentSessionId() === currentSessionId) {
+          updateModelPicker();
+          if (window.refreshChatContextHeader) window.refreshChatContextHeader('model-pick');
+          uiModule.showToast(`Using ${m.display}`);
+        }
       } catch (e) {
-        uiModule.showError('Failed to set model: ' + e);
-        finishSwitch();
-        return;
+        if (_modelPickSeq.get(currentSessionId) === pickSeq) {
+          if (_deps.getCurrentSessionId() === currentSessionId) updateModelPicker();
+          uiModule.showError('Could not save model. Previous selection kept; choose it again to retry.');
+        }
+      } finally {
+        if (_modelPickQueues.get(currentSessionId) === savePick) _modelPickQueues.delete(currentSessionId);
+        if (_modelPickSeq.get(currentSessionId) === pickSeq) _modelPickSeq.delete(currentSessionId);
       }
+      finishSwitch();
+      return;
     }
     // Update picker visibility — model is now set
     updateModelPicker();
@@ -730,6 +756,8 @@ async function _pick(m) {
 
   document.addEventListener('odysseus:auto-select-model', async (e) => {
     const detail = (e && e.detail) || {};
+    const autoSeq = ++_autoSelectSeq;
+    const pickSeqAtStart = _defaultPendingSeq;
     const currentSessionId = _deps.getCurrentSessionId();
     const sessions = _deps.getSessions();
     const current = sessions.find(x => x.id === currentSessionId);
@@ -739,6 +767,8 @@ async function _pick(m) {
     if (window.modelsModule && window.modelsModule.refreshModels) {
       try { await window.modelsModule.refreshModels(false); } catch (_) {}
     }
+    if (autoSeq !== _autoSelectSeq || pickSeqAtStart !== _defaultPendingSeq
+        || _deps.getCurrentSessionId() !== currentSessionId) return;
     const items = window.modelsModule && window.modelsModule.getCachedItems ? window.modelsModule.getCachedItems() : [];
     const targetEndpointId = detail.endpointId ? String(detail.endpointId) : '';
     const targetModel = detail.modelId || '';

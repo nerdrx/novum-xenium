@@ -787,6 +787,12 @@ def setup_session_routes(
                     delete_team_board(context_sid, effective_storage_owner(context_owner))
                 except Exception:
                     logger.warning("Team board cleanup failed for deleted session %s", context_sid, exc_info=True)
+                try:
+                    from src.owner_identity import effective_storage_owner
+                    from src.workspace_snapshots import delete_session_snapshots
+                    delete_session_snapshots(effective_storage_owner(context_owner), context_sid)
+                except Exception:
+                    logger.warning("Workspace snapshot cleanup failed for deleted session %s", context_sid, exc_info=True)
             session_manager.sessions.clear()
             for context_owner, context_sid in fenced_scopes:
                 complete_session_deletion(context_owner, context_sid)

@@ -18,17 +18,19 @@ from sqlalchemy.orm import sessionmaker
 @pytest.mark.asyncio
 async def test_tool_dispatch_overwrites_model_supplied_image_owner(monkeypatch, tool, owner, trusted_owner):
     import src.tool_execution as execution
+    import src.ai_interaction as images
+    import src.settings as settings
+    from mcp_servers import image_gen_server
     from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
 
-    class FakeMcp:
-        calls = []
+    calls = []
+    async def generate(args, *, session_id=None, owner=None):
+        calls.append((args, session_id, owner))
+        return {"results": "fixture result"}
 
-        async def call_tool(self, name, args):
-            self.calls.append((name, args))
-            return {"stdout": "fixture result", "exit_code": 0}
-
-    mcp = FakeMcp()
-    monkeypatch.setattr(execution, "get_mcp_manager", lambda: mcp)
+    monkeypatch.setattr(images, "do_generate_image", generate)
+    monkeypatch.setattr(settings, "get_setting", lambda _key, default=None: True)
+    monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
     monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
     block = SimpleNamespace(
         tool_type=tool,
@@ -36,13 +38,11 @@ async def test_tool_dispatch_overwrites_model_supplied_image_owner(monkeypatch, 
     )
 
     await execute_tool_block(
-        block, owner=owner, security_context=NO_TOOL_SECURITY_CONTEXT,
+        block, session_id="fixture-session", owner=owner,
+        security_context=NO_TOOL_SECURITY_CONTEXT,
     )
 
-    assert mcp.calls == [(
-        "mcp__image_gen__generate_image",
-        {"prompt": "fixture", "_odysseus_owner": trusted_owner},
-    )]
+    assert calls == [({"prompt": "fixture"}, "fixture-session", trusted_owner or None)]
 
 
 def test_ownerless_mcp_fails_closed_for_private_endpoints_but_allows_single_user(monkeypatch):
@@ -124,13 +124,16 @@ async def test_untrusted_owner_cannot_authorize_ownerless_tool_call(monkeypatch)
 @pytest.mark.asyncio
 async def test_qualified_image_mcp_marks_text_error_as_failure(monkeypatch):
     import src.tool_execution as execution
+    import src.ai_interaction as images
+    import src.settings as settings
+    from mcp_servers import image_gen_server
     from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
 
-    class FakeMcp:
-        async def call_tool(self, _name, _args):
-            return {"stdout": "Error: Image generation failed (422): fixture rejection", "exit_code": 0}
-
-    monkeypatch.setattr(execution, "get_mcp_manager", lambda: FakeMcp())
+    async def generate(*_args, **_kwargs):
+        return {"error": "Image generation failed (422): fixture rejection"}
+    monkeypatch.setattr(images, "do_generate_image", generate)
+    monkeypatch.setattr(settings, "get_setting", lambda _key, default=None: True)
+    monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
     monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
     _, result = await execute_tool_block(
         SimpleNamespace(tool_type="mcp__image_gen__generate_image", content='{"prompt":"fixture"}'),
@@ -146,17 +149,21 @@ async def test_qualified_image_mcp_marks_text_error_as_failure(monkeypatch):
 @pytest.mark.asyncio
 async def test_qualified_image_mcp_promotes_result_fields(monkeypatch):
     import src.tool_execution as execution
+    import src.ai_interaction as images
+    import src.settings as settings
+    from mcp_servers import image_gen_server
     from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
 
-    class FakeMcp:
-        async def call_tool(self, _name, _args):
-            return {"stdout": (
-                "Generated image for: fixture prompt\n"
-                "Direct link: /api/generated-image/fixture.png\n"
-                "model: chatgpt-image-codex\nsize: 1024x1024"
-            ), "exit_code": 0}
-
-    monkeypatch.setattr(execution, "get_mcp_manager", lambda: FakeMcp())
+    async def generate(*_args, **_kwargs):
+        return {
+            "results": "Generated image for: fixture prompt",
+            "image_url": "/api/generated-image/fixture.png",
+            "image_prompt": "fixture prompt", "image_model": "chatgpt-image-codex",
+            "image_size": "1024x1024",
+        }
+    monkeypatch.setattr(images, "do_generate_image", generate)
+    monkeypatch.setattr(settings, "get_setting", lambda _key, default=None: True)
+    monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
     monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
     _, result = await execute_tool_block(
         SimpleNamespace(tool_type="mcp__image_gen__generate_image", content='{"prompt":"fixture"}'),
@@ -168,6 +175,31 @@ async def test_qualified_image_mcp_promotes_result_fields(monkeypatch):
     assert result["image_prompt"] == "fixture prompt"
     assert result["image_model"] == "chatgpt-image-codex"
     assert result["image_size"] == "1024x1024"
+
+
+@pytest.mark.asyncio
+async def test_in_process_image_tool_preserves_admin_disable(monkeypatch):
+    import src.ai_interaction as images
+    import src.settings as settings
+    import src.tool_execution as execution
+    from mcp_servers import image_gen_server
+    from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
+
+    async def should_not_generate(*_args, **_kwargs):
+        pytest.fail("disabled image generation reached provider")
+
+    monkeypatch.setattr(images, "do_generate_image", should_not_generate)
+    monkeypatch.setattr(settings, "get_setting", lambda _key, default=None: False)
+    monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
+    monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
+    _, result = await execute_tool_block(
+        SimpleNamespace(tool_type="mcp__image_gen__generate_image", content='{"prompt":"fixture"}'),
+        owner="alice",
+        security_context=NO_TOOL_SECURITY_CONTEXT,
+    )
+
+    assert result["exit_code"] == 1
+    assert result["error"] == "Image generation is disabled by the administrator."
 
 
 @pytest.mark.asyncio

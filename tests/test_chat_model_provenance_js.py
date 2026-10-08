@@ -201,3 +201,33 @@ def test_metrics_preserve_explicitly_unknown_round_endpoint():
         "_actualEndpointId": None,
         "_actualEndpointLabel": None,
     }
+
+
+def test_chat_send_uses_current_saved_or_pending_route_not_a_previous_chat_pick():
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+
+    script = f"""
+      import {{ selectModelRouteForSend }} from {json.dumps(_MODULE)};
+      const staleLastPicked = {{ model: 'model-a', endpoint_url: 'http://a', session_id: 'chat-a' }};
+      const activeChat = selectModelRouteForSend({{
+        pending: null, model: 'model-b', endpointUrl: 'http://b', lastPicked: staleLastPicked,
+      }});
+      const pendingChat = selectModelRouteForSend({{
+        pending: {{ modelId: 'new-model', url: 'http://new', endpointId: 'new-id', source: 'manual' }},
+        model: 'model-b', endpointUrl: 'http://b', lastPicked: staleLastPicked,
+      }});
+      console.log(JSON.stringify({{ activeChat, pendingChat }}));
+    """
+    result = subprocess.run(
+        ["node", "--input-type=module"], input=script, capture_output=True,
+        text=True, cwd=_REPO, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    state = json.loads(result.stdout)
+    assert state["activeChat"] == {
+        "model": "model-b", "endpoint_url": "http://b", "endpoint_id": "", "source": "",
+    }
+    assert state["pendingChat"] == {
+        "model": "new-model", "endpoint_url": "http://new", "endpoint_id": "new-id", "source": "manual",
+    }

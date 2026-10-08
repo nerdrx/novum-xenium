@@ -38,11 +38,14 @@ def setup_workspace_routes():
         root = vet_workspace(workspace)
         if not root or root != os.path.realpath(workspace):
             raise HTTPException(status_code=400, detail="Workspace is no longer valid")
-        return root, owner
+        validate_scope = lambda: _verify_session_owner(
+            request, session_id, getattr(request.app.state, "session_manager", None)
+        )
+        return root, owner, validate_scope
 
-    def snapshot_call(fn, *args):
+    def snapshot_call(fn, *args, **kwargs):
         try:
-            return fn(*args)
+            return fn(*args, **kwargs)
         except SnapshotError as exc:
             message = str(exc)
             raise HTTPException(status_code=409 if "changed after preview" in message else 400, detail=message)
@@ -57,30 +60,38 @@ def setup_workspace_routes():
 
     @router.get("/snapshots")
     def get_snapshots(request: Request, workspace: str, session_id: str):
-        root, owner = snapshot_scope(request, workspace, session_id)
-        return {"snapshots": snapshot_call(list_snapshots, root, owner, session_id)}
+        root, owner, validate_scope = snapshot_scope(request, workspace, session_id)
+        return {"snapshots": snapshot_call(list_snapshots, root, owner, session_id,
+                                            validate_scope=validate_scope)}
 
     @router.post("/snapshots")
     async def post_snapshot(request: Request):
         body = await request.json()
         workspace, session_id = snapshot_body(body)
-        root, owner = snapshot_scope(request, workspace, session_id)
-        return await run_in_threadpool(snapshot_call, create_snapshot, root, owner, session_id, body.get("label"))
+        root, owner, validate_scope = snapshot_scope(request, workspace, session_id)
+        return await run_in_threadpool(
+            snapshot_call, create_snapshot, root, owner, session_id, body.get("label"),
+            validate_scope=validate_scope,
+        )
 
     @router.post("/snapshots/{snapshot_id}/preview")
     async def post_snapshot_preview(request: Request, snapshot_id: str):
         body = await request.json()
         workspace, session_id = snapshot_body(body)
-        root, owner = snapshot_scope(request, workspace, session_id)
-        return await run_in_threadpool(snapshot_call, preview_snapshot, root, owner, session_id, snapshot_id)
+        root, owner, validate_scope = snapshot_scope(request, workspace, session_id)
+        return await run_in_threadpool(
+            snapshot_call, preview_snapshot, root, owner, session_id, snapshot_id,
+            validate_scope=validate_scope,
+        )
 
     @router.post("/snapshots/{snapshot_id}/restore")
     async def post_snapshot_restore(request: Request, snapshot_id: str):
         body = await request.json()
         workspace, session_id = snapshot_body(body)
-        root, owner = snapshot_scope(request, workspace, session_id)
+        root, owner, validate_scope = snapshot_scope(request, workspace, session_id)
         return await run_in_threadpool(
-            snapshot_call, restore_snapshot, root, owner, session_id, snapshot_id, body.get("expected_revision", "")
+            snapshot_call, restore_snapshot, root, owner, session_id, snapshot_id,
+            body.get("expected_revision", ""), validate_scope=validate_scope,
         )
 
     @router.get("/browse")

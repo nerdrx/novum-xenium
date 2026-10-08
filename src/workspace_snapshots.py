@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import shutil
 import tempfile
 import threading
 import uuid
@@ -23,6 +24,7 @@ _MAX_FILE_BYTES = 8 * 1024 * 1024
 _MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_SNAPSHOTS = 20
 _MAX_PREVIEW_BYTES = 512 * 1024
+_SCOPE_FILE = ".scope.json"
 _EXCLUDED_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".cache", "dist", "build"}
 _EXCLUDED_NAMES = {
     ".env", ".netrc", ".npmrc", "id_rsa", "id_ed25519", "credentials.json",
@@ -53,6 +55,60 @@ def _identity(workspace: str, owner: str, session_id: str) -> tuple[str, str]:
     return root, key
 
 
+def _session_scope(owner: str, session_id: str) -> str:
+    return hashlib.sha256(json.dumps([owner, session_id], separators=(",", ":")).encode()).hexdigest()
+
+
+def validate_session_scope(owner: str, session_id: str) -> None:
+    """Fail closed if the chat no longer exists or belongs to another owner."""
+    from src.owner_identity import auth_disabled
+    from core.database import Session as DbSession, SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.query(DbSession).filter(DbSession.id == session_id).first()
+        if row is not None:
+            if auth_disabled() or row.owner == owner:
+                return
+            raise SnapshotError("chat is no longer available for this workspace snapshot")
+    finally:
+        db.close()
+
+    # Preserve the existing no-DB ghost-session behavior for callers that
+    # already have an owned in-memory chat.
+    from core.models import get_session_manager_instance
+    manager = get_session_manager_instance()
+    ghost = getattr(manager, "sessions", {}).get(session_id) if manager else None
+    if ghost is not None and (auth_disabled() or getattr(ghost, "owner", None) == owner):
+        return
+    raise SnapshotError("chat is no longer available for this workspace snapshot")
+
+
+def _read_scope_marker(path: Path) -> dict | None:
+    try:
+        fd = os.open(
+            path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SnapshotError("snapshot scope marker is not a safe file") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 256:
+            raise SnapshotError("snapshot scope marker is not a safe file")
+        with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as handle:
+            value = json.load(handle)
+        if not isinstance(value, dict):
+            raise SnapshotError("snapshot scope marker is invalid")
+        return value
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise SnapshotError("snapshot scope marker is invalid") from exc
+    finally:
+        os.close(fd)
+
+
 def _store(root: str, owner: str, session_id: str) -> Path:
     _, key = _identity(root, owner, session_id)
     if os.path.lexists(_ROOT) and (os.path.islink(_ROOT) or not os.path.isdir(_ROOT)):
@@ -68,7 +124,40 @@ def _store(root: str, owner: str, session_id: str) -> Path:
         os.chmod(path, 0o700)
     except OSError:
         pass
+    marker_path = path / _SCOPE_FILE
+    marker = _read_scope_marker(marker_path)
+    scope = _session_scope(owner, session_id)
+    if marker is None:
+        _write_json(marker_path, {"scope": scope})
+    elif marker.get("scope") != scope:
+        raise SnapshotError("snapshot scope does not match this chat")
     return path
+
+
+def delete_session_snapshots(owner: str, session_id: str) -> int:
+    """Remove tagged snapshots for exactly one deleted owner/chat pair."""
+    if not isinstance(owner, str) or not owner.strip() or not isinstance(session_id, str) or not session_id.strip():
+        return 0
+    scope = _session_scope(owner, session_id)
+    with _LOCK:
+        if not _ROOT.exists():
+            return 0
+        if _ROOT.is_symlink() or not _ROOT.is_dir():
+            raise SnapshotError("snapshot storage is not a private directory")
+        deleted = 0
+        with os.scandir(_ROOT) as entries:
+            for entry in entries:
+                if not re.fullmatch(r"[0-9a-f]{64}", entry.name) or not entry.is_dir(follow_symlinks=False):
+                    continue
+                directory = Path(entry.path)
+                try:
+                    marker = _read_scope_marker(directory / _SCOPE_FILE)
+                except SnapshotError:
+                    continue
+                if marker and marker.get("scope") == scope:
+                    shutil.rmtree(directory)
+                    deleted += 1
+        return deleted
 
 
 def _safe_rel(path: str) -> str:
@@ -315,15 +404,23 @@ def _write_json(path: Path, data: dict) -> None:
             os.unlink(temp)
 
 
-def create_snapshot(workspace: str, owner: str, session_id: str, label: str | None = None, turn_id: str | None = None) -> dict:
+def _capture_snapshot(root: str, directory: Path, key: str,
+                      label: str | None, turn_id: str | None) -> dict:
+    try: os.chmod(_ROOT, 0o700)
+    except OSError: pass
+    files, modes = _tree_and_modes(root)
+    return _save_snapshot(directory, key, files, modes, label, turn_id)
+
+
+def create_snapshot(workspace: str, owner: str, session_id: str, label: str | None = None,
+                    turn_id: str | None = None, *, validate_scope=None) -> dict:
     """Capture bounded regular files; symlinks, hidden dirs, and dependencies are skipped."""
     root, key = _identity(workspace, owner, session_id)
     with _LOCK:
+        if validate_scope:
+            validate_scope()
         directory = _store(root, owner, session_id)
-        try: os.chmod(_ROOT, 0o700)
-        except OSError: pass
-        files, modes = _tree_and_modes(root)
-        return _save_snapshot(directory, key, files, modes, label, turn_id)
+        return _capture_snapshot(root, directory, key, label, turn_id)
 
 
 def _save_snapshot(directory: Path, key: str, files: dict[str, bytes], modes: dict[str, int],
@@ -351,12 +448,15 @@ def _save_snapshot(directory: Path, key: str, files: dict[str, bytes], modes: di
     return {k: record[k] for k in ("id", "created_at", "label", "revision")}
 
 
-def ensure_snapshot(workspace: str, owner: str, session_id: str, turn_id: str) -> dict:
+def ensure_snapshot(workspace: str, owner: str, session_id: str, turn_id: str,
+                    *, validate_scope=None) -> dict:
     """Create one automatic pre-write checkpoint per agent turn."""
     if not isinstance(turn_id, str) or not turn_id.strip():
         raise SnapshotError("turn id is required for an automatic checkpoint")
     root, key = _identity(workspace, owner, session_id)
     with _LOCK:
+        if validate_scope:
+            validate_scope()
         directory = _store(root, owner, session_id)
         for path in directory.glob("[0-9a-f]" * 32 + ".json"):
             try:
@@ -365,27 +465,33 @@ def ensure_snapshot(workspace: str, owner: str, session_id: str, turn_id: str) -
                     return {k: record[k] for k in ("id", "created_at", "label", "revision")}
             except (OSError, ValueError, KeyError):
                 continue
-        return create_snapshot(root, owner, session_id, "Before agent tools", turn_id)
+        return _capture_snapshot(root, directory, key, "Before agent tools", turn_id)
 
 
-def list_snapshots(workspace: str, owner: str, session_id: str) -> list[dict]:
+def list_snapshots(workspace: str, owner: str, session_id: str, *, validate_scope=None) -> list[dict]:
     root, key = _identity(workspace, owner, session_id)
-    directory = _store(root, owner, session_id)
-    out = []
-    for path in directory.glob("[0-9a-f]" * 32 + ".json"):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-            if record.get("key") == key and record.get("id") == path.stem:
-                out.append({k: record.get(k) for k in ("id", "created_at", "label", "revision")})
-        except (OSError, ValueError):
-            continue
-    return sorted(out, key=lambda x: x["created_at"] or "", reverse=True)
-
-
-def preview_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: str) -> dict:
-    root, key = _identity(workspace, owner, session_id)
-    directory = _store(root, owner, session_id)
     with _LOCK:
+        if validate_scope:
+            validate_scope()
+        directory = _store(root, owner, session_id)
+        out = []
+        for path in directory.glob("[0-9a-f]" * 32 + ".json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                if record.get("key") == key and record.get("id") == path.stem:
+                    out.append({k: record.get(k) for k in ("id", "created_at", "label", "revision")})
+            except (OSError, ValueError):
+                continue
+        return sorted(out, key=lambda x: x["created_at"] or "", reverse=True)
+
+
+def preview_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: str,
+                     *, validate_scope=None) -> dict:
+    root, key = _identity(workspace, owner, session_id)
+    with _LOCK:
+        if validate_scope:
+            validate_scope()
+        directory = _store(root, owner, session_id)
         record = _read_manifest(directory, snapshot_id, key)
         saved = {name: base64.b64decode(value, validate=True) for name, value in record.get("files", {}).items()}
         saved_modes = {name: int(mode) & 0o777 for name, mode in record.get("modes", {}).items()}
@@ -431,13 +537,16 @@ def preview_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: s
         return {"snapshot": {k: record[k] for k in ("id", "created_at", "label")}, "revision": revision, "changes": changes}
 
 
-def restore_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: str, expected_revision: str) -> dict:
+def restore_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: str,
+                     expected_revision: str, *, validate_scope=None) -> dict:
     """Restore a whole snapshot only if the current workspace matches its preview."""
     if not _supports_safe_restore():
         raise SnapshotError("safe snapshot restore is unavailable on this platform")
     root, key = _identity(workspace, owner, session_id)
-    directory = _store(root, owner, session_id)
     with _LOCK:
+        if validate_scope:
+            validate_scope()
+        directory = _store(root, owner, session_id)
         record = _read_manifest(directory, snapshot_id, key)
         root_fd = _open_root_fd(root)
         try:

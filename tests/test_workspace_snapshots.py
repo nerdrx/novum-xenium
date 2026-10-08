@@ -302,3 +302,149 @@ def test_restore_rejects_platform_without_safe_dir_fd_support(ws, monkeypatch):
     with pytest.raises(snapshots.SnapshotError, match="unavailable on this platform"):
         snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
     assert path.read_text() == "current"
+
+
+def test_delete_session_removes_only_its_snapshots_and_archive_keeps_them(ws, tmp_path):
+    code = r'''import os, sys
+from pathlib import Path
+from src import workspace_snapshots as snapshots
+from core.session_manager import SessionManager
+import src.tool_execution as tool_execution
+
+workspace, snapshot_root = sys.argv[1:]
+snapshots._ROOT = Path(snapshot_root)
+tool_execution.vet_workspace = lambda path: os.path.realpath(path) if os.path.isdir(path) else None
+manager = SessionManager()
+manager.create_session("delete-me", "Delete", "http://unused", "unused", owner="alice")
+manager.create_session("archive-me", "Archive", "http://unused", "unused", owner="alice")
+target = snapshots.create_snapshot(workspace, "alice", "delete-me")
+snapshots.create_snapshot(workspace, "bob", "delete-me")
+snapshots.create_snapshot(workspace, "alice", "archive-me")
+manager.archive_session("archive-me")
+assert len(snapshots.list_snapshots(workspace, "alice", "archive-me")) == 1
+assert manager.delete_session("delete-me")
+key = snapshots._identity(workspace, "alice", "delete-me")[1]
+assert not (snapshots._ROOT / key / f"{target['id']}.json").exists()
+assert len(snapshots.list_snapshots(workspace, "bob", "delete-me")) == 1
+assert len(snapshots.list_snapshots(workspace, "alice", "archive-me")) == 1
+'''
+    workspace = ws
+    (workspace / "source.py").write_text("print('fixture')\n")
+    env = os.environ.copy()
+    env.update(
+        DATABASE_URL="sqlite:///:memory:",
+        ODYSSEUS_DATA_DIR=str(tmp_path / "data"),
+        AUTH_ENABLED="true",
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(workspace), str(tmp_path / "snapshots")],
+        capture_output=True, text=True, timeout=20, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_cleanup_waits_for_inflight_snapshot_then_removes_it(ws):
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    cleaned = threading.Event()
+    errors = []
+
+    def validate():
+        entered.set()
+        assert release.wait(3)
+
+    def create():
+        try:
+            snapshots.create_snapshot(str(ws), "alice", "delete-race", validate_scope=validate)
+        except Exception as exc:
+            errors.append(exc)
+
+    def cleanup():
+        try:
+            snapshots.delete_session_snapshots("alice", "delete-race")
+            cleaned.set()
+        except Exception as exc:
+            errors.append(exc)
+
+    creator = threading.Thread(target=create)
+    remover = threading.Thread(target=cleanup)
+    creator.start()
+    assert entered.wait(2)
+    remover.start()
+    assert not cleaned.wait(0.05)
+    release.set()
+    creator.join(timeout=3)
+    remover.join(timeout=3)
+
+    assert not creator.is_alive() and not remover.is_alive()
+    assert not errors
+    key = snapshots._identity(str(ws), "alice", "delete-race")[1]
+    assert not (snapshots._ROOT / key).exists()
+
+
+def test_queued_snapshot_revalidates_after_session_cleanup(ws):
+    import threading
+
+    deleting = threading.Event()
+    release = threading.Event()
+    deleted = [False]
+    errors = []
+
+    def cleanup_holding_lock():
+        with snapshots._LOCK:
+            snapshots.delete_session_snapshots("alice", "queued-delete")
+            deleted[0] = True
+            deleting.set()
+            assert release.wait(3)
+
+    def validate():
+        if deleted[0]:
+            raise snapshots.SnapshotError("chat was deleted")
+
+    remover = threading.Thread(target=cleanup_holding_lock)
+    remover.start()
+    assert deleting.wait(2)
+
+    def create():
+        try:
+            snapshots.create_snapshot(str(ws), "alice", "queued-delete", validate_scope=validate)
+        except Exception as exc:
+            errors.append(exc)
+
+    creator = threading.Thread(target=create)
+    creator.start()
+    release.set()
+    remover.join(timeout=3)
+    creator.join(timeout=3)
+
+    assert not remover.is_alive() and not creator.is_alive()
+    assert len(errors) == 1 and isinstance(errors[0], snapshots.SnapshotError)
+    key = snapshots._identity(str(ws), "alice", "queued-delete")[1]
+    assert not (snapshots._ROOT / key).exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="requires no-follow file opens")
+def test_cleanup_skips_symlinked_snapshot_directories_and_markers(tmp_path, monkeypatch):
+    root = tmp_path / "snapshots"
+    root.mkdir(mode=0o700)
+    monkeypatch.setattr(snapshots, "_ROOT", root)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    scope = snapshots._session_scope("alice", "chat")
+    (outside / snapshots._SCOPE_FILE).write_text(f'{{"scope":"{scope}"}}')
+    (outside / "preserve.json").write_text("keep")
+    linked_directory = root / ("a" * 64)
+    linked_directory.symlink_to(outside, target_is_directory=True)
+
+    marker_directory = root / ("b" * 64)
+    marker_directory.mkdir()
+    (marker_directory / snapshots._SCOPE_FILE).symlink_to(outside / snapshots._SCOPE_FILE)
+    (marker_directory / ("c" * 32 + ".json")).write_text("keep")
+
+    assert snapshots.delete_session_snapshots("alice", "chat") == 0
+    assert linked_directory.is_symlink()
+    assert (outside / "preserve.json").exists()
+    assert marker_directory.exists()
+    assert (marker_directory / ("c" * 32 + ".json")).exists()

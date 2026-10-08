@@ -27,10 +27,13 @@ def snapshot_client(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace_routes, "owner_is_admin_or_single_user", lambda user: user == "admin")
     monkeypatch.setattr("src.tool_execution.vet_workspace", lambda path: os.path.realpath(path))
     monkeypatch.setattr(workspace_routes, "_verify_session_owner", lambda *args: None)
-    monkeypatch.setattr(workspace_routes, "list_snapshots", lambda *args: [])
-    monkeypatch.setattr(workspace_routes, "create_snapshot", lambda *args: {"id": "created"})
-    monkeypatch.setattr(workspace_routes, "preview_snapshot", lambda *args: {"id": "preview"})
-    monkeypatch.setattr(workspace_routes, "restore_snapshot", lambda *args: {"id": "restored"})
+    def list_snapshots(*args, **kwargs):
+        kwargs["validate_scope"]()
+        return []
+    monkeypatch.setattr(workspace_routes, "list_snapshots", list_snapshots)
+    monkeypatch.setattr(workspace_routes, "create_snapshot", lambda *args, **kwargs: {"id": "created"})
+    monkeypatch.setattr(workspace_routes, "preview_snapshot", lambda *args, **kwargs: {"id": "preview"})
+    monkeypatch.setattr(workspace_routes, "restore_snapshot", lambda *args, **kwargs: {"id": "restored"})
     app.include_router(workspace_routes.setup_workspace_routes())
     return TestClient(app), workspace
 
@@ -97,7 +100,7 @@ def test_admin_browser_snapshot_route_uses_effective_owner(snapshot_client, monk
     )
     assert response.status_code == 200
     assert response.json() == {"snapshots": []}
-    assert verified == ["session-1"]
+    assert verified == ["session-1", "session-1"]
 
 
 def test_auth_disabled_snapshot_uses_shared_local_owner(snapshot_client, monkeypatch):
@@ -105,7 +108,7 @@ def test_auth_disabled_snapshot_uses_shared_local_owner(snapshot_client, monkeyp
     monkeypatch.setenv("AUTH_ENABLED", "false")
     monkeypatch.setattr(workspace_routes, "owner_is_admin_or_single_user", lambda user: True)
     captured = []
-    monkeypatch.setattr(workspace_routes, "list_snapshots", lambda root, owner, session: captured.append(owner) or [])
+    monkeypatch.setattr(workspace_routes, "list_snapshots", lambda root, owner, session, **kwargs: captured.append(owner) or [])
     response = client.get(
         "/api/workspace/snapshots",
         params={"workspace": workspace, "session_id": "session-1"},
@@ -128,7 +131,7 @@ async def test_snapshot_disk_work_does_not_block_other_requests(snapshot_client,
     client, workspace = snapshot_client
     started, release, finished = threading.Event(), threading.Event(), threading.Event()
 
-    def blocking_operation(*args):
+    def blocking_operation(*args, **kwargs):
         started.set()
         release.wait(0.4)  # Bounded even if the old handler blocks the event loop.
         finished.set()

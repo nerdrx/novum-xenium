@@ -33,6 +33,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
   let isolateWorktrees = false;
   let busy = false;
   let loading = false;
+  let loadFailed = false;
   let message = '';
   let saveTimer = null;
   let taskSerial = 0;
@@ -74,11 +75,14 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
   }
 
   async function save() {
-    if (!parentId || loading) return false;
+    if (!parentId || loading || loadFailed) return false;
     const saveParentId = parentId;
     const generation = loadGeneration;
     const body = JSON.stringify({ board });
     const request = saveChain.catch(() => {}).then(async () => {
+      if (parentId !== saveParentId || generation !== loadGeneration || loading || loadFailed) {
+        throw new Error('Team board is not ready to save');
+      }
       const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(saveParentId)}/team`, {
         method: 'PUT', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -94,7 +98,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
       if (parentId === saveParentId && generation === loadGeneration) setMessage('Saved');
       return true;
     } catch (error) {
-      if (parentId === saveParentId && generation === loadGeneration) setMessage('Could not save team board. Your edits are still here; try again.');
+      if (parentId === saveParentId && generation === loadGeneration && !loading && !loadFailed) setMessage('Could not save team board. Your edits are still here; try again.');
       console.warn('[group-team] save failed', error);
       return false;
     }
@@ -114,23 +118,25 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
   function render() {
     if (!root) return;
     root.hidden = !enabled;
+    const locked = busy || loading || loadFailed;
     root.innerHTML = `<div class="group-team-board">
-      <label class="group-team-field">Shared plan<textarea data-team-plan maxlength="8000" rows="3" ${busy ? 'disabled' : ''}>${esc(board.plan)}</textarea></label>
+      ${loadFailed ? '<div class="group-team-load-error" role="alert">Could not load the team board. Retry before editing or running tasks.</div><button type="button" data-team-load-retry>Retry loading team board</button>' : ''}
+      <label class="group-team-field">Shared plan<textarea data-team-plan maxlength="8000" rows="3" ${locked ? 'disabled' : ''}>${esc(board.plan)}</textarea></label>
       <div class="group-team-heading">Participants</div>
       ${board.participants.map((p, i) => `<label class="group-team-person">${esc(p.display)}
-        <select data-team-role="${i}" ${busy ? 'disabled' : ''}>
+        <select data-team-role="${i}" ${locked ? 'disabled' : ''}>
           <option value="builder" ${p.role === 'builder' ? 'selected' : ''}>Builder</option>
           <option value="reviewer" ${p.role === 'reviewer' ? 'selected' : ''}>Reviewer</option>
         </select></label>`).join('')}
       <div class="group-team-heading">Assigned tasks</div>
       ${board.tasks.map((task, i) => `<div class="group-team-task">
-        <input data-team-title="${i}" aria-label="Task ${i + 1}" maxlength="500" value="${esc(task.title)}" ${busy ? 'disabled' : ''}>
-        <select data-team-owner="${i}" aria-label="Task ${i + 1} builder" ${busy ? 'disabled' : ''}>${optionList('builder', task.owner_id)}</select>
-        <select data-team-reviewer="${i}" aria-label="Task ${i + 1} reviewer" ${busy ? 'disabled' : ''}><option value="">No reviewer</option>${optionList('reviewer', task.reviewer_id, task.owner_id)}</select>
+        <input data-team-title="${i}" aria-label="Task ${i + 1}" maxlength="500" value="${esc(task.title)}" ${locked ? 'disabled' : ''}>
+        <select data-team-owner="${i}" aria-label="Task ${i + 1} builder" ${locked ? 'disabled' : ''}>${optionList('builder', task.owner_id)}</select>
+        <select data-team-reviewer="${i}" aria-label="Task ${i + 1} reviewer" ${locked ? 'disabled' : ''}><option value="">No reviewer</option>${optionList('reviewer', task.reviewer_id, task.owner_id)}</select>
         <span class="group-team-status">${esc(task.status.replace('_', ' '))}</span>
-        ${task.status === 'awaiting_review' ? `<button type="button" data-team-done="${i}" ${busy ? 'disabled' : ''}>Mark done</button>` : ''}
-        ${task.status === 'working' ? `<button type="button" data-team-retry="${i}" title="Re-running may repeat an action that already completed" ${busy ? 'disabled' : ''}>Retry task</button>` : ''}
-        <button type="button" data-team-remove="${i}" aria-label="Remove task ${i + 1}" ${busy ? 'disabled' : ''}>×</button>
+        ${task.status === 'awaiting_review' ? `<button type="button" data-team-done="${i}" ${locked ? 'disabled' : ''}>Mark done</button>` : ''}
+        ${task.status === 'working' ? `<button type="button" data-team-retry="${i}" title="Re-running may repeat an action that already completed" ${locked ? 'disabled' : ''}>Retry task</button>` : ''}
+        <button type="button" data-team-remove="${i}" aria-label="Remove task ${i + 1}" ${locked ? 'disabled' : ''}>×</button>
         ${worktreePath(task) ? `<div class="group-team-worktree"><strong>Isolated worktree:</strong> <code>${esc(worktreePath(task))}</code><br><span>Detached at selected Git HEAD; uncommitted source changes were not copied.</span></div>` : ''}
         ${task.work_result ? `<details><summary>Builder report</summary><pre>${esc(worktreeReport(task))}</pre></details>` : ''}
         ${task.review_result ? `<details><summary>Reviewer report</summary><pre>${esc(task.review_result)}</pre></details>` : ''}
@@ -139,11 +145,11 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
           return session ? `<a href="#${encodeURIComponent(session)}">Open ${index === 0 ? 'builder' : 'reviewer'} chat</a>` : '';
         }).join(' · ')}</div>
       </div>`).join('')}
-      <label class="group-team-isolation"><input type="checkbox" data-team-isolate ${isolateWorktrees ? 'checked' : ''} ${busy ? 'disabled' : ''}>
+      <label class="group-team-isolation"><input type="checkbox" data-team-isolate ${isolateWorktrees ? 'checked' : ''} ${locked ? 'disabled' : ''}>
         Isolate task worktrees <span>Admin only; starts from selected Git HEAD. Uncommitted changes are not copied.</span></label>
       <div class="group-team-actions">
-        <button type="button" data-team-add ${busy || board.tasks.length >= 32 ? 'disabled' : ''}>Add task</button>
-        <button type="button" data-team-run ${busy || !board.tasks.length ? 'disabled' : ''}>${busy ? 'Working…' : 'Run one work + review pass'}</button>
+        <button type="button" data-team-add ${locked || board.tasks.length >= 32 ? 'disabled' : ''}>Add task</button>
+        <button type="button" data-team-run ${locked || !board.tasks.length ? 'disabled' : ''}>${busy ? 'Working…' : 'Run one work + review pass'}</button>
       </div>${busy ? '<button type="button" data-team-stop>Stop team pass</button>' : ''}<span data-team-message role="status">${esc(message || 'Automated pass stops for human verification.')}</span>
     </div>`;
     const plan = root.querySelector('[data-team-plan]');
@@ -203,6 +209,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
     });
     root.querySelector('[data-team-run]')?.addEventListener('click', runPass);
     root.querySelector('[data-team-stop]')?.addEventListener('click', stopRun);
+    root.querySelector('[data-team-load-retry]')?.addEventListener('click', () => load(true));
   }
 
   function defaultBoard(items) {
@@ -212,7 +219,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
     })), tasks: [] };
   }
 
-  async function load() {
+  async function load(retry = false) {
     const id = getParentSessionId();
     if (!id) {
       loadGeneration++;
@@ -223,27 +230,44 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
       loading = false;
       return;
     }
-    if (id === parentId) { render(); return; }
+    if (id === parentId && !retry && !loadFailed) { render(); return; }
+    const sameParent = id === parentId;
     pollGeneration++;
     jobId = null;
     busy = false;
     const generation = ++loadGeneration;
     parentId = id;
     loading = true;
+    loadFailed = false;
+    message = 'Loading team board…';
     const currentModels = models();
-    board = defaultBoard(currentModels);
+    if (!sameParent) board = defaultBoard(currentModels);
     enabled = localStorage.getItem(key(parentId)) === 'true';
     isolateWorktrees = localStorage.getItem(worktreeKey(parentId)) === 'true';
+    render();
     try {
       const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(parentId)}/team`, { credentials: 'same-origin' });
-      if (response.ok) {
-        const data = await response.json();
-        if (generation !== loadGeneration || parentId !== id) return;
-        if (data.board) board = data.board;
-      }
-    } catch (error) { console.warn('[group-team] load failed', error); }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (generation !== loadGeneration || parentId !== id) return;
+      if (data.board === null) board = defaultBoard(currentModels);
+      else if (data.board && typeof data.board === 'object' && !Array.isArray(data.board)
+          && typeof data.board.plan === 'string'
+          && Array.isArray(data.board.participants) && Array.isArray(data.board.tasks)) board = data.board;
+      else throw new Error('Invalid board response');
+    } catch (error) {
+      if (generation !== loadGeneration || parentId !== id) return;
+      console.warn('[group-team] load failed', error);
+      loading = false;
+      loadFailed = true;
+      message = 'Could not load the team board. Retry before editing or running tasks.';
+      render();
+      return;
+    }
     if (generation !== loadGeneration || parentId !== id) return;
     loading = false;
+    loadFailed = false;
+    message = '';
     render();
     await attachRun(id, generation);
   }
@@ -315,7 +339,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
   }
 
   async function runPass() {
-    if (!enabled || busy || !board.tasks.length) return;
+    if (!enabled || busy || loading || loadFailed || !board.tasks.length) return;
     if (board.tasks.some(task => task.status === 'working')) {
       message = 'A task has an uncertain result. Retry it explicitly or remove it before continuing.';
       render(); return;
@@ -369,7 +393,7 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
     setBoard(value) { board = value; render(); },
     retryTask(taskId) {
       const task = board.tasks.find(item => item.id === taskId);
-      if (task?.status === 'working') { task.status = 'pending'; return save(); }
+      if (!loading && !loadFailed && task?.status === 'working') { task.status = 'pending'; return save(); }
       return Promise.resolve(false);
     },
     save,

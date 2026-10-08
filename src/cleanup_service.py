@@ -129,21 +129,38 @@ async def cleanup_old_sessions(session_manager, owner: Optional[str] = None) -> 
 
             sessions_to_delete.append(session)
 
-        for session in sessions_to_delete:
-            message_count = db.query(DbChatMessage).filter(
-                DbChatMessage.session_id == session.id
-            ).count()
-            space_freed += message_count * CleanupConfig.ESTIMATED_MESSAGE_SIZE_BYTES
+        # Snapshot candidate identity and owner, then close this read session
+        # before SessionManager performs the permanent delete and its private
+        # artifact/run cleanup.
+        candidates = [(session.id, session.owner) for session in sessions_to_delete]
+        db.close()
+        for session_id, expected_owner in candidates:
+            check = SessionLocal()
+            try:
+                current = check.get(DbSession, session_id)
+                if (current is None or current.owner != expected_owner
+                        or (owner is not None and current.owner != owner)
+                        or not current.archived or current.is_important
+                        or current.last_accessed is None or current.last_accessed >= cutoff_date
+                        or current.message_count >= CleanupConfig.MIN_MESSAGES_TO_KEEP
+                        or (current.name and any(
+                            keyword in current.name.lower()
+                            for keyword in CleanupConfig.PROTECTED_KEYWORDS
+                        ))):
+                    continue
+                recent_q = check.query(DbSession.id).order_by(DbSession.created_at.desc())
+                recent_q = _apply_owner_filter(recent_q, DbSession, owner)
+                if session_id in {row[0] for row in recent_q.limit(CleanupConfig.PRESERVE_RECENT_COUNT).all()}:
+                    continue
+                message_count = check.query(DbChatMessage).filter(
+                    DbChatMessage.session_id == session_id
+                ).count()
+            finally:
+                check.close()
 
-        session_ids = [session.id for session in sessions_to_delete]
-        if session_ids:
-            db.query(DbSession).filter(DbSession.id.in_(session_ids)).delete(synchronize_session=False)
-            deleted_count = len(session_ids)
-            db.commit()
-
-            for session_id in session_ids:
-                if session_id in session_manager.sessions:
-                    del session_manager.sessions[session_id]
+            if session_manager.delete_session(session_id):
+                deleted_count += 1
+                space_freed += message_count * CleanupConfig.ESTIMATED_MESSAGE_SIZE_BYTES
 
         if deleted_count > 0:
             space_freed_mb = space_freed / (1024 * 1024)
@@ -152,7 +169,10 @@ async def cleanup_old_sessions(session_manager, owner: Optional[str] = None) -> 
 
     except Exception as e:
         logger.error(f"Error cleaning up old sessions: {e}")
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            pass
     finally:
         db.close()
 

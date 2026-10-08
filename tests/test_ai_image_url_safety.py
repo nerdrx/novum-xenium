@@ -31,6 +31,9 @@ def _patch_generation(monkeypatch, image_url):
         async def __aexit__(self, *exc):
             return False
 
+        async def get(self, url, *, timeout):
+            raise AssertionError("image download fixture must be supplied by the test")
+
         post = _post
 
     import httpx
@@ -47,6 +50,7 @@ def _patch_generation(monkeypatch, image_url):
             {"Authorization": "Bearer test"},
         ),
     )
+    return _AsyncClient
 
 
 async def test_generate_image_validates_provider_url_before_download(monkeypatch):
@@ -55,18 +59,18 @@ async def test_generate_image_validates_provider_url_before_download(monkeypatch
 
     provider_url = "https://images.example.com/generated.png?sig=abc"
     events = []
-    _patch_generation(monkeypatch, provider_url)
+    client_cls = _patch_generation(monkeypatch, provider_url)
 
     def _check_outbound_url(url, *, block_private=False):
         events.append(("check", url, block_private))
         return True, "ok"
 
-    def _get(url, *, timeout):
+    async def _get(self, url, *, timeout):
         events.append(("get", url, timeout))
         return _DownloadResponse()
 
     monkeypatch.setattr(url_safety, "check_outbound_url", _check_outbound_url)
-    monkeypatch.setattr(httpx, "get", _get)
+    monkeypatch.setattr(client_cls, "get", _get)
 
     result = await ai_interaction.do_generate_image("draw a chair\ndall-e-3")
 
@@ -83,17 +87,17 @@ async def test_generate_image_rejects_unsafe_provider_url_without_download(monke
 
     unsafe_url = "http://169.254.169.254/latest/meta-data"
     events = []
-    _patch_generation(monkeypatch, unsafe_url)
+    client_cls = _patch_generation(monkeypatch, unsafe_url)
 
     def _check_outbound_url(url, *, block_private=False):
         events.append(("check", url, block_private))
         return False, "link-local address blocked (SSRF metadata risk): 169.254.169.254"
 
-    def _get(url, *, timeout):
+    async def _get(self, url, *, timeout):
         raise AssertionError("unsafe provider image URL must not be downloaded")
 
     monkeypatch.setattr(url_safety, "check_outbound_url", _check_outbound_url)
-    monkeypatch.setattr(httpx, "get", _get)
+    monkeypatch.setattr(client_cls, "get", _get)
 
     result = await ai_interaction.do_generate_image("draw a chair\ndall-e-3")
 

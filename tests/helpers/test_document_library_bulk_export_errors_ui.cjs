@@ -2,8 +2,8 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { chromium } = require('/home/nerdrx/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
-const repo = '/tmp/nx-odysseus-overnight';
+const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
+const repo = path.resolve(__dirname, '../..');
 let exportCalls = 0;
 let mode = 'partial';
 const html = `<!doctype html><body><div id="toast"></div><script type="module">
@@ -24,5 +24,5 @@ const server=http.createServer((req,res)=>{
  if(fp===repo+'/static/js/documentLibrary.js') {let s=fs.readFileSync(fp,'utf8');s=s.replace('async function libraryBulkExport() {','window.__runBulkExport=libraryBulkExport; window.__selectedIds=_librarySelectedIds; async function libraryBulkExport() {'); return res.end(s);}
  fs.createReadStream(fp).pipe(res);
 });
-(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r)); const browser=await chromium.launch({headless:true,executablePath:'/opt/google/chrome/chrome',args:['--no-sandbox','--disable-gpu']});try{const p=await browser.newPage();const errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto(`http://127.0.0.1:${server.address().port}`);await p.waitForFunction(()=>window.ready&&window.__runBulkExport);await p.waitForTimeout(100);await p.evaluate(()=>{window.__selectedIds.add('a');window.__selectedIds.add('b')});await p.evaluate(()=>window.__runBulkExport());assert.deepEqual(await p.evaluate(()=>window.toasts),['ERROR:1 of 2 documents exported; 1 failed']);assert.equal(await p.evaluate(()=>window.__selectedIds.size),2,'failed items stay selected for retry');
+(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r)); const browser=await chromium.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE || '/usr/bin/chromium',args:['--no-sandbox','--disable-gpu']});try{const p=await browser.newPage();const errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto(`http://127.0.0.1:${server.address().port}`);await p.waitForFunction(()=>window.ready&&window.__runBulkExport);await p.waitForTimeout(100);await p.evaluate(()=>{window.__selectedIds.add('a');window.__selectedIds.add('b')});await p.evaluate(()=>window.__runBulkExport());assert.deepEqual(await p.evaluate(()=>window.toasts),['ERROR:1 of 2 documents exported; 1 failed']);assert.equal(await p.evaluate(()=>window.__selectedIds.size),2,'failed items stay selected for retry');
 await p.evaluate(()=>fetch('/__mode?value=malformed'));await p.evaluate(()=>window.__runBulkExport());assert.deepEqual(await p.evaluate(()=>window.toasts),['ERROR:1 of 2 documents exported; 1 failed','ERROR:0 of 2 documents exported; 2 failed'],'all-failed/malformed replies never claim success');assert.equal(exportCalls,4);assert.deepEqual(errors,[]);console.log('PASS: Library bulk export reports actual successful and failed counts; malformed/failed docs stay retryable');}finally{await browser.close();await new Promise(r=>server.close(r));}})().catch(e=>{console.error(e);process.exitCode=1;server.close()});

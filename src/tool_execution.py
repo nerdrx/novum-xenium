@@ -718,6 +718,53 @@ async def _call_mcp_tool(
     return result
 
 
+async def _call_image_tool_in_process(
+    content: str,
+    *,
+    session_id: Optional[str],
+    owner: Optional[str],
+) -> Dict:
+    """Run image generation in the cancellable chat task.
+
+    The image MCP server is a separate process. Cancelling its caller does not
+    reliably stop its provider request, so it could save a gallery artifact
+    after the chat run had already been stopped. Keep the public MCP tool
+    schema, but execute this app-owned tool in-process so cancellation reaches
+    the HTTP request and persistence stays scoped to the trusted chat context.
+    """
+    args = _build_mcp_args("generate_image", content)
+    if not args:
+        args = {"prompt": content.strip()}
+    args.pop(_MCP_OWNER_ARG, None)
+    # Retain the MCP server's fail-closed behavior for ownerless calls while
+    # making the request cancellable in this process.
+    from mcp_servers.image_gen_server import _OWNER_SCOPE_ERROR, _mcp_owner_required
+    if _mcp_owner_required(owner):
+        error = _OWNER_SCOPE_ERROR
+        return {"error": error, "output": error, "exit_code": 1}
+    from src.settings import get_setting
+    if not get_setting("image_gen_enabled", True):
+        error = "Image generation is disabled by the administrator."
+        return {"error": error, "output": error, "exit_code": 1}
+    from src.ai_interaction import do_generate_image
+
+    result = await do_generate_image(args, session_id=session_id, owner=owner)
+    error = result.get("error")
+    output = error or result.get("results", "")
+    if result.get("image_url"):
+        output = (
+            f"{output}\nDirect link: {result['image_url']}\n"
+            f"model: {result.get('image_model', '')}\n"
+            f"size: {result.get('image_size', '')}"
+        )
+    return {
+        **result,
+        "output": output,
+        "exit_code": 1 if error else 0,
+        **({"untrusted_content": True} if error else {}),
+    }
+
+
 def _promote_image_fields(result: Dict) -> None:
     """Lift the image URL (+ prompt/model/size) from a successful generate_image MCP
     text result into structured fields the agent loop already forwards to
@@ -952,10 +999,12 @@ async def execute_tool_block(
         snapshot = None
         if snapshot_required:
             try:
-                from src.workspace_snapshots import ensure_snapshot
+                from src.workspace_snapshots import ensure_snapshot, validate_session_scope
                 from src.owner_identity import effective_storage_owner
                 snapshot = await asyncio.to_thread(
-                    ensure_snapshot, workspace, effective_storage_owner(owner), session_id, security_context.run_id,
+                    ensure_snapshot, workspace, effective_storage_owner(owner), session_id,
+                    security_context.run_id,
+                    validate_scope=lambda: validate_session_scope(effective_storage_owner(owner), session_id),
                 )
             except Exception:
                 logger.warning("Workspace rollback snapshot unavailable; tool blocked")
@@ -1145,7 +1194,13 @@ async def _execute_tool_block_impl(
     # Route MCP-extracted tools through the MCP manager. Forward
     # the progress callback so long-running subprocess tools
     # (bash, python) can stream `tool_progress` events to the UI.
-    if tool in _MCP_TOOL_MAP:
+    if tool == "generate_image":
+        first_line = content.split(chr(10))[0][:80]
+        desc = f"{tool}: {first_line}"
+        result = await _call_image_tool_in_process(
+            content, session_id=session_id, owner=owner,
+        )
+    elif tool in _MCP_TOOL_MAP:
         first_line = content.split(chr(10))[0][:80]
         desc = f"{tool}: {first_line}"
         result = await _call_mcp_tool(tool, content, progress_cb=progress_cb, owner=owner)
@@ -1339,6 +1394,11 @@ async def _execute_tool_block_impl(
                 result = await mcp.call_tool(qualified, args)
         else:
             result = {"error": "MCP manager not available", "exit_code": 1}
+    elif tool == "mcp__image_gen__generate_image":
+        desc = f"mcp: {tool}"
+        result = await _call_image_tool_in_process(
+            content, session_id=session_id, owner=owner,
+        )
     elif tool.startswith("mcp__"):
         # MCP tool dispatch
         mcp = get_mcp_manager()

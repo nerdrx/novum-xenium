@@ -1,3 +1,16 @@
+/** Resolve the route captured by the active pending or saved chat. */
+export function selectModelRouteForSend({ pending, model, endpointUrl } = {}) {
+  if (pending && pending.modelId) {
+    return {
+      model: pending.modelId || '',
+      endpoint_url: pending.url || '',
+      endpoint_id: pending.endpointId || '',
+      source: pending.source || '',
+    };
+  }
+  return { model: model || '', endpoint_url: endpointUrl || '', endpoint_id: '', source: '' };
+}
+
 /** Select and update the response holder for a route-provenance event. */
 export function applyModelRouteEventState(event, holder, roundHolder, defaultModel = '') {
   const target = event && event.round && roundHolder ? roundHolder : holder;

@@ -281,6 +281,33 @@ let _researchPollTimer = null;
 
 // Session list keyboard navigation state
 let _sessionListFocused = false;
+let _sessionDropdownSequence = 0;
+
+function _hideSessionDropdown(dropdown) {
+  if (!dropdown) return;
+  dropdown.style.display = 'none';
+  dropdown._sessionTrigger?.setAttribute('aria-expanded', 'false');
+}
+
+function _wireSessionDropdownKeys(dropdown, trigger) {
+  dropdown.querySelectorAll('.dropdown-item-compact').forEach((item) => {
+    item.setAttribute('role', 'button');
+    item.tabIndex = 0;
+  });
+  dropdown.addEventListener('keydown', (event) => {
+    const action = event.target.closest('.dropdown-item-compact[role="button"]');
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      _hideSessionDropdown(dropdown);
+      _hideSessionDropdown(dropdown._sessionParent);
+      if (trigger?.isConnected) trigger.focus();
+    } else if (action && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      action.click();
+    }
+  });
+}
 
 /** Clear current session from UI (after delete/archive). */
 function _deselectCurrentSession(sid) {
@@ -398,7 +425,7 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
   noneOpt.addEventListener('click', async (e) => {
     e.stopPropagation();
     await moveToFolder(sessionId, '');
-    dropdown.style.display = 'none';
+    _hideSessionDropdown(dropdown);
     sub.style.display = 'none';
   });
   sub.appendChild(noneOpt);
@@ -415,7 +442,7 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
       // Auto-flip to By Folder view so the user can see where the
       // chat went, same as when creating a new folder.
       setSortMode('group');
-      dropdown.style.display = 'none';
+      _hideSessionDropdown(dropdown);
       sub.style.display = 'none';
     });
     sub.appendChild(opt);
@@ -439,7 +466,7 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
     // folder they just created — otherwise the new folder disappears
     // into the flat list and looks like the action did nothing.
     setSortMode('group');
-    dropdown.style.display = 'none';
+    _hideSessionDropdown(dropdown);
     sub.style.display = 'none';
   });
   sub.appendChild(newOpt);
@@ -480,12 +507,15 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
           sub.style.left = Math.max(8, rect.left - subRect.width - 2) + 'px';
         }
       }
+      if (e.detail === 0) sub.querySelector('.dropdown-item-compact[role="button"]')?.focus();
     }
   });
 
   sub.addEventListener('click', (e) => e.stopPropagation());
-  document.addEventListener('click', () => { sub.style.display = 'none'; });
+  _wireSessionDropdownKeys(sub, dropdown._sessionTrigger || moveItem);
   document.body.appendChild(sub);
+  sub._sessionParent = dropdown;
+  sub._sessionTrigger = dropdown._sessionTrigger;
 
   return moveItem;
 }
@@ -588,19 +618,7 @@ function createSessionItem(s) {
       input.focus();
       input.select();
       const _stopGuard = _guardSidebarDuringRename();
-      const commit = async () => {
-        const newName = input.value.trim();
-        if (newName && newName !== s.name) {
-          const fd = new FormData();
-          fd.append('name', newName);
-          await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'PATCH', body: fd });
-          s.name = newName;
-          uiModule.showToast('Renamed');
-        }
-        _forceSidebarOpen();
-        renderSessionList();
-        _stopGuard();
-      };
+      const commit = () => _commitSessionRename(input, s, _stopGuard);
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
@@ -627,7 +645,7 @@ function createSessionItem(s) {
       const dd = div._sessionDropdown;
       if (dd) {
         // Close any other open dropdowns
-        document.querySelectorAll('.dropdown').forEach(d => { if (d !== dd) d.style.display = 'none'; });
+        document.querySelectorAll('.dropdown').forEach(d => { if (d !== dd) _hideSessionDropdown(d); });
         const rect = div.getBoundingClientRect();
         dd.style.position = 'fixed';
         dd.style.left = rect.left + 'px';
@@ -642,7 +660,7 @@ function createSessionItem(s) {
           if (mr.right > window.innerWidth - 8) { dd.style.left = 'auto'; dd.style.right = '8px'; }
         });
         // Close on tap outside
-        const close = (ev) => { if (!dd.contains(ev.target)) { dd.style.display = 'none'; document.removeEventListener('click', close, true); } };
+        const close = (ev) => { if (!dd.contains(ev.target)) { _hideSessionDropdown(dd); document.removeEventListener('click', close, true); } };
         setTimeout(() => document.addEventListener('click', close, true), 100);
       }
     }, 500);
@@ -668,13 +686,21 @@ function createSessionItem(s) {
 
   // Create a dropdown menu button
   const menuBtn = document.createElement('button');
+  menuBtn.type = 'button';
   menuBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
   menuBtn.title = 'Session actions';
   menuBtn.className = 'hamburger session-menu-btn';
+  menuBtn.setAttribute('aria-label', `Actions for ${s.name || 'chat'}`);
+  menuBtn.setAttribute('aria-haspopup', 'true');
+  menuBtn.setAttribute('aria-expanded', 'false');
 
   // Create dropdown menu
   const dropdown = document.createElement('div');
   dropdown.className = 'dropdown session-dropdown session-dropdown-menu';
+  dropdown.id = `session-actions-${++_sessionDropdownSequence}`;
+  dropdown.setAttribute('aria-label', `Chat actions for ${s.name || 'chat'}`);
+  menuBtn.setAttribute('aria-controls', dropdown.id);
+  dropdown._sessionTrigger = menuBtn;
 
   // Create menu items
   const _icon = (svg) => `<span class="dropdown-icon">${svg}</span>`;
@@ -714,7 +740,7 @@ function createSessionItem(s) {
       fd.append('important', newVal);
       await fetch(`${API_BASE}/api/session/${s.id}/important`, { method: 'POST', body: fd });
       s.is_important = newVal;
-      dropdown.style.display = 'none';
+      _hideSessionDropdown(dropdown);
       renderSessionList();
     });
     dropdown.appendChild(starItem);
@@ -725,7 +751,7 @@ function createSessionItem(s) {
   copyItem.innerHTML = _icon(_copyIcon) + '<span>Copy Chat</span>';
   copyItem.addEventListener('click', async (e) => {
     e.stopPropagation();
-    dropdown.style.display = 'none';
+    _hideSessionDropdown(dropdown);
     try {
       const res = await fetch(`${API_BASE}/api/history/${s.id}`);
       const data = await res.json();
@@ -767,7 +793,7 @@ function createSessionItem(s) {
     selectMoreItem.innerHTML = _icon('<span style="font-size:16px;line-height:1;">●</span>') + '<span>Select</span>';
     selectMoreItem.addEventListener('click', (e) => {
       e.stopPropagation();
-      dropdown.style.display = 'none';
+      _hideSessionDropdown(dropdown);
       _enterSelectMode();
       const dot = div.querySelector('.session-select-cb');
       if (dot) { dot._checked = true; dot.innerHTML = '●'; dot.style.opacity = '1'; dot.style.color = 'var(--accent, var(--red))'; _selectedIds.add(s.id); _updateBulkCount(); }
@@ -802,7 +828,7 @@ function createSessionItem(s) {
   cancelItem.innerHTML = _icon(_cancelIcon) + '<span>Cancel</span>';
   cancelItem.addEventListener('click', (e) => {
     e.stopPropagation();
-    dropdown.style.display = 'none';
+    _hideSessionDropdown(dropdown);
   });
   dropdown.appendChild(cancelItem);
 
@@ -811,11 +837,11 @@ function createSessionItem(s) {
     e.stopPropagation();
     // Close any other open dropdowns
     document.querySelectorAll('.dropdown').forEach(d => {
-      if (d !== dropdown) d.style.display = 'none';
+      if (d !== dropdown) _hideSessionDropdown(d);
     });
     // Toggle this dropdown
     if (dropdown.style.display === 'block') {
-      dropdown.style.display = 'none';
+      _hideSessionDropdown(dropdown);
     } else {
       // Position the dropdown using viewport coords
       const rect = menuBtn.getBoundingClientRect();
@@ -824,6 +850,7 @@ function createSessionItem(s) {
       // Show off-screen first to measure height
       dropdown.style.top = '-9999px';
       dropdown.style.display = 'block';
+      menuBtn.setAttribute('aria-expanded', 'true');
       const ddRect = dropdown.getBoundingClientRect();
       // Flip above if not enough room below
       if (rect.bottom + 2 + ddRect.height > window.innerHeight) {
@@ -831,11 +858,12 @@ function createSessionItem(s) {
       } else {
         dropdown.style.top = rect.bottom + 2 + 'px';
       }
+      if (e.detail === 0) dropdown.querySelector('.dropdown-item-compact[role="button"]')?.focus();
     }
   });
 
   renameItem.addEventListener('click', () => {
-    dropdown.style.display = 'none';
+    _hideSessionDropdown(dropdown);
     _forceSidebarOpen();
     // Find the session row's name span and start inline editing
     const sessionEl = document.querySelector(`.list-item[data-session-id="${s.id}"]`);
@@ -850,19 +878,7 @@ function createSessionItem(s) {
     input.focus();
     input.select();
     const _stopGuard = _guardSidebarDuringRename();
-    const commit = async () => {
-      const newName = input.value.trim();
-      if (newName && newName !== s.name) {
-        const fd = new FormData();
-        fd.append('name', newName);
-        await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'PATCH', body: fd });
-        s.name = newName;
-        uiModule.showToast('Renamed');
-      }
-      _forceSidebarOpen();
-      renderSessionList();
-      _stopGuard();
-    };
+    const commit = () => _commitSessionRename(input, s, _stopGuard);
     input.addEventListener('blur', commit);
     input.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
@@ -873,10 +889,10 @@ function createSessionItem(s) {
   deleteItem.addEventListener('click', async () => {
     if (s.is_important) {
       uiModule.showToast('Unfavorite before deleting');
-      dropdown.style.display = 'none';
+      _hideSessionDropdown(dropdown);
       return;
     }
-    dropdown.style.display = 'none';
+    _hideSessionDropdown(dropdown);
     if (!await uiModule.styledConfirm('Delete this session?', { confirmText: 'Delete', danger: true })) {
       _forceSidebarOpen();
       return;
@@ -911,7 +927,7 @@ function createSessionItem(s) {
   });
 
   archiveItem.addEventListener('click', async () => {
-    dropdown.style.display = 'none';
+    _hideSessionDropdown(dropdown);
     _forceSidebarOpen();
     try {
       const response = await fetch(`${API_BASE}/api/session/${s.id}/archive`, {
@@ -921,7 +937,7 @@ function createSessionItem(s) {
       if (response.ok) {
         _forceSidebarOpen();
         await loadSessions();
-        dropdown.style.display = 'none';
+        _hideSessionDropdown(dropdown);
         uiModule.showToast('Session archived');
       } else {
         throw new Error('Failed to archive session');
@@ -938,6 +954,7 @@ function createSessionItem(s) {
   dropdown.addEventListener('click', (e) => {
     e.stopPropagation();
   });
+  _wireSessionDropdownKeys(dropdown, menuBtn);
 
   div.appendChild(span);
 
@@ -1501,6 +1518,40 @@ function _guardSidebarDuringRename() {
   // Keep guarding briefly after the caller stops, to catch the keyboard-dismiss
   // resize that fires just after blur/commit.
   return () => setTimeout(() => obs.disconnect(), 400);
+}
+
+async function _commitSessionRename(input, session, stopGuard) {
+  if (input._renameInFlight) return;
+  const newName = input.value.trim();
+  if (newName && newName !== session.name) {
+    const submittedName = newName;
+    input._renameInFlight = true;
+    try {
+      const fd = new FormData();
+      fd.append('name', submittedName);
+      const response = await fetch(`${API_BASE}/api/session/${session.id}`, { method: 'PATCH', body: fd });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      session.name = submittedName;
+      if (input.isConnected && input.value.trim() !== submittedName) {
+        uiModule.showToast('Earlier title saved; your newer title is still here. Press Enter to save it.');
+        return;
+      }
+      uiModule.showToast('Renamed');
+    } catch (error) {
+      const newerDraft = input.isConnected && input.value.trim() !== submittedName;
+      uiModule.showError(newerDraft
+        ? 'Could not rename chat. Your newer title is still here; press Enter to retry.'
+        : 'Could not rename chat. Your title is still here; press Enter to retry.');
+      if (input.isConnected && !newerDraft) { input.focus(); input.select(); }
+      else if (!input.isConnected) { _forceSidebarOpen(); stopGuard(); }
+      return;
+    } finally {
+      input._renameInFlight = false;
+    }
+  }
+  _forceSidebarOpen();
+  renderSessionList();
+  stopGuard();
 }
 
 // ── Bulk select mode ──
@@ -2457,6 +2508,9 @@ export async function deleteCurrentSessionFromTopMenu() {
 async function _onSessionListKeydown(e) {
   const item = e.target.closest('.list-item[data-session-id]');
   if (!item) return;
+  // Nested controls own their keyboard activation. Enter on a session action
+  // button must open its menu instead of selecting the containing chat row.
+  if (e.target !== item && e.target.closest('button, input, textarea, select, a, [role="button"]')) return;
 
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
@@ -2871,7 +2925,7 @@ if (document.readyState === 'loading') {
 function _initDropdownDismiss() {
   document.addEventListener('click', (e) => {
     if (e.target.closest('.session-dropdown-menu, .session-folder-submenu')) return;
-    document.querySelectorAll('.session-dropdown-menu, .session-folder-submenu').forEach(d => d.style.display = 'none');
+    document.querySelectorAll('.session-dropdown-menu, .session-folder-submenu').forEach(_hideSessionDropdown);
   });
   // Watch the sidebar — when it's hidden (any path: hamburger, swipe, mobile
   // collapse), close any open session dropdowns so they don't orphan over
@@ -2880,7 +2934,7 @@ function _initDropdownDismiss() {
   if (_sb) {
     new MutationObserver(() => {
       if (_sb.classList.contains('hidden')) {
-        document.querySelectorAll('.session-dropdown-menu, .session-folder-submenu').forEach(d => d.style.display = 'none');
+        document.querySelectorAll('.session-dropdown-menu, .session-folder-submenu').forEach(_hideSessionDropdown);
       }
     }).observe(_sb, { attributes: true, attributeFilter: ['class'] });
   }
@@ -2889,7 +2943,7 @@ function _initDropdownDismiss() {
     // Esc must dismiss both the parent dropdown AND the Move-to-folder
     // submenu in one keypress — previously only the dropdown closed and
     // the submenu was left orphaned on screen.
-    document.querySelectorAll('.session-dropdown-menu, .session-folder-submenu').forEach(d => d.style.display = 'none');
+    document.querySelectorAll('.session-dropdown-menu, .session-folder-submenu').forEach(_hideSessionDropdown);
   });
 }
 

@@ -1,12 +1,12 @@
 > Implementation lives in the separate [zVram project](https://github.com/nerdrx/zVram).
-> This PR is the Novum desktop-provider handoff for the implementing agent.
+> Novum desktop controls call this host bridge; the zVram management app stays separate.
 > Relative build paths and Python module names below refer to the zVram checkout.
 
 # Novum Xenium integration handoff
 
-This implementation lives entirely in zVram. It does not modify Novum Xenium
-(formerly Odysseus), its Ollama service, its default model, or model files.
-Changes inside Novum Xenium should be implemented through a separate PR.
+The inference runner and process supervisor live in zVram. Novum adds a narrow
+desktop adapter for model profiles. Ollama, the default model, and model files
+remain untouched.
 The zVram management GUI/TUI are standalone applications. Do not embed the
 management GUI in Novum; the two projects share styling, not their UI lifetime.
 
@@ -59,7 +59,7 @@ port's existing zVram endpoint. It refuses to overwrite an endpoint belonging
 to another provider. Other endpoints and defaults remain unchanged. Login in
 the desktop app is required; the helper does not bypass authentication.
 
-## Suggested Novum PR
+## Desktop controls
 
 Add a provider action that lists existing local GGUF models, lets the user
 choose the alias, port, context, and opt-in paging profile, then invokes the

@@ -226,6 +226,70 @@ def test_verifier_cancellation_kills_owned_process_group(repo):
     import time
     time.sleep(1.7)
     assert not os.path.exists(child_done)
+    os.unlink(started)
+    assert workflows.remove_worktree("alice", created["id"])["removed"] is True
+
+
+def test_worktree_cannot_be_removed_during_verification(repo, tmp_path):
+    created = workflows.create_worktree("alice", str(repo))
+    started = tmp_path / "verification-started"
+    workflows.save_verification_config("alice", str(repo), [{
+        "name": "slow",
+        "argv": [sys.executable, "-c", (
+            "from pathlib import Path; import time; "
+            f"Path({str(started)!r}).write_text('started'); time.sleep(0.3)"
+        )],
+    }])
+
+    async def verify_then_remove():
+        task = asyncio.create_task(workflows.run_verification("alice", created["id"]))
+        for _ in range(100):
+            if started.exists():
+                break
+            await asyncio.sleep(0.01)
+        assert started.exists()
+        with pytest.raises(workflows.ProjectWorkflowError, match="Verification is running"):
+            workflows.remove_worktree("alice", created["id"])
+        report = await task
+        assert report["complete"] is True
+        assert os.path.isdir(created["path"])
+        assert workflows.remove_worktree("alice", created["id"])["removed"] is True
+
+    asyncio.run(verify_then_remove())
+
+
+def test_config_change_during_verification_is_incomplete_and_preserves_snapshot(repo, tmp_path):
+    created = workflows.create_worktree("alice", str(repo))
+    started = tmp_path / "verification-config-started"
+    initial = [{
+        "name": "slow",
+        "argv": [sys.executable, "-c", (
+            "from pathlib import Path; import time; "
+            f"Path({str(started)!r}).write_text('started'); time.sleep(0.3)"
+        )],
+    }]
+    workflows.save_verification_config("alice", str(repo), initial)
+
+    async def verify_while_config_changes():
+        task = asyncio.create_task(workflows.run_verification("alice", created["id"]))
+        for _ in range(100):
+            if started.exists():
+                break
+            await asyncio.sleep(0.01)
+        assert started.exists()
+        workflows.save_verification_config("alice", str(repo), [{
+            "name": "replacement", "argv": [sys.executable, "-c", "pass"],
+        }])
+        report = await task
+        assert report["verification_config_changed_during_checks"] is True
+        assert report["complete"] is False
+        assert report["verification_checks_fingerprint"] == workflows._verification_checks_fingerprint(initial)
+        assert "checks changed" in report["reason"]
+        status = workflows.get_workspace_verification_status("alice", created["path"])
+        assert status["state"] == "stale"
+        assert status["previous_report"]["complete"] is False
+
+    asyncio.run(verify_while_config_changes())
 
 
 def test_worktree_creation_disables_repository_filters(repo, tmp_path):

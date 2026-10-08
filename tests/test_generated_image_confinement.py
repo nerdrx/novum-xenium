@@ -77,7 +77,7 @@ def test_generated_image_route_fails_closed_when_owner_lookup_fails(tmp_path, mo
     monkeypatch.setenv("AUTH_ENABLED", "false")
     import app
     import src.auth_helpers as auth_helpers
-    import src.database as database
+    import core.database as database
     from src import generated_images
 
     image_dir = tmp_path / "generated_images"
@@ -102,7 +102,7 @@ def test_generated_image_route_still_serves_in_auth_disabled_mode(tmp_path, monk
     from fastapi.testclient import TestClient
     monkeypatch.setenv("AUTH_ENABLED", "false")
     import app
-    import src.database as database
+    import core.database as database
     from src import generated_images
 
     image_dir = tmp_path / "generated_images"

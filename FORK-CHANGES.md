@@ -6,6 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- A document created asynchronously cannot take over another selected document. Managed worktrees cannot be removed while their verification is running; cancellation releases the guard after process cleanup.
 - Context inspection reports the actual request input cap even when the model window is unknown, without exposing prompt content or changing the budget. Image MCP carries the trusted caller owner through model lookup and Gallery storage, rejects spoofed ownerless calls to private providers, and normalizes image failures/results consistently. Generated-image ownership lookup failures return a retryable error instead of serving unverified bytes.
 - Browser intent excludes URLs and negated file instructions from workspace coding detection, while keeping later positive coding clauses. The bounded native browser core retains click alongside navigation and snapshot. Unknown model-window budgets remain conservative.
 - Graceful shutdown marks active detached runs interrupted before cancellation, preserving explicit continuation and partial output; deliberate Stop remains terminal. Notes drafts survive failed saves and older replies cannot clear a newer draft. Compare export supports keyboard focus and Escape return.

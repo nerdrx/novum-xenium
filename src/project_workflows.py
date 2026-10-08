@@ -20,6 +20,7 @@ from src.runtime_paths import get_default_data_dir
 from src.tool_execution import vet_workspace
 
 _LOCK = threading.RLock()
+_ACTIVE_VERIFICATIONS: set[tuple[str, str]] = set()
 _MAX_CHECKS = 8
 _MAX_TIMEOUT = 600
 _OUTPUT_LIMIT = 6000
@@ -798,6 +799,8 @@ def remove_worktree(owner: str, identifier: str) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{32}", identifier or ""):
         raise ProjectWorkflowError("Unknown managed worktree")
     with _LOCK:
+        if (_digest(owner), identifier) in _ACTIVE_VERIFICATIONS:
+            raise ProjectWorkflowError("Verification is running; managed worktree was preserved")
         registry = _load_registry(owner)
         record = registry.get(identifier)
         if not isinstance(record, dict) or record.get("owner_key") != _digest(owner):
@@ -826,6 +829,20 @@ def remove_worktree(owner: str, identifier: str) -> dict[str, Any]:
 
 async def run_verification(owner: str, identifier: str, *, session_id: str | None = None,
                            run_id: str | None = None) -> dict[str, Any]:
+    key = (_digest(owner), identifier)
+    with _LOCK:
+        if key in _ACTIVE_VERIFICATIONS:
+            raise ProjectWorkflowError("Verification is already running for this worktree")
+        _ACTIVE_VERIFICATIONS.add(key)
+    try:
+        return await _run_verification(owner, identifier, session_id=session_id, run_id=run_id)
+    finally:
+        with _LOCK:
+            _ACTIVE_VERIFICATIONS.discard(key)
+
+
+async def _run_verification(owner: str, identifier: str, *, session_id: str | None = None,
+                            run_id: str | None = None) -> dict[str, Any]:
     with _LOCK:
         registry = _load_registry(owner)
         record = registry.get(identifier)
@@ -875,22 +892,35 @@ async def run_verification(owner: str, identifier: str, *, session_id: str | Non
     if workspace_changed:
         results.append({"name": "Workspace unchanged during checks", "required": True,
                         "passed": False, "output": "The worktree changed while verification commands were running; rerun checks on the final state."})
-    required = [result for result in results if result["required"]]
-    report = {
-        "worktree_id": identifier,
-        "verification_checks_fingerprint": checks_fingerprint,
-        "head": after_head,
-        "dirty_fingerprint": after_fingerprint,
-        "checked_head": checked_head,
-        "checked_dirty_fingerprint": checked_fingerprint,
-        "workspace_changed_during_checks": workspace_changed,
-        "reason": "Worktree changed during checks; verification is incomplete." if workspace_changed else None,
-        "verified_at": time.time(),
-        "results": results,
-        "required_checks_passed": bool(required) and all(item["passed"] for item in required),
-        "complete": bool(required) and all(item["passed"] for item in required),
-    }
     with _LOCK:
+        current_config = _read_json(_project_config_path(owner, repo), {})
+        current_fingerprint = _verification_checks_fingerprint(
+            current_config.get("checks") if isinstance(current_config, dict) else []
+        )
+        config_changed = current_fingerprint != checks_fingerprint
+        if config_changed:
+            results.append({"name": "Verification configuration unchanged", "required": True,
+                            "passed": False,
+                            "output": "Verification checks changed while they were running; rerun the current checks."})
+        required = [result for result in results if result["required"]]
+        report = {
+            "worktree_id": identifier,
+            "verification_checks_fingerprint": checks_fingerprint,
+            "head": after_head,
+            "dirty_fingerprint": after_fingerprint,
+            "checked_head": checked_head,
+            "checked_dirty_fingerprint": checked_fingerprint,
+            "workspace_changed_during_checks": workspace_changed,
+            "verification_config_changed_during_checks": config_changed,
+            "reason": (
+                "Worktree changed during checks; verification is incomplete." if workspace_changed else
+                "Verification checks changed during the run; rerun the current checks." if config_changed else None
+            ),
+            "verified_at": time.time(),
+            "results": results,
+            "required_checks_passed": bool(required) and all(item["passed"] for item in required),
+            "complete": bool(required) and all(item["passed"] for item in required),
+        }
         _write_json(_store_dir(owner) / f"verification-{identifier}.json", report)
     return report
 

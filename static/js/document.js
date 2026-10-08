@@ -4676,6 +4676,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   async function _autoCreateFromInput(content) {
     if (_autoCreating) return;
     _autoCreating = true;
+    const loadGeneration = _documentLoadGeneration;
+    const sourceTextarea = document.getElementById('doc-editor-textarea');
     try {
       let sessionId = _lastSessionId
         || (sessionModule && sessionModule.getCurrentSessionId());
@@ -4695,17 +4697,21 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       // Set the content into the map so switchToDoc preserves it
       const d = docs.get(doc.id);
       if (d) d.content = content;
-      activeDocId = doc.id;
-      // Update textarea (keep existing content the user typed)
-      const textarea = document.getElementById('doc-editor-textarea');
-      if (textarea) {
-        textarea.placeholder = 'Document content...';
+      const canActivate = loadGeneration === _documentLoadGeneration
+        && !activeDocId
+        && sourceTextarea?.isConnected
+        && document.getElementById('doc-editor-textarea') === sourceTextarea;
+      if (canActivate) {
+        activeDocId = doc.id;
+        // Update textarea (keep existing content the user typed)
+        sourceTextarea.placeholder = 'Document content...';
+        syncHighlighting();
+        renderTabs();
       }
-      syncHighlighting();
-      renderTabs();
-      // Trigger auto-detect and auto-title
-      setTimeout(attemptAutoDetect, 100);
-      setTimeout(() => autoTitleFromContent(content), 300);
+      // Trigger auto-detect only if this created doc is still active. Title
+      // updates target the created doc explicitly even if the user switched.
+      setTimeout(() => { if (activeDocId === doc.id) attemptAutoDetect(); }, 100);
+      setTimeout(() => autoTitleFromContent(content, doc.id), 300);
       // Auto-save
       _scheduleDocAutosave(2000, doc.id);
     } catch (e) {

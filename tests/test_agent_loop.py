@@ -87,6 +87,7 @@ def test_image_capability_available_on_vague_followups_but_respects_policy(monke
 def test_native_image_schema_dispatches_exact_prompt_and_gallery_url(monkeypatch):
     import asyncio
     import json
+    import src.agent_tools  # Initialize the compatibility facade before its schema submodule.
     from src.tool_schemas import FUNCTION_TOOL_SCHEMAS, function_call_to_tool_block
     from src import tool_execution
 
@@ -104,8 +105,8 @@ def test_native_image_schema_dispatches_exact_prompt_and_gallery_url(monkeypatch
             return {"exit_code": 0, "stdout": "Generated image for: Chicken\n/api/generated-image/test.png\nmodel: chatgpt-image-codex\nsize: 1024x1024"}
 
     monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: Manager())
-    result = asyncio.run(tool_execution._call_mcp_tool(block.tool_type, block.content))
-    assert calls == [("mcp__image_gen__generate_image", arguments)]
+    result = asyncio.run(tool_execution._call_mcp_tool(block.tool_type, block.content, owner="alice"))
+    assert calls == [("mcp__image_gen__generate_image", {**arguments, "_odysseus_owner": "alice"})]
     assert result["image_url"] == "/api/generated-image/test.png"
 
     async def failed_call(name, args):
@@ -114,7 +115,7 @@ def test_native_image_schema_dispatches_exact_prompt_and_gallery_url(monkeypatch
     manager = Manager()
     manager.call_tool = failed_call
     monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: manager)
-    failed = asyncio.run(tool_execution._call_mcp_tool(block.tool_type, block.content))
+    failed = asyncio.run(tool_execution._call_mcp_tool(block.tool_type, block.content, owner="alice"))
     assert failed["exit_code"] == 1
     assert "No new file was saved" in failed["error"]
     assert "image_url" not in failed

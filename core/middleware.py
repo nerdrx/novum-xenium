@@ -2,6 +2,7 @@
 # Shared middleware, decorators, and request helpers
 
 import os
+import re
 import secrets
 from collections.abc import Mapping
 
@@ -92,6 +93,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         path = request.url.path
+        route_path = get_application_route_path(request.scope)
 
         # Tool render endpoints
         is_tool_render = path.startswith("/api/tools/") and path.endswith("/render")
@@ -111,7 +113,22 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if is_https:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
-        if is_report:
+        if request.method == "GET" and re.fullmatch(r"/api/modules/[a-z][a-z0-9-]{0,62}/panel", route_path):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; "
+                "sandbox allow-scripts; "
+                "script-src 'unsafe-inline'; "
+                "style-src 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "font-src 'self' data:; "
+                "connect-src 'none'; "
+                "frame-src 'none'; "
+                "object-src 'none'; "
+                "form-action 'none'; "
+                "base-uri 'none'; "
+                "frame-ancestors 'self'"
+            )
+        elif is_report:
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self' 'unsafe-inline'; "

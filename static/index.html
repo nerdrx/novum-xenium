@@ -245,6 +245,7 @@
   <link rel="stylesheet" href="/static/style.css?v=novum-xenium1">
   <link rel="stylesheet" href="/static/nx-ui.css?v=20261008d">
   <link rel="stylesheet" href="/static/usage.css?v=20261008a">
+  <link rel="stylesheet" href="/static/modules.css?v=20261008a">
   <link rel="modulepreload" href="/static/app.js?v=20261008overnight1">
   <link rel="modulepreload" href="/static/js/chat.js?v=20261007approvalfix2">
   <link rel="modulepreload" href="/static/js/ui.js">
@@ -1497,6 +1498,10 @@
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
             <span>Integrations</span>
           </button>
+          <button class="settings-nav-item" data-settings-tab="modules">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <span>Modules</span>
+          </button>
           <button class="settings-nav-item" data-settings-tab="email">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
             <span>Email</span>
@@ -2076,6 +2081,8 @@
         </div>
 
         <!-- ═══ EMAIL TAB ═══ -->
+        <div data-settings-panel="modules" class="hidden"><section id="modules-panel" aria-label="Installed modules"></section></div>
+
         <div data-settings-panel="email" class="hidden">
           <div class="admin-card">
             <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.6"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 4.3l.06.06A1.65 1.65 0 0 0 8.92 4a1.65 1.65 0 0 0 1-1.51V2a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>Email Settings</h2>
@@ -2584,6 +2591,12 @@
 <script type="module" src="/static/js/ui.js"></script>
 <script type="module" src="/static/js/markdown.js"></script>
 <script type="module" src="/static/js/dragSort.js"></script>
+<div id="module-window" class="modal hidden" role="dialog" aria-labelledby="module-window-title" aria-modal="true">
+  <div class="modal-content nx-module-window-content">
+    <div class="modal-header" id="module-window-header"><h3 id="module-window-title">Module</h3><button type="button" class="close-btn" id="module-window-close" aria-label="Close module">×</button></div>
+    <div id="module-frame-host"></div>
+  </div>
+</div>
 <script type="module" src="/static/js/sessions.js"></script>
 <script type="module" src="/static/js/memory.js"></script>
 <script type="module" src="/static/js/skills.js"></script>

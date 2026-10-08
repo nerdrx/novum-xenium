@@ -37,6 +37,7 @@ import notesModule from './js/notes.js';
 import adminModule from './js/admin.js?v=20261007toolqueue1';
 import settingsModule from './js/settings.js';
 import { initUsage, refreshUsage } from './js/usage.js';
+import { initModules } from './js/modules.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
@@ -4307,6 +4308,8 @@ function startOdysseusApp() {
     await fileHandlerModule.addFiles(files);
     uiModule.showToast(`Added ${files.length} file${files.length > 1 ? 's' : ''} to attach`);
   }, true);
+
+  initModules({ openIntegrations: () => settingsModule.open('integrations') });
 
   // Home and Settings share the same per-user analytics snapshot.
   initUsage({

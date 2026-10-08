@@ -90,6 +90,10 @@ Group conversations can continue for 20 replies, 100 replies or **Until Stop**. 
 
 Coordinated task passes run on the server, so closing the tab doesn't stop those passes. Ordinary auto-conversation still depends on the browser tab.
 
+### Add the bits you need
+
+Install small panels and MCP tool connections from **Settings → Modules**. Update a ZIP, review it, enable it. No rebuild for each change. Panels run in an isolated frame; tools keep their own MCP permissions. [Build a module](docs/modules.md), or start with the included Focus timer.
+
 ### Still your workspace
 
 The NX interface keeps the original colour, font and background controls. Use your own theme, switch effects or turn them off. Personality names and chat titles survive a refresh; names you set yourself stay yours.

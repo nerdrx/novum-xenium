@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Focus timer</title>
+<style>
+:root{--bg:#0a0a0b;--fg:#eee;--panel:#141416;--border:#444;--red:#7700ff;color-scheme:dark}
+body{margin:0;padding:24px;background:var(--bg);color:var(--fg);font:16px system-ui}main{max-width:360px;margin:auto}h1{font-size:20px}output{display:block;font-size:64px;font-variant-numeric:tabular-nums;margin:24px 0}button,input{font:inherit;color:var(--fg);background:var(--panel);border:2px solid var(--border);border-radius:8px;padding:10px}input{width:70px}button{cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid var(--red);outline-offset:3px}p{line-height:1.5}
+</style><main><h1>Focus timer</h1><label>Minutes <input id="minutes" type="number" min="1" max="180" value="25"></label><output id="time" aria-label="Time remaining">25:00</output><button id="start">Start</button> <button id="reset">Reset</button><p id="status" role="status">Ready when you are.</p><p>Closing this panel resets the timer.</p></main>
+<script>
+let remaining=1500000,deadline=0,running=false;
+const time=document.getElementById('time'),minutes=document.getElementById('minutes'),start=document.getElementById('start'),status=document.getElementById('status');
+function draw(){const seconds=Math.ceil(remaining/1000);time.textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0')}
+function reset(){running=false;remaining=Math.max(1,Math.min(180,Number(minutes.value)||25))*60000;start.textContent='Start';minutes.disabled=false;status.textContent='Ready when you are.';draw()}
+minutes.addEventListener('change',reset);document.getElementById('reset').addEventListener('click',reset);
+start.addEventListener('click',()=>{if(running){remaining=Math.max(0,deadline-Date.now());running=false;start.textContent='Continue';status.textContent='Paused.'}else{if(!remaining)reset();deadline=Date.now()+remaining;running=true;start.textContent='Pause';minutes.disabled=true;status.textContent='Focus time.'}draw()});
+setInterval(()=>{if(!running)return;remaining=Math.max(0,deadline-Date.now());draw();if(!remaining){running=false;start.textContent='Start';minutes.disabled=false;status.textContent='Time is up. Take a break.'}},250);
+window.addEventListener('message',event=>{if(event.source!==parent||event.data?.type!=='novum:theme')return;for(const key of ['bg','fg','panel','border','red']){const value=event.data.tokens?.[key];if(typeof value==='string'&&value)document.documentElement.style.setProperty('--'+key,value)}});
+</script></html>

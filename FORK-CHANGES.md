@@ -4,6 +4,15 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Updateable modules
+
+- Adds Settings → Modules for administrator-installed ZIP packages: isolated UI panels, existing MCP references and optional remote MCP connection definitions.
+- Installs, upgrades and restored versions require explicit enabling. Versions are immutable; the previous package can be restored. Tools connect only after an explicit action and keep their own Integrations lifecycle and approval rules.
+- Panels receive theme colours in a one-way message. They have no chat, cookie, storage or native management access; network requests and external scripts are blocked.
+- Adds a working Focus timer example and a [module author guide](docs/modules.md). No marketplace, package scripts or in-process backend plugins are included.
+
+Validation: module and usage route checks passed (23 tests). Direct Chromium desktop/mobile checks covered install/update/restore, admin restrictions, failed-request retry, explicit MCP connection, keyboard close/focus restoration, local images and real iframe DOM/storage/network isolation. Existing Settings shell checks passed.
+
 ## Usage analytics and home dashboard
 
 - Adds Settings → Usage with 7/30-day activity charts, input/output token totals and a model breakdown for the signed-in account.

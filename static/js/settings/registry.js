@@ -79,6 +79,12 @@ export const SETTINGS_PANELS = Object.freeze([
     keywords: ['integrations', 'connections', 'services'],
   }),
   definePanel({
+    id: 'modules',
+    label: 'Modules',
+    group: 'communications',
+    keywords: ['modules', 'mods', 'plugins', 'extensions', 'updates'],
+  }),
+  definePanel({
     id: 'email',
     label: 'Email',
     group: 'communications',

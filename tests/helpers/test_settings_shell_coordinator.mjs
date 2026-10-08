@@ -544,6 +544,7 @@ function buildFixture(document) {
     'ai',
     'search',
     'integrations',
+    'modules',
     'email',
     'reminders',
     'appearance',
@@ -817,6 +818,10 @@ const STUBS = new Map([
     {
       bindMenuDismiss() {},
     },
+  ],
+  [
+    path.join(JS, 'modules.js'),
+    { refreshModules() {} },
   ],
   [
     path.join(JS, 'usage.js'),

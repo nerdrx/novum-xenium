@@ -1227,7 +1227,10 @@ fn parse_mounts(
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if kind == "bind" {
-                if checkout_file_mounts.iter().any(|(expected_target, _)| *expected_target == target) {
+                if checkout_file_mounts
+                    .iter()
+                    .any(|(expected_target, _)| *expected_target == target)
+                {
                     if volume.get("read_only").and_then(|v| v.as_bool()) != Some(true) {
                         return Err(format!(
                             "Compose checkout file mount {target} must be read-only."
@@ -1261,13 +1264,18 @@ fn parse_mounts(
                 if let Some(path) = canonical_source.filter(|path| path.starts_with(&checkout)) {
                     if let Ok(relative) = path.strip_prefix(&checkout) {
                         if let Some(relative_text) = relative.to_str() {
-                            let first = relative.components().next().and_then(|part| part.as_os_str().to_str());
+                            let first = relative
+                                .components()
+                                .next()
+                                .and_then(|part| part.as_os_str().to_str());
                             let is_overlay_source = relative == Path::new("app.py")
                                 || matches!(first, Some("static" | "src" | "routes" | "core"));
                             if is_overlay_source {
-                                let expected_target = format!("/app/{}", relative_text.replace('\\', "/"));
+                                let expected_target =
+                                    format!("/app/{}", relative_text.replace('\\', "/"));
                                 if target != expected_target
-                                    || volume.get("read_only").and_then(|v| v.as_bool()) != Some(true)
+                                    || volume.get("read_only").and_then(|v| v.as_bool())
+                                        != Some(true)
                                     || !(path.is_file() || path.is_dir())
                                 {
                                     return Err(format!(
@@ -1275,7 +1283,12 @@ fn parse_mounts(
                                     ));
                                 }
                                 mounts.push(MountBackup {
-                                    kind: if path.is_dir() { "checkout" } else { "checkout-file" }.into(),
+                                    kind: if path.is_dir() {
+                                        "checkout"
+                                    } else {
+                                        "checkout-file"
+                                    }
+                                    .into(),
                                     source: path.to_string_lossy().into_owned(),
                                     archive: String::new(),
                                 });
@@ -1378,6 +1391,7 @@ fn parse_mounts(
             archive: format!("volume-{i}.tar.gz"),
         });
     }
+    mounts.sort_by(|a, b| (&a.kind, &a.source, &a.archive).cmp(&(&b.kind, &b.source, &b.archive)));
     if mounts.is_empty() {
         return Err("Compose defines no persistent project data to back up.".into());
     }
@@ -1725,11 +1739,18 @@ mod tests {
         });
         let inventory = parse_mounts(&spec, &config).unwrap();
         assert_eq!(
-            inventory.iter().filter(|m| m.kind == "checkout-file").count(),
+            inventory
+                .iter()
+                .filter(|m| m.kind == "checkout-file")
+                .count(),
             7
         );
-        assert!(inventory.iter().any(|m| m.kind == "bind" && m.source.ends_with("data/ollama")));
-        assert!(inventory.iter().any(|m| m.kind == "volume" && m.source.ends_with("chromadb-data")));
+        assert!(inventory
+            .iter()
+            .any(|m| m.kind == "bind" && m.source.ends_with("data/ollama")));
+        assert!(inventory
+            .iter()
+            .any(|m| m.kind == "volume" && m.source.ends_with("chromadb-data")));
     }
 
     #[test]

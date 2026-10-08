@@ -7,7 +7,6 @@ MCP server exposing image generation via OpenAI-compatible APIs.
 import asyncio
 import base64
 import sys
-import uuid
 from pathlib import Path
 
 from mcp.server import Server
@@ -158,32 +157,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             _pub_base = (get_setting("app_public_url", "") or "").rstrip("/")
 
             if img.get("b64_json"):
-                img_dir = Path(GENERATED_IMAGES_DIR)
-                img_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"{uuid.uuid4().hex[:12]}.png"
-                img_path = img_dir / filename
                 image_bytes = base64.b64decode(img["b64_json"])
                 actual_size = _image_dimensions(image_bytes)
-                img_path.write_bytes(image_bytes)
+                from src.session_image_cleanup import persist_generated_image
+                filename, _image_id = persist_generated_image(
+                    image_bytes,
+                    directory=GENERATED_IMAGES_DIR,
+                    prompt=prompt,
+                    model=model_id,
+                    size=actual_size or size,
+                    quality=payload.get("quality", "medium"),
+                    session_id=None,
+                    owner=owner,
+                )
                 image_url = f"{_pub_base}/api/generated-image/{filename}"
-
-                # Save to gallery
-                try:
-                    from src.database import SessionLocal, GalleryImage
-                    db = SessionLocal()
-                    db.add(GalleryImage(
-                        id=str(uuid.uuid4()),
-                        filename=filename,
-                        prompt=prompt,
-                        model=model_id,
-                        size=actual_size or size,
-                        quality=payload.get("quality", "medium"),
-                        owner=owner,
-                    ))
-                    db.commit()
-                    db.close()
-                except Exception:
-                    pass
 
             elif img.get("url"):
                 image_url = img["url"]

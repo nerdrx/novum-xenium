@@ -1126,40 +1126,26 @@ async def do_generate_image(content: str | Dict, session_id: Optional[str] = Non
             image_id = None
             actual_size = None
 
-            def _save_to_gallery(filename: str, image_size: Optional[str]) -> str:
-                """Insert a GalleryImage row and return the new id (or '')."""
-                try:
-                    from src.database import SessionLocal as _GallerySL, GalleryImage
-                    new_id = str(uuid.uuid4())
-                    _gdb = _GallerySL()
-                    _gdb.add(GalleryImage(
-                        id=new_id,
-                        filename=filename,
-                        prompt=prompt,
-                        model=model_id,
-                        size=image_size or size,
-                        quality=payload.get("quality", "medium"),
-                        session_id=session_id,
-                        owner=owner,
-                    ))
-                    _gdb.commit()
-                    _gdb.close()
-                    return new_id
-                except Exception as _ge:
-                    logger.warning(f"Failed to save gallery record: {_ge}")
-                    return ""
+            def _save_to_gallery(image_bytes: bytes, image_size: Optional[str]) -> tuple[str, str]:
+                """Persist the file and row together against the live chat scope."""
+                from src.session_image_cleanup import persist_generated_image
+                return persist_generated_image(
+                    image_bytes,
+                    directory=GENERATED_IMAGES_DIR,
+                    prompt=prompt,
+                    model=model_id,
+                    size=image_size or size,
+                    quality=payload.get("quality", "medium"),
+                    session_id=session_id,
+                    owner=owner,
+                )
 
             # GPT image models always return b64_json; DALL-E may return url
             if img.get("b64_json"):
-                img_dir = Path(GENERATED_IMAGES_DIR)
-                img_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"{uuid.uuid4().hex[:12]}.png"
                 image_bytes = base64.b64decode(img.get("b64_json"))
                 actual_size = _image_dimensions(image_bytes)
-                img_path = img_dir / filename
-                img_path.write_bytes(image_bytes)
+                filename, image_id = _save_to_gallery(image_bytes, actual_size)
                 image_url = f"/api/generated-image/{filename}"
-                image_id = _save_to_gallery(filename, actual_size)
 
             elif img.get("url"):
                 # Download external URL and save locally (DALL-E returns temp URLs)
@@ -1172,20 +1158,16 @@ async def do_generate_image(content: str | Dict, session_id: Optional[str] = Non
                     return {"error": f"Image API returned unsafe image URL: {reason}"}
                 try:
                     dl_resp = await client.get(result_url, timeout=60)
-                    if dl_resp.status_code == 200:
-                        img_dir = Path(GENERATED_IMAGES_DIR)
-                        img_dir.mkdir(parents=True, exist_ok=True)
-                        filename = f"{uuid.uuid4().hex[:12]}.png"
-                        img_path = img_dir / filename
-                        img_path.write_bytes(dl_resp.content)
-                        actual_size = _image_dimensions(dl_resp.content)
-                        image_url = f"/api/generated-image/{filename}"
-                        image_id = _save_to_gallery(filename, actual_size)
-                    else:
-                        image_url = result_url  # fallback to external URL
                 except Exception as _dl_e:
                     logger.warning(f"Failed to download DALL-E image: {_dl_e}")
                     image_url = result_url  # fallback to external URL
+                else:
+                    if dl_resp.status_code == 200:
+                        actual_size = _image_dimensions(dl_resp.content)
+                        filename, image_id = _save_to_gallery(dl_resp.content, actual_size)
+                        image_url = f"/api/generated-image/{filename}"
+                    else:
+                        image_url = result_url  # fallback to external URL
             else:
                 return {"error": "Image API returned unexpected format (no b64_json or url)"}
 
@@ -1277,36 +1259,21 @@ async def do_edit_image(
 
     logger.info("Image edit: model=%s, size=%s, quality=%s, image=%s, prompt=%s", model_id, size, quality, path.name, prompt[:80])
 
-    def _save_edited_image_to_gallery(filename: str, image_size: Optional[str]) -> str:
-        try:
-            from src.database import SessionLocal as _GallerySL, GalleryImage
-            new_id = str(uuid.uuid4())
-            _gdb = _GallerySL()
-            _gdb.add(GalleryImage(
-                id=new_id,
-                filename=filename,
-                prompt=prompt,
-                model=model_id,
-                size=image_size or size,
-                quality=payload.get("quality", "medium"),
-                session_id=session_id,
-                owner=owner,
-            ))
-            _gdb.commit()
-            _gdb.close()
-            return new_id
-        except Exception as _ge:
-            logger.warning("Failed to save edited image gallery record: %s", _ge)
-            return ""
-
     def _save_image_bytes(image_bytes: bytes, suffix: str = ".png") -> tuple[str, str, Optional[str]]:
-        img_dir = Path(GENERATED_IMAGES_DIR)
-        img_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{uuid.uuid4().hex[:12]}{suffix}"
-        (img_dir / filename).write_bytes(image_bytes)
         actual_size = _image_dimensions(image_bytes)
-        return (f"/api/generated-image/{filename}",
-                _save_edited_image_to_gallery(filename, actual_size), actual_size)
+        from src.session_image_cleanup import persist_generated_image
+        filename, image_id = persist_generated_image(
+            image_bytes,
+            directory=GENERATED_IMAGES_DIR,
+            prompt=prompt,
+            model=model_id,
+            size=actual_size or size,
+            quality=payload.get("quality", "medium"),
+            session_id=session_id,
+            owner=owner,
+            suffix=suffix,
+        )
+        return f"/api/generated-image/{filename}", image_id, actual_size
 
     async def _try_local_img2img_fallback(client: httpx.AsyncClient) -> Optional[Dict[str, Any]]:
         """Try Odysseus' local diffusion img2img endpoint.

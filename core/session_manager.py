@@ -601,7 +601,11 @@ class SessionManager:
         db = SessionLocal()
         fenced_run = False
         context_owner = None
+        image_lock = None
         try:
+            from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
+            image_lock = IMAGE_PERSISTENCE_LOCK
+            image_lock.acquire()
             try:
                 from src.session_image_cleanup import cleanup_session_images
                 cleanup_session_images(session_id, db=db)
@@ -637,6 +641,8 @@ class SessionManager:
                 # Commit the document-detach / message-delete above (a no-op when
                 # the ghost had no rows) together with the session delete.
                 db.commit()
+                image_lock.release()
+                image_lock = None
                 try:
                     from src.owner_identity import effective_storage_owner
                     result_owner = effective_storage_owner(context_owner)
@@ -676,6 +682,8 @@ class SessionManager:
                 complete_session_deletion(context_owner, session_id)
             return False
         finally:
+            if image_lock is not None:
+                image_lock.release()
             db.close()
 
     # ------------------------------------------------------------------

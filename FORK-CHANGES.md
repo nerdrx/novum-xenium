@@ -6,6 +6,9 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Generated-image persistence and permanent chat deletion share a short process-local lock. A final trusted chat/owner check rejects deleted or mismatched sessions before saving; a failed Gallery commit removes its newly written file. The lock never spans provider network calls. This is not crash-atomic filesystem/database storage or coordination across multiple app processes.
+- Endpoint-list errors keep the last successful rows, show an accessible Retry control and avoid refreshing dependent model controls with a false empty inventory. Invalid payloads and obsolete replies are rejected; a successful empty list still shows None.
+
 - Team-board load failures lock editing and running until Retry retrieves the saved board, preventing a failed read from overwriting existing tasks with a blank board. Genuine empty boards remain editable.
 - Chat image tools keep provider HTTP inside the cancellable run instead of a detached MCP handler. Stop prevents late file/Gallery writes in the app; trusted chat ownership and administrator restrictions remain enforced. This does not establish upstream-provider computation cancellation.
 - Old-chat cleanup uses the permanent-deletion boundary for private context, checkpoints, evidence, team boards and tagged snapshots. It rechecks eligibility and preserves other owners; no-login archives use their reserved local scope.
@@ -232,3 +235,8 @@ A second deployed image-model chat generated a fresh PNG in **24.28 seconds** an
 
 
 October 8 model routing, board loading and private cleanup follow-up: the frozen suite passed **6,686 tests with 17 skips** after updating a dispatch unit fixture for the new ownership callback. All **29** hidden browser helpers passed serially in network-disabled containers. A standard Docker app ran as UID 1000 and passed login, explicit title save, stale-team rejection, manifest and task lifecycle checks. Its no-login snapshot HTTP test verified create/list, archive preservation and permanent-delete cleanup while keeping workspace files unchanged. A fake-provider request through the actual chat API reproduced a late native-image save after Stop; the patched-source repeat closed the provider connection and left zero generated files or Gallery rows. The returned-URL image download uses async HTTP; its URL-safety coverage is deterministic rather than a separate live-provider probe. Provider computation cancellation remains unverified. No local model inference ran.
+
+
+The deployed native image tool passed a live `gpt-6-luna` chat request with one sealed image-task approval. The Gallery item belonged to the test chat, and the stream's 1254-by-1254 metadata matched the fetched PNG. Permanently deleting the owned test chat removed both its Gallery entry and generated file. This covers the native tool path separately from the earlier direct image-model chat checks.
+
+A deployed `gpt-6.1-sol` browser pass inspected the public GitHub README, navigated and took snapshots, used `context_search`, and returned its Docker startup command in **49.58 seconds**, with one task approval and no stream errors. The owned chat was archived and empty fixture directory removed. A separate hidden check used the real live composer and intercepted its provider request: a failed model PATCH kept the confirmed model, and a stale remembered chat-A route did not replace chat B's selected model in the outgoing form. It reported no page errors. These are bounded workflow checks, not comparative model-quality measurements.

@@ -18,6 +18,7 @@ let _toolStateSaveQueue = Promise.resolve();
 // the endpoints list can flash a glow on that row. Cleared once the
 // animation fires.
 let _recentlyAddedEpId = null;
+let _endpointLoadGeneration = 0;
 let _authPolicy = { password_min_length: 8, reserved_usernames: [] };
 
 function el(id) { return document.getElementById(id); }
@@ -471,6 +472,7 @@ async function _selectAddedModelInChat(endpoint) {
 }
 
 async function loadEndpoints() {
+  const generation = ++_endpointLoadGeneration;
   const listLocal = el('adm-epList-local');
   const listApi = el('adm-epList-api');
   // Render endpoint rows first. Do not make Added Models wait on /api/models or
@@ -489,16 +491,35 @@ async function loadEndpoints() {
       }
     }, 0);
   };
+  const showLoadError = () => {
+    [listLocal, listApi].forEach(list => {
+      if (!list) return;
+      let error = list.querySelector('[data-adm-endpoint-load-error]');
+      if (!error) {
+        error = document.createElement('div');
+        error.dataset.admEndpointLoadError = '1';
+        error.className = 'admin-error';
+        error.setAttribute('role', 'alert');
+        list.prepend(error);
+      }
+      error.replaceChildren(document.createTextNode('Failed to load endpoints. '));
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'admin-btn-sm';
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => loadEndpoints());
+      error.appendChild(retry);
+    });
+  };
   try {
     const res = await fetch('/api/model-endpoints', { credentials: 'same-origin' });
-    // Treat a non-OK response (e.g. 401/403 for non-admins, or backend
-    // returning an error envelope) the same as "no endpoints yet": show the
-    // empty state, not "Failed to load". The user just installed the app —
-    // there's literally nothing to load, so the error read as broken UI.
-    let data = [];
-    if (res.ok) {
-      try { data = await res.json(); } catch { data = []; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data) || data.some(ep => !ep || typeof ep !== 'object' || Array.isArray(ep) || typeof ep.id !== 'string' || !ep.id.trim())) {
+      throw new Error('Invalid endpoint list');
     }
+    if (generation !== _endpointLoadGeneration) return;
+    [listLocal, listApi].forEach(list => list?.querySelectorAll('[data-adm-endpoint-load-error]').forEach(node => node.remove()));
     if (!Array.isArray(data) || data.length === 0) {
       const empty = '<div class="admin-empty">None</div>';
       if (listLocal) listLocal.innerHTML = empty;
@@ -764,8 +785,7 @@ async function loadEndpoints() {
     });
     refreshDependentModelUi();
   } catch (e) {
-    const err = '<div class="admin-error">Failed to load</div>';
-    [listLocal, listApi].forEach(c => { if (c) c.innerHTML = err; });
+    if (generation === _endpointLoadGeneration) showLoadError();
   }
 }
 

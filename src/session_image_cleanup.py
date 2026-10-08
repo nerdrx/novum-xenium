@@ -6,11 +6,14 @@ import json
 import logging
 import os
 import re
+import threading
+import uuid
 from pathlib import Path
 
 from src.constants import GENERATED_IMAGES_DIR
 
 logger = logging.getLogger(__name__)
+IMAGE_PERSISTENCE_LOCK = threading.RLock()
 
 
 def _database_models():
@@ -18,6 +21,67 @@ def _database_models():
     from core.database import ChatMessage, GalleryImage, SessionLocal
 
     return ChatMessage, GalleryImage, SessionLocal
+
+
+def persist_generated_image(
+    image_bytes: bytes,
+    *,
+    directory: str | Path,
+    prompt: str,
+    model: str,
+    size: str,
+    quality: str,
+    session_id: str | None,
+    owner: str | None,
+    suffix: str = ".png",
+) -> tuple[str, str]:
+    """Serialize scope-checked generated-image file and Gallery persistence."""
+    from src.database import GalleryImage, Session, SessionLocal
+
+    stored_session_id = session_id or None
+    image_path = None
+    created_file = False
+    db = SessionLocal()
+    try:
+        with IMAGE_PERSISTENCE_LOCK:
+            if stored_session_id:
+                session = db.query(Session).filter(Session.id == stored_session_id).first()
+                if session is None or session.owner != owner:
+                    raise ValueError("Chat is no longer available; generated image was not saved.")
+
+            image_dir = Path(directory)
+            image_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{uuid.uuid4().hex[:12]}{suffix}"
+            image_path = image_dir / filename
+            with image_path.open("xb") as handle:
+                created_file = True
+                handle.write(image_bytes)
+            image_id = str(uuid.uuid4())
+            db.add(GalleryImage(
+                id=image_id,
+                filename=filename,
+                prompt=prompt,
+                model=model,
+                size=size,
+                quality=quality,
+                session_id=stored_session_id,
+                owner=owner,
+            ))
+            db.commit()
+            return filename, image_id
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            logger.warning("Could not roll back generated image Gallery insert", exc_info=True)
+        if image_path is not None and created_file:
+            try:
+                image_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove unregistered generated image %s", image_path)
+        raise
+    finally:
+        db.close()
 
 
 def _generated_image_path_for_cleanup(filename: str) -> Path | None:
@@ -83,6 +147,11 @@ def session_image_refs(db, session_id: str) -> tuple[set[str], set[str]]:
 
 def cleanup_session_images(session_id: str, db=None) -> int:
     """Soft-delete Gallery rows and unlink generated files owned by a chat."""
+    with IMAGE_PERSISTENCE_LOCK:
+        return _cleanup_session_images_locked(session_id, db)
+
+
+def _cleanup_session_images_locked(session_id: str, db=None) -> int:
     _, GalleryImage, SessionLocal = _database_models()
     owns_db = db is None
     db = db or SessionLocal()

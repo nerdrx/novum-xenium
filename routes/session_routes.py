@@ -723,7 +723,11 @@ def setup_session_routes(
 
         db = SessionLocal()
         fenced_scopes = []
+        image_lock = None
         try:
+            from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
+            image_lock = IMAGE_PERSISTENCE_LOCK
+            image_lock.acquire()
             from core.database import ChatMessage as DbChatMessage
             session_ids = [row[0] for row in db.query(DbSession.id).all()]
             context_scopes = dict(db.query(DbSession.id, DbSession.owner).all())
@@ -769,6 +773,8 @@ def setup_session_routes(
             db.query(DbChatMessage).delete()
             db.query(DbSession).delete()
             db.commit()
+            image_lock.release()
+            image_lock = None
             from src.tool_result_store import delete_results
             from src.agent_runs import complete_session_deletion, delete_checkpoints
             for context_sid, context_owner in context_scopes.items():
@@ -807,6 +813,8 @@ def setup_session_routes(
             logger.error(f"Error deleting all sessions: {e}")
             raise HTTPException(500, "Failed to delete sessions")
         finally:
+            if image_lock is not None:
+                image_lock.release()
             db.close()
 
     @router.post("/session/{sid}/archive")

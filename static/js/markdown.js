@@ -286,7 +286,7 @@ export function hasUnclosedThinkTag(text) {
 }
 
 export function startsWithReasoningPrefix(text) {
-  return /^\s*(?:thinking(?:\s+process)?\s*:|the user |user wants|we need |i need |i should |i will |i'll |i am going |let me (?:think|look|see|check|read|review|analyze|parse|figure|draft|write)|they are |the question |i can )/i.test(text || '');
+  return /^\s*(?:thinking(?:\s+process)?\s*:|the user |user wants)/i.test(text || '');
 }
 
 export function normalizeThinkingMarkup(text) {
@@ -357,7 +357,7 @@ function normalizePlainThinking(text) {
     }
   }
 
-  if (/^\s*(?:thinking(?:\s+process)?\s*:|the user |user wants|we need |let me (?:think|look|see|check|read|review|analyze|parse|figure|draft|write)|i need to |i should |i will |i'll |i am going )/i.test(trimmed)) {
+  if (startsWithReasoningPrefix(trimmed)) {
     const thinkBlock = withoutPrefix.trim();
     if (thinkBlock) return `<think>${thinkBlock}</think>`;
   }
@@ -458,9 +458,9 @@ function createThinkingSection(thinkingContent, index = 0, thinkingTime = null) 
   const timeHtml = thinkingTime ? `<span style="font-size:11px;opacity:0.4;font-variant-numeric:tabular-nums;">${thinkingTime}s</span>` : '';
   return `
     <div class="thinking-section">
-      <div class="thinking-header" data-thinking-id="${id}">
+      <div class="thinking-header" data-thinking-id="${id}" role="button" tabindex="0" aria-controls="${id}" aria-expanded="false">
         <div class="thinking-header-left">
-          <span>View thinking process</span>
+          <span data-label="reasoning">Show reasoning</span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           ${timeHtml}
@@ -560,7 +560,7 @@ export function createCollapsible(contentMarkdown, label = 'details') {
   const safeLabel = escapeHtml(label);
   return `
     <div class="thinking-section">
-      <div class="thinking-header" data-thinking-id="${id}">
+      <div class="thinking-header" data-thinking-id="${id}" role="button" tabindex="0" aria-controls="${id}" aria-expanded="false">
         <div class="thinking-header-left"><span data-label="${safeLabel}">View ${safeLabel}</span></div>
         <div style="display:flex;align-items:center;gap:6px;"><span class="thinking-toggle" id="${id}-toggle"></span></div>
       </div>
@@ -1029,16 +1029,15 @@ function _setThinkingExpanded(content, toggle, header, expanded) {
   content.classList.toggle('expanded', expanded);
   toggle.classList.toggle('expanded', expanded);
   const label_el = header?.querySelector('.thinking-header-left span');
+  header?.setAttribute('aria-expanded', String(expanded));
   if (label_el) {
-    const label = label_el.dataset.label || 'thinking process';
-    label_el.textContent = expanded ? `Hide ${label}` : `View ${label}`;
+    const label = label_el.dataset.label || 'reasoning';
+    label_el.textContent = expanded ? `Hide ${label}` : `Show ${label}`;
   }
 }
 
 // Delegated click handler for thinking toggle (CSP-safe, no inline onclick)
-document.addEventListener('click', function(e) {
-  const header = e.target.closest('.thinking-header[data-thinking-id]');
-  if (!header) return;
+function _toggleThinkingHeader(header) {
   const id = header.dataset.thinkingId;
   const content = document.getElementById(id);
   const toggle = document.getElementById(id + '-toggle');
@@ -1054,6 +1053,18 @@ document.addEventListener('click', function(e) {
   if (willExpand) set.add(hash);
   else set.delete(hash);
   _saveExpandedSet(set);
+}
+document.addEventListener('click', function(e) {
+  const header = e.target.closest('.thinking-header[data-thinking-id]');
+  if (!header) return;
+  _toggleThinkingHeader(header);
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const header = e.target.closest?.('.thinking-header[data-thinking-id][role="button"]');
+  if (!header) return;
+  e.preventDefault();
+  _toggleThinkingHeader(header);
 });
 
 // Watch the chat history; whenever a thinking section appears, expand it if

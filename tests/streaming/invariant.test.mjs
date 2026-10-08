@@ -88,6 +88,41 @@ for (const [name, text] of THINKING_CORPUS) {
   });
 }
 
+test('first-person progress remains visible', () => {
+  for (const text of [
+    'Let me look up opening hours for you.',
+    "I'll check the opening hours now.",
+    'I will look that up.',
+  ]) {
+    assert.equal(md.startsWithReasoningPrefix(text), false);
+    const { thinkingBlocks, content } = md.extractThinkingBlocks(text);
+    assert.deepEqual(thinkingBlocks, []);
+    assert.equal(content, text);
+    assert.equal(renderMain(text).includes('thinking-section'), false);
+  }
+});
+
+test('explicit thinking labels and tags remain hidden', () => {
+  for (const [text, expected] of [
+    ['<think>Check the opening-hours page.</think>It opens at nine.', 'It opens at nine.'],
+    ['Thinking Process: Check the opening-hours page.\n\nHere is the result.', 'Here is the result.'],
+  ]) {
+    const { thinkingBlocks, content } = md.extractThinkingBlocks(text);
+    assert.deepEqual(thinkingBlocks, ['Check the opening-hours page.']);
+    assert.equal(content, expected);
+    assert.equal(renderMain(text).includes('thinking-section'), true);
+  }
+});
+
+test('rendered reasoning has a labeled, accessible per-response toggle', () => {
+  const html = renderMain('<think>First step.\n\nSecond step.</think>\n\nAnswer.');
+  assert.match(html, /class="thinking-header"[^>]*role="button"[^>]*aria-controls="thinking-/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, />Show reasoning<\/span>/);
+  assert.match(html, /First step[\s\S]*Second step/);
+  assert.match(html, /Answer\./);
+});
+
 // A final-output check independent of chunking: streaming to completion must equal
 // a single full render.
 test('streamed-to-completion output equals full render for whole corpus', () => {

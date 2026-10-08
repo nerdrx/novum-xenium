@@ -4,6 +4,15 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Reasoning display and page previews
+
+- Ordinary progress messages such as “Let me look up the opening hours” stay in the reply instead of being guessed as reasoning from their first words. Explicit thinking tags and provider reasoning remain separate.
+- The Novum Xenium preset uses the supplied NX theme: dark surfaces, lavender accent, sans font and pale orbit effects. Existing saved theme customizations remain available.
+- Show reasoning opens the full returned reasoning for a response, with keyboard support, expansion state and a larger reading area. Providers that return no reasoning have no extra text to show.
+- Archived webpage results keep a larger opening chunk when the prompt budget allows. A short navigation-heavy preview could previously hide useful page content, including opening hours, while the full result was stored outside the model context.
+
+Validation: streaming-renderer regressions cover normal progress messages and explicitly marked reasoning. Context-storage checks cover facts after navigation text, retrieval from the archive and tight input budgets. This improves the evidence the model receives; it cannot guarantee that every model will interpret it correctly.
+
 ## Desktop notifications and image clipboard
 
 - Home is a normal sidebar row with a house icon, using the same layout as Search and New Chat.

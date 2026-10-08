@@ -20,7 +20,8 @@ def test_bulk_output_is_indexed_and_retrieved_in_real_agent_loop(monkeypatch, tm
     monkeypatch.setattr(loop, "_build_system_prompt", lambda messages, *args, **kwargs: (list(messages), []))
     requests = []
     needle = "EXACT_IMPORTANT_DETAIL"
-    raw = "Start of page. " * 1000 + needle + " End of page. " * 1000
+    opening_detail = "Opening hours Monday-Friday 08:00-18:00, Saturday 08:00-12:30."
+    raw = "Site navigation. " * 60 + opening_detail + " Start of page. " * 1000 + needle + " End of page. " * 1000
 
     async def execute(block, **kwargs):
         if block.tool_type == "web_fetch":
@@ -38,7 +39,8 @@ def test_bulk_output_is_indexed_and_retrieved_in_real_agent_loop(monkeypatch, tm
             calls = [{"id": "fetch", "name": "web_fetch", "arguments": '{"url":"https://github.com/nerdrx"}'}]
         elif len(requests) == 2:
             result = next(m for m in reversed(shaped) if m["role"] == "tool")
-            assert len(result["content"]) < 1600
+            assert len(result["content"]) < 2800
+            assert opening_detail in result["content"]
             assert needle not in result["content"]
             assert result["metadata"]["trusted"] is False
             result_id = re.search(r"stored as ([\w-]+)", result["content"]).group(1)

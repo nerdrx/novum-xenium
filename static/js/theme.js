@@ -54,7 +54,7 @@ function _defaultFontForTheme(name) {
 
 // Default background patterns for built-in themes
 const THEME_DEFAULT_PATTERN = {
-  'novum-xenium': 'none',
+  'novum-xenium': 'orbits',
   nx:         'synapse',
   dark:       'none',
   light:      'dots',
@@ -72,6 +72,7 @@ const THEME_DEFAULT_PATTERN = {
 
 // Default effect colors for specific themes (overrides --fg)
 const THEME_DEFAULT_EFFECT_COLOR = {
+  'novum-xenium': '#e9e6ef',
   nx:         '#ececec',
   midnight:   '#ffffff',
   organs:     '#451616',

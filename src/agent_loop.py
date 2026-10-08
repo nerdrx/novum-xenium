@@ -5143,12 +5143,18 @@ async def stream_agent_loop(
                 archive_result, owner, session_id, tool_name, raw_context,
             )
             event["context_result_id"] = context_id
+            # A 700-character webpage prefix can be only navigation/advertising.
+            # Keep one archive-sized opening chunk when the prompt has room;
+            # the rest remains searchable rather than filling the context.
+            head_chars = (2000 if tool_name == "web_fetch"
+                          and (remaining_tokens is None or remaining_tokens >= 600)
+                          else 700)
             preview = (
                 f"### {description}\nexit_code: {result.get('exit_code', 'unknown')}\n"
                 f"[Large result stored as {context_id}. This is a preview, not the full output. "
                 "Use context_search with this result_id and keywords for missing details, "
                 "or empty query plus offset for exact chunks.]\n"
-                + formatted[:700] + "\n[... stored content ...]\n" + formatted[-250:]
+                + formatted[:head_chars] + "\n[... stored content ...]\n" + formatted[-250:]
             )
             return _account_preview(preview, exchange_tokens)
         except Exception:

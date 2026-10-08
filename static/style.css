@@ -9446,6 +9446,10 @@ body.fullwidth-chat .chat-history {
 .thinking-header:hover {
   background: color-mix(in srgb, var(--red) 12%, transparent);
 }
+.thinking-header:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: -2px;
+}
 
 .thinking-header-left {
   display: flex;
@@ -9490,7 +9494,7 @@ body.fullwidth-chat .chat-history {
 }
 
 .thinking-content.expanded {
-  max-height: 300px;
+  max-height: 70vh;
   overflow-y: auto;
   padding: 12px;
 }

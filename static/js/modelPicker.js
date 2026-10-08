@@ -59,7 +59,7 @@ function _pickerModelKey(m) {
 
 // ── Shared keyboard nav for model pickers ──
 function _handlePickerKeydown(e, listEl, itemSelector, closeFn) {
-  if (e.key === 'Escape') { closeFn(); return; }
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFn(); return; }
   if (e.key === 'Enter') {
     e.preventDefault();
     const active = listEl.querySelector(itemSelector + '.kb-active') || listEl.querySelector(itemSelector);
@@ -209,11 +209,12 @@ function _initModelPickerDropdown() {
   if (wrap.dataset.modelPickerBound === '1') return;
   wrap.dataset.modelPickerBound = '1';
 
-  function _close() {
+  function _close({ restoreFocus = false } = {}) {
     if (menu.classList.contains('hidden')) return;
     // Restore scroll button
     const _scrollBtn = document.getElementById('scroll-bottom-btn');
     if (_scrollBtn) _scrollBtn.style.display = '';
+    if (restoreFocus) btn.focus({ preventScroll: true });
     menu.classList.add('closing');
     menu.addEventListener('animationend', function _onDone() {
       menu.removeEventListener('animationend', _onDone);
@@ -230,6 +231,13 @@ function _initModelPickerDropdown() {
       }
     }, 200);
   }
+
+  menu.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    _close({ restoreFocus: true });
+  });
 
   function _openPickerShortcut(kind) {
     _close();
@@ -861,7 +869,7 @@ async function _pick(m) {
     });
   }
   search.addEventListener('keydown', (e) => {
-    _handlePickerKeydown(e, listEl, '.model-switch-item', _close);
+    _handlePickerKeydown(e, listEl, '.model-switch-item', () => _close({ restoreFocus: true }));
   });
   const addModelsBtn = document.getElementById('model-picker-add-models-btn');
   if (addModelsBtn) {

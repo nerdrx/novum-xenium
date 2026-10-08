@@ -6,6 +6,9 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Cleanup and cleanup-preview database work runs in worker threads instead of stalling the streaming event loop. The existing async APIs and owner filters remain unchanged; a concurrent request can respond while controlled cleanup I/O is blocked.
+- Escape closes the model picker from search or its nested controls and returns focus to the trigger. Search Arrow/Enter navigation and outside-click focus remain intact. This is a targeted keyboard fix, not a full accessibility certification.
+
 - Generated-image persistence and permanent chat deletion share a short process-local lock. A final trusted chat/owner check rejects deleted or mismatched sessions before saving; a failed Gallery commit removes its newly written file. The lock never spans provider network calls. This is not crash-atomic filesystem/database storage or coordination across multiple app processes.
 - Endpoint-list errors keep the last successful rows, show an accessible Retry control and avoid refreshing dependent model controls with a false empty inventory. Invalid payloads and obsolete replies are rejected; a successful empty list still shows None.
 

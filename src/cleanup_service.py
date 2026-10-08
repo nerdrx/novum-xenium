@@ -1,4 +1,5 @@
 # src/cleanup_service.py
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Tuple, Dict, Any, Optional
@@ -37,7 +38,7 @@ def _apply_owner_filter(query, DbSession, owner: Optional[str]):
     return query.filter(DbSession.owner == owner)
 
 
-async def archive_inactive_sessions(session_manager, owner: Optional[str] = None) -> int:
+def _archive_inactive_sessions_sync(session_manager, owner: Optional[str] = None) -> int:
     """
     Archive sessions that haven't been accessed in the configured number of days.
 
@@ -78,7 +79,13 @@ async def archive_inactive_sessions(session_manager, owner: Optional[str] = None
 
     return archived_count
 
-async def cleanup_old_sessions(session_manager, owner: Optional[str] = None) -> Tuple[int, float]:
+
+async def archive_inactive_sessions(session_manager, owner: Optional[str] = None) -> int:
+    """Run the synchronous database operation without blocking the event loop."""
+    return await asyncio.to_thread(_archive_inactive_sessions_sync, session_manager, owner)
+
+
+def _cleanup_old_sessions_sync(session_manager, owner: Optional[str] = None) -> Tuple[int, float]:
     """
     Delete old sessions based on specific criteria.
 
@@ -178,7 +185,13 @@ async def cleanup_old_sessions(session_manager, owner: Optional[str] = None) -> 
 
     return deleted_count, 0.0
 
-async def get_cleanup_preview(owner: Optional[str] = None) -> Dict[str, Any]:
+
+async def cleanup_old_sessions(session_manager, owner: Optional[str] = None) -> Tuple[int, float]:
+    """Run database and artifact cleanup away from the event loop."""
+    return await asyncio.to_thread(_cleanup_old_sessions_sync, session_manager, owner)
+
+
+def _get_cleanup_preview_sync(owner: Optional[str] = None) -> Dict[str, Any]:
     """
     Get a preview of what would be cleaned up without making changes.
 
@@ -284,6 +297,11 @@ async def get_cleanup_preview(owner: Optional[str] = None) -> Dict[str, Any]:
         "preserved_sessions": preserved_sessions,
         "estimated_space_freed_mb": round(estimated_space_freed / (1024 * 1024), 2)
     }
+
+
+async def get_cleanup_preview(owner: Optional[str] = None) -> Dict[str, Any]:
+    """Run the synchronous preview queries without blocking the event loop."""
+    return await asyncio.to_thread(_get_cleanup_preview_sync, owner)
 
 async def cleanup_sessions(session_manager, owner: Optional[str] = None) -> Tuple[int, int, float]:
     """

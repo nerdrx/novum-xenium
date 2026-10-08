@@ -17,6 +17,15 @@ Validation: the full Python suite passed with 6,751 passed and 18 skipped. Linux
 
 See [desktop setup](docs/desktop.md). Packaging results are recorded with the desktop release.
 
+## Desktop tray and logo
+
+- Uses nerdrx's supplied logo in the desktop app, application icons and workspace. Empty transparent margins are cropped; the artwork is retained.
+- Adds a native tray menu for opening the workspace, showing the backend manager and explicitly quitting the desktop app. Closing either window hides it when a tray is available; restoring the workspace retains the existing webview. Docker services continue running independently. Repeated launches restore the existing app instance.
+- Shows progress during desktop operations, blocks duplicate clicks, preserves unsaved settings on focus/status refresh and discards obsolete replies. Busy state leaves global status messages available to assistive technology.
+- Queues Quit during an active backend operation, displays the pending exit and rejects new commands until the current operation completes.
+
+Validation: all 17 native Rust tests and the desktop browser regression passed. Headless Gamescope checks covered native IPC boundaries, same-window tray restore, single-instance handoff, one-click Quit, missing tray hosts and watcher loss. Direct Chromium checks passed shared branding at desktop/mobile widths and preserved route-specific icons. Documentation and branding Python checks passed; the optional browser wrapper was skipped in the container and run directly instead. Live Windows runtime acceptance remains pending.
+
 ## Included changes
 
 - Tab and Shift+Tab keep native composer focus navigation instead of accidentally switching Plan mode. Plan mode has a visible toggle under More tools, with its pressed state exposed to assistive technology.

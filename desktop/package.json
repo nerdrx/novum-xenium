@@ -1,6 +1,6 @@
 {
   "name": "novum-xenium-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Novum Xenium desktop workspace and container manager",
   "license": "AGPL-3.0-or-later",

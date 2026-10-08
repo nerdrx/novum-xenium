@@ -13,6 +13,11 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
+    WindowEvent,
+};
+use tauri::{
     path::BaseDirectory, AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
@@ -81,6 +86,9 @@ struct UpdateResult {
 struct NativeState {
     operation: Arc<Mutex<()>>,
     workbench_port: Arc<std::sync::atomic::AtomicU16>,
+    tray_created: AtomicBool,
+    tray_icon: Mutex<Option<TrayIcon>>,
+    quit_pending: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -96,6 +104,14 @@ fn require_main(window: &WebviewWindow) -> Result<(), String> {
         Ok(())
     } else {
         Err("Native manager commands are only available to the main window.".into())
+    }
+}
+
+fn ensure_not_quitting(pending: &AtomicBool) -> Result<(), String> {
+    if pending.load(Ordering::Acquire) {
+        Err("The app is finishing its current operation before quitting.".into())
+    } else {
+        Ok(())
     }
 }
 
@@ -593,12 +609,15 @@ async fn get_status(
     state: State<'_, NativeState>,
 ) -> Result<DesktopStatus, String> {
     require_main(&window)?;
+    ensure_not_quitting(&state.quit_pending)?;
     let path = config_path(&app)?;
     let lock = state.operation.clone();
+    let quit_pending = state.quit_pending.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
             .map_err(|_| "Native operation lock is unavailable.")?;
+        ensure_not_quitting(&quit_pending)?;
         let config = load_config_at(&path)?;
         Ok(status_for(config))
     })
@@ -614,12 +633,15 @@ async fn save_config(
     config: DesktopConfig,
 ) -> Result<DesktopConfig, String> {
     require_main(&window)?;
+    ensure_not_quitting(&state.quit_pending)?;
     let path = config_path(&app)?;
     let lock = state.operation.clone();
+    let quit_pending = state.quit_pending.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
             .map_err(|_| "Native operation lock is unavailable.")?;
+        ensure_not_quitting(&quit_pending)?;
         if let Some(existing) = load_config_at(&path)? {
             let proposed = validate_config(config.clone())?;
             if existing != proposed && running_state(&existing)? {
@@ -642,10 +664,13 @@ async fn start_backend(
     state: State<'_, NativeState>,
 ) -> Result<DesktopStatus, String> {
     require_main(&window)?;
+    ensure_not_quitting(&state.quit_pending)?;
     let path = config_path(&app)?;
     let lock = state.operation.clone();
+    let quit_pending = state.quit_pending.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock.lock().map_err(|_| "Native operation lock is unavailable.")?;
+        ensure_not_quitting(&quit_pending)?;
         let config = load_config_at(&path)?.ok_or("Save a trusted checkout before starting the backend.")?;
         let output = run_compose(&config, &["up", "-d", "--build"], Duration::from_secs(1200))?;
         command_ok(&output, "Backend start")?;
@@ -663,12 +688,15 @@ async fn stop_backend(
     state: State<'_, NativeState>,
 ) -> Result<DesktopStatus, String> {
     require_main(&window)?;
+    ensure_not_quitting(&state.quit_pending)?;
     let path = config_path(&app)?;
     let lock = state.operation.clone();
+    let quit_pending = state.quit_pending.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
             .map_err(|_| "Native operation lock is unavailable.")?;
+        ensure_not_quitting(&quit_pending)?;
         let config = load_config_at(&path)?.ok_or("No checkout is configured.")?;
         let output = run_compose(
             &config,
@@ -689,12 +717,15 @@ async fn read_logs(
     state: State<'_, NativeState>,
 ) -> Result<LogResult, String> {
     require_main(&window)?;
+    ensure_not_quitting(&state.quit_pending)?;
     let path = config_path(&app)?;
     let lock = state.operation.clone();
+    let quit_pending = state.quit_pending.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
             .map_err(|_| "Native operation lock is unavailable.")?;
+        ensure_not_quitting(&quit_pending)?;
         let config = load_config_at(&path)?.ok_or("No checkout is configured.")?;
         let output = run_compose(
             &config,
@@ -711,31 +742,36 @@ async fn read_logs(
     .map_err(|e| format!("Log worker failed: {e}"))?
 }
 
-#[tauri::command]
-fn open_workbench(
-    window: WebviewWindow,
-    app: AppHandle,
-    state: State<'_, NativeState>,
-) -> Result<WorkbenchResult, String> {
-    require_main(&window)?;
+fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<WorkbenchResult, String> {
     let path = config_path(&app)?;
     let config = load_config_at(&path)?.ok_or("Save a checkout before opening the workbench.")?;
     let url = app_url(&config);
-    state.workbench_port.store(config.port, Ordering::Release);
     let parsed = url
         .parse()
         .map_err(|e| format!("Invalid workbench URL: {e}"))?;
     if let Some(existing) = app.get_webview_window("workbench") {
+        let old_port = state.workbench_port.load(Ordering::Acquire);
+        if old_port != config.port {
+            state.workbench_port.store(config.port, Ordering::Release);
+            if let Err(error) = existing.navigate(parsed) {
+                state.workbench_port.store(old_port, Ordering::Release);
+                return Err(format!("Cannot navigate workbench: {error}"));
+            }
+        }
         existing
-            .navigate(parsed)
-            .map_err(|e| format!("Cannot navigate workbench: {e}"))?;
+            .show()
+            .map_err(|e| format!("Cannot show workbench: {e}"))?;
+        existing
+            .unminimize()
+            .map_err(|e| format!("Cannot restore workbench: {e}"))?;
         existing
             .set_focus()
             .map_err(|e| format!("Cannot focus workbench: {e}"))?;
         return Ok(WorkbenchResult { url });
     }
+    state.workbench_port.store(config.port, Ordering::Release);
     let allowed_port = state.workbench_port.clone();
-    WebviewWindowBuilder::new(&app, "workbench", WebviewUrl::External(parsed))
+    WebviewWindowBuilder::new(app, "workbench", WebviewUrl::External(parsed))
         .title("Novum Xenium Workbench")
         .inner_size(1360.0, 900.0)
         .on_navigation(move |next| {
@@ -751,18 +787,156 @@ fn open_workbench(
 }
 
 #[tauri::command]
+fn open_workbench(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, NativeState>,
+) -> Result<WorkbenchResult, String> {
+    require_main(&window)?;
+    open_saved_workbench(&app, &state)
+}
+
+fn show_manager(app: &AppHandle) -> bool {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.show().is_err() {
+            return false;
+        }
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        true
+    } else {
+        false
+    }
+}
+
+fn restore_workspace(app: &AppHandle) {
+    let state = app.state::<NativeState>();
+    if let Err(error) = open_saved_workbench(app, &state) {
+        eprintln!("Cannot open workbench from tray: {error}");
+        show_manager(app);
+    }
+}
+
+fn quit_when_idle(app: &AppHandle) {
+    let state = app.state::<NativeState>();
+    if state.quit_pending.swap(true, Ordering::AcqRel) {
+        show_quit_pending_notice(app);
+        return;
+    }
+    let operation = state.operation.clone();
+    let wait_for_operation = operation.clone();
+    match operation.try_lock() {
+        Ok(_guard) => app.exit(0),
+        Err(_) => {
+            show_quit_pending_notice(app);
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _guard = wait_for_operation
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                app.exit(0);
+            });
+        }
+    };
+}
+
+fn show_quit_pending_notice(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.eval(
+            "(() => { const notice = document.getElementById('global-notice'); if (notice) { notice.textContent = 'Finishing the current backend operation before quitting…'; notice.hidden = false; } })()",
+        );
+        let _ = window.set_focus();
+    }
+}
+
+fn install_tray(app: &AppHandle) -> Result<TrayIcon, String> {
+    let workspace = MenuItem::with_id(app, "open-workspace", "Open workspace", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let manager = MenuItem::with_id(
+        app,
+        "backend-manager",
+        "Backend manager",
+        true,
+        None::<&str>,
+    )
+    .map_err(|error| error.to_string())?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let menu =
+        Menu::with_items(app, &[&workspace, &manager, &quit]).map_err(|error| error.to_string())?;
+
+    let mut builder = TrayIconBuilder::new()
+        .menu(&menu)
+        .tooltip("Novum Xenium")
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open-workspace" => restore_workspace(app),
+            "backend-manager" => {
+                show_manager(app);
+            }
+            "quit" => quit_when_idle(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                restore_workspace(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app).map_err(|error| error.to_string())
+}
+
+fn tray_host_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(connection) = zbus::blocking::Connection::session() else {
+            return false;
+        };
+        let Ok(proxy) = zbus::blocking::fdo::DBusProxy::new(&connection) else {
+            return false;
+        };
+        let Ok(watcher_name) = "org.kde.StatusNotifierWatcher".try_into() else {
+            return false;
+        };
+        proxy.name_has_owner(watcher_name).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+fn can_hide_to_tray(tray_created: bool, host_available: bool) -> bool {
+    tray_created && host_available
+}
+
+#[tauri::command]
 async fn check_update(
     window: WebviewWindow,
     app: AppHandle,
     state: State<'_, NativeState>,
 ) -> Result<UpdateAvailability, String> {
     require_main(&window)?;
+    ensure_not_quitting(&state.quit_pending)?;
     let path = config_path(&app)?;
     let lock = state.operation.clone();
+    let quit_pending = state.quit_pending.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
             .map_err(|_| "Native operation lock is unavailable.")?;
+        ensure_not_quitting(&quit_pending)?;
         let config = load_config_at(&path)?.ok_or("No checkout is configured.")?;
         check_update_inner(&config)
     })
@@ -826,12 +1000,15 @@ async fn update_backend(
     state: State<'_, NativeState>,
 ) -> Result<UpdateResult, String> {
     require_main(&window)?;
+    ensure_not_quitting(&state.quit_pending)?;
     let path = config_path(&app)?;
     let lock = state.operation.clone();
+    let quit_pending = state.quit_pending.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
             .map_err(|_| "Native operation lock is unavailable.")?;
+        ensure_not_quitting(&quit_pending)?;
         let config = load_config_at(&path)?.ok_or("No checkout is configured.")?;
         let backup_root = path
             .parent()
@@ -1490,6 +1667,9 @@ fn write_manifest(
 
 fn app_startup() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_manager(app);
+        }))
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("manager-navigation")
                 .on_navigation(|webview, url| {
@@ -1507,6 +1687,82 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
                 .build(),
         )
         .manage(NativeState::default())
+        .setup(|app| {
+            match install_tray(&app.handle()) {
+                Ok(tray) => {
+                    let state = app.state::<NativeState>();
+                    let host_available = tray_host_available();
+                    state.tray_created.store(true, Ordering::Release);
+                    *state.tray_icon.lock().expect("tray lock poisoned") = Some(tray);
+                    if !host_available {
+                        eprintln!(
+                            "No StatusNotifierWatcher is available; using no-tray close behavior"
+                        );
+                    }
+                }
+                Err(error) => {
+                    eprintln!("System tray unavailable; using no-tray close behavior: {error}")
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if !matches!(window.label(), "main" | "workbench") {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                if let Some(state) = app.try_state::<NativeState>() {
+                    if state.quit_pending.load(Ordering::Acquire) {
+                        api.prevent_close();
+                        show_quit_pending_notice(&app);
+                    } else {
+                        let tray_created = state.tray_created.load(Ordering::Acquire);
+                        let host_available = tray_created && tray_host_available();
+                        let operation_busy = state.operation.try_lock().is_err();
+                        if can_hide_to_tray(tray_created, host_available) {
+                            api.prevent_close();
+                            if let Err(error) = window.hide() {
+                                eprintln!("Cannot hide window to tray: {error}");
+                            }
+                        } else if operation_busy {
+                            api.prevent_close();
+                            if window.label() == "main"
+                                && app.get_webview_window("workbench").is_none()
+                            {
+                                quit_when_idle(&app);
+                            } else {
+                                show_manager(&app);
+                            }
+                        } else if window.label() == "main" {
+                            if let Some(workbench) = app.get_webview_window("workbench") {
+                                api.prevent_close();
+                                if workbench.show().is_ok() {
+                                    let _ = workbench.set_focus();
+                                    if let Err(error) = window.hide() {
+                                        eprintln!(
+                                            "Cannot hide manager while workspace is open: {error}"
+                                        );
+                                        show_manager(&app);
+                                    }
+                                } else {
+                                    show_manager(&app);
+                                }
+                            }
+                        } else if window.label() == "workbench" {
+                            if app
+                                .get_webview_window("main")
+                                .is_some_and(|manager| !manager.is_visible().unwrap_or(true))
+                            {
+                                if !show_manager(&app) {
+                                    api.prevent_close();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             save_config,
@@ -1534,6 +1790,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("docker-compose.yml"), "services: {}\n").unwrap();
         dir
+    }
+
+    #[test]
+    fn close_to_tray_requires_created_icon_and_linux_watcher() {
+        assert!(!can_hide_to_tray(false, true));
+        assert!(!can_hide_to_tray(true, false));
+        assert!(can_hide_to_tray(true, true));
+    }
+
+    #[test]
+    fn queued_quit_rejects_new_native_operations() {
+        let pending = AtomicBool::new(false);
+        assert!(ensure_not_quitting(&pending).is_ok());
+        pending.store(true, Ordering::Release);
+        assert!(ensure_not_quitting(&pending).is_err());
+    }
+
+    #[test]
+    fn tray_host_probe_detects_empty_session_bus_when_requested() {
+        if std::env::var_os("NOVUM_TEST_EMPTY_TRAY_BUS").is_some() {
+            assert!(!tray_host_available());
+            assert!(!can_hide_to_tray(true, tray_host_available()));
+        }
     }
 
     #[test]
@@ -1745,9 +2024,8 @@ mod tests {
                 .count(),
             7
         );
-        assert!(inventory
-            .iter()
-            .any(|m| m.kind == "bind" && Path::new(&m.source).ends_with(Path::new("data").join("ollama"))));
+        assert!(inventory.iter().any(|m| m.kind == "bind"
+            && Path::new(&m.source).ends_with(Path::new("data").join("ollama"))));
         assert!(inventory
             .iter()
             .any(|m| m.kind == "volume" && m.source.ends_with("chromadb-data")));

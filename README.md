@@ -1,5 +1,7 @@
 # Novum Xenium
 
+<img src="assets/branding/novum-xenium.png" alt="Novum Xenium logo" width="240">
+
 A self-hosted agent workspace. Coding, research, images and longer jobs, with a lightweight desktop app to run the backend.
 
 Built on [Odysseus](https://github.com/odysseus-dev/odysseus) and the NX-Odysseus fork. The original history and AGPL-3.0 license stay with it.
@@ -11,7 +13,7 @@ Built on [Odysseus](https://github.com/odysseus-dev/odysseus) and the NX-Odysseu
 The Tauri app uses the system webview. It manages an existing Docker Compose installation and opens the same frontend you can use in a browser. No separate desktop copy of chat, tools or memory.
 
 - Start and stop the selected backend, check its health and read logs.
-- Open the workspace in its own window.
+- Open the workspace in its own window; close it to the tray and restore it without reloading.
 - Review backend updates, back up persistent data and check recovery if startup fails.
 - Install desktop release artifacts through [NX Hub](https://github.com/nerdrx/nx-hub).
 

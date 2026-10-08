@@ -159,6 +159,14 @@ html.theme-novum-xenium .sidebar-brand-title {
   letter-spacing: 0.01em;
 }
 
+#sidebar .sidebar-brand-logo {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+#sidebar .sidebar-brand-logo + .sidebar-brand-title { left: 0; }
+
 html.theme-novum-xenium .welcome-name {
   color: var(--brand-color, var(--red));
   background: none;
@@ -2105,12 +2113,12 @@ body.bg-pattern-sparkles {
       letter-spacing:0.03em;
       margin-bottom:10px;
     }
-    .welcome-boat {
+    .welcome-logo {
       width: 1.8rem;
       height: 1.8rem;
       margin-right: 0.4rem;
       vertical-align: -0.15em;
-      color: var(--brand-color, var(--red));
+      object-fit: contain;
     }
     #welcome-screen .welcome-sub {
       font-size:0.85rem;

@@ -14,7 +14,7 @@ The manager includes only the checkout's `docker-compose.yml` and recognized opt
 
 Install the AppImage through NX Hub, or download it and its SHA-256 sidecar from Releases. NX Hub extracts AppImages, so its install does not require FUSE. Docker with the Compose plugin and Git must be available to the desktop user's PATH.
 
-The current desktop release uses the host WebKitGTK runtime. If launching a portable build manually, install WebKitGTK 4.1 using your distribution's package manager when needed.
+The current desktop release uses the host WebKitGTK runtime. If launching a portable build manually, install WebKitGTK 4.1 using your distribution's package manager when needed. Linux tray support also needs an AppIndicator library and a desktop tray host, such as KDE Plasma's StatusNotifierWatcher. Without a tray host, windows close normally instead of disappearing into an unavailable tray. See the [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux) for distribution package names.
 
 ## Windows
 
@@ -30,7 +30,7 @@ Before changing persistent state, the manager stops the selected backend, snapsh
 
 Backups contain private application data. Keep them on storage you control. The app leaves recovery archives available rather than deleting them after an update. Review long-running agent tasks before starting an update; this first release does not automatically schedule updates around active tasks.
 
-App updates and backend updates are separate. NX Hub manages the desktop package; the desktop manager handles the selected backend. Closing the desktop window does not delete persistent data or automatically stop Docker services.
+App updates and backend updates are separate. NX Hub manages the desktop package; the desktop manager handles the selected backend. When a system tray is available, closing the manager or workspace hides that window. Open it again from the Novum Xenium tray menu; the existing workspace stays loaded. The tray also provides an explicit Quit command. If a backend operation is active, Quit displays a notice and exits after that operation finishes; it does not interrupt the update. Quitting the desktop app leaves Docker services running. Launching the app again restores the existing instance instead of creating duplicate tray icons.
 
 ## Native boundary
 
@@ -53,7 +53,7 @@ See the official Tauri prerequisites for Linux system packages and the Windows C
 
 ## Native smoke check
 
-`desktop/tests/native_smoke.py` uses Python's standard library and a running `tauri-driver` installation. It writes configuration only to a temporary directory, reads status/logs from an existing healthy backend, opens the workbench, and verifies that the workbench cannot invoke native management commands. It does not start, stop or update the backend.
+`desktop/tests/native_smoke.py` uses Python's standard library and a running `tauri-driver` installation. It writes configuration only to temporary directories, reads status/logs from an existing healthy backend, opens the workbench, and verifies that the workbench cannot invoke native management commands. It does not start, stop or update the backend.
 
 On Linux with Gamescope and WebKitWebDriver installed:
 
@@ -65,3 +65,5 @@ gamescope --backend headless --expose-wayland -W 1100 -H 760 -- env GDK_BACKEND=
 ```
 
 Pass `--backend-port` for a non-default port and `--driver` if `tauri-driver` is outside PATH. This requires a debug desktop build and does not need a visible window.
+
+Optional `--tray-host none` and `--tray-host fake` modes also test graceful window close under an isolated `dbus-run-session`; they never use the user's session bus or data directories. The fake-host mode checks hide/restore for both windows, same-window workspace reuse, single-instance handoff, tray Quit, and close behavior after the watcher disappears. These modes additionally need `dbus-python`, GLib introspection bindings, `python3-xlib`, and `xdotool` on Linux.

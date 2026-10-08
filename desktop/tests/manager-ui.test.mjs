@@ -48,10 +48,18 @@ test('manager uses native IPC safely and browser preview remains inert', async (
     window.__backend = { state: 'stopped', detail: 'Docker is available; service is stopped.' };
     window.__config = { checkout: '/tmp/nx-checkout', project: 'Fixture', port: 7300 };
     window.__confirmUpdate = false;
+    window.__holdNextStatus = false;
+    window.__pendingStatuses = [];
     window.confirm = () => window.__confirmUpdate;
     window.__TAURI__ = { core: { invoke: async (command, args) => {
       window.__calls.push({ command, args });
-      if (command === 'get_status') return { config: window.__config, backend: window.__backend };
+      if (command === 'get_status') {
+        if (window.__holdNextStatus) {
+          window.__holdNextStatus = false;
+          return new Promise((resolve, reject) => window.__pendingStatuses.push({ resolve, reject }));
+        }
+        return { config: window.__config, backend: window.__backend };
+      }
       if (command === 'save_config') { window.__config = args.config; return args.config; }
       if (command === 'start_backend') { await new Promise((resolve) => { window.__finishStart = resolve; }); window.__backend = { state: 'running' }; return {}; }
       if (command === 'stop_backend') { window.__backend = { state: 'stopped' }; return {}; }
@@ -65,6 +73,7 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   await page.goto(url);
   await page.waitForFunction(() => window.__calls.some((call) => call.command === 'get_status'));
   assert.equal(await page.locator('#backend-state-text').textContent(), 'Stopped');
+  assert.equal(await page.locator('.dashboard-grid').getAttribute('aria-busy'), 'false');
   assert.equal(await page.locator('body').evaluate(el => getComputedStyle(el).backgroundImage), 'none');
   assert.equal(await page.locator('.panel').first().evaluate(el => getComputedStyle(el).backgroundImage), 'none');
   assert.equal(await page.locator('[data-action="start"]').isEnabled(), true);
@@ -76,9 +85,46 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   assert.deepEqual(saveCall.args.config, { checkout: '/tmp/nx-checkout', project: 'Fixture project', port: 7300 });
   assert.equal(await page.locator('#config-message').textContent(), 'Settings saved.');
 
+  await page.locator('#checkout').fill('/tmp/unsaved-checkout');
+  await page.locator('#project').fill('Unsaved draft');
+  await page.locator('#port').fill('7444');
+  await page.evaluate(() => { window.__holdNextStatus = true; window.dispatchEvent(new Event('focus')); });
+  await page.waitForFunction(() => window.__pendingStatuses.length === 1);
+  await page.evaluate(() => window.__pendingStatuses[0].resolve({
+    config: { checkout: '/tmp/external-checkout', project: 'External config', port: 7445 },
+    backend: { state: 'stopped', detail: 'Newest service check.' },
+  }));
+  await page.waitForFunction(() => document.querySelector('#backend-detail').textContent === 'Newest service check.');
+  assert.equal(await page.locator('#checkout').inputValue(), '/tmp/unsaved-checkout');
+  assert.equal(await page.locator('#project').inputValue(), 'Unsaved draft');
+  assert.equal(await page.locator('#port').inputValue(), '7444');
+
+  await page.evaluate(() => { window.__holdNextStatus = true; window.dispatchEvent(new Event('focus')); });
+  await page.waitForFunction(() => window.__pendingStatuses.length === 2);
+  await page.evaluate(() => { window.__backend = { state: 'running', detail: 'Newest status.' }; });
+  const statusCountBeforeRefresh = await page.evaluate(() => window.__calls.filter((call) => call.command === 'get_status').length);
+  await page.locator('[data-action="refresh"]').click();
+  await page.waitForFunction((count) => window.__calls.filter((call) => call.command === 'get_status').length === count + 1, statusCountBeforeRefresh);
+  await page.waitForFunction(() => document.querySelector('#backend-state-text').textContent === 'Running' && document.querySelector('.dashboard-grid').getAttribute('aria-busy') === 'false');
+  await page.evaluate(() => window.__pendingStatuses[1].reject(new Error('late stale failure')));
+  await page.waitForTimeout(30);
+  assert.equal(await page.locator('#global-error').isVisible(), false);
+  assert.equal(await page.locator('#backend-state-text').textContent(), 'Running');
+  assert.equal(await page.locator('#project').inputValue(), 'Unsaved draft');
+  await page.evaluate(() => { window.__backend = { state: 'stopped' }; });
+  await page.locator('[data-action="refresh"]').click();
+  await page.waitForFunction(() => document.querySelector('#backend-state-text').textContent === 'Stopped' && document.querySelector('.dashboard-grid').getAttribute('aria-busy') === 'false');
+
   await page.locator('[data-action="start"]').click();
-  await page.locator('[data-action="start"]').click({ force: true });
   await page.waitForFunction(() => typeof window.__finishStart === 'function');
+  assert.equal(await page.locator('.dashboard-grid').getAttribute('aria-busy'), 'true');
+  assert.equal(await page.locator('#global-notice').textContent(), 'Starting backend…');
+  assert.equal(await page.locator('[data-action="refresh"]').isDisabled(), true);
+  const statusCallsWhileStarting = await page.evaluate(() => window.__calls.filter((call) => call.command === 'get_status').length);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(30);
+  assert.equal(await page.evaluate(() => window.__calls.filter((call) => call.command === 'get_status').length), statusCallsWhileStarting, 'focus refresh must not overlap a native action');
+  await page.locator('[data-action="start"]').click({ force: true });
   assert.equal(await page.evaluate(() => window.__calls.filter((call) => call.command === 'start_backend').length), 1);
   await page.evaluate(() => window.__finishStart());
   await page.waitForFunction(() => window.__calls.filter((call) => call.command === 'get_status').length >= 2);
@@ -115,6 +161,8 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   await page.locator('[data-action="update"]').click();
   await page.waitForTimeout(20);
   assert.equal(await page.evaluate(() => window.__calls.filter((call) => call.command === 'update_backend').length), 0, 'cancelled confirmation must not apply update');
+  assert.equal(await page.locator('.dashboard-grid').getAttribute('aria-busy'), 'false');
+  assert.equal(await page.locator('#global-notice').isVisible(), false, 'cancelled update clears pending progress');
   await page.evaluate(() => { window.__confirmUpdate = true; });
   await page.locator('[data-action="update"]').click();
   await page.waitForFunction(() => window.__calls.some((call) => call.command === 'update_backend'));
@@ -129,6 +177,19 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   }));
   assert.equal(mobileLayout.page, mobileLayout.viewport, 'mobile layout should not overflow horizontally');
   assert.ok(mobileLayout.gridColumns.split(' ').length <= 1, 'mobile panels should stack in one column');
+  for (const width of [360, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const narrowLayout = await page.evaluate(() => ({
+      viewport: document.documentElement.clientWidth,
+      page: document.documentElement.scrollWidth,
+      topbar: document.querySelector('.topbar').scrollWidth,
+      topbarClient: document.querySelector('.topbar').clientWidth,
+      brandRight: document.querySelector('.brand').getBoundingClientRect().right,
+      statusRight: document.querySelector('#backend-state').getBoundingClientRect().right,
+    }));
+    assert.equal(narrowLayout.page, narrowLayout.viewport, `${width}px manager layout should not overflow horizontally`);
+    assert.ok(narrowLayout.topbar <= narrowLayout.topbarClient, `${width}px topbar should fit its container`);
+  }
   assert.deepEqual(pageErrors, []);
 
   const preview = await browser.newPage();

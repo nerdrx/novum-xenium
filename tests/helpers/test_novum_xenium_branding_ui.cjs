@@ -8,16 +8,19 @@ const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 const repo = path.resolve(__dirname, '../..');
 // Use the real shared shell, with scripts removed so this stays a static visual
 // check and never sends chat text or touches app APIs.
-const html = fs.readFileSync(path.join(repo, 'static/index.html'), 'utf8')
-  .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+const sourceHtml = fs.readFileSync(path.join(repo, 'static/index.html'), 'utf8');
+const routeScriptStart = sourceHtml.indexOf('<!-- Per-route favicon.');
+const routeScript = sourceHtml.slice(routeScriptStart).match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/i)?.[0];
+const html = sourceHtml
+  .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (script) => script === routeScript ? script : '')
   .replace(/<html\b([^>]*)>/i, '<html$1 class="theme-novum-xenium">');
 
 const server = http.createServer((req, res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://fixture').pathname);
-  if (pathname === '/') { res.setHeader('Content-Type', 'text/html'); res.end(html); return; }
+  if (pathname === '/' || pathname === '/calendar') { res.setHeader('Content-Type', 'text/html'); res.end(html); return; }
   const file = path.resolve(repo, `.${pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
-  res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'text/plain');
+  res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : file.endsWith('.png') ? 'image/png' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 
@@ -56,6 +59,8 @@ const server = http.createServer((req, res) => {
           codeFont: getComputedStyle(document.querySelector('code')).fontFamily,
           sidebarShadow: getComputedStyle(sidebar).boxShadow,
           themeClass: root.classList.contains('theme-novum-xenium'),
+          rootFavicon: (() => { const icon = document.querySelector("link[rel='icon']"); return { href: icon.href, type: icon.type }; })(),
+          logos: [...document.querySelectorAll('.welcome-logo, .sidebar-brand-logo')].map((img) => ({ src: img.currentSrc, width: img.naturalWidth, height: img.naturalHeight, alt: img.alt, ariaHidden: img.getAttribute('aria-hidden') })),
           welcome: (() => { const el = document.querySelector('#welcome-screen'); const cs = getComputedStyle(el); return { text: el.innerText, display: cs.display, opacity: cs.opacity, color: cs.color, fill: cs.webkitTextFillColor, rect: el.getBoundingClientRect().toJSON() }; })(),
         };
       });
@@ -64,6 +69,10 @@ const server = http.createServer((req, res) => {
       assert.ok(metrics.font.startsWith('system-ui'), `prose font: ${metrics.font}`);
       assert.ok(metrics.codeFont.includes('Fira Code'), `code font: ${metrics.codeFont}`);
       assert.equal(metrics.sidebarShadow, 'none');
+      assert.equal(new URL(metrics.rootFavicon.href).pathname, '/static/icons/icon-192.png');
+      assert.equal(metrics.rootFavicon.type, 'image/png');
+      assert.equal(metrics.logos.length, 2);
+      assert.ok(metrics.logos.every((logo) => logo.width > 0 && logo.height > 0 && logo.alt === '' && logo.ariaHidden === 'true'), `brand images: ${JSON.stringify(metrics.logos)}`);
       assert.ok(metrics.documentWidth <= metrics.viewportWidth, `${viewport.name} horizontal overflow: ${JSON.stringify(metrics)}`);
       assert.ok(metrics.bodyWidth <= metrics.viewportWidth, `${viewport.name} body overflow: ${JSON.stringify(metrics)}`);
       assert.ok(metrics.composerRight <= metrics.viewportWidth + 1, `${viewport.name} composer outside viewport`);
@@ -75,6 +84,12 @@ const server = http.createServer((req, res) => {
       }
       await page.close();
     }
+    const routePage = await browser.newPage();
+    await routePage.goto(`http://127.0.0.1:${server.address().port}/calendar`);
+    const routeIcon = await routePage.locator("link[rel='icon']").evaluate((link) => ({ href: link.href, type: link.type }));
+    assert.equal(routeIcon.type, 'image/svg+xml');
+    assert.match(decodeURIComponent(routeIcon.href), /<rect x='4' y='6' width='24' height='22'/, 'calendar keeps its route-specific SVG favicon');
+    await routePage.close();
     console.log('PASS: Novum Xenium defaults render without desktop/mobile overflow');
   } finally {
     await browser.close();

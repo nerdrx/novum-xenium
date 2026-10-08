@@ -231,8 +231,13 @@ export function makeWindowDraggable(modal, options = {}) {
     if (Math.abs(cx - startX) > MOVE_THRESHOLD || Math.abs(cy - startY) > MOVE_THRESHOLD) {
       movedDuringDrag = true;
     }
-    content.style.left = (startLeft + cx - startX) + 'px';
-    content.style.top = (startTop + cy - startY) + 'px';
+    // Keep the header reachable, including below the desktop's custom title bar.
+    const topInset = document.getElementById('nx-window-bar')?.getBoundingClientRect().bottom || 0;
+    const rect = content.getBoundingClientRect();
+    const maxLeft = Math.max(0, window.innerWidth - rect.width);
+    const maxTop = Math.max(topInset, window.innerHeight - header.getBoundingClientRect().height);
+    content.style.left = Math.max(0, Math.min(maxLeft, startLeft + cx - startX)) + 'px';
+    content.style.top = Math.max(topInset, Math.min(maxTop, startTop + cy - startY)) + 'px';
     // Corner guard: in the top fullscreen band the side docks stay OFF, so a
     // top corner only ever snaps to fullscreen — never the corner hybrid.
     const inTopBand = cy <= SNAP_PX;
@@ -279,6 +284,7 @@ export function makeWindowDraggable(modal, options = {}) {
   };
 
   header.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
     if (mobileSkip > 0 && window.innerWidth <= mobileSkip) return;
     if (skipSelector && e.target.closest(skipSelector)) return;
     e.preventDefault();

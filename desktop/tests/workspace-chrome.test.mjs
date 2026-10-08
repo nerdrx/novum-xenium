@@ -65,6 +65,23 @@ test('workspace controls use only guarded navigation and preserve theme/layout',
   const dragged = await popup.boundingBox();
   assert.equal(dragged.x, before.x + 50);
   assert.equal(dragged.y, before.y + 30);
+  // Right-click must not pin or move a popup, and dragging cannot hide its header.
+  await page.locator('#popup header span').click({button:'right'});
+  assert.deepEqual(await popup.boundingBox(), dragged);
+  await page.mouse.move(dragged.x + 80, dragged.y + 22);
+  await page.mouse.down();
+  await page.mouse.move(-200, -200, {steps:5});
+  await page.mouse.up();
+  const clamped = await popup.boundingBox();
+  assert.equal(clamped.x, 0);
+  assert.equal(clamped.y, 36, 'popup header stays below desktop title bar');
+  await page.mouse.move(80, 58);
+  await page.mouse.down();
+  await page.mouse.move(1000, 750, {steps:5});
+  await page.mouse.up();
+  const lower = await popup.boundingBox();
+  assert.ok(lower.x + lower.width <= 1100);
+  assert.ok(lower.y + 44 <= 760, 'header controls stay reachable at bottom edge');
   await page.getByRole('button', {name:'Close popup'}).click();
   assert.equal(await page.locator('#popup').count(), 0, 'close receives its click without starting a drag');
   await page.getByRole('button', {name:'Minimize window'}).click();

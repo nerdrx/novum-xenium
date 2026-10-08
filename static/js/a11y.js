@@ -79,7 +79,9 @@
     if (!mc || mc.nodeType !== 1 || mc.dataset.a11yDialog === '1') return;
     mc.dataset.a11yDialog = '1';
     if (!mc.hasAttribute('role')) mc.setAttribute('role', 'dialog');
-    if (!mc.hasAttribute('aria-modal')) mc.setAttribute('aria-modal', 'true');
+    // Tool windows allow interaction with the workspace behind them. Only
+    // genuinely blocking dialogs should explicitly declare aria-modal=true.
+    if (!mc.hasAttribute('aria-modal')) mc.setAttribute('aria-modal', 'false');
 
     var heading = headingSel && mc.querySelector(headingSel);
     if (heading) {

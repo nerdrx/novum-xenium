@@ -4,6 +4,15 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Desktop bug and usability pass
+
+- Manager status checks keep the window controls usable. Content scrolls below the title bar, with the workspace scrollbar styling.
+- Update checks accept both supported availability fields and keep newer results when an older status request finishes late. Browser preview controls stay disabled.
+- Tool window headers stay reachable when dragged to viewport edges, and right-click no longer starts a drag.
+- Floating tools expose modeless dialog semantics to assistive technology; explicitly blocking dialogs retain their modal setting.
+
+Validation: eight desktop browser tests cover manager controls and update races, popup dragging, keyboard navigation, image actions, notifications, home layout and dialog semantics. Native Linux WebKit checks cover the custom manager frame and scrolling; headless Gamescope does not verify desktop minimize/maximize geometry.
+
 ## Reasoning display and page previews
 
 - Ordinary progress messages such as “Let me look up the opening hours” stay in the reply instead of being guessed as reasoning from their first words. Explicit thinking tags and provider reasoning remain separate.

@@ -13,6 +13,7 @@ const main = $('#main');
 const dashboard = $('.dashboard-grid');
 dashboard.setAttribute('aria-busy', 'false');
 let statusRequestSeq = 0;
+let updateCheckSeq = 0;
 
 function readConfigFields() {
   return { checkout: checkoutInput.value, project: projectInput.value, port: portInput.value };
@@ -68,15 +69,15 @@ function updateBackendView(backend = {}) {
 
 function syncActions() {
   const configured = Boolean(state.config?.checkout && state.config?.project && state.config?.port);
-  $('[data-action="start"]').disabled = state.busy || !configured || ['running', 'unknown'].includes(state.backend.state);
-  $('[data-action="stop"]').disabled = state.busy || !['running', 'unhealthy'].includes(state.backend.state);
-  $('[data-action="open"]').disabled = state.busy || state.backend.state !== 'running';
-  $('[data-action="refresh"]').disabled = state.busy;
-  $('[data-action="logs"]').disabled = state.busy;
-  $('[data-action="check-update"]').disabled = state.busy;
+  $('[data-action="start"]').disabled = !invoke || state.busy || !configured || ['running', 'unknown'].includes(state.backend.state);
+  $('[data-action="stop"]').disabled = !invoke || state.busy || !['running', 'unhealthy'].includes(state.backend.state);
+  $('[data-action="open"]').disabled = !invoke || state.busy || state.backend.state !== 'running';
+  $('[data-action="refresh"]').disabled = !invoke || state.busy;
+  $('[data-action="logs"]').disabled = !invoke || state.busy;
+  $('[data-action="check-update"]').disabled = !invoke || state.busy;
   $('[data-action="save"]').disabled = state.busy || !invoke;
   const updateButton = $('[data-action="update"]');
-  if (updateButton) updateButton.disabled = state.busy || !state.update?.supported || !state.update?.available;
+  if (updateButton) updateButton.disabled = !invoke || state.busy || !state.update?.supported || !(state.update?.available || state.update?.update_available);
 }
 
 function applyConfig(config, { onlyIfUnchanged = null } = {}) {
@@ -98,6 +99,7 @@ function applyConfig(config, { onlyIfUnchanged = null } = {}) {
 
 async function refreshStatus() {
   const requestId = ++statusRequestSeq;
+  const updateSeq = updateCheckSeq;
   const lastConfirmedFields = state.confirmedFields || readConfigFields();
   try {
     const result = await invoke('get_status');
@@ -112,7 +114,7 @@ async function refreshStatus() {
     }
     updateBackendView(result.backend || {});
     setNotice(globalError);
-    if (result.update && typeof result.update === 'object') renderUpdateState(result.update);
+    if (updateSeq === updateCheckSeq && result.update && typeof result.update === 'object') renderUpdateState(result.update);
     return result;
   } catch (error) {
     if (requestId !== statusRequestSeq) return null;
@@ -224,6 +226,7 @@ document.querySelectorAll('.app-shell [data-action]').forEach((button) => {
       performAction('check for updates', async () => {
         const result = await invoke('check_update');
         if (!result || typeof result !== 'object') throw new Error('The manager returned an invalid update response.');
+        updateCheckSeq += 1;
         renderUpdateState(result);
       }, null, 'Checking for updates…');
     } else if (action === 'update') {

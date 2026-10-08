@@ -36,7 +36,7 @@
     if (document.getElementById('nx-window-bar')) return;
     const style = document.createElement('style');
     style.textContent = `
-      #nx-window-bar { display:none; position:fixed; inset:0 0 auto; height:36px; z-index:2147483647;
+      #nx-window-bar { box-sizing:border-box; display:none; position:fixed; inset:0 0 auto; height:36px; z-index:2147483647;
         align-items:center; background:var(--bg,var(--ground,#101014)); color:var(--fg,var(--ink,#eee));
         border-bottom:1px solid var(--border,var(--line,#38313f)); font:12px var(--font-family,sans-serif); user-select:none; }
       html[data-nx-window-frame=custom] #nx-window-bar { display:flex; }

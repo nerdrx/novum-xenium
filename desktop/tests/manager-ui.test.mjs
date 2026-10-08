@@ -194,12 +194,23 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   await page.waitForFunction(() => window.__calls.some((call) => call.command === 'read_logs'));
   assert.equal(await page.locator('#logs-output').textContent(), '<img src=x onerror=alert(1)>\nservice ready');
   assert.equal(await page.locator('#logs-output img').count(), 0);
+  const pendingStatusIndex = await page.evaluate(() => window.__pendingStatuses.length);
+  await page.evaluate(() => { window.__holdNextStatus = true; window.dispatchEvent(new Event('focus')); });
+  await page.waitForFunction((index) => window.__pendingStatuses.length === index + 1, pendingStatusIndex);
   await page.locator('[data-action="check-update"]').click();
   await page.waitForFunction(() => window.__calls.some((call) => call.command === 'check_update'));
+  await page.waitForFunction(() => document.querySelector('#update-message').textContent.includes('not supported'));
   assert.match(await page.locator('#update-message').textContent(), /not supported/);
+  await page.evaluate((index) => window.__pendingStatuses[index].resolve({
+    config: window.__config,
+    backend: { state: 'stopped', detail: 'Late status response.' },
+    update: { supported: true, available: false, detail: 'Run the update check.' },
+  }), pendingStatusIndex);
+  await page.waitForFunction(() => document.querySelector('#backend-detail').textContent === 'Late status response.');
+  assert.match(await page.locator('#update-message').textContent(), /not supported/, 'late status must not overwrite a newer explicit update check');
   assert.equal(await page.locator('[data-action="update"]').count(), 1);
   assert.equal(await page.locator('[data-action="update"]').isVisible(), false);
-  await page.evaluate(() => { window.__updateCheck = { supported: true, current: 'old', target: 'new', available: true, detail: 'A reviewed update is available.' }; });
+  await page.evaluate(() => { window.__updateCheck = { supported: true, current: 'old', target: 'new', update_available: true, detail: 'A reviewed update is available.' }; });
   await page.locator('[data-action="check-update"]').click();
   await page.waitForFunction(() => window.__calls.filter((call) => call.command === 'check_update').length === 2);
   assert.equal(await page.locator('[data-action="update"]').isVisible(), true);
@@ -242,6 +253,7 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   await preview.goto(url);
   assert.match(await preview.locator('#global-error').textContent(), /unavailable in browser preview/);
   assert.equal(await preview.locator('#config-form input').first().isDisabled(), true);
+  assert.equal(await preview.locator('.app-shell [data-action]:not([hidden])').evaluateAll((buttons) => buttons.every((button) => button.disabled)), true);
   assert.equal(await preview.locator('#backend-state-text').textContent(), 'Checking status');
   assert.deepEqual(await preview.evaluate(() => window.__TAURI__), undefined);
   await preview.close();

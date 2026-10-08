@@ -140,8 +140,8 @@ export function initSidebarLayout(Storage, opts) {
   const chatNewBtn = document.getElementById('chat-new-btn');
   [chatNewBtn].forEach(btn => {
     if (btn) btn.addEventListener('click', () => {
-      const brandBtn = document.getElementById('sidebar-brand-btn');
-      if (brandBtn) brandBtn.click();
+      const newChatBtn = document.getElementById('sidebar-new-chat-btn');
+      if (newChatBtn) newChatBtn.click();
     });
   });
 

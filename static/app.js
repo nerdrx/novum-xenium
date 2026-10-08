@@ -3388,7 +3388,10 @@ function initializeEventListeners() {
       if (e) { e.preventDefault(); e.stopPropagation(); }
       await _handleNewChatAction({ preferModel: false, focus: false });
       el('message')?.blur();
-      if (window.innerWidth <= 768) el('sidebar')?.classList.add('hidden');
+      if (window.innerWidth <= 768) {
+        el('sidebar')?.classList.add('hidden');
+        el('sidebar-backdrop')?.classList.remove('visible');
+      }
     });
   }
 

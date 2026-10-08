@@ -95,3 +95,19 @@ def test_matching_image_endpoint_routes_selected_image_model(monkeypatch):
     monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
 
     assert chat_routes._is_image_generation_session(_session(model="sdxl-local"))
+
+
+def test_approved_image_reference_must_belong_to_latest_user_turn():
+    pending = SimpleNamespace(
+        tool_name="generate_image",
+        content=json.dumps({"prompt": "make a sticker", "attachment_id": "new-image"}),
+    )
+    sess = SimpleNamespace(history=[
+        SimpleNamespace(role="user", metadata={"attachments": [{"id": "older-image"}]}),
+        SimpleNamespace(role="assistant", metadata=None),
+        SimpleNamespace(role="user", metadata={"attachments": [{"id": "new-image"}]}),
+    ])
+
+    assert chat_routes._approved_image_attachment_id(pending, sess) == "new-image"
+    sess.history[-1].metadata = {"attachments": [{"id": "different-image"}]}
+    assert chat_routes._approved_image_attachment_id(pending, sess) == ""

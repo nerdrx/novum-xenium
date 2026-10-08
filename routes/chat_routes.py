@@ -649,6 +649,31 @@ def _first_image_attachment(chat_handler, att_ids: List[str], owner: str | None 
     return None
 
 
+def _approved_image_attachment_id(pending, sess) -> str:
+    """Return an approved image ref only if it belonged to the original user turn."""
+    if not pending or getattr(pending, "tool_name", None) != "generate_image":
+        return ""
+    try:
+        args = json.loads(pending.content)
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(args, dict):
+        return ""
+    attachment_id = str(args.get("attachment_id") or "").strip()
+    if not attachment_id:
+        return ""
+    from src.attachment_refs import attachment_refs_from_metadata
+    # Approval continuation has no new user turn. Bind the sealed ref to the
+    # latest persisted user turn, then rebuild its path through the owner-aware
+    # upload resolver before execution.
+    for message in reversed(getattr(sess, "history", None) or []):
+        if getattr(message, "role", None) != "user":
+            continue
+        refs = attachment_refs_from_metadata(getattr(message, "metadata", None))
+        return attachment_id if any(ref.get("attachment_id") == attachment_id for ref in refs) else ""
+    return ""
+
+
 def _recover_empty_session_model(sess, session_id: str, owner: str | None = None) -> bool:
     """Re-populate sess.model from the matching endpoint's cached models.
 
@@ -2554,6 +2579,19 @@ def setup_chat_routes(
                     elif _explicit_browser_intent:
                         _forced_tools = set(_BROWSER_MCP_TOOLS)
 
+                    _agent_uploaded_files = ctx.uploaded_files
+                    if tool_approval_continuation:
+                        _approved_attachment_id = _approved_image_attachment_id(
+                            pending_tool_approval, sess,
+                        )
+                        if _approved_attachment_id:
+                            from routes.chat_helpers import build_uploaded_file_manifest
+                            _agent_uploaded_files = build_uploaded_file_manifest(
+                                [_approved_attachment_id],
+                                getattr(chat_handler, "upload_handler", None),
+                                _user,
+                            )
+
                     async for chunk in stream_agent_loop(
                         sess.endpoint_url,
                         sess.model,
@@ -2587,7 +2625,7 @@ def setup_chat_routes(
                             else None
                         ),
                         forced_tools=_forced_tools,
-                        uploaded_files=ctx.uploaded_files,
+                        uploaded_files=_agent_uploaded_files,
                         defer_context_shaping=_foreground_policy.enabled,
                         external_untrusted_context_seen=external_untrusted_context_seen,
                         delegated_credential=_delegated_credential,

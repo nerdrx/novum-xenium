@@ -682,12 +682,9 @@ Suggest changes with explanations (for review/feedback requests).""",
 
     "generate_image": """\
 ```generate_image
-<prompt>
-<model>
-<size>
-<quality>
+{"prompt":"..."}
 ```
-Generate a new image through the configured image provider and save it to the Gallery. Line 1 = description, line 2 = optional model name, line 3 = WxH (e.g. 1024x1024), line 4 = quality. Use this tool for image requests; do not guess browser endpoints or invent filenames. Only report success after a returned image URL. This tool creates new images; it does not edit existing images.""",
+Generate an image through the configured image provider and save it to the Gallery. For a new image, use a prompt only. To transform an image attached to the current user turn, add that image's `attachment_id` to the JSON arguments; the source pixels will be sent to the image editor. Never pass a filesystem path or use an older attachment. Only report success after a returned image URL.""",
 
     "chat_with_model": "- ```chat_with_model``` — Ask a DIFFERENT AI model and relay its answer. Line 1 = model name (or 'model@endpoint'), rest = your message. Use when the user says 'ask <model>', 'what does <model> think', or wants to compare/their answer from another model.",
     "ask_teacher": "- ```ask_teacher``` — Escalate a hard question to a more capable model. Line 1 = model name or 'auto', rest = the question. Use when stuck or need expert knowledge.",
@@ -5206,6 +5203,7 @@ async def stream_agent_loop(
                     workspace=workspace,
                     security_context=run_security,
                     exact_approval=exact_approval,
+                    uploaded_files=uploaded_files,
                 )
             finally:
                 await approved_progress_q.put(None)
@@ -6456,6 +6454,7 @@ async def stream_agent_loop(
                             progress_cb=_push_progress,
                             workspace=workspace,
                             security_context=run_security,
+                            uploaded_files=uploaded_files,
                         )
                     finally:
                         # Sentinel so the drainer knows to stop.

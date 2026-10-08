@@ -53,14 +53,15 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "generate_image",
-            "description": "Generate a new image from a text prompt using the configured image provider and save it to the Gallery. Call this tool for image requests; do not use the browser or invent a saved filename. Only report success after the tool returns an image URL. This tool creates new images; it does not edit existing images.",
+            "description": "Generate an image from a text prompt using the configured image provider and save it to the Gallery. If the user asks to transform an image attached to the current turn (for example, 'make a sticker from this'), pass that image's attachment_id so the source pixels are edited; do not describe it as a prompt-only lookalike. Omit attachment_id for a new image. Only report success after the tool returns an image URL.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string", "description": "Complete visual description of the new image"},
+                    "prompt": {"type": "string", "description": "Visual description for a new image, or edit instructions when attachment_id is set"},
                     "model": {"type": "string", "description": "Optional image model; omit to use the configured default"},
                     "size": {"type": "string", "description": "Optional requested WxH, e.g. 1024x1024"},
-                    "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"]}
+                    "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"]},
+                    "attachment_id": {"type": "string", "description": "ID of an image attached to the current user turn, when transforming that image. Never use a path or an older attachment."}
                 },
                 "required": ["prompt"]
             }

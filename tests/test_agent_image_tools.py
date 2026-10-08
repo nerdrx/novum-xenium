@@ -50,3 +50,5 @@ def test_retry_round_receives_real_image_schema(monkeypatch, enabled, connected,
     assert bool(image_schemas) is expected
     if expected:
         assert image_schemas[0]["function"]["parameters"]["required"] == ["prompt"]
+        assert "attachment_id" in image_schemas[0]["function"]["parameters"]["properties"]
+        assert "current turn" in image_schemas[0]["function"]["description"]

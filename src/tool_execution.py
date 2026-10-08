@@ -724,6 +724,7 @@ async def _call_image_tool_in_process(
     *,
     session_id: Optional[str],
     owner: Optional[str],
+    uploaded_files: Optional[list[Dict[str, Any]]] = None,
 ) -> Dict:
     """Run image generation in the cancellable chat task.
 
@@ -747,9 +748,41 @@ async def _call_image_tool_in_process(
     if not get_setting("image_gen_enabled", True):
         error = "Image generation is disabled by the administrator."
         return {"error": error, "output": error, "exit_code": 1}
-    from src.ai_interaction import do_generate_image
-
-    result = await do_generate_image(args, session_id=session_id, owner=owner)
+    attachment_id = str(args.pop("attachment_id", "") or "").strip()
+    if attachment_id:
+        # The model supplies an opaque ID, never a path. Resolve it only from
+        # the owner-checked manifest for this turn and recheck its upload root.
+        source = next(
+            (
+                item for item in (uploaded_files or [])
+                if isinstance(item, dict)
+                and str(item.get("id") or item.get("attachment_id") or "") == attachment_id
+            ),
+            None,
+        )
+        path = str((source or {}).get("path") or "")
+        mime = str((source or {}).get("mime") or "").lower()
+        from src.constants import UPLOAD_DIR
+        root = os.path.realpath(UPLOAD_DIR)
+        resolved = os.path.realpath(path) if path else ""
+        try:
+            inside_uploads = bool(resolved and os.path.commonpath([root, resolved]) == root)
+        except ValueError:
+            inside_uploads = False
+        if not (source and mime.startswith("image/") and inside_uploads and os.path.isfile(resolved)):
+            error = "Image attachment is not available in the current user turn."
+            return {"error": error, "output": error, "exit_code": 1}
+        from src.ai_interaction import do_edit_image
+        result = await do_edit_image(
+            str(args.get("prompt") or ""), resolved,
+            model_spec=str(args.get("model") or ""),
+            session_id=session_id, owner=owner,
+            size=str(args.get("size") or "1024x1024"),
+            quality=str(args.get("quality") or "medium"),
+        )
+    else:
+        from src.ai_interaction import do_generate_image
+        result = await do_generate_image(args, session_id=session_id, owner=owner)
     error = result.get("error")
     output = error or result.get("results", "")
     if result.get("image_url"):
@@ -916,6 +949,7 @@ async def execute_tool_block(
         | _MissingToolSecurityContext
     ) = _MISSING_TOOL_SECURITY_CONTEXT,
     exact_approval: Optional[ExactToolApproval] = None,
+    uploaded_files: Optional[list[Dict[str, Any]]] = None,
 ) -> Tuple[str, Dict]:
     """Execute a single tool block. Returns (description, result_dict).
 
@@ -1072,6 +1106,7 @@ async def execute_tool_block(
                 if approval_claimed
                 else None
             ),
+            uploaded_files=uploaded_files,
         )
         if snapshot:
             output[1]["workspace_snapshot_id"] = snapshot["id"]
@@ -1096,6 +1131,7 @@ async def _execute_tool_block_impl(
     approved_document_id: Optional[str] = None,
     approved_document_version: Optional[int] = None,
     approved_document_digest: Optional[str] = None,
+    uploaded_files: Optional[list[Dict[str, Any]]] = None,
 ) -> Tuple[str, Dict]:
     """Execute a single tool block. Returns (description, result_dict).
 
@@ -1240,6 +1276,7 @@ async def _execute_tool_block_impl(
         desc = f"{tool}: {first_line}"
         result = await _call_image_tool_in_process(
             content, session_id=session_id, owner=owner,
+            uploaded_files=uploaded_files,
         )
     elif tool in _MCP_TOOL_MAP:
         first_line = content.split(chr(10))[0][:80]
@@ -1439,6 +1476,7 @@ async def _execute_tool_block_impl(
         desc = f"mcp: {tool}"
         result = await _call_image_tool_in_process(
             content, session_id=session_id, owner=owner,
+            uploaded_files=uploaded_files,
         )
     elif tool.startswith("mcp__"):
         # MCP tool dispatch

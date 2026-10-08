@@ -203,6 +203,92 @@ async def test_in_process_image_tool_preserves_admin_disable(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_image_tool_edits_only_current_manifest_attachment(monkeypatch, tmp_path):
+    import src.ai_interaction as images
+    import src.constants as constants
+    import src.settings as settings
+    import src.tool_execution as execution
+    from mcp_servers import image_gen_server
+    from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    source = uploads / "avatar.png"
+    source.write_bytes(b"fixture image")
+    calls = []
+
+    async def edit(prompt, image_path, model_spec="", **kwargs):
+        calls.append((prompt, image_path, model_spec, kwargs))
+        return {
+            "results": "Edited image for: " + prompt,
+            "image_url": "/api/generated-image/sticker.png",
+            "image_prompt": prompt,
+        }
+
+    async def generate(*_args, **_kwargs):
+        pytest.fail("reference-image request fell through to text-only generation")
+
+    monkeypatch.setattr(constants, "UPLOAD_DIR", uploads)
+    monkeypatch.setattr(images, "do_edit_image", edit)
+    monkeypatch.setattr(images, "do_generate_image", generate)
+    monkeypatch.setattr(settings, "get_setting", lambda _key, default=None: True)
+    monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
+    monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
+
+    _, result = await execute_tool_block(
+        SimpleNamespace(
+            tool_type="generate_image",
+            content=json.dumps({"prompt": "make a curious sticker", "attachment_id": "upload-1"}),
+        ),
+        session_id="chat-1", owner="alice",
+        uploaded_files=[{"id": "upload-1", "path": str(source), "mime": "image/png"}],
+        security_context=NO_TOOL_SECURITY_CONTEXT,
+    )
+
+    assert calls == [(
+        "make a curious sticker", str(source), "",
+        {"session_id": "chat-1", "owner": "alice", "size": "1024x1024", "quality": "medium"},
+    )]
+    assert result["image_url"] == "/api/generated-image/sticker.png"
+    assert result["exit_code"] == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_image_tool_rejects_missing_or_out_of_root_attachment(monkeypatch, tmp_path):
+    import src.ai_interaction as images
+    import src.constants as constants
+    import src.settings as settings
+    import src.tool_execution as execution
+    from mcp_servers import image_gen_server
+    from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"fixture image")
+    monkeypatch.setattr(constants, "UPLOAD_DIR", uploads)
+    monkeypatch.setattr(settings, "get_setting", lambda _key, default=None: True)
+    monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
+    monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
+    monkeypatch.setattr(images, "do_edit_image", lambda *_args, **_kwargs: pytest.fail("unsafe edit reached provider"))
+
+    for attachment_id, manifest in (
+        ("stale-id", [{"id": "other-id", "path": str(outside), "mime": "image/png"}]),
+        ("outside-id", [{"id": "outside-id", "path": str(outside), "mime": "image/png"}]),
+    ):
+        _, result = await execute_tool_block(
+            SimpleNamespace(
+                tool_type="generate_image",
+                content=json.dumps({"prompt": "edit", "attachment_id": attachment_id}),
+            ),
+            owner="alice", uploaded_files=manifest,
+            security_context=NO_TOOL_SECURITY_CONTEXT,
+        )
+        assert result["exit_code"] == 1
+        assert "current user turn" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_image_mcp_scopes_discovery_resolution_and_gallery_record(monkeypatch, tmp_path):
     from mcp_servers import image_gen_server
     import src.ai_interaction as images

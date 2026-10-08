@@ -1785,6 +1785,7 @@ function initializeEventListeners() {
     if (btn) {
       btn.classList.toggle('active', !!active);
       btn.setAttribute('aria-pressed', String(!!active));
+      btn.setAttribute('aria-label', 'Plan mode');
       btn.title = active
         ? 'Plan mode on - next message proposes a plan only'
         : 'Plan mode';
@@ -1881,17 +1882,6 @@ function initializeEventListeners() {
     }
     if (statusToggle) {
       statusToggle.addEventListener('click', () => setPlanMode(false));
-    }
-    const msgInput = el('message');
-    if (msgInput && !msgInput._odysseusPlanTabToggle) {
-      msgInput._odysseusPlanTabToggle = true;
-      msgInput.addEventListener('keydown', (e) => {
-        if (e.key !== 'Tab' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const st = loadToggleState();
-        setPlanMode(!st.plan_mode);
-      });
     }
     const chatBar = document.querySelector('.chat-input-bar');
     if (chatBar && !chatBar._odysseusPlanSwipeToggle) {

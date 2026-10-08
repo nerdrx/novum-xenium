@@ -1,79 +1,21 @@
-# Novum Xenium
+<p align="center">
+  <img src="assets/branding/novum-xenium.png" alt="Novum Xenium" width="260">
+</p>
 
-<img src="assets/branding/novum-xenium.png" alt="Novum Xenium logo" width="240">
+<h1 align="center">Novum Xenium</h1>
+<p align="center">A desktop home for your self-hosted agent workspace.</p>
 
-A self-hosted agent workspace. Coding, research, images and longer jobs, with a lightweight desktop app to run the backend.
+Give it a repo. Research something. Make an image. Come back to a longer job without starting from scratch.
 
-Built on [Odysseus](https://github.com/odysseus-dev/odysseus) and the NX-Odysseus fork. The original history and AGPL-3.0 license stay with it.
+Novum Xenium brings your models, tools, projects and chats together. The lightweight Tauri app manages the Docker backend and opens your workspace. Prefer a browser? Same workspace, same data.
 
-## Desktop app
+This started with [Odysseus](https://github.com/odysseus-dev/odysseus), then NX-Odysseus. We kept using it, fixing what got in the way and adding what was missing. Now it has its own desktop app, interface and way of working. The original history, credits and AGPL license stay with it.
 
-![Novum Xenium desktop manager](assets/branding/desktop-manager.png)
+**[Get started](#get-started)** · [Desktop app](#the-desktop-app) · [See it work](#give-it-a-real-job) · [Workflow guide](docs/nx-workflows.md) · [What changed](FORK-CHANGES.md)
 
-The Tauri app uses the system webview. It manages an existing Docker Compose installation and opens the same frontend you can use in a browser. No separate desktop copy of chat, tools or memory.
+![Novum Xenium home dashboard](assets/branding/workspace-home.png)
 
-- Start and stop the selected backend, check its health and read logs.
-- Open the workspace in its own window; close it to the tray and restore it without reloading.
-- Review backend updates, back up persistent data and check recovery if startup fails.
-- Install desktop release artifacts through [NX Hub](https://github.com/nerdrx/nx-hub).
-
-The first desktop release adopts an existing checkout; it does not silently install Docker, WSL or Git. Linux is tested locally. Windows builds run in CI; a successful build alone does not establish Windows runtime support. See [desktop setup and update behavior](docs/desktop.md).
-
-```bash
-cd desktop
-npm ci
-npm run dev
-```
-
-Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/). Backend setup below remains available without the desktop app.
-
-This started with installing Odysseus and using it. Then fixing the things that got in the way: agents losing their tools, chats stopping after one turn, unclear errors, context problems, missing workspace access. It grew into a fork with its own workflow.
-
-The aim is a self-hosted workhorse for coding, research and agent teams. Give it a project, let it use tools, check what it did, and keep going. Local models and hosted providers both work, including a ChatGPT subscription.
-
-[Get started](#get-started) · [What's different](#whats-different) · [What we've tested](#what-weve-tested) · [Workflow guide](docs/nx-workflows.md) · [Change record](FORK-CHANGES.md)
-
-## What's different
-
-The original Odysseus already has chat, agents, MCP, documents, email, notes, tasks, calendar, model comparison, deep research and a gallery. NX builds on that.
-
-- **Working on projects.** A persistent workspace, repository guidance and a compact map, managed Git worktrees, and snapshots you can review and restore. Save the checks a project needs and see whether they actually passed. Docker includes ripgrep and a packaged browser tool that starts without a runtime npm download. Large repos can use a sparse checkout.
-- **Keeping longer tasks usable.** Tool definitions count toward the context budget. Large outputs are archived and searchable, with exact chunks available when needed. The context inspector shows where the space goes.
-- **Remembering useful things.** Skills load their procedures on demand. Agents can search past chats and open the actual matching messages, with timestamps and links back to the source.
-- **Agents working together.** Group chats can keep talking for 20 replies, 100 replies or Until Stop. Shared task boards add a builder, optional read-only reviewers and a human decision on whether the task is done. Coordinated task passes run on the server, so closing the tab does not stop them.
-- **Checking the harness.** An offline preflight shows declared model capabilities, configured backends and missing pieces. Run evidence keeps timing, tool outcomes and interruption state without copying prompts, commands or secrets. A small coding evaluation checks actual files, not completion claims.
-- **Knowing what's happening.** Waiting and streaming have clearer status messages. Repeated reads and failed retries pause with an explanation, keeping the edits and tool history. Interrupted runs can continue from saved progress after a restart. Queued messages stay with their chat, and task saves can be retried in the same open form without duplicating the job.
-- **Choosing how much to approve.** Ask for approval, Approve for me or Full access within the workspace/container. A small judge handles eligible uncertain actions and shows its reason.
-- **ChatGPT and images.** Native subscription tool calls, fixes for unsupported request parameters, proper image-provider settings and an optional host Codex image bridge.
-- **Seeing your usage.** A home dashboard shows the week, recent chats and a few fun stats. Settings has 7/30-day analytics with model and token breakdowns. Counts come from your saved chats; estimates and missing records are labelled.
-- **Finding your chats.** Request-based titles for ordinary and group chats, including older model-name placeholders. Names you set yourself stay untouched.
-- **Keeping your setup.** Application-data backups with restore preview, improved emoji rendering, personality names that survive refresh, and the NX default theme. Folder, provider and approval failures offer a retry instead of leaving you guessing.
-
-The [change record](FORK-CHANGES.md) has the details. The [Hermes comparison](docs/hermes-comparison.md) explains the skills, recall and team improvements; Hermes itself isn't a dependency.
-
-## What we've tested
-
-### It worked on NX Warp
-
-We gave the agent a small job in [NX Warp](https://github.com/nerdrx/nx-warp): fix the latency-summary tool crashing on compressed CSV captures.
-
-Using the ChatGPT subscription model `gpt-6.1-sol`, Odysseus cloned a sparse checkout, added a regression, ran it to confirm the failure, fixed the script, passed all six related tests and made the commit.
-
-**[The result is PR #74.](https://github.com/nerdrx/nx-warp/pull/74)** The tests passed again during review, and GitHub's Python CI passed too.
-
-That test also caught another problem in Odysseus: this model wasn't recognized by the context-size lookup, so it kept losing progress under a small input budget. We fixed the lookup, passed 44 context tests, and the agent finished its continuation.
-
-The agent ran through the production loop in a saved-file harness. Review, push and PR creation used the host's existing GitHub login. Private repo access and publishing through the normal chat UI haven't been tested yet. NX Warp also has failures in other CI checks, outside this Python change; the PR records them.
-
-### The other features have checks too
-
-We've used focused regression tests, headless UI checks, isolated Docker starts and bounded live provider/browser tests. Those cover things like retrieving details from archived output, restoring workspace files and permissions, recovering interrupted runs, group tool calls and image-provider discovery.
-
-On October 8, live subscription checks also completed small multi-file coding tasks, a builder/reviewer parser change, public GitHub browsing and exact-detail retrieval from archived output. Image checks fetched the generated PNG and compared its dimensions with the saved metadata. A separate browser check caught and fixed model choices leaking between chats. These are bounded tasks with checked results; they don't establish that every model or project will work equally well.
-
-A later cloud run cloned this repo and fixed unbounded output capture in its coding evaluator in about 81 seconds, with one task approval. An independent offline run passed all 28 related tests before we integrated the patch. An earlier rollback-preparation failure did not repeat; its cause remains unconfirmed.
-
-The [validation record](FORK-CHANGES.md#validation) says what ran and what used simulated replies. The [latest notes](docs/hermes-comparison.md#validation-and-limits) include the coding test and remaining failures. Test runs overlap, so their counts aren't added into one big number.
+<sub>The workspace, with example activity. Colours, fonts and background effects are yours to change.</sub>
 
 ## Get started
 
@@ -86,46 +28,124 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open **[localhost:7000](http://localhost:7000)** once the app has started. Use your `ODYSSEUS_ADMIN_PASSWORD` value if you pre-seeded one; otherwise find the temporary password with:
+Open **[localhost:7000](http://localhost:7000)**. Use your `ODYSSEUS_ADMIN_PASSWORD` if you set one before first boot; otherwise find the temporary password here:
 
 ```bash
 docker compose logs odysseus
 ```
 
-Connect a provider in **Settings**, choose **Agent** for tool use, and select your workspace. You don't need to download a local LLM or set up the image bridge to start.
+Connect a provider in **Settings**, choose **Agent** for tools, and select your workspace. Use a local model or a hosted provider, including a ChatGPT subscription. No local LLM download or image bridge needed to get going.
 
-Authentication is on and published ports default to localhost. Application data stays under `data/`. Project files live in `data/agent_workspace/workspace/` on your computer, mounted as `/workspace` inside Docker.
+That's the setup: clone, copy the environment file, run Compose. Authentication is on. Ports bind to localhost by default. Your application data lives in `data/`; project files live in `data/agent_workspace/workspace/`, mounted as `/workspace` in the container.
 
-The setup stays the same idea as upstream: clone, copy the environment file, run Compose. See the [setup guide](website/setup.md) for native installs, GPU options, Windows/macOS, HTTPS and configuration.
+[Full setup guide](website/setup.md) covers native installs, GPU options, Windows/macOS, HTTPS and configuration.
 
-## Using it
+## The desktop app
 
-Use local models on your own hardware, or connect a hosted provider when you want cloud inference. The app and workspace remain self-hosted; anything sent to a hosted model goes to that provider.
+![Novum Xenium desktop manager](assets/branding/desktop-manager.png)
 
-For images, configure a provider in Settings. The optional [Codex image bridge](docs/codex-image-bridge.md) uses an existing host login and needs a separate setup. It can generate new images and edit an attached image; quality and size settings are guidance.
+Start the backend, open the workspace, get on with it. Close the window and it stays in the tray. Reopen it without losing the page.
 
-The [workflow guide](docs/nx-workflows.md) covers project work, approvals, groups, recovery, snapshots, backups and web access.
+The app uses your system webview. It can check backend health, show logs, review updates, back up application data and help recover a failed startup. Chat, memory and tools live in the backend, so you don't end up managing a second desktop copy.
 
-A few limits matter:
+Install a [desktop release](https://github.com/nerdrx/novum-xenium/releases) directly or through [NX Hub](https://github.com/nerdrx/nx-hub). The current app adopts an existing Compose checkout; it does not install Docker, WSL or Git for you.
 
-- Full access skips approvals within the current setup. It doesn't mount more host folders or override account permissions and disabled tools. The shell isn't an operating-system sandbox.
-- Native file mutation and snapshot restore require safe POSIX file APIs; the standard Docker install has them, including Docker on Windows/macOS. Native platforms lacking those APIs can inspect files and snapshots but cannot run these mutations. Multi-file patches and snapshot restores can be partial after an I/O failure; inspect the reported recovery point or workspace diff.
-- Stop cancels owned foreground process groups, background jobs and commands tracked in the persistent tmux pane. The pane keeps its shell state. Deliberately detached or reparented processes may need separate cleanup; Stop cannot undo side effects.
-- Snapshots cover included workspace files, up to 2,000 files, 8 MiB per file and 64 MiB total. Stop concurrent file writers before restoring. Snapshots don't undo external services, running processes or shell effects outside the workspace. Use sparse checkouts for large repos.
-- Retrieval doesn't enlarge a model's context window or guarantee perfect recall. Requests and output limits are budgeted separately for each provider route.
-- Auto-conversation runs in the browser tab. Backups contain private application data and credentials, so keep them private.
-- Full backup creation requires safe file APIs and Linux procfs for SQLite snapshots. The standard Docker setup supplies both. A moved or replaced source can abort a backup; retry after file moves stop. Ordinary SQLite writes remain supported through its backup API.
+Linux is tested locally. Windows builds run in CI; Windows runtime testing is still needed. [Desktop setup and update details](docs/desktop.md).
 
-Keep `AUTH_ENABLED=true` for any network-accessible deployment. Keep `LOCALHOST_BYPASS=false` outside local development. More deployment details are in the [security notes](website/setup.md#security-notes).
+For development:
 
-## Help improve it
+```bash
+cd desktop
+npm ci
+npm run dev
+```
 
-Reproducible bugs, fresh-install checks and small fixes are welcome. Show the actual tool or test output, and say when a check used simulated replies. See [CONTRIBUTING.md](CONTRIBUTING.md) and [ROADMAP.md](ROADMAP.md).
+Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/).
 
-## Origin and license
+## Built around doing the work
 
-NX Odysseus is an independent fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). The upstream base is `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`, with NX changes recorded through October 8, 2026.
+### A project stays a project
 
-It remains **AGPL-3.0-or-later**. The original authors and third-party notices are kept in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md); see [LICENSE](LICENSE) for the terms. Keep the license and notices, and provide corresponding source as required when distributing or serving modified versions.
+Persistent files, repository guidance, a compact repo map and managed Git worktrees. Save a project's checks, run them and see the result. Review a snapshot or restore included files when an edit goes sideways.
 
-The [upstream demo](https://odysseus-dev.github.io/odysseus/) shows the original product. This repository's change record and workflow guide describe the NX version.
+The Docker image includes ripgrep and a browser tool that starts without downloading npm packages at runtime. Sparse checkouts keep larger repositories manageable. GitHub work uses the shell and Git tools you already know.
+
+### Long chats need more than a bigger number
+
+Tool definitions count against the model's context, so skills and procedures load on demand. Large tool outputs can be archived, searched and opened again at the exact useful chunk. Past-chat recall opens the matching messages with timestamps and source links, rather than stopping at a vague snippet.
+
+The context inspector shows where the space went. Retrieval helps use the context you have; it does not turn a small model window into an unlimited one.
+
+### Know what it's doing
+
+Clear waiting and streaming states. Explanations when a run stops. Saved progress for interrupted runs, chat-specific queues and a pause when repeated reads or failed retries go nowhere.
+
+The home dashboard shows your week, recent chats, favourite model, chat streak and words written. Settings adds 7/30-day activity and model/token breakdowns. These come from your saved chats. Estimated tokens and missing records are labelled; subscription quotas aren't guessed.
+
+Choose **Ask for approval**, **Approve for me** or **Full access** within your configured workspace/container. Eligible uncertain actions can go through a lightweight judge, with its reason shown.
+
+### More than one agent, when it helps
+
+Group conversations can continue for 20 replies, 100 replies or **Until Stop**. Shared task boards support a builder, optional read-only reviewers and your decision on whether the job is done.
+
+Coordinated task passes run on the server, so closing the tab doesn't stop those passes. Ordinary auto-conversation still depends on the browser tab.
+
+### Still your workspace
+
+The NX interface keeps the original colour, font and background controls. Use your own theme, switch effects or turn them off. Personality names and chat titles survive a refresh; names you set yourself stay yours.
+
+Images have their own provider settings. The optional [Codex image bridge](docs/codex-image-bridge.md) uses an existing host login for generation and attached-image edits. It needs separate setup; quality and size settings are guidance.
+
+Odysseus also brings documents, email, notes, tasks, calendar, model comparison, deep research, MCP and a gallery. Those haven't disappeared behind the new name.
+
+[Workflow guide](docs/nx-workflows.md) · [Full change record](FORK-CHANGES.md) · [Hermes comparison](docs/hermes-comparison.md) — Hermes itself isn't a dependency.
+
+## Give it a real job
+
+We gave the agent a small job in [NX Warp](https://github.com/nerdrx/nx-warp): fix the latency-summary tool crashing on compressed CSV captures.
+
+With the ChatGPT subscription model `gpt-6.1-sol`, it cloned a sparse checkout, added a regression, confirmed the failure, fixed the script, passed all six related tests and made the commit.
+
+**[Here's PR #74.](https://github.com/nerdrx/nx-warp/pull/74)** The tests passed again during review. GitHub's Python CI passed too.
+
+That run also exposed a context-size lookup bug in our own harness. We fixed it and the agent finished its continuation. Testing it on actual work catches things a green unit-test run can miss.
+
+The agent used the production loop in a saved-file harness. Review, push and PR creation used the host's existing GitHub login. Private-repository access and publishing through the normal chat UI still need testing. Other NX Warp CI failures are recorded in the PR; they weren't part of this Python fix.
+
+### What the checks establish
+
+Focused regressions, headless UI checks, isolated Docker starts and bounded live provider/browser runs cover recovery, workspace changes, context handling, tool calls and image discovery.
+
+On October 8, live subscription checks completed small multi-file coding jobs, a builder/reviewer parser change, public GitHub browsing and exact-detail retrieval from archived output. Image checks fetched the generated PNG and compared dimensions with saved metadata. Browser checks also caught and fixed model selections leaking between chats.
+
+A separate cloud run cloned this repo and fixed unbounded output capture in the coding evaluator in about 81 seconds, with one task approval. An independent offline run passed all 28 related tests before integration. An earlier rollback-preparation failure did not repeat; its cause remains unconfirmed.
+
+These are checked examples, not a promise that every model handles every project. Test runs overlap, so we don't add them into one impressive-looking total.
+
+[Validation record](FORK-CHANGES.md#validation) · [Remaining limits](docs/hermes-comparison.md#validation-and-limits)
+
+## A few things to know
+
+Hosted inference sends data to the provider you choose. Keeping the application self-hosted does not make a cloud model local.
+
+- **Full access stays within your setup.** It doesn't mount extra host folders, enable disabled tools or override account permissions. The shell isn't an operating-system sandbox.
+- **Stop has boundaries.** It cancels owned foreground process groups, background jobs and commands tracked in the persistent tmux pane. Detached or reparented processes may need separate cleanup. It cannot undo side effects.
+- **Snapshots cover included workspace files.** Limits are 2,000 files, 8 MiB per file and 64 MiB total. Stop concurrent file writers before restoring. Snapshots don't undo external services, running processes or shell effects outside the workspace.
+- **File safety depends on platform APIs.** Native mutations and snapshot restore need safe POSIX file APIs. Docker supplies them, including on Windows/macOS. Other native platforms may support inspection without mutation. Multi-file changes can be partial after an I/O failure; check the recovery point or workspace diff.
+- **Backups are private.** They contain application data and credentials. Full backup creation needs safe file APIs and Linux procfs for SQLite snapshots, both available in the standard Docker setup. A moved or replaced source can abort a backup; retry after file moves stop. Ordinary SQLite writes are supported through its backup API.
+
+Keep `AUTH_ENABLED=true` for a network-accessible deployment, and `LOCALHOST_BYPASS=false` outside local development. Read the [security notes](website/setup.md#security-notes) before exposing it beyond your machine.
+
+## Help make it better
+
+Found something odd? Show how to reproduce it, the relevant tool output and what you expected. Fresh-install checks and small fixes help too. Say when a test used simulated replies.
+
+[Contributing](CONTRIBUTING.md) · [Roadmap](ROADMAP.md)
+
+## Where it came from
+
+Novum Xenium is an independent fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). The upstream base is `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`, with NX changes recorded through October 8, 2026.
+
+**AGPL-3.0-or-later.** Original authors and third-party notices remain in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md). See [LICENSE](LICENSE). Keep the license and notices, and provide corresponding source as required when distributing or serving modified versions.
+
+The [upstream demo](https://odysseus-dev.github.io/odysseus/) shows the original product. This repo's [change record](FORK-CHANGES.md) describes the NX version.

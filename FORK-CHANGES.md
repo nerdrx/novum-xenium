@@ -6,6 +6,11 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Task deletion and remote Ollama port discovery offload blocking network/subprocess work, keeping the async app responsive. Calendar cleanup runs after the task transaction closes, using detached task values.
+- Rollback failures retain the safety gate while distinguishing size, permissions, storage, stale chat and changing-workspace failures. Unknown details stay in server logs rather than the public tool response.
+- Gallery album cards and action tiles support Enter and Space, show keyboard focus and keep nested menu controls independent.
+- Coding evaluations discard unused verifier output and send exact-run Stop requests with the required POST method.
+
 - Team runs interrupted by app shutdown remain interrupted; explicit Stop remains stopped. The board keeps unfinished work visible for review and retry.
 - Gallery album changes retain confirmed results and failed selections across network errors. Bulk deletion continues after an individual HTTP failure, suppresses overlapping requests and keeps later selections. Ambiguous create outcomes refresh the list before inviting another attempt.
 
@@ -280,3 +285,7 @@ A disposable app with a loopback fake provider completed one file tool, stalled 
 A separate standard Compose-stack smoke started the app, SearXNG, ChromaDB and ntfy with temporary data, ephemeral loopback ports and startup work disabled. Authentication, workspace writes as UID 1000, search-service HTTP, internal Chroma heartbeat and ntfy HTTP passed; all owned containers, network and volumes were removed. Offline embedding initialization left vector indexing unavailable, so this is service/startup proof, not semantic-retrieval proof. Its diagnostic now points to both embedding setup and Chroma connectivity rather than implying a server-only failure. No provider inference ran in these checks.
 
 October 8 team interruption and Gallery mutation follow-up: the frozen suite passed **6,714 tests with 17 skips**, and all **38** hidden-browser helpers passed offline. Real SQLite manager fixtures distinguish shutdown cancellation from explicit Stop without marking unfinished board work complete. Album fixtures exercise failed create/rename/delete, ambiguous network outcomes, mixed bulk HTTP failures, selections added while pending, duplicate clicks and retry. These checks do not establish full provider-backed team restart recovery or exactly-once album creation after a lost acknowledgement.
+
+October 8 responsiveness, rollback diagnostics and keyboard follow-up: the frozen suite passed **6,723 tests with 17 skips**, and all **39** hidden-browser helpers passed offline. Controlled handler fixtures keep the event loop moving while calendar cleanup or a remote SSH port probe is blocked. Snapshot failures remain fail-closed, expose safe actionable guidance and retain exceptions in server logs. Album fixtures load the production stylesheet, check visible keyboard focus and exercise opening, selection and nested controls. The evaluation runner sends POST to the exact-run Stop route and discards unused verifier output while preserving timeout cleanup.
+
+A live `gpt-6.1-sol` coding task cloned this public repository with a sparse checkout, changed two benchmark files and completed in **80.78 seconds**, with one task-scoped approval. Independent read-only, network-disabled validation passed **28 tests**; the reviewed output-bounding patch was integrated. An earlier attempt was blocked during rollback preparation; a fresh exact-workspace retry succeeded, but the historical exception had been suppressed and its root cause remains unconfirmed. Disposable chats and workspaces were removed. This is one small cloud coding workflow, not a general coding-quality benchmark.

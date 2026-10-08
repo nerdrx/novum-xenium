@@ -56,3 +56,13 @@
   .modules-frame-controls { align-items:flex-start; }
   #module-window .modal-content { width:calc(100vw - 16px); height:calc(100dvh - 32px); }
 }
+.modules-navigation, .modules-toolbar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+.modules-navigation .modules-button[aria-pressed="true"] { background:var(--panel); border-color:var(--red); }
+.modules-search, .modules-filter { box-sizing:border-box; min-height:38px; border:2px solid var(--border); border-radius:var(--nx-control-radius,8px); background:var(--bg); color:var(--fg); padding:8px 10px; font:inherit; font-size:12px; }
+.modules-search { flex:1; min-width:160px; }
+.modules-filter { max-width:100%; }
+.modules-search:focus-visible, .modules-filter:focus-visible, .modules-advanced summary:focus-visible { outline:2px solid var(--red); outline-offset:3px; }
+.modules-advanced { margin-top:18px; border-top:1px solid var(--border); padding-top:14px; }
+.modules-advanced summary { cursor:pointer; font-size:13px; padding:6px 0; }
+.modules-advanced .modules-installer { margin-top:12px; }
+#modules-panel [hidden] { display:none !important; }

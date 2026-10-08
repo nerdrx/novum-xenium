@@ -18,6 +18,11 @@ let activeModule = null;
 let returnFocus = null;
 let statusText = '';
 let statusError = false;
+let moduleView = 'installed';
+let moduleSearch = '';
+let moduleFilter = 'all';
+let repositoryDraft = '';
+let zipExpanded = false;
 
 function element(tag, className, text) {
   const item = document.createElement(tag);
@@ -209,13 +214,29 @@ function render() {
   intro.append(element('h2', '', 'Modules'), element('p', 'modules-detail', 'Add panels and connect extra tools without rebuilding the app.'));
   heading.append(intro);
   panel.append(heading);
-  if (admin) {
+  if (!admin) moduleView = 'installed';
+  const navigation = element('nav', 'modules-navigation');
+  navigation.setAttribute('aria-label', 'Module views');
+  const views = admin ? [['installed', `Installed (${modules.length})`], ['repositories', 'Repositories']] : [['installed', `Installed (${modules.length})`]];
+  views.forEach(([view, label]) => {
+    const button = control(label, () => { moduleView = view; render(); document.getElementById(`modules-view-${view}`)?.focus(); });
+    button.id = `modules-view-${view}`;
+    button.setAttribute('aria-pressed', String(moduleView === view));
+    navigation.append(button);
+  });
+  panel.append(navigation);
+  const status = element('p', 'modules-status', statusText);
+  status.id = 'modules-status'; status.setAttribute('role', statusError ? 'alert' : 'status');
+  panel.append(status);
+  if (admin && moduleView === 'repositories') {
     const sourceBox = element('section', 'modules-installer modules-sources');
     sourceBox.append(element('h3', '', 'GitHub module sources'));
     const sourceForm = element('form', 'modules-source-form');
     const sourceLabel = element('label', 'modules-file-label', 'Repository URL');
     sourceLabel.htmlFor = 'modules-source-url';
     const sourceUrl = element('input'); sourceUrl.type = 'url'; sourceUrl.id = 'modules-source-url'; sourceUrl.required = true;
+    sourceUrl.value = repositoryDraft;
+    sourceUrl.addEventListener('input', () => { repositoryDraft = sourceUrl.value; });
     sourceUrl.placeholder = 'https://github.com/owner/repository'; sourceUrl.autocomplete = 'url';
     const addSource = element('button', 'modules-button', 'Add repo');
     addSource.type = 'submit'; addSource.disabled = sourceBusy;
@@ -226,7 +247,7 @@ function render() {
       sourceBusy = true; addSource.disabled = true; setStatus('Adding or refreshing repository…');
       try {
         await api('/api/modules/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
-        sourceUrl.value = '';
+        sourceUrl.value = ''; repositoryDraft = '';
         if (await refreshSources()) setStatus('Repository added or refreshed.');
       } catch (error) { setStatus(error.message, true); }
       finally { sourceBusy = false; render(); }
@@ -311,6 +332,15 @@ function render() {
     });
     sourceBox.append(sourceList);
     panel.append(sourceBox);
+    if (!sources.length && !sourceLoadError) sourceBox.append(element('p', 'modules-empty', 'Add a repository to browse its modules. Installed modules live in the Installed view.'));
+    return;
+  }
+  let zipInstaller = null;
+  if (admin) {
+    const advanced = element('details', 'modules-advanced');
+    advanced.open = zipExpanded;
+    advanced.addEventListener('toggle', () => { zipExpanded = advanced.open; });
+    advanced.append(element('summary', '', 'Install from ZIP'));
     const installer = element('section', 'modules-installer');
     const label = element('label', 'modules-file-label', 'Module ZIP');
     label.htmlFor = 'modules-file';
@@ -329,13 +359,38 @@ function render() {
       } catch (error) { setStatus(error.message, true); install.disabled = false; file.disabled = false; }
     });
     installer.append(label, file, install, element('p', 'modules-detail modules-install-note', 'New installs and updates stay disabled until you enable them. Only install modules you trust.'));
-    panel.append(installer);
+    advanced.append(installer);
+    // Keep the optional installer after the module list.
+    zipInstaller = advanced;
   }
-  const status = element('p', 'modules-status', statusText);
-  status.id = 'modules-status'; status.setAttribute('role', statusError ? 'alert' : 'status');
-  panel.append(status);
-  if (!modules.length) panel.append(element('p', 'modules-empty', admin ? 'No modules installed. Add a ZIP to get started.' : 'No modules available. An administrator can install and enable them.'));
+  const toolbar = element('div', 'modules-toolbar');
+  const search = element('input', 'modules-search');
+  search.type = 'search'; search.placeholder = 'Find a module…'; search.value = moduleSearch;
+  search.setAttribute('aria-label', 'Find installed modules');
+  const filter = element('select', 'modules-filter');
+  filter.setAttribute('aria-label', 'Module status');
+  [['all', 'All modules'], ['enabled', 'Enabled'], ['disabled', 'Disabled']].forEach(([value, label]) => {
+    const option = element('option', '', label); option.value = value; filter.append(option);
+  });
+  filter.value = moduleFilter;
+  toolbar.append(search, filter); panel.append(toolbar);
+  if (!modules.length) panel.append(element('p', 'modules-empty', admin ? 'No modules installed. Add a repository to get started.' : 'No modules available. An administrator can install and enable them.'));
   const list = element('div', 'modules-list');
+  const noMatches = element('p', 'modules-empty', 'No matching modules. Try another name or status.');
+  noMatches.hidden = true;
+  function filterCards() {
+    const query = moduleSearch.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const card of list.children) {
+      const item = modules.find(module => module.id === card.dataset.moduleId);
+      card.hidden = !`${item.name} ${item.description || ''}`.toLocaleLowerCase().includes(query) ||
+        (moduleFilter !== 'all' && item.enabled !== (moduleFilter === 'enabled'));
+      if (!card.hidden) visible++;
+    }
+    noMatches.hidden = !modules.length || visible > 0;
+  }
+  search.addEventListener('input', () => { moduleSearch = search.value; filterCards(); });
+  filter.addEventListener('change', () => { moduleFilter = filter.value; filterCards(); });
   modules.forEach(item => {
     const card = element('article', 'modules-card');
     card.dataset.moduleId = item.id;
@@ -389,7 +444,9 @@ function render() {
     }
     list.append(card);
   });
-  panel.append(list);
+  panel.append(list, noMatches);
+  filterCards();
+  if (zipInstaller) panel.append(zipInstaller);
 }
 export async function refreshModules() {
   if (refreshing) return refreshing;

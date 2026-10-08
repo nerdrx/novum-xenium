@@ -225,6 +225,9 @@ elements.choose.addEventListener('click', async () => {
   } catch (_) { /* Error is already visible. */ }
 });
 elements.refresh.addEventListener('click', () => { refreshStatus().catch(() => {}); });
+$('#zvram-panel').addEventListener('toggle', () => {
+  if ($('#zvram-panel').open && invoke && !busy) refreshStatus().catch(() => {});
+});
 
 elements.form.addEventListener('submit', async event => {
   event.preventDefault();

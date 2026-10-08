@@ -64,13 +64,14 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   const disclosure = page.locator('#zvram-panel');
   assert.equal(await disclosure.evaluate(element => element.open), false);
-  assert.equal(await page.evaluate(() => window.__calls.some(call => call.command.startsWith('zvram_'))), false, 'zVram must not probe or start automatically');
+  assert.equal(await page.evaluate(() => window.__calls.some(call => call.command.startsWith('zvram_'))), false, 'zVram stays idle until its panel opens');
   await page.locator('#zvram-panel > summary').focus();
   await page.keyboard.press('Enter');
   assert.equal(await disclosure.evaluate(element => element.open), true);
 
-  await page.locator('#zvram-choose').click();
   await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_status'));
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.evaluate(() => window.__calls.some(call => call.command === 'zvram_choose_installation' || call.command === 'zvram_action')), false, 'Auto-discovery needs no folder picker and starts no model');
   assert.equal(await page.locator('#zvram-installation').textContent(), '/opt/zvram');
   assert.equal(await page.locator('#zvram-model option').count(), 1);
   assert.match(await page.locator('#zvram-model option').textContent(), /1\.2 KiB/);

@@ -90,6 +90,67 @@ fn validate_installation(path: &Path) -> Result<PathBuf, String> {
     Ok(checkout)
 }
 
+fn installation_for_candidate(candidate: &Path) -> Option<PathBuf> {
+    let resolved = fs::canonicalize(candidate).ok()?;
+    let root = if resolved.is_dir() {
+        resolved
+    } else {
+        resolved.parent()?.to_path_buf()
+    };
+    validate_installation(&root).ok()
+}
+
+fn find_installation(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .find_map(|candidate| installation_for_candidate(&candidate))
+}
+
+fn detect_installation(backend_checkout: Option<&Path>) -> Option<PathBuf> {
+    let mut candidates = std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .map(|directory| directory.join("zvram"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join(".local/bin/zvram"));
+    }
+    candidates.extend([
+        PathBuf::from("/usr/local/bin/zvram"),
+        PathBuf::from("/usr/bin/zvram"),
+    ]);
+    if let Some(backend_checkout) = backend_checkout {
+        if let Some(parent) = backend_checkout.parent() {
+            candidates.extend([parent.join("zvram"), parent.join("zVram")]);
+        }
+    }
+    find_installation(candidates)
+}
+
+fn read_or_detect_installation(
+    config_path: &Path,
+    discover: impl FnOnce() -> Option<PathBuf>,
+) -> Result<Option<PathBuf>, String> {
+    match read_installation(config_path) {
+        Ok(Some(saved)) => return Ok(Some(saved)),
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(detected) = discover() {
+                save_installation(config_path, &detected)?;
+                return Ok(Some(detected));
+            }
+            return Err(error);
+        }
+    }
+    if let Some(detected) = discover() {
+        save_installation(config_path, &detected)?;
+        return Ok(Some(detected));
+    }
+    Ok(None)
+}
+
 fn save_installation(path: &Path, checkout: &Path) -> Result<String, String> {
     let parent = path
         .parent()
@@ -213,12 +274,6 @@ pub(super) async fn zvram_status(
     require_main(&window)?;
     ensure_not_quitting(&state.quit_pending)?;
     platform_supported()?;
-    let config_path = zvram_config_path(&app)?;
-    let Some(installation) = read_installation(&config_path)? else {
-        let mut result = unavailable_status("Choose a zVram installation to begin.");
-        result["installation"] = Value::String(String::new());
-        return Ok(result);
-    };
     let app = app.clone();
     let lock = state.zvram_operation.clone();
     let quit_pending = state.quit_pending.clone();
@@ -227,6 +282,18 @@ pub(super) async fn zvram_status(
             .lock()
             .map_err(|_| "zVram operation lock is unavailable.")?;
         ensure_not_quitting(&quit_pending)?;
+        let install_path = zvram_config_path(&app)?;
+        let backend_path = config_path(&app)?;
+        let backend = load_config_at(&backend_path)?;
+        let backend_checkout = backend.as_ref().map(|config| Path::new(&config.checkout));
+        let Some(installation) =
+            read_or_detect_installation(&install_path, || detect_installation(backend_checkout))?
+        else {
+            let mut result =
+                unavailable_status("zVram was not detected. Choose an installation to begin.");
+            result["installation"] = Value::String(String::new());
+            return Ok(result);
+        };
         let request = ZvramRequest::status();
         run_bridge(&app, &installation, &request)
     })
@@ -311,6 +378,13 @@ impl ZvramRequest {
 mod tests {
     use super::*;
 
+    fn installation_fixture(path: &Path) {
+        fs::create_dir_all(path).unwrap();
+        for name in ["zvram_manager.py", "zvram_model.py", "zvram"] {
+            fs::write(path.join(name), "test").unwrap();
+        }
+    }
+
     #[test]
     fn request_is_typed_and_uses_the_python_bridge_field_names() {
         let request: ZvramRequest = serde_json::from_value(json!({
@@ -342,12 +416,54 @@ mod tests {
     #[test]
     fn installation_requires_manager_model_helper_and_wrapper() {
         let temp = tempfile::tempdir().unwrap();
-        for name in ["zvram_manager.py", "zvram_model.py", "zvram"] {
-            fs::write(temp.path().join(name), "test").unwrap();
-        }
+        installation_fixture(temp.path());
         assert_eq!(validate_installation(temp.path()).unwrap(), temp.path());
         fs::remove_file(temp.path().join("zvram_model.py")).unwrap();
         assert!(validate_installation(temp.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_resolves_path_launcher_symlinks_and_skips_incomplete_installations() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let installation = temp.path().join("share/zvram/0.3.0");
+        installation_fixture(&installation);
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let launcher = bin.join("zvram");
+        symlink(installation.join("zvram"), &launcher).unwrap();
+        let incomplete = temp.path().join("incomplete");
+        fs::create_dir_all(&incomplete).unwrap();
+        fs::write(incomplete.join("zvram"), "wrapper only").unwrap();
+
+        assert_eq!(
+            find_installation([incomplete.join("zvram"), launcher]),
+            Some(fs::canonicalize(installation).unwrap())
+        );
+        assert_eq!(find_installation([incomplete.join("zvram")]), None);
+    }
+
+    #[test]
+    fn valid_manual_installation_wins_without_running_discovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let manual = temp.path().join("manual");
+        let detected = temp.path().join("detected");
+        installation_fixture(&manual);
+        installation_fixture(&detected);
+        let config = temp.path().join("config/zvram.json");
+        save_installation(&config, &manual).unwrap();
+        let mut discovery_called = false;
+
+        let selected = read_or_detect_installation(&config, || {
+            discovery_called = true;
+            Some(detected)
+        })
+        .unwrap();
+
+        assert_eq!(selected, Some(fs::canonicalize(manual).unwrap()));
+        assert!(!discovery_called);
     }
 
     #[test]

@@ -103,8 +103,10 @@ Notifications use a small native route restricted to the configured local backen
 
 ## zVram model providers (Linux)
 
-Open **zVram model server** in the backend manager and choose your trusted
-[zVram checkout](https://github.com/nerdrx/zVram). It needs the model bridge and
+Open **zVram model server** in the backend manager. It finds installed zVram
+through PATH or the NX Hub launcher in `~/.local/bin`, and remembers the location.
+A valid saved selection takes priority. If nothing is found, use **Choose installation**
+to select your trusted [zVram checkout](https://github.com/nerdrx/zVram). It needs the model bridge and
 manager from the `feat/xenium-vram-manager` branch, Python 3, and a built Vulkan
 `llama-server`. Novum does not download weights or build zVram automatically.
 

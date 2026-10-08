@@ -14,24 +14,6 @@ html.nx-workspace .sidebar {
   border-color: var(--nx-soft-border);
   box-shadow: none;
 }
-html.nx-workspace .sidebar-header {
-  justify-content: center;
-  padding-bottom: 6px;
-}
-html.nx-workspace #sidebar .sidebar-brand {
-  min-width: 64px;
-  min-height: 44px;
-  justify-content: center;
-  padding: 6px 4px;
-  border: 0;
-  background: transparent;
-}
-#sidebar .sidebar-brand-logo {
-  width: 52px;
-  height: 28px;
-  object-fit: contain;
-  margin: 0;
-}
 html.nx-workspace .sidebar-inner {
   padding: 8px 9px 10px;
   gap: 2px;
@@ -518,14 +500,7 @@ html.nx-workspace.density-spacious .settings-nav-item {
   }
 }
 
-/* The desktop frame already carries the brand. Keep sidebar navigation useful. */
-html[data-nx-window-frame="custom"] .sidebar-brand-logo,
+/* The desktop frame already carries the brand. */
 html[data-nx-window-frame="custom"] #welcome-screen .welcome-name {
   display: none;
-}
-html[data-nx-window-frame="custom"] #sidebar-brand-btn::after {
-  content: "Home";
-  color: var(--fg);
-  font-size: 14px;
-  font-weight: 550;
 }

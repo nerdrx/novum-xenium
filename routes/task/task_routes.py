@@ -1,17 +1,23 @@
 """CRUD routes for scheduled tasks."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from core.database import SessionLocal, ScheduledTask, TaskRun
+try:
+    from core.database import TaskCreateIdempotency
+except ImportError:  # lightweight route-test stubs do not model this table
+    TaskCreateIdempotency = None
 from core.constants import internal_api_base
 from src.auth_helpers import get_current_user
 from src.constants import DATA_DIR, EMAIL_URGENCY_CACHE_DIR
@@ -24,6 +30,7 @@ from src.task_scheduler import compute_next_run, HOUSEKEEPING_DEFAULTS
 from routes.prefs_routes import _load_for_user, _save_for_user
 
 logger = logging.getLogger(__name__)
+_TASK_CREATE_KEY_TTL_HOURS = 24
 
 
 def _maybe_cascade_calendar_event(task) -> None:
@@ -186,6 +193,23 @@ def _display_task_name(t: ScheduledTask) -> str:
     if defs and (t.name or "") in set(defs.get("legacy_names") or []):
         return defs["name"]
     return t.name
+
+
+def _find_task_create_replay(db, owner: Optional[str], key: str, fingerprint: str):
+    previous = db.query(TaskCreateIdempotency).filter_by(
+        owner_key=owner or "", key=key,
+    ).first()
+    if not previous:
+        return None
+    if previous.fingerprint != fingerprint:
+        raise HTTPException(409, "Idempotency-Key was already used for a different task request")
+    task = db.query(ScheduledTask).filter(
+        ScheduledTask.id == previous.task_id,
+        ScheduledTask.owner == owner,
+    ).first()
+    if not task:
+        raise HTTPException(409, "This task request was already completed; use a new key to create another task")
+    return _task_to_dict(task)
 
 
 def _task_to_dict(t: ScheduledTask, include_last_run_result: bool = False) -> dict:
@@ -452,6 +476,22 @@ def setup_task_routes(task_scheduler) -> APIRouter:
     @router.post("")
     async def create_task(request: Request, req: TaskCreate):
         user = _owner(request)
+        idempotency_key = getattr(request, "headers", {}).get("Idempotency-Key")
+
+        if idempotency_key is not None and (
+            not idempotency_key or len(idempotency_key) > 128
+            or not idempotency_key.isascii()
+            or any(ord(char) < 33 or ord(char) > 126 for char in idempotency_key)
+        ):
+            raise HTTPException(400, "Invalid Idempotency-Key")
+
+        request_fingerprint = None
+        if idempotency_key:
+            canonical_request = json.dumps(
+                req.model_dump() if hasattr(req, "model_dump") else req.dict(),
+                sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            )
+            request_fingerprint = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
 
         # Validate
         if req.task_type in ("llm", "research") and not req.prompt:
@@ -476,6 +516,25 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             raise HTTPException(400, "Event name is required for event-triggered tasks")
         if req.trigger_type == "event" and not req.trigger_count:
             raise HTTPException(400, "Trigger count is required for event-triggered tasks")
+
+        # Verify privileges and request validity before replaying an earlier
+        # response. Keys are owner-scoped and retained for one day.
+        if idempotency_key:
+            db = SessionLocal()
+            try:
+                cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=_TASK_CREATE_KEY_TTL_HOURS)
+                db.query(TaskCreateIdempotency).filter(
+                    TaskCreateIdempotency.created_at < cutoff,
+                ).delete(synchronize_session=False)
+                replay = _find_task_create_replay(db, user, idempotency_key, request_fingerprint)
+                if replay is not None:
+                    return replay
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
 
         # Auto-generate name
         name = req.name
@@ -553,7 +612,23 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                 character_id=(req.character_id or None),
             )
             db.add(task)
-            db.commit()
+            if idempotency_key:
+                db.add(TaskCreateIdempotency(
+                    owner_key=user or "",
+                    key=idempotency_key,
+                    fingerprint=request_fingerprint,
+                    task_id=task_id,
+                ))
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                if not idempotency_key:
+                    raise
+                replay = _find_task_create_replay(db, user, idempotency_key, request_fingerprint)
+                if replay is None:
+                    raise
+                return replay
             db.refresh(task)
             return _task_to_dict(task)
         finally:

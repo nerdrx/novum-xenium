@@ -778,6 +778,21 @@ class ScheduledTask(TimestampMixin, Base):
     )
 
 
+class TaskCreateIdempotency(Base):
+    """Short-lived keys used to make task-create retries safe."""
+    __tablename__ = "task_create_idempotency"
+
+    owner_key = Column(String, primary_key=True)
+    key = Column(String, primary_key=True)
+    fingerprint = Column(String, nullable=False)
+    task_id = Column(String, nullable=False)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
+
+    __table_args__ = (
+        Index("ix_task_create_idempotency_created_at", "created_at"),
+    )
+
+
 class EditorDraft(TimestampMixin, Base):
     """Persisted in-progress gallery-editor session — layered project state
     that the user can close and reopen later. Stores the full layer payload

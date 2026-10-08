@@ -188,7 +188,9 @@ def _bounded_map(items: List[Any], worker: Callable[[int, Any], Dict[str, Any]],
 # ── ChromaDB (vector RAG + vector memory) ──
 
 def chromadb_health(rag_manager: Any, memory_vector: Any) -> Dict[str, Any]:
-    """Report on the two ChromaDB-backed stores via their `.healthy` flags.
+    """Report vector-index readiness via the stores' `.healthy` flags.
+
+    This includes embedding initialization; it is not a ChromaDB server probe.
 
     Both absent  → disabled (Chroma/embeddings not installed or off).
     Both healthy → ok. One down → degraded. Both present but unhealthy → down.
@@ -211,8 +213,10 @@ def chromadb_health(rag_manager: Any, memory_vector: Any) -> Dict[str, Any]:
         return _svc("chromadb", OK, "Vector stores healthy.", **meta)
     if any(healthy):
         return _svc("chromadb", DEGRADED,
-                    "One vector store is unavailable.", **meta)
-    return _svc("chromadb", DOWN, "Vector stores are unavailable.", **meta)
+                    "One vector index is unavailable. Check its embedding backend and ChromaDB connection.", **meta)
+    return _svc("chromadb", DOWN,
+                "Vector indexing is unavailable. Check embedding model setup and the ChromaDB connection.",
+                **meta)
 
 
 # ── SearXNG ──

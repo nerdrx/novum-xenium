@@ -81,11 +81,14 @@ async function _runFirstOpenOnboarding() {
   }
 }
 
-async function _createTask(data) {
+async function _createTask(data, idempotencyKey) {
   const res = await fetch(`${API_BASE}/api/tasks`, {
     method: 'POST',
     credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error('Failed to create task');
@@ -1699,133 +1702,159 @@ function _showForm(existing, initTaskType, initTriggerType) {
   };
   document.addEventListener('keydown', window._tasksFormEsc, true);
 
+  // Reuse a create key after an uncertain network result only while the
+  // submitted payload is unchanged. The server persists it for 24 hours;
+  // closing this form discards the key, so a later reopened form is a new request.
+  let createIdempotencyKey = null;
+  let createIdempotencyPayload = null;
+  let saveInFlight = false;
+
   // Save
   document.getElementById('task-form-save').addEventListener('click', async () => {
-    const nameEl = document.getElementById('task-form-name');
-    const outputSelValue = document.getElementById('task-form-output')?.value || 'session';
-    let outputTarget = outputSelValue;
-    if (outputSelValue === 'email') {
-      const to = document.getElementById('task-form-output-email-to')?.value || '';
-      const accountId = document.getElementById('task-form-output-email-account')?.value || '';
-      outputTarget = _buildTaskEmailOutputTarget(to, accountId);
-    }
-
-    const payload = {
-      task_type: taskType,
-      trigger_type: triggerType,
-      output_target: outputTarget,
+    if (saveInFlight) return;
+    saveInFlight = true;
+    const saveButton = document.getElementById('task-form-save');
+    if (saveButton) saveButton.disabled = true;
+    const releaseSave = () => {
+      saveInFlight = false;
+      if (saveButton) saveButton.disabled = false;
     };
-    if (nameEl) payload.name = nameEl.value.trim() || undefined;
 
-    // Model / endpoint override. Blank = inherit session default. Otherwise
-    // value is `endpoint_url::model_id`.
-    const modelVal = document.getElementById('task-form-model')?.value || '';
-    if (modelVal) {
-      const idx = modelVal.indexOf('::');
-      if (idx > 0) {
-        payload.endpoint_url = modelVal.slice(0, idx);
-        payload.model = modelVal.slice(idx + 2);
+    try {
+      const nameEl = document.getElementById('task-form-name');
+      const outputSelValue = document.getElementById('task-form-output')?.value || 'session';
+      let outputTarget = outputSelValue;
+      if (outputSelValue === 'email') {
+        const to = document.getElementById('task-form-output-email-to')?.value || '';
+        const accountId = document.getElementById('task-form-output-email-account')?.value || '';
+        outputTarget = _buildTaskEmailOutputTarget(to, accountId);
       }
-    } else {
-      // Explicitly clear so a previously-pinned task can return to default.
-      payload.endpoint_url = '';
-      payload.model = '';
-    }
 
-    // Chain
-    const chainVal = document.getElementById('task-form-chain')?.value;
-    payload.then_task_id = chainVal || '';
+      const payload = {
+        task_type: taskType,
+        trigger_type: triggerType,
+        output_target: outputTarget,
+      };
+      if (nameEl) payload.name = nameEl.value.trim() || undefined;
 
-    // Notifications toggle — defaults to true if absent.
-    const notifEl = document.getElementById('task-form-notif');
-    if (notifEl) payload.notifications_enabled = !!notifEl.checked;
+      // Model / endpoint override. Blank = inherit session default. Otherwise
+      // value is `endpoint_url::model_id`.
+      const modelVal = document.getElementById('task-form-model')?.value || '';
+      if (modelVal) {
+        const idx = modelVal.indexOf('::');
+        if (idx > 0) {
+          payload.endpoint_url = modelVal.slice(0, idx);
+          payload.model = modelVal.slice(idx + 2);
+        }
+      } else {
+        // Explicitly clear so a previously-pinned task can return to default.
+        payload.endpoint_url = '';
+        payload.model = '';
+      }
 
-    // Task type specifics
-    if (taskType === 'llm' || taskType === 'research') {
-      const prompt = document.getElementById('task-form-prompt')?.value?.trim();
-      if (!prompt) {
-        if (uiModule) uiModule.showError('Prompt is required');
-        return;
-      }
-      payload.prompt = prompt;
-      const personaVal = document.getElementById('task-form-persona')?.value || '';
-      payload.character_id = personaVal;
-    } else {
-      // Non-llm/research tasks: explicitly clear any persona on switch.
-      payload.character_id = '';
-      const action = document.getElementById('task-form-action')?.value;
-      if (!action) {
-        if (uiModule) uiModule.showError('Select an action');
-        return;
-      }
-      payload.action = action;
-      if (_EMAIL_ACCOUNT_ACTIONS.has(action)) {
-        const accountId = document.getElementById('task-form-email-account')?.value || '';
-        payload.prompt = accountId ? JSON.stringify({ account_id: accountId }) : '';
-      }
-      if (action === 'check_email_urgency') {
-        const urgentPrompt = document.getElementById('task-form-urgent-email-prompt')?.value || '';
+      // Chain
+      const chainVal = document.getElementById('task-form-chain')?.value;
+      payload.then_task_id = chainVal || '';
+
+      // Notifications toggle — defaults to true if absent.
+      const notifEl = document.getElementById('task-form-notif');
+      if (notifEl) payload.notifications_enabled = !!notifEl.checked;
+
+      // Task type specifics
+      if (taskType === 'llm' || taskType === 'research') {
+        const prompt = document.getElementById('task-form-prompt')?.value?.trim();
+        if (!prompt) {
+          if (uiModule) uiModule.showError('Prompt is required');
+          return;
+        }
+        payload.prompt = prompt;
+        const personaVal = document.getElementById('task-form-persona')?.value || '';
+        payload.character_id = personaVal;
+      } else {
+        // Non-llm/research tasks: explicitly clear any persona on switch.
+        payload.character_id = '';
+        const action = document.getElementById('task-form-action')?.value;
+        if (!action) {
+          if (uiModule) uiModule.showError('Select an action');
+          return;
+        }
+        payload.action = action;
+        if (_EMAIL_ACCOUNT_ACTIONS.has(action)) {
+          const accountId = document.getElementById('task-form-email-account')?.value || '';
+          payload.prompt = accountId ? JSON.stringify({ account_id: accountId }) : '';
+        }
+        if (action === 'check_email_urgency') {
+          const urgentPrompt = document.getElementById('task-form-urgent-email-prompt')?.value || '';
         try {
           await _saveUrgentEmailSettings(urgentPrompt);
         } catch (e) {
-          if (uiModule) uiModule.showError('Failed to save urgency rules');
+          if (saveButton?.isConnected && uiModule) uiModule.showError('Failed to save urgency rules');
+          return;
+          }
+        }
+      }
+
+      // Trigger specifics
+      if (triggerType === 'schedule') {
+        const schedSelect = document.getElementById('task-form-schedule');
+        payload.schedule = schedSelect?.value || 'daily';
+
+        if (payload.schedule === 'cron') {
+          const cronVal = document.getElementById('task-form-cron')?.value?.trim();
+          if (!cronVal) {
+            if (uiModule) uiModule.showError('Cron expression is required');
+            return;
+          }
+          payload.cron_expression = cronVal;
+        } else {
+          const timeVal = _getTimePickerValue('task-form-time-wrap');
+          payload.scheduled_time = _localTimeToUtc(timeVal);
+
+          const dayInput = document.getElementById('task-form-day');
+          if (dayInput) payload.scheduled_day = parseInt(dayInput.value, 10);
+
+          if (payload.schedule === 'once' && document.getElementById('task-form-date')) {
+            const pickedDate = _getDatePickerValue('task-form-date');
+            const [h, m] = timeVal.split(':').map(Number);
+            pickedDate.setHours(h, m, 0, 0);
+            payload.scheduled_date = pickedDate.toISOString();
+          }
+        }
+      } else if (triggerType === 'event') {
+        const evSel = document.getElementById('task-form-event');
+        const countInput = document.getElementById('task-form-trigger-count');
+        if (!evSel?.value) {
+          if (uiModule) uiModule.showError('Select an event');
           return;
         }
+        payload.trigger_event = evSel.value;
+        payload.trigger_count = parseInt(countInput?.value || '5', 10);
       }
-    }
+      // webhook: no extra fields needed, token is auto-generated server-side
 
-    // Trigger specifics
-    if (triggerType === 'schedule') {
-      const schedSelect = document.getElementById('task-form-schedule');
-      payload.schedule = schedSelect?.value || 'daily';
-
-      if (payload.schedule === 'cron') {
-        const cronVal = document.getElementById('task-form-cron')?.value?.trim();
-        if (!cronVal) {
-          if (uiModule) uiModule.showError('Cron expression is required');
-          return;
-        }
-        payload.cron_expression = cronVal;
-      } else {
-        const timeVal = _getTimePickerValue('task-form-time-wrap');
-        payload.scheduled_time = _localTimeToUtc(timeVal);
-
-        const dayInput = document.getElementById('task-form-day');
-        if (dayInput) payload.scheduled_day = parseInt(dayInput.value, 10);
-
-        if (payload.schedule === 'once' && document.getElementById('task-form-date')) {
-          const pickedDate = _getDatePickerValue('task-form-date');
-          const [h, m] = timeVal.split(':').map(Number);
-          pickedDate.setHours(h, m, 0, 0);
-          payload.scheduled_date = pickedDate.toISOString();
-        }
-      }
-    } else if (triggerType === 'event') {
-      const evSel = document.getElementById('task-form-event');
-      const countInput = document.getElementById('task-form-trigger-count');
-      if (!evSel?.value) {
-        if (uiModule) uiModule.showError('Select an event');
-        return;
-      }
-      payload.trigger_event = evSel.value;
-      payload.trigger_count = parseInt(countInput?.value || '5', 10);
-    }
-    // webhook: no extra fields needed, token is auto-generated server-side
-
-    try {
       // Edit only when we have a real existing task (has an id). A draft
       // object passed for AI pre-fill has no id → create via POST.
       if (existing && existing.id) {
         await _updateTask(existing.id, payload);
-        if (uiModule) uiModule.showToast('Task updated');
       } else {
-        await _createTask(payload);
-        if (uiModule) uiModule.showToast('Task created');
+        const serializedPayload = JSON.stringify(payload);
+        if (serializedPayload !== createIdempotencyPayload) {
+          createIdempotencyPayload = serializedPayload;
+          createIdempotencyKey = window.crypto?.randomUUID?.()
+            || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        }
+        await _createTask(payload, createIdempotencyKey);
       }
+      // The form may have been closed and another view opened while the
+      // request was pending; stale success must not dismiss that new view.
+      if (!saveButton?.isConnected) return;
+      if (uiModule) uiModule.showToast(existing?.id ? 'Task updated' : 'Task created');
       await _fetchTasks();
-      _switchTab('tasks');
+      if (saveButton?.isConnected) _switchTab('tasks');
     } catch (e) {
-      if (uiModule) uiModule.showError(e.message);
+      if (saveButton?.isConnected && uiModule) uiModule.showError(e.message || 'Failed to save task');
+    } finally {
+      releaseSave();
     }
   });
 }

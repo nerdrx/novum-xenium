@@ -16,6 +16,10 @@ The ChatGPT subscription connection authenticates model inference. Git authentic
 
 Group chats have a circular-arrow button beside Agent/Chat. Open it for **Auto conversation**, **20 / 100 replies / Until Stop**, and **Stop**. Tool approvals wait for your choice before the requesting participant continues.
 
+## Queued messages
+
+Sending text while a reply streams queues it in that chat. Switching chats leaves the queued text with its original chat; returning sends it after the response finishes. Activate a queued bubble to stop the current response and send that message next. Keyboard users can Tab to it and press Enter or Space. Attachments cannot be queued. The queue lives in the current browser tab and is not saved across a reload.
+
 ## Windows and model comparison
 
 Tool windows raise when opened or clicked. Popup menus follow the live window stack, including Compare model suggestions and export menus, so they remain above their parent after repeated window use. The Compare scoreboard also opens in front. Compare's 5–300 second timeout also applies to model checks, retries and shuffle replacements. The check explains that a local model may be loading or queued; Skip continues without verifying availability. Closing the check cancels its browser requests, while a provider request already running on the server can continue until its timeout.
@@ -43,6 +47,12 @@ This is a bounded repetition check, not a judgment of whether every action is us
 ## Restart recovery
 
 after a process interruption, open the chat and click **Continue** on its recovery card. The server retains bounded partial text and tool outcomes in owner-scoped checkpoints. Continue is one-use, rechecks the saved workspace/model/endpoint and preserves read-only plan mode. Saved evidence is untrusted context; tools and old approvals are never replayed automatically. In-memory runs still reconnect normally without a restart. Stop also works when pressed before the detached run starts. Incognito does not store checkpoints. Stop tracks commands in the persistent tmux pane and terminates their owned descendants while preserving shell state. Deliberately detached or reparented processes may need separate cleanup. Inspect remaining writers before restoring files.
+
+## Scheduled tasks
+
+Save is disabled while a task request is pending. If a create request fails or its reply is lost, retrying unchanged content in the same open form reuses the original request key instead of creating a second job. Editing the content starts a new request. Closing or reloading the form discards its key. API clients can send `Idempotency-Key`; matching owner-scoped requests are retained for 24 hours, and reusing a key for different content returns a conflict.
+
+Scheduled shell and script results retain up to 10,000 characters plus a truncation notice. Excess output is drained so a full pipe cannot stall the task. Write a full log to a persistent file when needed. Stop cancels owned process groups; it cannot undo completed side effects or stop an independently detached remote job.
 
 ## Coding undo
 

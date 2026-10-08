@@ -127,6 +127,64 @@ async def test_process_shutdown_preserves_interrupted_run_for_explicit_recovery(
 
 
 @pytest.mark.asyncio
+async def test_cancellation_before_shutdown_hook_keeps_checkpoint_recoverable(tmp_path, monkeypatch):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "early-cancel.db"))
+    monkeypatch.setattr(run_checkpoints, "_STORE", store)
+    session_id = "shutdown-cancel-before-hook"
+
+    async def stream():
+        yield 'data: {"delta":"partial before teardown"}\n\n'
+        await asyncio.Event().wait()
+
+    run = agent_runs.start(session_id, stream(), owner="alice")
+    while not run.buffer:
+        await asyncio.sleep(0)
+
+    # Uvicorn/event-loop teardown can cancel detached tasks before lifespan
+    # shutdown reaches interrupt_active_runs(). That cancellation has no Stop
+    # intent and must retain the same recovery semantics.
+    run.task.cancel()
+    await asyncio.gather(run.task, return_exceptions=True)
+    assert run.status == "interrupted"
+    checkpoint = store.get(session_id, "alice")
+    assert checkpoint["status"] == "interrupted"
+    assert checkpoint["can_continue"] is True
+    assert checkpoint["last_output"] == "partial before teardown"
+    assert await agent_runs.interrupt_active_runs(timeout=0) == 0
+
+    if run.evict_task:
+        run.evict_task.cancel()
+    agent_runs._RUNS.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_started_explicit_stop_remains_nonrecoverable(tmp_path, monkeypatch):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "explicit-stop.db"))
+    monkeypatch.setattr(run_checkpoints, "_STORE", store)
+    session_id = "started-explicit-stop"
+
+    async def stream():
+        yield 'data: {"delta":"partial before stop"}\n\n'
+        await asyncio.Event().wait()
+
+    run = agent_runs.start(session_id, stream(), owner="alice")
+    while not run.buffer:
+        await asyncio.sleep(0)
+
+    assert agent_runs.stop(session_id, run.run_id)
+    await asyncio.gather(run.task, return_exceptions=True)
+    assert run.status == "stopped"
+    checkpoint = store.get(session_id, "alice")
+    assert checkpoint["status"] == "stopped"
+    assert checkpoint["can_continue"] is False
+    assert await agent_runs.interrupt_active_runs(timeout=0) == 0
+
+    if run.evict_task:
+        run.evict_task.cancel()
+    agent_runs._RUNS.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_stop_before_drain_wakes_subscriber_without_checkpoint(tmp_path, monkeypatch):
     store = run_checkpoints.CheckpointStore(str(tmp_path / "incognito.db"))
     monkeypatch.setattr(run_checkpoints, "_STORE", store)

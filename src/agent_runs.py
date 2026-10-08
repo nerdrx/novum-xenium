@@ -33,7 +33,7 @@ class _Run:
     __slots__ = (
         "buffer", "subscribers", "status", "task", "evict_task", "run_id", "owner",
         "checkpoint_pending", "checkpoint_last_flush", "persist_checkpoint", "drain_started",
-        "deleted_scope", "predecessor_task",
+        "deleted_scope", "predecessor_task", "stop_requested",
     )
 
     def __init__(self, owner: Optional[str] = None, persist_checkpoint: bool = True,
@@ -52,6 +52,7 @@ class _Run:
         self.persist_checkpoint = persist_checkpoint
         self.drain_started = False
         self.deleted_scope: Optional[tuple[str, str]] = None
+        self.stop_requested = False
         # If this run is replaced before _drain starts, its own task cannot
         # carry the predecessor barrier onward, so the next run inherits it.
         self.predecessor_task = predecessor_task
@@ -157,7 +158,10 @@ async def interrupt_active_runs(timeout: float = 3.0) -> int:
     draining gets a short window to close generators and flush partial output.
     """
     with _RUN_LOCK:
-        runs = [run for run in list(_RUNS.values()) if run.status == "running"]
+        runs = [
+            run for run in list(_RUNS.values())
+            if run.status == "running" and not run.stop_requested
+        ]
     tasks = []
     for run in runs:
         run.status = "interrupted"
@@ -216,11 +220,12 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
         if run.status == "running":
             run.status = "done"
     except asyncio.CancelledError:
-        # Shutdown marks active runs interrupted before cancelling them so the
-        # next process can offer an explicit continuation. Preserve that state;
-        # user-requested cancellation still becomes "stopped".
+        # Explicit stop/replacement paths mark the run terminal before they
+        # cancel it. A cancellation that arrives first has no user intent
+        # attached (for example, server teardown racing its lifespan hook), so
+        # keep the checkpoint recoverable instead of misreporting it as stopped.
         if run.status == "running":
-            run.status = "stopped"
+            run.status = "stopped" if run.stop_requested else "interrupted"
         # Let the wrapped generator's own CancelledError handler run (it saves
         # the partial response to the session).
         try:
@@ -402,6 +407,7 @@ def stop(session_id: str, expected_run_id: Optional[str] = None) -> bool:
                     run.deleted_scope = None
                 return
             never_started = not run.drain_started
+            run.stop_requested = True
             if never_started:
                 # A task cancelled before its coroutine first runs never enters
                 # _drain's cancellation/finally handlers.

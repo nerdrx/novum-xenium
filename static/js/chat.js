@@ -1113,10 +1113,19 @@ import { loadPanel } from './panels.js';
     const wrap = document.createElement('div');
     wrap.className = 'msg msg-user msg-user-queued';
     wrap.dataset.queueId = item.id;
-    wrap.title = 'Queued - click to send now and stop the current response';
+    wrap.title = 'Queued - activate to send now and stop the current response';
+    wrap.setAttribute('role', 'button');
+    wrap.setAttribute('tabindex', '0');
+    wrap.setAttribute('aria-label', `Queued message: ${item.message}. Activate to send now and stop the current response.`);
     wrap.innerHTML = `<div class="role">You <span class="queued-pill"><svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>Queued</span></div><div class="body">${_escapeQueueText(item.message)}</div>`;
     wrap.addEventListener('click', (ev) => {
       if (ev.target && ev.target.closest && ev.target.closest('button, a, textarea, input')) return;
+      _promoteQueuedRequest(item.id);
+    });
+    wrap.addEventListener('keydown', (ev) => {
+      if (ev.repeat || (ev.key !== 'Enter' && ev.key !== ' ')) return;
+      if (ev.target && ev.target.closest && ev.target.closest('button, a, textarea, input')) return;
+      ev.preventDefault();
       _promoteQueuedRequest(item.id);
     });
     host.appendChild(wrap);
@@ -7083,6 +7092,7 @@ import { loadPanel } from './panels.js';
     addMessage: chatRenderer.addMessage,
     displayMetrics: chatRenderer.displayMetrics,
     handleChatSubmit,
+    queueStreamingComposerRequest,
     abortCurrentRequest,
     detachCurrentStream,
     checkBackgroundStream,

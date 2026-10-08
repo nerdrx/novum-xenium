@@ -105,6 +105,12 @@ export const SETTINGS_PANELS = Object.freeze([
   }),
 
   definePanel({
+    id: 'usage',
+    label: 'Usage',
+    group: 'account',
+    keywords: ['usage', 'analytics', 'tokens', 'activity', 'statistics'],
+  }),
+  definePanel({
     id: 'account',
     label: 'Account',
     group: 'account',

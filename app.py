@@ -721,6 +721,9 @@ app.include_router(setup_research_routes(research_handler, session_manager=sessi
 from routes.history.history_routes import setup_history_routes
 app.include_router(setup_history_routes(session_manager, upload_handler=upload_handler))
 
+from routes.usage_routes import setup_usage_routes
+app.include_router(setup_usage_routes())
+
 # Search
 from routes.search.search_routes import setup_search_routes
 app.include_router(setup_search_routes(config))

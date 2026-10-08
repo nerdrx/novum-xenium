@@ -548,6 +548,7 @@ function buildFixture(document) {
     'reminders',
     'appearance',
     'shortcuts',
+    'usage',
     'account',
     'tools',
     'users',
@@ -816,6 +817,10 @@ const STUBS = new Map([
     {
       bindMenuDismiss() {},
     },
+  ],
+  [
+    path.join(JS, 'usage.js'),
+    { refreshUsage() {} },
   ],
   [
     path.join(JS, 'appConfig.js'),

@@ -2,6 +2,7 @@
 // User-facing preferences: AI models, search, appearance
 
 import uiModule from './ui.js';
+import { refreshUsage } from './usage.js';
 import searchModule from './search.js';
 import { byId } from './settings/dom.js';
 import {
@@ -106,6 +107,7 @@ function onSettingsPanelActivated(tab) {
 
   // AI endpoints are intentionally refreshed only when entering the AI panel.
   if (tab === 'ai') refreshAiModelEndpoints();
+  if (tab === 'usage') refreshUsage({ force: true });
 }
 
 function openAdminSettingsTab(tab) {

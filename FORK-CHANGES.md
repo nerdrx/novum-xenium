@@ -4,6 +4,15 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Usage analytics and home dashboard
+
+- Adds Settings → Usage with 7/30-day activity charts, input/output token totals and a model breakdown for the signed-in account.
+- Replaces the empty welcome area with a weekly overview, recent chats, chat streak, most-used model, busiest day and words written.
+- Uses retained chat records, including archived chats. Deleted and Nobody chats are excluded. Missing token metadata and estimates are labelled; these numbers are not provider billing or subscription limits. Dates use UTC and streaks cover the selected period.
+- Keeps theme colours, backgrounds, keyboard navigation and narrow screens supported. No analytics service or chart dependency is added.
+
+Validation: usage and ownership tests passed, plus direct Chromium checks on desktop/mobile for both periods, empty/error/retry states, missing metrics, safe labels and navigation callbacks. Existing theme and Settings shell checks also passed.
+
 ## Novum Xenium desktop preview
 
 - Preserves the complete Odysseus and NX-Odysseus source history and AGPL-3.0-or-later notices in the new repository.

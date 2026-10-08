@@ -45,6 +45,7 @@ The original Odysseus already has chat, agents, MCP, documents, email, notes, ta
 - **Knowing what's happening.** Waiting and streaming have clearer status messages. Repeated reads and failed retries pause with an explanation, keeping the edits and tool history. Interrupted runs can continue from saved progress after a restart. Queued messages stay with their chat, and task saves can be retried in the same open form without duplicating the job.
 - **Choosing how much to approve.** Ask for approval, Approve for me or Full access within the workspace/container. A small judge handles eligible uncertain actions and shows its reason.
 - **ChatGPT and images.** Native subscription tool calls, fixes for unsupported request parameters, proper image-provider settings and an optional host Codex image bridge.
+- **Seeing your usage.** A home dashboard shows the week, recent chats and a few fun stats. Settings has 7/30-day analytics with model and token breakdowns. Counts come from your saved chats; estimates and missing records are labelled.
 - **Finding your chats.** Request-based titles for ordinary and group chats, including older model-name placeholders. Names you set yourself stay untouched.
 - **Keeping your setup.** Application-data backups with restore preview, improved emoji rendering, personality names that survive refresh, and the NX default theme. Folder, provider and approval failures offer a retry instead of leaving you guessing.
 

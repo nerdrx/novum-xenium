@@ -36,6 +36,7 @@ import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js?v=20261007toolqueue1';
 import settingsModule from './js/settings.js';
+import { initUsage, refreshUsage } from './js/usage.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
@@ -4301,6 +4302,24 @@ function startOdysseusApp() {
     await fileHandlerModule.addFiles(files);
     uiModule.showToast(`Added ${files.length} file${files.length > 1 ? 's' : ''} to attach`);
   }, true);
+
+  // Home and Settings share the same per-user analytics snapshot.
+  initUsage({
+    openChat: id => sessionModule.selectSession(id),
+    openAnalytics: () => settingsModule.open('usage'),
+  });
+  const welcome = document.getElementById('welcome-screen');
+  const dashboard = document.getElementById('home-dashboard');
+  const nobody = document.getElementById('incognito-toggle');
+  const syncHomeUsage = () => {
+    if (dashboard) dashboard.hidden = !!nobody?.checked;
+    if (welcome && !welcome.classList.contains('hidden') && !nobody?.checked) refreshUsage();
+  };
+  if (welcome) new MutationObserver(syncHomeUsage).observe(welcome, { attributes: true, attributeFilter: ['class'] });
+  const nobodyButton = document.getElementById('incognito-btn');
+  if (nobodyButton) new MutationObserver(syncHomeUsage).observe(nobodyButton, { attributes: true, attributeFilter: ['class'] });
+  nobody?.addEventListener('change', syncHomeUsage);
+  syncHomeUsage();
 
   // Load initial data
   presetsModule.loadPresets(uiModule.showError);

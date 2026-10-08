@@ -6,6 +6,7 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Tool-result archiving follows the remaining request budget, including multiple results in one round, so details below the fixed bulk threshold remain recoverable through `context_search`. Cold schema and plan-mode imports use shared lightweight tool types. Separate-worker verification timeouts and orphaned stdout readers stop the check's process group; worker cancellation also discovers nested process groups.
 - A document created asynchronously cannot take over another selected document. Managed worktrees cannot be removed while their verification is running; cancellation releases the guard after process cleanup. Changing check definitions during a run makes that result incomplete and stale.
 - Context inspection reports the actual request input cap even when the model window is unknown, without exposing prompt content or changing the budget. Image MCP carries the trusted caller owner through model lookup and Gallery storage, rejects spoofed ownerless calls to private providers, and normalizes image failures/results consistently. Generated-image ownership lookup failures return a retryable error instead of serving unverified bytes.
 - Browser intent excludes URLs and negated file instructions from workspace coding detection, while keeping later positive coding clauses. The bounded native browser core retains click alongside navigation and snapshot. Unknown model-window budgets remain conservative.

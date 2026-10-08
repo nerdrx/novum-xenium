@@ -307,14 +307,14 @@ async def _run_check_async(argv: list[str], cwd: str, timeout: int, *, session_i
         from src.tool_execution import _active_workspace
 
         payload = json.dumps({"argv": argv, "timeout": timeout})
-        code = f'''import json,os,subprocess,threading
+        code = f'''import json,os,signal,subprocess,threading
 cfg=json.loads({payload!r})
 os.environ["PYTHONDONTWRITEBYTECODE"]="1"
 p=None
 out=bytearray()
 truncated=False
 try:
- p=subprocess.Popen(cfg["argv"],cwd=os.getcwd(),stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+ p=subprocess.Popen(cfg["argv"],cwd=os.getcwd(),stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=(os.name!="nt"))
  def read():
   global truncated
   while True:
@@ -324,10 +324,21 @@ try:
    if room>0: out.extend(chunk[:room])
    if len(chunk)>room: truncated=True
  t=threading.Thread(target=read,daemon=True);t.start()
+ def stop_group():
+  if os.name!="nt":
+   try: os.killpg(p.pid,signal.SIGKILL)
+   except OSError: p.kill()
+  else: p.kill()
+ orphaned=False
  try: rc=p.wait(timeout=cfg["timeout"]); timed=False
- except subprocess.TimeoutExpired: p.kill();rc=p.wait(timeout=5);timed=True
+ except subprocess.TimeoutExpired:
+  stop_group()
+  rc=p.wait(timeout=5);timed=True
  t.join(timeout=1)
- result={{"passed":not timed and rc==0,"timed_out":timed,"exit_code":rc,"output":out.decode("utf-8","replace")+("\\n… output truncated" if truncated else "")}}
+ orphaned=t.is_alive()
+ if orphaned:
+  stop_group();t.join(timeout=2)
+ result={{"passed":not timed and not orphaned and rc==0,"timed_out":timed,"orphaned":orphaned,"exit_code":rc,"output":out.decode("utf-8","replace")+("\\n… output truncated" if truncated else "")+("\\nVerifier child processes were stopped after the command exited." if orphaned else "")}}
 except OSError as e: result={{"passed":False,"output":str(e)[:6000]}}
 print("__ODY_VERIFY__"+json.dumps(result))
 '''

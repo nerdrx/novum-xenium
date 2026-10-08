@@ -4980,11 +4980,33 @@ async def stream_agent_loop(
     # so the user can resume instead of the turn silently stalling.
     _exhausted_rounds = False
 
+    _context_preview_accounted_round = None
+    _context_preview_accounted_tokens = 0
+
     async def _context_result_preview(tool_name, description, result, formatted, event):
+        nonlocal _context_preview_accounted_round, _context_preview_accounted_tokens
+        current_round = event.get("round", 0)
+        if current_round != _context_preview_accounted_round:
+            _context_preview_accounted_round = current_round
+            _context_preview_accounted_tokens = 0
+
+        def _account_preview(text, call_tokens):
+            nonlocal _context_preview_accounted_tokens
+            _context_preview_accounted_tokens += call_tokens + estimate_tokens([
+                {"role": "tool", "content": text},
+            ])
+            return text
+
+        exchange_tokens = estimate_tokens([{
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": tool_name, "arguments": str(event.get("command") or "")}}],
+        }]) + 32
+
         if (not session_id or delegated_credential or tool_name == "context_search"
                 or "context_search" in disabled_tools
                 or (_relevant_tools is not None and "context_search" not in _relevant_tools)):
-            return formatted
+            return _account_preview(formatted, exchange_tokens)
         # Keep bulk data searchable outside the model window. Preserve the
         # original result for integrity checks and the UI bubble.
         raw_context = json.dumps(
@@ -4992,8 +5014,28 @@ async def stream_agent_loop(
              if key not in {"images", "screenshot", "image_base64", "image_data"}},
             ensure_ascii=False, default=str,
         )
-        if len(raw_context) <= 6000:
-            return formatted
+        # The fixed size guard avoids stuffing clearly bulk output into normal
+        # turns. Small explicit input budgets need an earlier guard: the
+        # formatted result can otherwise be truncated by the next request's
+        # context shaper, with no archive left to recover the missing detail.
+        inspection = _last_context_inspection or {}
+        input_budget = inspection.get("input_budget_tokens")
+        try:
+            input_budget = max(0, int(input_budget)) if input_budget is not None else None
+            used_tokens = max(0, int(inspection.get("total_tokens", 0)))
+        except (TypeError, ValueError, OverflowError):
+            input_budget = None
+            used_tokens = 0
+        remaining_tokens = (
+            max(0, input_budget - used_tokens - _context_preview_accounted_tokens - exchange_tokens)
+            if input_budget is not None else None
+        )
+        exceeds_remaining_budget = (
+            remaining_tokens is not None
+            and estimate_tokens([{"role": "tool", "content": formatted}]) > remaining_tokens
+        )
+        if len(raw_context) <= 6000 and not exceeds_remaining_budget:
+            return _account_preview(formatted, exchange_tokens)
         try:
             from src.tool_result_store import archive_result
             # Cancelling to_thread's await does not stop its worker. Keep this
@@ -5003,17 +5045,18 @@ async def stream_agent_loop(
                 archive_result, owner, session_id, tool_name, raw_context,
             )
             event["context_result_id"] = context_id
-            return (
+            preview = (
                 f"### {description}\nexit_code: {result.get('exit_code', 'unknown')}\n"
                 f"[Large result stored as {context_id}. This is a preview, not the full output. "
                 "Use context_search with this result_id and keywords for missing details, "
                 "or empty query plus offset for exact chunks.]\n"
                 + formatted[:700] + "\n[... stored content ...]\n" + formatted[-250:]
             )
+            return _account_preview(preview, exchange_tokens)
         except Exception:
             # Disk/FTS failures must never silently discard source data.
             logger.warning("[context] Could not archive tool output; retaining original prompt result", exc_info=True)
-            return formatted
+            return _account_preview(formatted, exchange_tokens)
 
     _approved_result_injected = False
     if exact_approval is not None:

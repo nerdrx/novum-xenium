@@ -13,6 +13,10 @@ contract:
 Pure-function tests — no FastAPI app boot, no DB.
 """
 
+import os
+import subprocess
+import sys
+
 from src.tool_security import (
     PLAN_MODE_READONLY_TOOLS,
     _PLAN_MODE_KNOWN_MUTATORS,
@@ -58,6 +62,28 @@ def test_disabled_never_intersects_allowlist():
     assert plan_mode_disabled_tools() & PLAN_MODE_READONLY_TOOLS == set()
 
 
+def test_cold_plan_mode_registry_does_not_load_agent_tools_facade(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    env = os.environ.copy()
+    env["ODYSSEUS_DATA_DIR"] = str(data)
+    env["DATABASE_URL"] = f"sqlite:///{data / 'app.db'}"
+    code = (
+        "import sys; from src.tool_security import (plan_mode_disabled_tools, "
+        "PLAN_MODE_READONLY_TOOLS, _PLAN_MODE_KNOWN_MUTATORS); "
+        "from src.tool_schemas import FUNCTION_TOOL_SCHEMAS; "
+        "names={(tool.get('function') or {}).get('name') for tool in FUNCTION_TOOL_SCHEMAS}; "
+        "names.discard(None); denied=plan_mode_disabled_tools(); "
+        "assert denied == (names | _PLAN_MODE_KNOWN_MUTATORS) - PLAN_MODE_READONLY_TOOLS; "
+        "assert 'src.agent_tools' not in sys.modules"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=os.path.dirname(os.path.dirname(__file__)),
+        env=env, capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_mcp_readonly_classification():
     from src.mcp_manager import mcp_tool_is_readonly as ro
     # Server-provided hints win over the name heuristic.
@@ -79,9 +105,9 @@ def test_fail_closed_fallback_blocks_mutations(monkeypatch):
     def _boom():
         raise ImportError("simulated circular import failure")
 
-    # Force the dynamic path to fail by making the lazy import explode.
+    # Force the dynamic path to fail by making the canonical registry unavailable.
     monkeypatch.setitem(
-        __import__("sys").modules, "src.agent_tools", None
+        __import__("sys").modules, "src.tool_schemas", None
     )
     disabled = ts.plan_mode_disabled_tools()
     assert disabled, "plan mode must never fail open (empty disabled set)"

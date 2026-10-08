@@ -91,6 +91,28 @@ def test_worker_timeout_terminates_process_group(tmp_path):
     assert not _pid_running(child_pid)
 
 
+def test_worker_cancellation_terminates_new_session_descendant(tmp_path):
+    marker = tmp_path / "cancelled-child-finished"
+    child = f"import pathlib,time;time.sleep(1.5);pathlib.Path({str(marker)!r}).write_text('x')"
+    code = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable,'-c',{child!r}],start_new_session=True); "
+        "time.sleep(30)"
+    )
+    job = {"id": "cancel-session", "status": "running", "output": "", "cancelled": False}
+    runner = threading.Thread(target=server.run, args=(job, code, "python", tmp_path, 30))
+    runner.start()
+    deadline = time.monotonic() + 3
+    while not job.get("proc") and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert job.get("proc") is not None
+    server.kill(job)
+    runner.join(timeout=3)
+    assert not runner.is_alive()
+    time.sleep(1.7)
+    assert not marker.exists()
+
+
 @pytest.mark.asyncio
 async def test_client_cancellation_deletes_worker_job(tmp_path, monkeypatch):
     # Several parser tests replace/re-import src.tool_execution during module
@@ -109,8 +131,15 @@ async def test_client_cancellation_deletes_worker_job(tmp_path, monkeypatch):
     monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", f"http://127.0.0.1:{worker.server_port}")
     monkeypatch.setenv("ODYSSEUS_EXECUTOR_TOKEN", token)
     monkeypatch.setenv("ODYSSEUS_EXECUTOR_ROOT", str(tmp_path))
+    marker = tmp_path / "client-cancel-child-finished"
+    child = f"import pathlib,time;time.sleep(1.5);pathlib.Path({str(marker)!r}).write_text('x')"
+    code = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable,'-c',{child!r}],start_new_session=True); "
+        "print('child started',flush=True); time.sleep(30)"
+    )
     task = asyncio.create_task(execution_runtime.execute_isolated(
-        "import time; time.sleep(30)", {"session_id": "s", "run_id": "r"}, language="python"
+        code, {"session_id": "s", "run_id": "r"}, language="python"
     ))
     try:
         deadline = time.monotonic() + 3
@@ -123,6 +152,10 @@ async def test_client_cancellation_deletes_worker_job(tmp_path, monkeypatch):
                 pytest.fail(f"worker request exited before creating a job: {result!r}")
             await asyncio.sleep(0.02)
         assert server.JOBS
+        deadline = time.monotonic() + 3
+        while not any("child started" in job.get("output", "") for job in server.JOBS.values()) and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+        assert any("child started" in job.get("output", "") for job in server.JOBS.values())
         assert not task.done(), f"client completed before cancellation: {task.result()!r}"
         assert task.cancel(), "client task was already complete when cancellation was requested"
         with pytest.raises(asyncio.CancelledError):
@@ -131,6 +164,8 @@ async def test_client_cancellation_deletes_worker_job(tmp_path, monkeypatch):
         while server.JOBS and time.monotonic() < deadline:
             await asyncio.sleep(0.02)
         assert not server.JOBS
+        await asyncio.sleep(1.7)
+        assert not marker.exists()
     finally:
         if not task.done():
             task.cancel()

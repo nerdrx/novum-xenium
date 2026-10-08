@@ -292,6 +292,74 @@ def test_config_change_during_verification_is_incomplete_and_preserves_snapshot(
     asyncio.run(verify_while_config_changes())
 
 
+def test_separate_worker_timeout_kills_check_process_group(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("worker child cleanup test uses POSIX process groups")
+    from src import execution_runtime
+
+    marker = tmp_path / "worker-child-finished"
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", "http://fixture.invalid")
+
+    async def local_worker(code, _params, *, language):
+        assert language == "python"
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", code, cwd=str(tmp_path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await process.communicate()
+        return {"exit_code": process.returncode, "output": stdout.decode("utf-8", "replace")}
+
+    monkeypatch.setattr(execution_runtime, "execute_isolated", local_worker)
+    child = (
+        "import pathlib,time; time.sleep(1.5); "
+        f"pathlib.Path({str(marker)!r}).write_text('survived')"
+    )
+    command = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(20)"
+    )
+    result = asyncio.run(workflows._run_check_async(
+        [sys.executable, "-c", command], str(tmp_path), 1, session_id=None, run_id=None,
+    ))
+    assert result["timed_out"] is True
+    import time
+    time.sleep(1.7)
+    assert not marker.exists()
+
+
+def test_separate_worker_stops_child_that_outlives_successful_check(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("worker child cleanup test uses POSIX process groups")
+    from src import execution_runtime
+
+    marker = tmp_path / "worker-orphan-finished"
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", "http://fixture.invalid")
+
+    async def local_worker(code, _params, *, language):
+        assert language == "python"
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", code, cwd=str(tmp_path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await process.communicate()
+        return {"exit_code": process.returncode, "output": stdout.decode("utf-8", "replace")}
+
+    monkeypatch.setattr(execution_runtime, "execute_isolated", local_worker)
+    child = (
+        "import pathlib,time; time.sleep(1.5); "
+        f"pathlib.Path({str(marker)!r}).write_text('survived')"
+    )
+    command = f"import subprocess,sys; subprocess.Popen([sys.executable,'-c',{child!r}])"
+    result = asyncio.run(workflows._run_check_async(
+        [sys.executable, "-c", command], str(tmp_path), 5, session_id=None, run_id=None,
+    ))
+    assert result["passed"] is False
+    assert "child processes were stopped" in result["output"]
+    import time
+    time.sleep(1.7)
+    assert not marker.exists()
+
+
 def test_worktree_creation_disables_repository_filters(repo, tmp_path):
     if os.name == "nt":
         pytest.skip("filter-hook marker uses a POSIX command")

@@ -48,10 +48,59 @@ def kill(job):
     job["cancelled"] = True
     proc = job.get("proc")
     if proc:
+        # Job code may create a new session (for example, a nested verifier
+        # subprocess). Freeze the worker's own group before discovering and
+        # killing those descendant process groups, or they can escape DELETE.
+        try:
+            os.killpg(proc.pid, signal.SIGSTOP)
+        except OSError:
+            pass
+        for pgid in _descendant_process_groups(proc.pid):
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
         try:
             os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except OSError:
             pass
+
+
+def _descendant_process_groups(root_pid: int) -> set[int]:
+    """Return separate POSIX process groups below a live worker job PID."""
+    proc_root = Path("/proc")
+    if os.name != "posix" or not proc_root.is_dir():
+        return set()
+    parents: dict[int, tuple[int, int]] = {}
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return set()
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            # fields begin at proc stat field 3 (state); parent is 4, pgrp is 5.
+            parents[int(entry.name)] = (int(fields[1]), int(fields[2]))
+        except (OSError, ValueError, IndexError):
+            continue
+    children: dict[int, list[int]] = {}
+    for child, (parent, _pgid) in parents.items():
+        children.setdefault(parent, []).append(child)
+    groups: set[int] = set()
+    pending = list(children.get(root_pid, ()))
+    seen = {root_pid}
+    while pending:
+        pid = pending.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        _parent, pgid = parents.get(pid, (0, 0))
+        if pgid and pgid != root_pid:
+            groups.add(pgid)
+        pending.extend(children.get(pid, ()))
+    return groups
 
 
 def run(job, code, language, cwd, timeout):

@@ -178,11 +178,8 @@ def plan_mode_disabled_tools() -> Set[str]:
     enabled. MCP tools are handled separately — the loop drops the MCP manager
     entirely in plan mode."""
     try:
-        # agent_tools / tool_parsing / tool_schemas form a mutually-circular
-        # cluster that only resolves cleanly when entered via agent_tools.
-        # Import it first so the lazy schema import works even from a cold
-        # import (e.g. tests) — not just after the app has wired everything up.
-        import src.agent_tools  # noqa: F401
+        # Read the canonical registry directly; it depends on lightweight tool
+        # types, not the compatibility facade that re-exports these schemas.
         from src.tool_schemas import FUNCTION_TOOL_SCHEMAS
 
         all_names = {

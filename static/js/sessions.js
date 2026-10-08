@@ -8,10 +8,12 @@ import { providerLogo } from './providers.js';
 import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722ctxheader1';
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
+import { installSessionHistory, setSessionHistory } from './sessionHistory.js';
 
 const API_BASE = window.location.origin;
 
 let sessions = [];
+let _sessionsLoaded = false;
 let currentSessionId = null;
 let _sessionNavToken = 0;
 let _skipAutoSelect = false;
@@ -316,7 +318,7 @@ function _deselectCurrentSession(sid) {
   uiModule.el('chat-history').innerHTML = '';
   uiModule.el('current-meta').textContent = 'Novum Xenium';
   Storage.remove('lastSessionId');
-  history.replaceState(null, '', window.location.pathname);
+  setSessionHistory(null, { replace: true });
   if (window.chatModule && window.chatModule.showWelcomeScreen) {
     window.chatModule.showWelcomeScreen();
   }
@@ -1751,6 +1753,7 @@ export async function loadSessions() {
       throw new Error('Session request returned an invalid response');
     }
     sessions = _normalizeSessionsList(fetched);
+    _sessionsLoaded = true;
     renderSessionList();
 
     const sessionsSection = uiModule.el('sessions-section');
@@ -1918,10 +1921,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     const _isTransientChat = !!_meta && (_meta.folder === 'Assistant' || _meta.folder === 'Tasks');
     if (!_isTransientChat) {
       Storage.set('lastSessionId', id);
-      // Update URL hash without triggering hashchange handler
-      if (window.location.hash !== '#' + id) {
-        history.replaceState(null, '', '#' + id);
-      }
+      setSessionHistory(id);
     }
     // Restore character preset for persistent chats
     try {
@@ -2279,7 +2279,7 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
   currentSessionId = null;
   try { window.__odysseusLastSelectedSessionId = ''; } catch (_) {}
   Storage.remove('lastSessionId');
-  history.replaceState(null, '', window.location.pathname);
+  setSessionHistory(null);
   document.querySelectorAll('.list-item.active-session, .session-item.active').forEach(el => {
     el.classList.remove('active-session', 'active');
   });
@@ -2389,7 +2389,7 @@ export async function materializePendingSession() {
     currentSessionId = payload.id;
     if (!isIncognito) {
       Storage.set('lastSessionId', payload.id);
-      history.replaceState(null, '', '#' + payload.id);
+      setSessionHistory(payload.id);
     }
 
     // Reload the sidebar in the background. Awaiting this used to block the first
@@ -2455,14 +2455,14 @@ export function getCurrentEndpointUrl() {
   return null;
 }
 
-export function setCurrentSessionId(id) {
+export function setCurrentSessionId(id, { pushHistory = false } = {}) {
   _sessionNavToken++;
   currentSessionId = id;
   try { window.__odysseusLastSelectedSessionId = id || ''; } catch (_) {}
   if (!id) {
     _suppressNextSessionLoading = true;
     Storage.remove('lastSessionId');
-    history.replaceState(null, '', window.location.pathname);
+    setSessionHistory(null, { replace: !pushHistory });
     document.querySelectorAll('.list-item.active-session, .session-item.active').forEach(el => {
       el.classList.remove('active-session', 'active');
     });
@@ -2590,17 +2590,39 @@ export function initDragSort() {
   });
 }
 
-// Hash-based routing: navigate between sessions with browser back/forward.
-// Skip entity-prefixed hashes (document-, note-, etc.) — those are handled
-// by their own click handlers in chatRenderer.js and must not trigger
-// session navigation (which would reset the active chat).
-window.addEventListener('hashchange', () => {
-  const hashId = window.location.hash.replace('#', '');
-  if (/^(document|note|image|email|event|task|skill|research)-/.test(hashId) || /^open=notes&note=/.test(hashId)) return;
-  if (hashId && hashId !== currentSessionId) {
-    const target = sessions.find(s => s.id === hashId && !s.archived);
-    if (target) selectSession(hashId);
+function _showHomeFromHistory() {
+  if (currentSessionId) {
+    window.chatModule?.detachCurrentStream?.(currentSessionId);
+    _deselectCurrentSession(currentSessionId);
+  } else {
+    _sessionNavToken++;
+    _pendingChat = null;
+    _pendingMaterializePromise = null;
+    uiModule.el('chat-history').innerHTML = '';
+    window.chatModule?.showWelcomeScreen?.();
   }
+  Storage.remove('lastSessionId');
+  _skipAutoSelect = true;
+  setSessionHistory(null, { replace: true });
+  window.documentModule?.closePanel?.();
+  document.querySelectorAll('.list-item.active-session, .session-item.active').forEach(el => {
+    el.classList.remove('active-session', 'active');
+  });
+  uiModule.el('current-meta').textContent = 'Novum Xenium';
+  const input = document.getElementById('message');
+  if (input) input.disabled = false;
+  updateModelPicker();
+  window.refreshChatContextHeader?.('new-chat');
+}
+
+// Session routes share the browser's back/forward stack. Entity hashes
+// (document-, note-, etc.) remain owned by their respective panels.
+installSessionHistory({
+  getCurrentSessionId: () => currentSessionId,
+  getSessions: () => sessions,
+  selectSession,
+  showHome: _showHomeFromHistory,
+  isReady: () => _sessionsLoaded,
 });
 
 // ── Research indicator management ──

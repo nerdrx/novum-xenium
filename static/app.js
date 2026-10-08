@@ -858,7 +858,7 @@ function initializeEventListeners() {
     } catch (e) {
       console.warn('fresh chat stream detach failed:', e);
     }
-    if (sessionModule) sessionModule.setCurrentSessionId(null);
+    if (sessionModule) sessionModule.setCurrentSessionId(null, { pushHistory: true });
     const box = el('chat-history');
     if (box) box.innerHTML = '';
     if (chatModule && chatModule.showWelcomeScreen) {

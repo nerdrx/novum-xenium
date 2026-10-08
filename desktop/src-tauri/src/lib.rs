@@ -88,6 +88,7 @@ struct NativeState {
     operation: Arc<Mutex<()>>,
     workbench_port: Arc<std::sync::atomic::AtomicU16>,
     last_workbench_notification: Mutex<Option<Instant>>,
+    zoom_levels: Mutex<HashMap<String, usize>>,
     tray_created: AtomicBool,
     tray_icon: Mutex<Option<TrayIcon>>,
     quit_pending: Arc<AtomicBool>,
@@ -768,9 +769,56 @@ fn workbench_window_action(url: &tauri::Url) -> Option<&str> {
     url.host_str().filter(|action| {
         matches!(
             *action,
-            "ready" | "drag" | "minimize" | "toggle-maximize" | "close" | "native-frame"
+            "ready"
+                | "drag"
+                | "minimize"
+                | "toggle-maximize"
+                | "close"
+                | "native-frame"
+                | "zoom-in"
+                | "zoom-out"
+                | "zoom-reset"
         )
     })
+}
+
+fn manager_window_action_allowed(label: &str, action: &str) -> bool {
+    label == "main"
+        && matches!(
+            action,
+            "ready"
+                | "drag"
+                | "minimize"
+                | "toggle-maximize"
+                | "close"
+                | "native-frame"
+                | "zoom-in"
+                | "zoom-out"
+                | "zoom-reset"
+        )
+}
+
+fn next_zoom_level(level: usize, action: &str) -> usize {
+    match action {
+        "zoom-in" => (level + 1).min(10),
+        "zoom-out" => level.saturating_sub(1),
+        "zoom-reset" => 2,
+        _ => level,
+    }
+}
+
+fn apply_window_zoom(
+    window: &WebviewWindow,
+    state: &NativeState,
+    action: &str,
+) -> tauri::Result<()> {
+    const ZOOMS: [f64; 11] = [
+        0.75, 0.875, 1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75, 1.875, 2.0,
+    ];
+    let mut levels = state.zoom_levels.lock().expect("zoom level lock poisoned");
+    let level = levels.entry(window.label().to_owned()).or_insert(2);
+    *level = next_zoom_level(*level, action);
+    window.set_zoom(ZOOMS[*level])
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1011,7 +1059,11 @@ fn update_workbench_chrome(window: &WebviewWindow) {
     }
 }
 
-fn handle_workbench_window_action(window: &WebviewWindow, action: &str) -> tauri::Result<()> {
+fn handle_workbench_window_action(
+    window: &WebviewWindow,
+    state: &NativeState,
+    action: &str,
+) -> tauri::Result<()> {
     match action {
         "ready" if !cfg!(target_os = "macos") => {
             window.set_decorations(false)?;
@@ -1039,9 +1091,34 @@ fn handle_workbench_window_action(window: &WebviewWindow, action: &str) -> tauri
         }
         // close() retains the existing CloseRequested / hide-to-tray behavior.
         "close" => window.close()?,
+        "zoom-in" | "zoom-out" | "zoom-reset" => apply_window_zoom(window, state, action)?,
         _ => {}
     }
     Ok(())
+}
+
+#[tauri::command]
+fn mount_manager_chrome(window: WebviewWindow) -> Result<(), String> {
+    require_main(&window)?;
+    window
+        .eval(&format!(
+            "document.documentElement.dataset.nxWindowManager='true';\n{}",
+            include_str!("workspace_chrome.js")
+        ))
+        .map_err(|error| format!("Cannot mount manager window controls: {error}"))
+}
+
+#[tauri::command]
+fn manager_window_action(
+    window: WebviewWindow,
+    state: State<'_, NativeState>,
+    action: String,
+) -> Result<(), String> {
+    if !manager_window_action_allowed(window.label(), &action) {
+        return Err("Unsupported manager window action.".into());
+    }
+    handle_workbench_window_action(&window, &state, &action)
+        .map_err(|error| format!("Manager window action failed: {error}"))
 }
 
 fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<WorkbenchResult, String> {
@@ -1178,12 +1255,15 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
                                 }
                             }
                         } else if let Some(action) = workbench_window_action(next) {
-                            if let Err(error) = handle_workbench_window_action(&window, action) {
+                            let state = navigation_app.state::<NativeState>();
+                            if let Err(error) = handle_workbench_window_action(&window, &state, action) {
                                 eprintln!("Workspace window action {action} failed: {error}");
-                                let _ = window.set_decorations(true);
-                                let _ = window.eval(
-                                    "document.documentElement.dataset.nxWindowFrame='native';",
-                                );
+                                if action == "ready" || action == "native-frame" {
+                                    let _ = window.set_decorations(true);
+                                    let _ = window.eval(
+                                        "document.documentElement.dataset.nxWindowFrame='native';",
+                                    );
+                                }
                             }
                         }
                     }
@@ -1217,6 +1297,11 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
         })
         .build()
         .map_err(|e| format!("Cannot open workbench: {e}"))?;
+    state
+        .zoom_levels
+        .lock()
+        .expect("zoom level lock poisoned")
+        .insert("workbench".into(), 2);
     Ok(WorkbenchResult { url })
 }
 
@@ -2162,8 +2247,8 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
             if !matches!(window.label(), "main" | "workbench") {
                 return;
             }
-            if window.label() == "workbench" && matches!(event, WindowEvent::Resized(_)) {
-                if let Some(webview) = window.app_handle().get_webview_window("workbench") {
+            if matches!(event, WindowEvent::Resized(_)) {
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
                     update_workbench_chrome(&webview);
                 }
             }
@@ -2221,6 +2306,8 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            mount_manager_chrome,
+            manager_window_action,
             get_status,
             save_config,
             start_backend,
@@ -2338,10 +2425,21 @@ mod tests {
             "toggle-maximize",
             "close",
             "native-frame",
+            "zoom-in",
+            "zoom-out",
+            "zoom-reset",
         ] {
             let url = format!("nx-workbench://{action}").parse().unwrap();
             assert_eq!(workbench_window_action(&url), Some(action));
         }
+        assert!(manager_window_action_allowed("main", "zoom-in"));
+        assert!(!manager_window_action_allowed("workbench", "zoom-in"));
+        assert!(!manager_window_action_allowed("main", "start_backend"));
+        assert_eq!(next_zoom_level(2, "zoom-in"), 3);
+        assert_eq!(next_zoom_level(2, "zoom-out"), 1);
+        assert_eq!(next_zoom_level(2, "zoom-reset"), 2);
+        assert_eq!(next_zoom_level(10, "zoom-in"), 10);
+        assert_eq!(next_zoom_level(0, "zoom-out"), 0);
         for url in [
             "nx-workbench://start_backend",
             "nx-workbench://close/other",

@@ -223,8 +223,34 @@ html.nx-workspace .model-picker-action-btn {
 
 /* Consistent panel and menu chrome across settings, tools, and overlays. */
 html.nx-workspace .modal-content {
+  min-width: 0;
   border-radius: var(--nx-panel-radius);
   box-shadow: 0 16px 44px color-mix(in srgb, #000 30%, transparent);
+}
+html.nx-workspace .modal-content :is(
+  .modal-body,
+  .settings-layout,
+  .settings-panels,
+  .preset-chartab,
+  #char-fields-wrap
+) {
+  min-width: 0;
+}
+html.nx-workspace .modal-content .modal-body {
+  scrollbar-gutter: stable;
+}
+html.nx-workspace .modal-content :is(input, select, textarea) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+/* Centre the 18px thumb on the 6px Prompt slider track. */
+html.nx-workspace .preset-range::-webkit-slider-thumb {
+  box-sizing: border-box;
+  margin-top: -6px;
+}
+html.nx-workspace .preset-range::-moz-range-thumb {
+  box-sizing: border-box;
 }
 html.nx-workspace .modal-header {
   padding: 3px 2px 8px;

@@ -39,7 +39,7 @@
 .usage-recent-chat { display:flex; align-items:center; justify-content:space-between; gap:10px; border:2px solid var(--border); border-radius:var(--nx-control-radius,8px); background:var(--bg); color:var(--fg); padding:10px 12px; min-height:42px; font:inherit; font-size:12px; text-align:left; cursor:pointer; min-width:0; }
 .usage-recent-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .usage-recent-chat > .usage-detail { flex-shrink:0; font-size:10px; }
-html.nx-workspace #welcome-screen:has(#home-dashboard) { position:relative; top:auto; left:auto; transform:none !important; animation:none; width:min(900px,100%); max-width:100%; margin:18px auto 12px; padding:8px 8px 18px; flex:1; min-height:0; overflow-y:auto; pointer-events:auto; box-sizing:border-box; }
+html.nx-workspace #welcome-screen:has(#home-dashboard) { position:relative; top:auto; left:auto; transform:none !important; transition:none !important; animation:none !important; width:min(900px,100%); max-width:100%; margin:18px auto 12px; padding:8px 8px 18px; flex:1; min-height:0; overflow-y:auto; pointer-events:auto; box-sizing:border-box; }
 html.nx-workspace #welcome-screen:has(#home-dashboard) .welcome-logo { width:90px; height:48px; }
 html.nx-workspace #welcome-screen:has(#home-dashboard) .welcome-name { margin-bottom:8px; }
 html.nx-workspace #welcome-screen:has(#home-dashboard) :is(.welcome-sub,.welcome-tip) { display:none; }

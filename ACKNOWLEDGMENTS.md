@@ -175,6 +175,12 @@ concerns from earlier are resolved:
 
 ---
 
+## Solar-system background
+
+Planet positions use the documented equations and Table 1 orbital elements from [JPL Solar System Dynamics](https://ssd.jpl.nasa.gov/planets/approx_pos.html). This is an approximate heliocentric view for 1800–2050, using UTC in place of TDB; Earth is represented by the Earth–Moon barycentre. Orbit distances are compressed for visibility and planet icons are not to scale. It is not a precision ephemeris.
+
+---
+
 ## Thanks to
 
 Most of Odysseus's code was written *with* AI models, not just by a human.

@@ -46,7 +46,7 @@ That's the setup: clone, copy the environment file, run Compose. Authentication 
 
 <sub>The manager, with an example checkout. Same palette as the workspace, without the extra browser tab.</sub>
 
-Start the backend, open the workspace, get on with it. Close the window and it stays in the tray. Reopen it without losing the page.
+Start the backend, open the workspace, get on with it. Mouse back and forward move through your chats and Home. Close the window and it stays in the tray. Reopen it without losing the page.
 
 The app uses your system webview. It can check backend health, show logs, review updates, back up application data and help recover a failed startup. Chat, memory and tools live in the backend, so you don't end up managing a second desktop copy.
 
@@ -101,6 +101,8 @@ Install small panels and MCP tool connections from **Settings → Modules**. Upd
 ### Still your workspace
 
 Charcoal panels, lavender controls and quiet orbit lines. The workspace and desktop manager now share the NX default palette. Colour, font and background controls remain, so you can make it yours or turn effects off. Custom themes currently apply to the workspace; the manager keeps the NX default. Personality names and chat titles survive a refresh; names you set yourself stay yours.
+
+The optional **Solar system** background places eight monochrome planets using the current date and JPL’s approximate orbital elements. Distances are compressed so the inner planets remain visible. Colour, size and intensity still follow your theme controls.
 
 Images have their own provider settings. The optional [Codex image bridge](docs/codex-image-bridge.md) uses an existing host login for generation and attached-image edits. It needs separate setup; quality and size settings are guidance.
 

@@ -68,11 +68,13 @@ Pass `--backend-port` for a non-default port and `--driver` if `tauri-driver` is
 
 Optional `--tray-host none` and `--tray-host fake` modes also test graceful window close under an isolated `dbus-run-session`; they never use the user's session bus or data directories. The fake-host mode checks hide/restore for both windows, same-window workspace reuse, single-instance handoff, tray Quit, and close behavior after the watcher disappears. These modes additionally need `dbus-python`, GLib introspection bindings, `python3-xlib`, and `xdotool` on Linux.
 
+Both desktop windows support Ctrl+/Ctrl− (Command+/Command− on macOS) to zoom the whole page, and Ctrl+0 to reset. Ctrl+mouse wheel also zooms. Zoom stays within 75–200% and is independent for each window.
+
 The workspace supports Ctrl+R (Command+R on macOS) and F5 to reload its current page. The tray menu also offers Reload workspace. Reloading leaves Docker running but can interrupt a page response; closing to the tray preserves the page instead.
 
 ## Workbench window controls
 
-Linux and Windows workbench windows use a compact title bar matched to the workspace theme. Minimize, maximize/restore and close work through window-only controls; the workspace does not gain backend-management permissions. Double-click the title area to maximize. Right-click it to restore your system title bar if needed. macOS keeps its native frame.
+Linux and Windows manager and workspace windows use the same compact title bar matched to the NX theme. Minimize, maximize/restore and close work through window-only controls; the workspace does not gain backend-management permissions. Double-click the title area to maximize. Right-click it to restore your system title bar if needed. macOS keeps its native frame.
 
 After replacing an installed desktop build, use **Quit** in the tray menu and reopen the app. Closing its window can leave the previous process running in the tray.
 

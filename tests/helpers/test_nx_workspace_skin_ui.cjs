@@ -119,8 +119,7 @@ function noOverflow(metrics, label) {
         const userMessage = document.querySelector('.msg-user');
         const toolOutput = document.querySelector('.agent-tool-output');
         const brandButton = document.querySelector('#sidebar-brand-btn');
-        const brandLogo = document.querySelector('#sidebar-brand-btn .sidebar-brand-logo');
-        const brandRect = brandLogo.getBoundingClientRect();
+        const homeIcon = brandButton.querySelector('svg');
         const brandButtonStyle = getComputedStyle(brandButton);
         return {
           viewportWidth: innerWidth,
@@ -133,11 +132,8 @@ function noOverflow(metrics, label) {
           toolRadius: parseFloat(getComputedStyle(toolOutput).borderTopLeftRadius),
           brandLabel: brandButton.getAttribute('aria-label'),
           hasSidebarBrandTitle: !!brandButton.querySelector('.sidebar-brand-title'),
-          brandLogoWidth: brandRect.width,
-          brandLogoHeight: brandRect.height,
-          brandLogoFit: getComputedStyle(brandLogo).objectFit,
-          brandLogoAlt: brandLogo.getAttribute('alt'),
-          brandLogoHidden: brandLogo.getAttribute('aria-hidden'),
+          homeText: brandButton.textContent.trim(),
+          homeIconHidden: homeIcon.getAttribute('aria-hidden'),
           brandButtonMinWidth: parseFloat(brandButtonStyle.minWidth),
           brandButtonMinHeight: parseFloat(brandButtonStyle.minHeight),
         };
@@ -147,12 +143,11 @@ function noOverflow(metrics, label) {
       assert.ok(baseline.sidebarItemRadius > 0, 'skin applies a rounded control surface');
       assert.ok(baseline.messageRadius > 0, 'chat message surface receives workspace treatment');
       assert.ok(baseline.toolRadius > 0, 'tool output surface receives workspace treatment');
-      assert.equal(baseline.brandLabel, 'Home', 'logo-only sidebar button keeps its accessible action name');
-      assert.equal(baseline.hasSidebarBrandTitle, false, 'sidebar brand displays logo without adjacent title text');
-      assert.equal(baseline.brandLogoFit, 'contain', 'sidebar logo preserves its image ratio');
-      assert.equal(baseline.brandLogoAlt, '', 'sidebar logo remains decorative');
-      assert.equal(baseline.brandLogoHidden, 'true', 'sidebar logo stays hidden from assistive technology');
-      assert.ok(baseline.brandButtonMinWidth >= 44 && baseline.brandButtonMinHeight >= 44, `sidebar logo keeps a comfortable pointer target: ${JSON.stringify(baseline)}`);
+      assert.equal(baseline.brandLabel, 'Home', 'Home row has its accessible action name');
+      assert.equal(baseline.homeText, 'Home', 'Home is a normal labelled navigation row');
+      assert.equal(baseline.hasSidebarBrandTitle, false, 'duplicate brand title stays removed');
+      assert.equal(baseline.homeIconHidden, 'true', 'Home icon is decorative');
+      assert.ok(baseline.brandButtonMinHeight >= 32, 'Home matches the sidebar control height');
       assert.notEqual(baseline.chatDisplay, 'none', 'chat shell stays visible');
 
       const modelMenu = page.locator('#model-picker-menu');

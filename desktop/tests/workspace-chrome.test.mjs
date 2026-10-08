@@ -74,11 +74,16 @@ test('workspace controls use only guarded navigation and preserve theme/layout',
   await page.keyboard.press('Enter');
   await page.locator('#nx-window-drag').dblclick();
   await page.getByRole('button', {name:'Close window'}).click();
+  await page.keyboard.press('Control+Equal');
+  await page.keyboard.press('Control+-');
+  await page.keyboard.press('Control+0');
+  await page.evaluate(() => document.dispatchEvent(new WheelEvent('wheel', {deltaY:-1, ctrlKey:true, cancelable:true})));
   const actions = await page.evaluate(() => window.__windowActions);
   assert.equal(actions[0], 'ready');
   assert.ok(actions.includes('drag'));
   assert.equal(actions.filter(a => a === 'toggle-maximize').length, 4);
   assert.ok(actions.includes('close') && actions.includes('minimize'));
+  assert.ok(actions.includes('zoom-in') && actions.includes('zoom-out') && actions.includes('zoom-reset'));
   assert.equal(await page.evaluate(() => typeof window.__TAURI__), 'undefined');
   await page.screenshot({path:'/tmp/nx-workbench-titlebar.png'});
   await page.locator('#nx-window-drag').click({button:'right'});
@@ -90,4 +95,27 @@ test('workspace controls use only guarded navigation and preserve theme/layout',
   await mac.addInitScript(script);
   await mac.goto(`http://127.0.0.1:${server.address().port}`);
   assert.equal(await mac.locator('#nx-window-bar').count(), 0);
+
+  const manager = await browser.newPage({ viewport:{width:1100,height:760} });
+  await manager.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => {
+      document.documentElement.dataset.nxWindowManager = 'true';
+    }, {once:true});
+    window.__managerActions = [];
+    window.__TAURI__ = { core:{ invoke: async (command, {action}) => {
+      window.__managerActions.push([command, action]);
+      if (action === 'ready') document.documentElement.dataset.nxWindowFrame = 'custom';
+    } } };
+  });
+  await manager.addInitScript(script);
+  await manager.goto(`http://127.0.0.1:${server.address().port}`);
+  await manager.getByRole('button', {name:'Minimize window'}).click();
+  await manager.keyboard.press('Control+Equal');
+  assert.equal(await manager.locator('body').evaluate(el => el.getBoundingClientRect().top), 36);
+  assert.deepEqual(await manager.evaluate(() => window.__managerActions.slice(0, 3)), [
+    ['manager_window_action', 'ready'],
+    ['manager_window_action', 'minimize'],
+    ['manager_window_action', 'zoom-in'],
+  ]);
+  assert.equal(await manager.evaluate(() => window.__windowActions), undefined, 'manager uses scoped Tauri commands, not workbench navigation');
 });

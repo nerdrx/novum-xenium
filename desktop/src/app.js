@@ -251,6 +251,7 @@ if (!invoke) {
   syncActions();
 } else {
   syncActions();
+  invoke('mount_manager_chrome').catch((error) => console.warn('Could not mount manager window controls', error));
   // Initial status is a single real IPC request, not a simulated loading sequence.
   refreshStatus().catch(() => {});
   window.addEventListener('focus', () => {

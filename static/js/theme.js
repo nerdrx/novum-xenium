@@ -2,6 +2,7 @@
 // ES6 module
 
 import Storage from './storage.js';
+import { initSolarSystem } from './solarSystem.js';
 import uiModule from './ui.js';
 import { initColorPickers, attachColorPicker } from './colorPicker.js';
 import { hexToRgb } from './color/hex.js';
@@ -418,12 +419,17 @@ const _BG_CLASSES = ['bg-pattern-dots',
   'bg-pattern-synapse', 'bg-pattern-rain', 'bg-pattern-constellations',
   'bg-pattern-perlin-flow',
   'bg-pattern-petals', 'bg-pattern-sparkles', 'bg-pattern-embers',
-  'bg-pattern-snow', 'bg-pattern-fireflies', 'bg-pattern-orbits'];
+  'bg-pattern-snow', 'bg-pattern-fireflies', 'bg-pattern-orbits', 'bg-pattern-solar-system'];
 const _CANVAS_PATTERNS = { synapse: _initSynapse, rain: _initRain, constellations: _initConstellations,
   'perlin-flow': _initPerlinFlow,
   petals: _initPetals, sparkles: _initSparkles, embers: _initEmbers,
   snow: () => _initAmbient('snow'), fireflies: () => _initAmbient('fireflies'),
-  orbits: () => _initAmbient('orbits') };
+  orbits: () => _initAmbient('orbits'),
+  'solar-system': () => {
+    const effect = initSolarSystem();
+    _ambientCleanup = () => { _ambientRefresh = null; effect.cleanup(); };
+    _ambientRefresh = effect.refresh;
+  } };
 
 export function applyBgEffectColor(color) {
   document.documentElement.style.setProperty('--bg-effect-color', color || '');

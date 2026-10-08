@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'novum-xenium-v389-composer-spacing';
+const CACHE_NAME = 'novum-xenium-v390-solar-navigation-layout';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -72,6 +72,8 @@ const PRECACHE = [
   '/static/js/search-chat.js',
   '/static/js/compare/index.js',
   '/static/js/theme.js',
+  '/static/js/sessionHistory.js',
+  '/static/js/solarSystem.js',
   '/static/js/censor.js',
   '/static/js/settings.js',
   '/static/js/admin.js',

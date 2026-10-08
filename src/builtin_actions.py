@@ -750,21 +750,86 @@ async def action_consolidate_memory(owner: str, **kwargs) -> Tuple[str, bool]:
 
 
 async def _run_subprocess(argv, *, shell: bool = False, timeout: int = 120, label: str = "Command") -> Tuple[str, bool]:
-    """Shared subprocess runner. Wraps the blocking subprocess.run in
-    asyncio.to_thread so the event loop stays responsive."""
+    """Run an owned process group without leaving it behind on cancellation."""
     import asyncio
+    import os
+    import signal
     import subprocess
+
+    async def stop_process_group(process):
+        if os.name == "nt":
+            try:
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill", "/PID", str(process.pid), "/T", "/F",
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(killer.wait(), timeout=5)
+            except (OSError, asyncio.TimeoutError):
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=5)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            pass
+
+    process = None
+    spawn_task = None
     try:
-        result = await asyncio.to_thread(
-            subprocess.run, argv, shell=shell, capture_output=True, text=True, timeout=timeout,
+        kwargs = (
+            {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+            if os.name == "nt" else {"start_new_session": True}
         )
-        output = (result.stdout or "").strip()
-        if result.returncode != 0 and result.stderr:
-            output += "\nSTDERR: " + result.stderr.strip()
-        return output or "(no output)", result.returncode == 0
-    except subprocess.TimeoutExpired:
-        return f"{label} timed out ({timeout}s)", False
+        process_kwargs = {
+            "stdin": asyncio.subprocess.DEVNULL,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            **kwargs,
+        }
+        if shell:
+            spawn = asyncio.create_subprocess_shell(argv, **process_kwargs)
+        else:
+            spawn = asyncio.create_subprocess_exec(*argv, **process_kwargs)
+        spawn_task = asyncio.create_task(spawn)
+        process = await asyncio.shield(spawn_task)
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            await stop_process_group(process)
+            return f"{label} timed out ({timeout}s)", False
+        output = (stdout or b"").decode(errors="replace").strip()
+        stderr_text = (stderr or b"").decode(errors="replace").strip()
+        if process.returncode != 0 and stderr_text:
+            output += "\nSTDERR: " + stderr_text
+        return output or "(no output)", process.returncode == 0
+    except asyncio.CancelledError:
+        if process is None and spawn_task is not None:
+            try:
+                process = await asyncio.shield(spawn_task)
+            except Exception:
+                process = None
+        if process is not None:
+            await asyncio.shield(stop_process_group(process))
+        raise
     except Exception as e:
+        # Match the former subprocess.run handling for spawn/IO failures.
+        if isinstance(e, subprocess.TimeoutExpired):
+            return f"{label} timed out ({timeout}s)", False
+        if process is not None:
+            await stop_process_group(process)
         return str(e), False
 
 

@@ -19,6 +19,8 @@ let _toolStateSaveQueue = Promise.resolve();
 // animation fires.
 let _recentlyAddedEpId = null;
 let _endpointLoadGeneration = 0;
+const _deletingEndpointIds = new Set();
+const _togglingEndpointIds = new Set();
 let _authPolicy = { password_min_length: 8, reserved_usernames: [] };
 
 function el(id) { return document.getElementById(id); }
@@ -562,8 +564,8 @@ async function loadEndpoints() {
               ${hasModels ? `<span style="font-size:10px;opacity:0.4;${category === 'api' ? 'flex-basis:100%;' : ''}">Click to manage models</span>` : ''}
             </div>
             <div style="display:flex;gap:4px;align-items:center;">
-              <button class="admin-btn-sm" data-adm-toggle-ep="${ep.id}">${ep.is_enabled ? 'Disable' : 'Enable'}</button>
-              <button class="admin-btn-delete" data-adm-del-ep="${ep.id}" data-adm-ep-online="${ep.online ? '1' : '0'}">Delete</button>
+              <button class="admin-btn-sm" data-adm-toggle-ep="${ep.id}" data-toggle-label="${ep.is_enabled ? 'Disable' : 'Enable'}"${_togglingEndpointIds.has(String(ep.id)) ? ' disabled' : ''}>${_togglingEndpointIds.has(String(ep.id)) ? 'Saving…' : (ep.is_enabled ? 'Disable' : 'Enable')}</button>
+              <button class="admin-btn-delete" data-adm-del-ep="${ep.id}" data-adm-ep-online="${ep.online ? '1' : '0'}"${_deletingEndpointIds.has(String(ep.id)) ? ' disabled' : ''}>${_deletingEndpointIds.has(String(ep.id)) ? 'Deleting…' : 'Delete'}</button>
               ${hasModels ? '<svg class="admin-user-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;transition:transform 0.2s,opacity 0.2s;"><polyline points="6 9 12 15 18 9"/></svg>' : ''}
             </div>
           </div>
@@ -605,9 +607,45 @@ async function loadEndpoints() {
     queryAll('[data-adm-toggle-ep]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        await fetch(`/api/model-endpoints/${btn.dataset.admToggleEp}`, { method: 'PATCH' });
-        await _refreshAfterEndpointChange();
-        loadEndpoints();
+        const epId = String(btn.dataset.admToggleEp);
+        if (_togglingEndpointIds.has(epId)) return;
+        _togglingEndpointIds.add(epId);
+        const originalText = btn.textContent;
+        const currentRow = () => [listLocal, listApi].filter(Boolean)
+          .flatMap(list => [...list.querySelectorAll('[data-adm-ep-id]')])
+          .find(row => row.getAttribute('data-adm-ep-id') === epId);
+        const currentButton = () => currentRow()?.querySelector('[data-adm-toggle-ep]');
+        const setSavingUi = (saving) => {
+          const current = currentButton();
+          if (!current) return;
+          current.disabled = saving;
+          if (saving) current.textContent = 'Saving…';
+          else if (current.textContent === 'Saving…') current.textContent = current.dataset.toggleLabel || originalText;
+        };
+        setSavingUi(true);
+        currentRow()?.querySelector('[data-adm-ep-toggle-error]')?.remove();
+        try {
+          const res = await fetch(`/api/model-endpoints/${encodeURIComponent(epId)}`, { method: 'PATCH', credentials: 'same-origin' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          await _refreshAfterEndpointChange();
+          await loadEndpoints();
+        } catch (_) {
+          const row = currentRow();
+          if (row) {
+            let error = row.querySelector('[data-adm-ep-toggle-error]');
+            if (!error) {
+              error = document.createElement('div');
+              error.dataset.admEpToggleError = '1';
+              error.className = 'admin-error';
+              error.setAttribute('role', 'alert');
+              row.appendChild(error);
+            }
+            error.textContent = 'Update failed. Retry the action.';
+          }
+        } finally {
+          _togglingEndpointIds.delete(epId);
+          setSavingUi(false);
+        }
       });
     });
     queryAll('[data-adm-copy-url]').forEach(btn => {
@@ -629,30 +667,58 @@ async function loadEndpoints() {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         var epId = btn.dataset.admDelEp;
+        if (_deletingEndpointIds.has(String(epId))) return;
+        _deletingEndpointIds.add(String(epId));
         var isOffline = btn.dataset.admEpOnline === '0';
-        // Offline endpoints are already broken — skip the confirm dialog
-        // entirely and delete immediately. The optimistic UI removal makes
-        // the action feel instant.
-        if (!isOffline) {
-          var deps = [];
-          try {
-            var depRes = await fetch('/api/model-endpoints/' + epId + '/dependents', { credentials: 'same-origin' });
-            var depData = await depRes.json();
-            deps = depData.dependents || [];
-          } catch (e) { /* proceed without warning */ }
-          var msg = 'Delete this endpoint?';
-          if (deps.length) {
-            msg += '\n\nThe following settings use this endpoint and will be reset:\n— ' + deps.join('\n— ');
+        const currentRow = () => [listLocal, listApi].filter(Boolean)
+          .flatMap(list => [...list.querySelectorAll('[data-adm-ep-id]')])
+          .find(row => row.getAttribute('data-adm-ep-id') === String(epId));
+        const setDeletingUi = (deleting) => {
+          const currentButton = currentRow()?.querySelector('[data-adm-del-ep]');
+          if (currentButton) {
+            currentButton.disabled = deleting;
+            currentButton.textContent = deleting ? 'Deleting…' : 'Delete';
           }
-          if (!await uiModule.styledConfirm(msg, { confirmText: 'Delete', danger: true })) return;
+        };
+        setDeletingUi(true);
+        currentRow()?.querySelector('[data-adm-ep-delete-error]')?.remove();
+        try {
+          // Offline endpoints are already broken, so remove them without a confirm dialog.
+          if (!isOffline) {
+            var deps = [];
+            try {
+              var depRes = await fetch('/api/model-endpoints/' + epId + '/dependents', { credentials: 'same-origin' });
+              var depData = await depRes.json();
+              deps = depData.dependents || [];
+            } catch (e) { /* proceed without warning */ }
+            var msg = 'Delete this endpoint?';
+            if (deps.length) {
+              msg += '\n\nThe following settings use this endpoint and will be reset:\n— ' + deps.join('\n— ');
+            }
+            if (!await uiModule.styledConfirm(msg, { confirmText: 'Delete', danger: true })) return;
+          }
+          const res = await fetch('/api/model-endpoints/' + encodeURIComponent(epId), { method: 'DELETE', credentials: 'same-origin' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          currentRow()?.remove();
+          await _refreshAfterEndpointChange(epId);
+          await loadEndpoints();
+        } catch (_) {
+          const row = currentRow();
+          if (row) {
+            let error = row.querySelector('[data-adm-ep-delete-error]');
+            if (!error) {
+              error = document.createElement('div');
+              error.dataset.admEpDeleteError = '1';
+              error.className = 'admin-error';
+              error.setAttribute('role', 'alert');
+              row.appendChild(error);
+            }
+            error.textContent = 'Delete failed. The endpoint is still listed; retry Delete.';
+          }
+        } finally {
+          _deletingEndpointIds.delete(String(epId));
+          setDeletingUi(false);
         }
-        // Optimistic: remove from UI immediately
-        const row = btn.closest('[data-adm-ep-id]');
-        if (row) row.remove();
-        fetch('/api/model-endpoints/' + epId, { method: 'DELETE' })
-          .then(() => _refreshAfterEndpointChange(epId))
-          .then(() => loadEndpoints())
-          .catch(() => loadEndpoints());
       });
     });
     // Clear the just-added marker now that the row has been rendered

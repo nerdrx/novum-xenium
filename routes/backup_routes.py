@@ -58,7 +58,8 @@ async def _save_upload(request: Request, max_bytes: int) -> Path:
                     raise HTTPException(413, "Backup archive exceeds the upload limit")
                 handle.write(chunk)
         return path
-    except Exception:
+    except BaseException:
+        # Cancellation is a BaseException too; never retain a partial private archive.
         path.unlink(missing_ok=True)
         raise
 

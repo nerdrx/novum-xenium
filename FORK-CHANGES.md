@@ -6,6 +6,12 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Inline plan execution uses the selected bubble's plan and its source chat. A session change, composer edit or competing submit cannot transfer the one-shot approval to another request. The unused global plan cache is discarded; this does not add a persistent plan editor.
+- Endpoint Delete and Enable/Disable wait for successful server responses, keep failed changes retryable and avoid clearing a pending chat route on failure. Repeated clicks are suppressed; a confirmed deletion and a failed subsequent list refresh are reported separately.
+- Skills list failures preserve the previous list and offer Retry. Failed individual Delete or Publish actions no longer claim success. Saving captures the submitted text and retains any newer edits for another save.
+- Scheduler shutdown cancels tracked task runs and drains them within a bounded grace period. Built-in command actions own their subprocess group and terminate it on cancellation or timeout, including a child holding pipes after its parent exits. POSIX cleanup has controlled process tests; Windows cleanup remains unverified, and remote SSH cancellation cannot guarantee remote-job termination.
+- Cancelled backup uploads remove their partial temporary archive. The contribution guide now points to this fork and its actual default branch.
+
 - Cleanup and cleanup-preview database work runs in worker threads instead of stalling the streaming event loop. The existing async APIs and owner filters remain unchanged; a concurrent request can respond while controlled cleanup I/O is blocked.
 - Escape closes the model picker from search or its nested controls and returns focus to the trigger. Search Arrow/Enter navigation and outside-click focus remain intact. This is a targeted keyboard fix, not a full accessibility certification.
 

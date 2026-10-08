@@ -648,6 +648,27 @@ class TaskScheduler:
 
     async def stop(self):
         self._running = False
+        # Stop owned task runs too. Cancelling only the scheduler loops leaves
+        # an in-flight action alive while the app is shutting down.
+        run_task_ids = (
+            set(getattr(self, "_all_task_handles", {}))
+            | set(getattr(self, "_task_handles", {}))
+            | set(getattr(self, "_executing", set()))
+        )
+        run_handles = set()
+        for task_id in run_task_ids:
+            handles = set(getattr(self, "_all_task_handles", {}).get(task_id, set()))
+            latest = getattr(self, "_task_handles", {}).get(task_id)
+            if latest:
+                handles.add(latest)
+            active = {handle for handle in handles if not handle.done()}
+            run_handles.update(active)
+            for handle in active:
+                handle.cancel()
+            if active or task_id in getattr(self, "_executing", set()):
+                self._mark_run_aborted(
+                    task_id, message="Scheduler shutting down", all_runs=True,
+                )
         if self._task:
             self._task.cancel()
             try:
@@ -660,6 +681,10 @@ class TaskScheduler:
                 t.cancel()
                 try: await t
                 except asyncio.CancelledError: pass
+        if run_handles:
+            done, pending = await asyncio.wait(run_handles, timeout=3.0)
+            if pending:
+                logger.warning("Scheduler shutdown timed out waiting for %d task run(s)", len(pending))
         logger.info("Task scheduler stopped")
 
     async def _note_pings_loop(self):

@@ -1,17 +1,12 @@
-# Contributing to Odysseus
+# Contributing to NX Odysseus
 
 Thanks for helping. The project is moving quickly, so the best contributions are focused, easy to review, and easy to test.
 
 ## Branch model
 
-Odysseus has two branches:
-
-- **`dev`** — where all PRs land. Things can be in flux here; the merge button gets used freely.
-- **`main`** — what users run. Curated and tested by the maintainer. Fast-forwarded to a stable `dev` commit at each release.
-
-**Open your PR against `dev`, not `main`.** The GitHub "base" dropdown defaults to `dev`. If you opened a PR against `main` by accident, click "Edit" on the PR and change the base — no rebase needed.
-
-End-users cloning the repo will land on `dev` by default. To run the curated/stable version: `git checkout main` after clone.
+The fork's default branch is **`main`**. Open small, focused pull requests
+against `main`; it is also the branch users get when cloning this repository.
+Upstream Odysseus has its own contribution rules and branch policy.
 
 ## Before You Start
 
@@ -25,8 +20,8 @@ End-users cloning the repo will land on `dev` by default. To run the curated/sta
 Docker is the recommended path for normal testing:
 
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/nerdrx/nx-odysseus.git
+cd nx-odysseus
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -40,14 +35,14 @@ pip install -r requirements.txt
 python -m uvicorn app:app --host 127.0.0.1 --port 7000
 ```
 
-Windows is not actively tested. Docker on Linux or a Linux/macOS manual install is the safer path for now.
+Windows is not actively tested. The standard Docker image has the POSIX file APIs required by workspace mutations. Cross-platform Docker and native installs need testing on the actual target OS.
 
 ## Running Checks
 
 Run the smallest relevant checks for your change:
 
 ```bash
-python -m pytest
+python -m pytest -q tests/test_<affected_feature>.py
 python -m py_compile app.py routes/*.py src/*.py
 node --check static/js/<file-you-changed>.js
 ```
@@ -59,6 +54,20 @@ docker compose config
 docker compose up -d --build
 docker compose logs --tail=120 odysseus
 ```
+
+Browser regressions under `tests/helpers/test_*_ui.cjs` use Playwright and a
+Chromium executable. With those installed, run the relevant helper directly:
+
+```bash
+PLAYWRIGHT_PACKAGE=/absolute/path/to/node_modules/playwright \
+BROWSER_EXECUTABLE=/absolute/path/to/chromium \
+node tests/helpers/test_<affected_feature>_ui.cjs
+```
+
+Use disposable data for app and Docker tests. Do not point an automated test at
+your personal instance unless it explicitly creates and cleans up only its own
+fixtures. Live provider checks cost quota and remain separate from offline
+regressions.
 
 Mention what you ran in the pull request description. If you could not run a check, say so.
 
@@ -74,7 +83,9 @@ Good pull requests usually include:
 
 Please keep PRs small. Large PRs that mix unrelated cleanup, formatting, refactors, and behavior changes are much harder to review.
 
-> **Auto-generated PRs.** If you are running an LLM agent (Devin, Cursor, OpenHands, Claude Code, etc.) against this repo: please open an issue describing the problem first instead of opening a PR directly. Bulk agent-generated PRs that don't match the project's visual style or contribution format will be closed without review, even when the underlying fix is correct.
+Agent-assisted contributions follow the same rules: review the diff yourself,
+include a concrete reproduction and actual validation, and keep the change
+focused. Do not present simulated provider replies as live model tests.
 
 ## Style and visual changes
 

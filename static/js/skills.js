@@ -90,7 +90,10 @@ export async function loadSkills(cascade = false) {
   _loadPromise = (async () => {
   try {
     const res = await fetch(`${API}/api/skills`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (!Array.isArray(data.skills)) throw new Error('Invalid skills response');
+    document.getElementById('skills-load-error')?.remove();
     // Dedupe by name (case-insensitive) — the API has occasionally
     // returned the same skill twice (built-in shadow + user copy, or
     // a write-then-read race), and rendering both made the duplicate
@@ -120,6 +123,22 @@ export async function loadSkills(cascade = false) {
     }
   } catch (e) {
     console.error('Failed to load skills:', e);
+    const container = document.getElementById('skills-list');
+    if (container && !document.getElementById('skills-load-error')) {
+      const error = document.createElement('div');
+      error.id = 'skills-load-error';
+      error.className = 'admin-error';
+      error.style.gridColumn = '1 / -1';
+      error.setAttribute('role', 'alert');
+      error.textContent = 'Skills could not be refreshed. Your existing list is kept. ';
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'admin-btn-sm';
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => loadSkills());
+      error.appendChild(retry);
+      container.prepend(error);
+    }
   } finally {
     _loadPromise = null;
   }
@@ -1057,20 +1076,29 @@ function _toggleSkillEdit(card, name) {
 async function _saveSkillEdit(card, name) {
   const preview = card.querySelector('.skill-card-preview');
   const ta = preview?.querySelector('.skill-md-editor');
-  if (!ta) return;
+  if (!ta || card._skillSaveInFlight) return;
+  const markdown = ta.value;
+  card._skillSaveInFlight = true;
   try {
     const res = await fetch(`${API}/api/skills/${encodeURIComponent(name)}/markdown`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ markdown: ta.value }),
+      body: JSON.stringify({ markdown }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     // Refresh the cached markdown so the preload/expand show the new text.
-    _mdCache.set(name, ta.value);
+    _mdCache.set(name, markdown);
+    card._md = markdown;
+    if (ta.value !== markdown) {
+      uiModule.showToast('Earlier changes saved. Your newer edits still need saving.');
+      return;
+    }
     uiModule.showToast('Saved');
     await loadSkills();  // re-render (frontmatter changes like name/status may have changed)
   } catch (e) {
     uiModule.showError('Save failed: ' + e.message);
+  } finally {
+    card._skillSaveInFlight = false;
   }
 }
 
@@ -1084,7 +1112,8 @@ async function _deleteSkill(name, card = null) {
       .find(c => { const n = c.querySelector('.skill-card-name'); return n && n.textContent === name; }) || null;
   }
   try {
-    await fetch(`${API}/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const res = await fetch(`${API}/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     _mdCache.delete(name);
     if (card) {
       if (card._testPoll) { clearInterval(card._testPoll); card._testPoll = null; }
@@ -1100,11 +1129,12 @@ async function _deleteSkill(name, card = null) {
 
 async function _setSkillStatus(name, status) {
   try {
-    await fetch(`${API}/api/skills/${encodeURIComponent(name)}`, {
+    const res = await fetch(`${API}/api/skills/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
     });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await loadSkills();
     uiModule.showToast(status === 'published' ? 'Skill approved' : 'Skill moved to draft');
   } catch (e) { uiModule.showError('Update failed: ' + e.message); }

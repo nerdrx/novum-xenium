@@ -1014,14 +1014,15 @@ import { loadPanel } from './panels.js';
 
   // API key pattern for the guard in handleChatSubmit
   const API_KEY_RE = /^(sk-[a-zA-Z0-9_\-]{20,}|gsk_[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_\-]{30,}|xai-[a-zA-Z0-9]{20,})$/;
-  const PLAN_STORAGE_KEY = 'odysseus-active-plan';
+  // Discard plans saved before Execute approvals were tied to their source bubble.
+  try { localStorage.removeItem('odysseus-active-plan'); } catch (_) {}
 
   const _queuedAgentRequests = [];
   let _queuedDrainTimer = null;
   let _queuedPromoteTimer = null;
   let _queuedRequestSeq = 0;
   let _queuedBubbleHost = null;
-  let _pendingApprovedPlan = '';
+  let _pendingApprovedPlan = null;
 
   function _extractPlanText(text) {
     const raw = String(text || '').trim();
@@ -1038,44 +1039,53 @@ import { loadPanel } from './panels.js';
     return stripped;
   }
 
-  function _getStoredPlan() {
-    try { return localStorage.getItem(PLAN_STORAGE_KEY) || ''; } catch (_) { return ''; }
+  function _pendingPlanForSession(sessionId, message) {
+    if (!_pendingApprovedPlan) return null;
+    if (!sessionId || _pendingApprovedPlan.sessionId !== String(sessionId)
+        || (message !== undefined && _pendingApprovedPlan.message !== message)) {
+      _pendingApprovedPlan = null;
+      return null;
+    }
+    return _pendingApprovedPlan;
   }
 
-	  function _setStoredPlan(plan) {
-	    const text = _extractPlanText(plan);
-	    if (!text) return;
-	    try { localStorage.setItem(PLAN_STORAGE_KEY, text); } catch (_) {}
-	  }
-
-	  function _clearStoredPlan() {
-	    try { localStorage.removeItem(PLAN_STORAGE_KEY); } catch (_) {}
-	  }
-
-	  function _attachPlanActions(target, plan) {
-	    if (!target || !String(plan || '').trim() || target.querySelector('.plan-inline-actions')) return;
-	    const actions = document.createElement('div');
-	    actions.className = 'plan-inline-actions';
-	    actions.innerHTML = `
-	      <button type="button" class="plan-inline-execute">
-	        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="7 4 20 12 7 20 7 4"></polygon></svg>
-	        Execute
-	      </button>
-	      <button type="button" class="plan-inline-clear">Clear</button>`;
-	    actions.querySelector('.plan-inline-execute')?.addEventListener('click', () => {
-	      const approved = _getStoredPlan() || _extractPlanText(plan);
-	      if (!approved.trim()) return;
-	      _pendingApprovedPlan = approved;
-	      if (window.__odysseusSetPlanMode) window.__odysseusSetPlanMode(false);
-	      if (window.__odysseusSetChatMode) window.__odysseusSetChatMode('agent');
-	      _setComposerAndSend('Execute the approved plan.');
-	    });
-	    actions.querySelector('.plan-inline-clear')?.addEventListener('click', () => {
-	      _clearStoredPlan();
-	      actions.remove();
-	    });
-	    (target.querySelector('.body') || target).appendChild(actions);
-	  }
+  function _attachPlanActions(target, plan, sessionId) {
+    if (!target || !String(plan || '').trim() || !sessionId || target.querySelector('.plan-inline-actions')) return;
+    const actions = document.createElement('div');
+    actions.className = 'plan-inline-actions';
+    actions.innerHTML = `
+      <button type="button" class="plan-inline-execute">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="7 4 20 12 7 20 7 4"></polygon></svg>
+        Execute
+      </button>
+      <button type="button" class="plan-inline-clear">Clear</button>`;
+    actions.querySelector('.plan-inline-execute')?.addEventListener('click', () => {
+      const planSessionId = String(sessionId);
+      const currentSessionId = String(sessionModule?.getCurrentSessionId?.() || '');
+      if (currentSessionId !== planSessionId) {
+        uiModule.showToast && uiModule.showToast('Open the chat that contains this plan before executing it');
+        return;
+      }
+      if (_sendInFlight || hasActiveStream(planSessionId)) {
+        uiModule.showToast && uiModule.showToast('Wait for the current response to finish before executing the plan');
+        return;
+      }
+      const approved = _extractPlanText(plan);
+      if (!approved.trim()) return;
+      const message = 'Execute the approved plan.';
+      const pending = { sessionId: planSessionId, message, plan: approved };
+      _pendingApprovedPlan = pending;
+      if (window.__odysseusSetPlanMode) window.__odysseusSetPlanMode(false);
+      if (window.__odysseusSetChatMode) window.__odysseusSetChatMode('agent');
+      if (!_setComposerAndSend(message, planSessionId, pending) && _pendingApprovedPlan === pending) {
+        _pendingApprovedPlan = null;
+      }
+    });
+    actions.querySelector('.plan-inline-clear')?.addEventListener('click', () => {
+      actions.remove();
+    });
+    (target.querySelector('.body') || target).appendChild(actions);
+  }
 
   function _escapeQueueText(s) {
     return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1121,14 +1131,19 @@ import { loadPanel } from './panels.js';
     return item;
   }
 
-  function _setComposerAndSend(message) {
+  function _setComposerAndSend(message, expectedSessionId = null, pendingPlan = null) {
     const input = uiModule.el('message');
     if (!input) return false;
     input.value = message;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     if (uiModule.autoResize) uiModule.autoResize(input);
     setTimeout(() => {
-      handleChatSubmit({ preventDefault() {} }).catch(err => {
+      if (expectedSessionId
+          && String(sessionModule?.getCurrentSessionId?.() || '') !== String(expectedSessionId)) {
+        if (_pendingApprovedPlan === pendingPlan) _pendingApprovedPlan = null;
+        return;
+      }
+      handleChatSubmit({ preventDefault() {}, expectedSessionId, pendingPlan }).catch(err => {
         console.error('queued send failed', err);
         try { uiModule.showError && uiModule.showError('Queued send failed: ' + (err?.message || err)); } catch (_) {}
       });
@@ -1215,6 +1230,13 @@ import { loadPanel } from './panels.js';
    */
   export async function handleChatSubmit(e) {
     e.preventDefault();
+    const expectedSessionId = e.expectedSessionId ? String(e.expectedSessionId) : '';
+    if (expectedSessionId
+        && (String(sessionModule.getCurrentSessionId() || '') !== expectedSessionId
+            || _pendingApprovedPlan !== e.pendingPlan)) {
+      if (_pendingApprovedPlan === e.pendingPlan) _pendingApprovedPlan = null;
+      return;
+    }
     // Cancel research clarification timeout if active
     if (window._researchTimeoutTimer) {
       clearTimeout(window._researchTimeoutTimer);
@@ -1223,11 +1245,21 @@ import { loadPanel } from './panels.js';
     // Get current session
     const sessionId = sessionModule.getCurrentSessionId();
     const session = sessionModule.getSessions().find(s => s.id === sessionId);
+    // An approval belongs to the chat where its plan was shown. Discard it as
+    // soon as a send begins in another chat (or with no active chat).
+    if (expectedSessionId) {
+      _pendingPlanForSession(sessionId);
+    } else {
+      _pendingApprovedPlan = null;
+    }
     
     const submitBtn = document.querySelector('.send-btn');
     
     // If compare is active, stop all compare streams
     if (window.compareModule && window.compareModule.isActive()) {
+      if (_pendingApprovedPlan && _pendingApprovedPlan.sessionId === String(sessionId || '')) {
+        _pendingApprovedPlan = null;
+      }
       window.compareModule.handleCompareSubmit();
       return;
     }
@@ -1235,6 +1267,11 @@ import { loadPanel } from './panels.js';
     // If currently streaming, keyboard Enter can queue a non-empty composer.
     // Clicking the stop icon should still stop normally, even if text exists.
     if (isStreaming) {
+      // Submitting while a stream is active means Stop/queue, not plan execute.
+      // Do not leave this approval armed for a later unrelated send.
+      if (_pendingApprovedPlan && _pendingApprovedPlan.sessionId === String(sessionId || '')) {
+        _pendingApprovedPlan = null;
+      }
       const queueRequestedAt = Number(window.__odysseusQueueStreamingSubmit || 0);
       const shouldQueueStreamingSubmit = queueRequestedAt && Date.now() - queueRequestedAt < 1200;
       window.__odysseusQueueStreamingSubmit = 0;
@@ -1521,6 +1558,15 @@ import { loadPanel } from './panels.js';
       }
     }
 
+    // Plan Execute is bound to the session selected when the button was
+    // clicked. Navigation during async send setup must not retarget it.
+    if (expectedSessionId
+        && String(sessionModule.getCurrentSessionId() || '') !== expectedSessionId) {
+      if (_pendingApprovedPlan === e.pendingPlan) _pendingApprovedPlan = null;
+      _releaseSendFlag();
+      return;
+    }
+
     // --- API key guard: warn if message looks like an API key ---
     if (!approvalForSend && API_KEY_RE.test(msg.trim())) {
       if (!await window.styledConfirm('This looks like an API key. Sending it to the AI could expose it.\n\nDid you mean to use /setup instead?', { confirmText: 'Send anyway', danger: true })) {
@@ -1588,6 +1634,7 @@ import { loadPanel } from './panels.js';
 
     // Declare accumulated outside try block so it's accessible in catch
     let accumulated = '';
+    let updatedPlanForTurn = '';
     // Are we currently inside an unclosed <think> block? Toggled per think/answer
     // cycle so a multi-round agent response (one reasoning phase PER round) wraps each
     // round's reasoning in its own <think>…</think> instead of leaking rounds 2+ as text.
@@ -1967,31 +2014,34 @@ import { loadPanel } from './panels.js';
       // Web toggle: pre-search in Chat mode only. Agent mode should not
       // opportunistically hit SearXNG just because the chat search toggle is
       // on; explicit web/current-info requests are handled by the backend
-	      // intent gate.
-	      const toggleState = Storage.loadToggleState();
-	      const isPlanMode = !!toggleState.plan_mode && !(el('research-toggle') && el('research-toggle').checked);
-	      let isAgentMode = (toggleState.mode || 'chat') === 'agent';
-	      const isIncognito = recoveryForSend ? false : isIncognitoForSend;
-	      // Recovery copy is app-authored context; it must not silently
-	      // auto-enable shell tools or override the current Bash toggle.
-	      const workspaceAgentIntent = !isIncognito && !recoveryForSend && /\b(fix|debug|implement|change|update|refactor|patch|review|test|run|execute|start|launch|build|lint|typecheck|benchmark|eval|terminal[- ]bench|tbench|repo|repository|codebase|project|app|server|api|frontend|backend|bug|issue|pr|file|folder|directory|source|logs?|trace|stacktrace|traceback|docker|container|tmux|terminal|shell|git|branch|commit|diff|pytest|process|port|endpoint|computer|machine|laptop|device|system)\b/i.test(String(msg || ''));
-	      if (isPlanMode || _pendingApprovedPlan) {
-	        isAgentMode = true;
-	      }
-	      if (!isAgentMode && workspaceAgentIntent) {
-	        isAgentMode = true;
-	      }
-	      // Auto-escalate to agent mode when a document is open — the user expects
-	      // the AI to see the document and have tools to edit it
-	      if (!isIncognito && !isAgentMode && documentModule && activeDocIdForSend) {
-	        isAgentMode = true;
-	      }
-	      fd.append('mode', isAgentMode ? 'agent' : 'chat');
-	      fd.append('plan_mode', isPlanMode ? 'true' : 'false');
-	      if (!isPlanMode && _pendingApprovedPlan) {
-	        fd.append('approved_plan', _pendingApprovedPlan.slice(0, 8192));
-	        _pendingApprovedPlan = '';
-	      }
+      // intent gate.
+      const toggleState = Storage.loadToggleState();
+      const isPlanMode = !!toggleState.plan_mode && !(el('research-toggle') && el('research-toggle').checked);
+      let isAgentMode = (toggleState.mode || 'chat') === 'agent';
+      const approvedPlanForSend = expectedSessionId && _pendingApprovedPlan === e.pendingPlan
+        ? _pendingPlanForSession(streamSessionId, msg)
+        : null;
+      const isIncognito = recoveryForSend ? false : isIncognitoForSend;
+      // Recovery copy is app-authored context; it must not silently
+      // auto-enable shell tools or override the current Bash toggle.
+      const workspaceAgentIntent = !isIncognito && !recoveryForSend && /\b(fix|debug|implement|change|update|refactor|patch|review|test|run|execute|start|launch|build|lint|typecheck|benchmark|eval|terminal[- ]bench|tbench|repo|repository|codebase|project|app|server|api|frontend|backend|bug|issue|pr|file|folder|directory|source|logs?|trace|stacktrace|traceback|docker|container|tmux|terminal|shell|git|branch|commit|diff|pytest|process|port|endpoint|computer|machine|laptop|device|system)\b/i.test(String(msg || ''));
+      if (isPlanMode || approvedPlanForSend) {
+        isAgentMode = true;
+      }
+      if (!isAgentMode && workspaceAgentIntent) {
+        isAgentMode = true;
+      }
+      // Auto-escalate to agent mode when a document is open — the user expects
+      // the AI to see the document and have tools to edit it
+      if (!isIncognito && !isAgentMode && documentModule && activeDocIdForSend) {
+        isAgentMode = true;
+      }
+      fd.append('mode', isAgentMode ? 'agent' : 'chat');
+      fd.append('plan_mode', isPlanMode ? 'true' : 'false');
+      if (!isPlanMode && approvedPlanForSend) {
+        fd.append('approved_plan', approvedPlanForSend.plan.slice(0, 8192));
+        if (_pendingApprovedPlan === approvedPlanForSend) _pendingApprovedPlan = null;
+      }
 	      if (el('web-toggle').checked) {
 	        if (!isAgentMode) {
 	          fd.append('use_web', 'true');
@@ -3991,10 +4041,9 @@ import { loadPanel } from './panels.js';
 
               } else if (json.type === 'plan_update') {
                 if (_isBg) continue;
-                // Agent wrote back to the plan (ticked a step / revised). Update
-                // the stored plan + live-refresh the docked plan window.
+                // Keep this turn's revised plan with this turn's own bubble.
                 const _pu = (json.data && json.data.plan) ? json.data.plan : '';
-                if (_pu) _setStoredPlan(_pu);
+                if (_pu) updatedPlanForTurn = _extractPlanText(_pu);
 
               } else if (json.type === 'agent_step') {
                 _closeOpenThinkingMarkup(_isBg);
@@ -4376,15 +4425,13 @@ import { loadPanel } from './panels.js';
           _appendViewReportLink(footerTarget, streamSessionId);
         }
         // Also store raw on the footer target so copy/TTS work
-	        if (footerTarget !== holder) footerTarget.dataset.raw = accumulated;
-		        try {
-		          const _endToggles = Storage.loadToggleState();
-		          if (_endToggles.plan_mode && accumulated) {
-		            _setStoredPlan(accumulated);
-		            _attachPlanActions(footerTarget, accumulated);
-		          }
-		        } catch (_) {}
-	        if (addAITTSButton && accumulated && window.aiTTSManager?._provider !== 'disabled' && window.aiTTSManager?.available) {
+        if (footerTarget !== holder) footerTarget.dataset.raw = accumulated;
+        try {
+          if (isPlanMode && accumulated) {
+            _attachPlanActions(footerTarget, updatedPlanForTurn || accumulated, streamSessionId);
+          }
+        } catch (_) {}
+        if (addAITTSButton && accumulated && window.aiTTSManager?._provider !== 'disabled' && window.aiTTSManager?.available) {
 	          addAITTSButton(footerTarget, accumulated);
 	        }
         // TTS auto-play: streaming mode flushes remaining text, non-streaming enqueues full message

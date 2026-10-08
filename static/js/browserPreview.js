@@ -201,7 +201,7 @@ function updateBrowserPreview(event, sessionId) {
   const state = {
     ...old,
     status: updated ? 'Updated' : 'Preview unavailable',
-    action: typeof preview.action === 'string' ? preview.action.slice(0, 120) : fallbackAction,
+    action: typeof preview.action === 'string' ? preview.action.replace(/^browser_/, '').replaceAll('_', ' ').slice(0, 120) : fallbackAction,
     title: typeof preview.title === 'string' && preview.title ? preview.title.slice(0, 240) : old.title || '',
     url: safeUrl(preview.url)?.href || old.url || '',
     screenshot: screenshot || old.screenshot || '',

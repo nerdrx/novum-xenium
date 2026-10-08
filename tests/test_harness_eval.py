@@ -160,6 +160,35 @@ def test_verification_timeout_still_writes_case_report(tmp_path, monkeypatch):
     assert "private verification command" not in json.dumps(report)
 
 
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_file_check_discards_large_output(tmp_path, monkeypatch, exit_code):
+    import subprocess
+
+    real_popen = harness_eval.subprocess.Popen
+
+    def checked_popen(*args, **kwargs):
+        assert kwargs["stdout"] == subprocess.DEVNULL
+        assert kwargs["stderr"] == subprocess.DEVNULL
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(harness_eval.subprocess, "Popen", checked_popen)
+    # Each stream receives 4 MiB, well beyond a pipe buffer's capacity.
+    check = (
+        "import sys\n"
+        "chunk = b'x' * 65536\n"
+        "for _ in range(64):\n"
+        "    sys.stdout.buffer.write(chunk)\n"
+        "    sys.stderr.buffer.write(chunk)\n"
+        "sys.stdout.buffer.flush()\n"
+        "sys.stderr.buffer.flush()\n"
+        f"sys.exit({exit_code})\n"
+    )
+    result = harness_eval.run_file_check({"check": check}, tmp_path)
+    assert result.returncode == exit_code
+    assert result.stdout is None
+    assert result.stderr is None
+
+
 def test_file_check_timeout_kills_spawned_child(tmp_path):
     import os
     import subprocess

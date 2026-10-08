@@ -26395,6 +26395,10 @@ details.hwfit-serve-advanced > .hwfit-serve-checks:last-of-type {
   cursor: pointer;
   transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
 }
+.gallery-album-card[role="button"]:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 2px;
+}
 .gallery-album-card:hover {
   transform: translateY(-2px);
   border-color: var(--red);

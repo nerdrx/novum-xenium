@@ -10,6 +10,7 @@ Extracted from agent_tools.py.
 import asyncio
 import collections
 import contextvars
+import errno
 import json
 import logging
 import os
@@ -864,6 +865,43 @@ async def _document_tool_dispatch(
 # Dispatcher
 # ---------------------------------------------------------------------------
 
+def _snapshot_failure_message(exc: Exception) -> str:
+    """Return actionable checkpoint guidance without exposing paths or details."""
+    from src.workspace_snapshots import SnapshotError
+
+    message = str(exc)
+    if isinstance(exc, SnapshotError):
+        if message in {"workspace exceeds snapshot size limit", "workspace exceeds snapshot file limit"}:
+            return (
+                "The workspace exceeds rollback snapshot limits. Choose a smaller workspace or "
+                "exclude generated and dependency files, then retry."
+            )
+        if message in {"chat is no longer available for this workspace snapshot", "owner and session are required"}:
+            return "This chat is no longer available for rollback protection. Reopen the chat and retry."
+        if message in {"workspace is no longer valid", "workspace is no longer a safe directory"}:
+            return "The selected workspace is no longer accessible. Re-select it and retry."
+        if message == "workspace changed during snapshot":
+            return "The workspace changed while rollback protection was being prepared. Stop concurrent edits and retry."
+        if message == "workspace could not be read during snapshot":
+            return "The app could not read the workspace for rollback protection. Check workspace permissions and retry."
+        if message in {
+            "snapshot storage is not a private directory",
+            "snapshot scope marker is not a safe file",
+            "snapshot scope marker is invalid",
+            "snapshot scope does not match this chat",
+        }:
+            return "Rollback snapshot storage failed a safety check. Check app data storage permissions and retry."
+
+    current = exc
+    while current is not None:
+        if isinstance(current, OSError):
+            if current.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)}:
+                return "Rollback snapshot storage is full. Free app data space and retry."
+            if current.errno in {errno.EACCES, errno.EPERM}:
+                return "The app cannot access the workspace or rollback storage. Check permissions and retry."
+        current = current.__cause__
+    return "Rollback snapshot failed unexpectedly. Check server logs, then retry."
+
 async def execute_tool_block(
     block: Any,
     session_id: Optional[str] = None,
@@ -1006,9 +1044,12 @@ async def execute_tool_block(
                     security_context.run_id,
                     validate_scope=lambda: validate_session_scope(effective_storage_owner(owner), session_id),
                 )
-            except Exception:
-                logger.warning("Workspace rollback snapshot unavailable; tool blocked")
-                return blocked_tool_result(tool_name, "A rollback snapshot could not be created. Reduce the workspace size or select a smaller project, then retry.")
+            except Exception as exc:
+                logger.warning(
+                    "Workspace rollback snapshot unavailable; tool blocked (%s)",
+                    type(exc).__name__, exc_info=True,
+                )
+                return blocked_tool_result(tool_name, _snapshot_failure_message(exc))
         output = await _execute_tool_block_impl(
             block,
             session_id=session_id,

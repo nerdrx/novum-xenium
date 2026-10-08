@@ -85,7 +85,7 @@ def stream_events(response, deadline):
 def run_file_check(case, fixture, timeout=15):
     command = [os.sys.executable, "-c", case["check"]]
     process = subprocess.Popen(
-        command, cwd=fixture, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        command, cwd=fixture, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=(os.name == "posix"),
     )
     try:

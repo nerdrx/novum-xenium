@@ -782,13 +782,37 @@ function _renderAlbumsGrid() {
   _wireAlbumsEvents(wrap);
 }
 
+function _makeAlbumCardKeyboardAccessible(card, label, pressed = null) {
+  if (!card) return;
+  card.setAttribute('role', 'button');
+  card.setAttribute('tabindex', '0');
+  card.setAttribute('aria-label', label);
+  if (pressed === null) card.removeAttribute('aria-pressed');
+  else card.setAttribute('aria-pressed', String(pressed));
+  card.addEventListener('keydown', (e) => {
+    if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return;
+    if (e.target !== card && e.target.closest?.('button, a, input, textarea, select, [contenteditable="true"]')) return;
+    e.preventDefault();
+    if (card.isConnected) card.click();
+  });
+}
+
 // Per-card / per-popmenu event wiring — extracted so both the empty
 // state and the real grid can reuse it.
 function _wireAlbumsEvents(scope) {
   const container = document.getElementById('gallery-albums-container');
   if (!container) return;
 
+  _makeAlbumCardKeyboardAccessible(container.querySelector('#gallery-albums-new.gallery-album-card-add'), 'Create a new album');
+  _makeAlbumCardKeyboardAccessible(container.querySelector('#gallery-albums-upload'), 'Upload an album folder');
   container.querySelectorAll('.gallery-album-card[data-album]').forEach(card => {
+    const album = _albums.find(a => a.id === card.dataset.album);
+    const albumName = album?.name || 'Untitled album';
+    _makeAlbumCardKeyboardAccessible(
+      card,
+      _albumSelectMode ? `Select album: ${albumName}` : `Open album: ${albumName}, ${album?.count || 0} photos`,
+      _albumSelectMode ? _albumSelected.has(card.dataset.album) : null,
+    );
     card.addEventListener('click', (e) => {
       // Clicks on the menu button or any pop-menu item are handled below;
       // don't navigate into the album in that case.
@@ -803,6 +827,7 @@ function _wireAlbumsEvents(scope) {
         const dot = card.querySelector('.gallery-select-dot');
         if (dot) dot.classList.toggle('selected', _albumSelected.has(id));
         card.classList.toggle('selected', _albumSelected.has(id));
+        card.setAttribute('aria-pressed', String(_albumSelected.has(id)));
         _updateAlbumBulkCount();
         return;
       }

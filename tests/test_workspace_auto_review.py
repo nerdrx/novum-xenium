@@ -1,5 +1,6 @@
 """Auto review grants one constrained action and requires usable rollback."""
 import asyncio
+import errno
 import json
 from types import SimpleNamespace
 
@@ -46,7 +47,7 @@ def test_judge_grant_cannot_lift_ask_or_delegated(tmp_path, mode, delegated):
     assert not security.decision_for("write_file", content, workspace=str(tmp_path)).allowed
 
 
-def test_dispatch_snapshots_before_write_and_fails_closed(tmp_path, monkeypatch):
+def test_dispatch_snapshots_before_write_and_fails_closed(tmp_path, monkeypatch, caplog):
     root = tmp_path / "workspace"
     root.mkdir()
     path = root / "main.py"
@@ -77,11 +78,36 @@ def test_dispatch_snapshots_before_write_and_fails_closed(tmp_path, monkeypatch)
     preview = workspace_snapshots.preview_snapshot(str(root), "alice", "chat", result["workspace_snapshot_id"])
     assert "before" in preview["changes"][0]["diff"]
     def fail(*args, **kwargs):
-        raise OSError("disk full")
+        raise OSError(errno.ENOSPC, "no space", "/private/snapshot-path")
     monkeypatch.setattr(workspace_snapshots, "ensure_snapshot", fail)
     _, result = run()
     assert result["blocked"] is True
+    assert "storage is full" in result["error"]
+    assert "/private/snapshot-path" not in result["error"]
+    assert any(record.exc_info for record in caplog.records if "rollback snapshot unavailable" in record.message.lower())
     assert calls == ["write_file"]
+
+
+@pytest.mark.parametrize("error,expected", [
+    ("workspace exceeds snapshot size limit", "exceeds rollback snapshot limits"),
+    ("chat is no longer available for this workspace snapshot", "Reopen the chat"),
+    ("snapshot storage is not a private directory", "failed a safety check"),
+])
+def test_snapshot_error_guidance_is_actionable_and_sanitized(error, expected):
+    from src.workspace_snapshots import SnapshotError
+
+    message = tool_execution._snapshot_failure_message(SnapshotError(error))
+    assert expected in message
+    assert "/" not in message
+    assert "token" not in message.lower()
+
+
+def test_snapshot_os_error_guidance_does_not_expose_filename():
+    message = tool_execution._snapshot_failure_message(
+        PermissionError(errno.EACCES, "denied", "/private/workspace/token.txt")
+    )
+    assert "Check permissions" in message
+    assert "/private/workspace/token.txt" not in message
 
 
 @pytest.mark.parametrize("snapshot_ok,verdict,executes", [(True,"allow",True), (False,"allow",False), (True,"ask",False)])

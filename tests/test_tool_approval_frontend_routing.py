@@ -89,6 +89,10 @@ def test_app_submit_debounce_only_yields_for_control_plane_and_keeps_special_rou
     start = app.index("  function handleSubmit(e) {")
     end = app.index("\n\n  chatForm.onsubmit = handleSubmit;", start)
     handler = app[start:end]
+    handle_submit_source = json.dumps(
+        "let chatForm = document.getElementById('chat-form'), _submitting = false; "
+        + handler + "; return handleSubmit;"
+    )
     script = f"""
       const timers = [];
       console.log = () => {{}};
@@ -103,7 +107,7 @@ def test_app_submit_debounce_only_yields_for_control_plane_and_keeps_special_rou
       const handleSubmit = new Function(
         'document', '_bumpChatPriority', 'compareModule', 'groupModule',
         'chatRenderer', 'uiModule', 'chatModule', 'originalSubmit', 'setTimeout',
-        {json.dumps('let chatForm = document.getElementById(\'chat-form\'), _submitting = false; ' + handler + '; return handleSubmit;')}
+        {handle_submit_source}
       )(
         document, () => {{}},
         {{ isActive: () => compareActive, handleCompareSubmit: () => calls.compare++ }},

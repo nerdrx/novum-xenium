@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException, Request
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from core.database import Base, GalleryImage
 import routes.gallery_routes as gallery_routes
@@ -27,7 +28,9 @@ def _delete_endpoint():
 
 
 def _seed(tmp_path):
-    engine = create_engine("sqlite:///:memory:")
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
@@ -47,14 +50,14 @@ def test_file_kept_when_commit_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(gallery_routes, "GALLERY_IMAGE_DIR", tmp_path / "data" / "generated_images")
     monkeypatch.setattr(gallery_routes, "get_current_user", lambda r: "alice")
 
-    # A session whose commit always fails, to simulate a DB error mid-delete.
-    sess = SessionLocal()
+    # Sessions are created in the endpoint's worker thread; fail only its
+    # first-session commit to simulate a DB error mid-delete.
+    def failing_session():
+        sess = SessionLocal()
+        sess.commit = lambda: (_ for _ in ()).throw(RuntimeError("commit failed"))
+        return sess
 
-    def _boom():
-        raise RuntimeError("commit failed")
-
-    monkeypatch.setattr(sess, "commit", _boom)
-    monkeypatch.setattr(gallery_routes, "SessionLocal", lambda: sess)
+    monkeypatch.setattr(gallery_routes, "SessionLocal", failing_session)
 
     delete = _delete_endpoint()
     with pytest.raises(HTTPException):

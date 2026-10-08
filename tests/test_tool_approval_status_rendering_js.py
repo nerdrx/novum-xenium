@@ -22,13 +22,14 @@ def test_tool_approval_status_and_resolution_helpers_match_execution_state():
         for line in object_body.splitlines()
         if line.strip().rstrip(",").isidentifier()
     ]
+    chat_renderer_source = json.dumps("return ({" + object_body + "\n});")
     script = f"""
       const helperFns = new Function(
         {json.dumps(helpers + '; return { toolEventStatus, resolveToolApprovalNode, findPendingApprovalNode };')}
       )();
       const names = {json.dumps(object_members)};
       const values = names.map(name => helperFns[name] || (() => {{}}));
-      const chatRenderer = new Function(...names, {json.dumps('return ({' + object_body + '\n});')})(...values);
+      const chatRenderer = new Function(...names, {chat_renderer_source})(...values);
       if (chatRenderer.toolEventStatus !== helperFns.toolEventStatus
           || chatRenderer.resolveToolApprovalNode !== helperFns.resolveToolApprovalNode
           || chatRenderer.findPendingApprovalNode !== helperFns.findPendingApprovalNode) {{

@@ -1,11 +1,13 @@
 """Gallery routes — browsable library for photos and AI-generated images."""
 
 import os
+import asyncio
 import base64
 import hashlib
 import io
 import logging
 import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -245,6 +247,207 @@ def _gallery_image_path(filename: str) -> Path:
     if safe_name != original:
         raise HTTPException(400, "Unsafe gallery filename")
     return path
+
+
+def _atomic_replace_gallery_image(path: Path, content: bytes) -> None:
+    """Write complete image bytes beside the destination, then replace it."""
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _rotate_gallery_image_sync(image_id: str, user: str | None, angle: int) -> dict[str, Any]:
+    """Rotate using a worker-owned DB session; serialize only final persistence."""
+    from io import BytesIO
+    from PIL import Image
+    from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
+
+    db = SessionLocal()
+    try:
+        img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
+        if not img:
+            raise HTTPException(404, "Image not found")
+        if not user or img.owner != user:
+            raise HTTPException(403, "Not your image")
+        if img.is_active is False:
+            raise HTTPException(404, "Image not found")
+
+        filename = img.filename
+        source_file_hash = img.file_hash
+        img_path = _gallery_image_path(filename)
+        if not img_path.exists():
+            raise HTTPException(404, "Image file not found")
+        source_bytes = img_path.read_bytes()
+
+        # Decode/encode outside the shared persistence lock. The image bytes
+        # are our immutable input even if another request removes the path.
+        with Image.open(BytesIO(source_bytes)) as pil:
+            rotated = pil.rotate(-angle, expand=True)
+            ext = filename.rsplit(".", 1)[-1].lower()
+            save_kwargs = {}
+            if ext in ("jpg", "jpeg"):
+                save_kwargs["quality"] = 95
+                fmt = "JPEG"
+            elif ext == "webp":
+                fmt = "WEBP"
+                save_kwargs["quality"] = 95
+            else:
+                fmt = "PNG"
+            buf = BytesIO()
+            rotated.save(buf, format=fmt, **save_kwargs)
+            content = buf.getvalue()
+            width, height = rotated.size
+
+        # Discard the read transaction, then re-read under the same lock used
+        # by delete/session cleanup so a stale rotation cannot resurrect a file.
+        db.rollback()
+        with IMAGE_PERSISTENCE_LOCK:
+            current = db.query(GalleryImage).filter(
+                GalleryImage.id == image_id
+            ).populate_existing().first()
+            if not current or current.is_active is False:
+                raise HTTPException(404, "Image not found")
+            if not user or current.owner != user:
+                raise HTTPException(403, "Not your image")
+            if current.filename != filename or current.file_hash != source_file_hash:
+                raise HTTPException(409, "Image changed during rotation; reload and retry")
+            if not img_path.is_file():
+                raise HTTPException(404, "Image file not found")
+
+            previous = source_bytes
+            _atomic_replace_gallery_image(img_path, content)
+            current.file_hash = hashlib.sha256(content).hexdigest()
+            current.file_size = len(content)
+            current.width, current.height = width, height
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                try:
+                    _atomic_replace_gallery_image(img_path, previous)
+                except Exception as restore_exc:
+                    logger.exception("Could not restore gallery image after rotation commit failure")
+                    raise HTTPException(
+                        500, "Rotation failed and the original image could not be restored"
+                    ) from restore_exc
+                raise
+            return {"ok": True, "width": width, "height": height}
+    finally:
+        db.close()
+
+
+def _delete_gallery_image_sync(image_id: str, user: str | None) -> Dict[str, str]:
+    """Soft-delete and unlink on a worker, serialized with rotation writes."""
+    from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
+
+    db = SessionLocal()
+    try:
+        with IMAGE_PERSISTENCE_LOCK:
+            img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
+            if not img:
+                raise HTTPException(404, "Image not found")
+            if not user or img.owner != user:
+                raise HTTPException(404, "Image not found")
+
+            img_filename = img.filename
+            img.is_active = False
+            db.commit()
+
+            try:
+                img_path = _gallery_image_path(img_filename)
+                if img_path.exists():
+                    img_path.unlink()
+            except Exception as exc:
+                logger.warning("Could not remove gallery image file for %s: %s", img_filename, exc)
+
+        # Strip stale chat-history references after the image mutation lock is
+        # released; this cleanup cannot make a deleted image reappear.
+        try:
+            from core.database import ChatMessage as _ChatMessage
+            from sqlalchemy import or_ as _or
+            import json as _json
+
+            msgs = db.query(_ChatMessage).join(
+                DbSession, _ChatMessage.session_id == DbSession.id
+            ).filter(
+                _ChatMessage.meta_data.isnot(None),
+                DbSession.owner == user,
+                _or(
+                    _ChatMessage.meta_data.like(f"%{image_id}%"),
+                    _ChatMessage.meta_data.like(f"%{img_filename}%"),
+                ),
+            ).all()
+            rows_to_delete = []
+            for message in msgs:
+                if not message.meta_data:
+                    continue
+                try:
+                    meta = _json.loads(message.meta_data)
+                except Exception:
+                    continue
+                events = meta.get("tool_events") or []
+                new_events = []
+                removed_any = False
+                for event in events:
+                    if not isinstance(event, dict):
+                        new_events.append(event)
+                        continue
+                    is_match = event.get("image_id") == image_id or (
+                        event.get("image_url") and img_filename in event["image_url"]
+                    )
+                    if is_match:
+                        removed_any = True
+                        continue
+                    new_events.append(event)
+                if not removed_any:
+                    continue
+                if not new_events:
+                    rows_to_delete.append(message)
+                    previous = (
+                        db.query(_ChatMessage)
+                        .filter(
+                            _ChatMessage.session_id == message.session_id,
+                            _ChatMessage.timestamp < message.timestamp,
+                        )
+                        .order_by(_ChatMessage.timestamp.desc())
+                        .first()
+                    )
+                    if previous and previous.role == "user":
+                        previous_meta = {}
+                        try:
+                            previous_meta = _json.loads(previous.meta_data) if previous.meta_data else {}
+                        except Exception:
+                            previous_meta = {}
+                        if not (previous_meta.get("tool_events") or []):
+                            rows_to_delete.append(previous)
+                else:
+                    meta["tool_events"] = new_events
+                    message.meta_data = _json.dumps(meta)
+            for message in rows_to_delete:
+                db.delete(message)
+            if msgs:
+                db.commit()
+        except Exception as exc:
+            logger.warning("chat-history cleanup after image delete failed: %s", exc)
+        return {"status": "deleted", "id": image_id}
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("delete_gallery_image: failed")
+        raise HTTPException(500, "Image deletion failed")
+    finally:
+        db.close()
 
 
 def _normalize_image_endpoint_base(url: str) -> str:
@@ -504,10 +707,6 @@ def setup_gallery_routes() -> APIRouter:
     async def gallery_rotate(request: Request, image_id: str):
         """Rotate an image by ±90° or 180°. Updates the file on disk and the
         width/height in the DB. Body: {angle: 90 | -90 | 180}."""
-        from pathlib import Path
-        from PIL import Image
-        from io import BytesIO
-
         data = await request.json()
         try:
             angle = int(data.get("angle", 90))
@@ -517,44 +716,7 @@ def setup_gallery_routes() -> APIRouter:
             raise HTTPException(400, "Angle must be 90, -90, 180, or 270")
 
         user = get_current_user(request)
-        db = SessionLocal()
-        try:
-            img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
-            if not img:
-                raise HTTPException(404, "Image not found")
-            if not user or img.owner != user:
-                raise HTTPException(403, "Not your image")
-
-            img_path = _gallery_image_path(img.filename)
-            if not img_path.exists():
-                raise HTTPException(404, "Image file not found")
-
-            # PIL rotates counter-clockwise; the API takes "clockwise"
-            # convention so we negate to match user expectation.
-            with Image.open(img_path) as pil:
-                rotated = pil.rotate(-angle, expand=True)
-                # Recompute hash so dedupe stays accurate.
-                buf = BytesIO()
-                ext = img.filename.rsplit(".", 1)[-1].lower()
-                save_kwargs = {}
-                if ext in ("jpg", "jpeg"):
-                    save_kwargs["quality"] = 95
-                    fmt = "JPEG"
-                elif ext == "webp":
-                    fmt = "WEBP"
-                    save_kwargs["quality"] = 95
-                else:
-                    fmt = "PNG"
-                rotated.save(buf, format=fmt, **save_kwargs)
-                content = buf.getvalue()
-                img_path.write_bytes(content)
-                img.file_hash = hashlib.sha256(content).hexdigest()
-                img.file_size = len(content)
-                img.width, img.height = rotated.size
-            db.commit()
-            return {"ok": True, "width": img.width, "height": img.height}
-        finally:
-            db.close()
+        return await asyncio.to_thread(_rotate_gallery_image_sync, image_id, user, angle)
 
     # ---- POST /api/gallery/ai-upscale ----
     @router.post("/api/gallery/ai-upscale")
@@ -1136,122 +1298,7 @@ def setup_gallery_routes() -> APIRouter:
     @router.delete("/api/gallery/{image_id}")
     async def delete_gallery_image(request: Request, image_id: str) -> Dict[str, str]:
         user = get_current_user(request)
-        db = SessionLocal()
-        try:
-            img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
-            if not img:
-                raise HTTPException(404, "Image not found")
-            if not user or img.owner != user:
-                raise HTTPException(404, "Image not found")
-
-            img_filename = img.filename
-            # Soft-delete the record first; the DB is the source of truth.
-            img.is_active = False
-            db.commit()
-
-            # Only after the soft-delete commit succeeds do we remove the file.
-            # If the file were deleted first and the commit then failed/rolled
-            # back, the still-active record would point at a missing file.
-            # Best-effort so a missing or locked file can't 500 a delete that
-            # already succeeded logically. Uses the path-confined resolver so a
-            # malformed stored filename can't escape generated_images.
-            try:
-                img_path = _gallery_image_path(img_filename)
-                if img_path.exists():
-                    img_path.unlink()
-            except Exception as e:
-                logger.warning(f"Could not remove gallery image file for {img_filename}: {e}")
-
-            # Strip stale chat-history references so the image bubble
-            # (and its prompt caption) doesn't come back after a server
-            # reboot replays the session. We remove the matching tool
-            # event entirely; if that leaves the message with no other
-            # tool events AND a "Generated image for: …" body, drop the
-            # whole row so there's no remnant.
-            try:
-                from core.database import ChatMessage as _ChatMessage
-                from sqlalchemy import or_ as _or
-                import json as _json
-                # Match by image_id OR by filename — older messages
-                # (saved before we threaded image_id through the SSE)
-                # only carry image_url containing the filename.
-                msgs = db.query(_ChatMessage).filter(
-                    _ChatMessage.meta_data.isnot(None),
-                    _or(
-                        _ChatMessage.meta_data.like(f"%{image_id}%"),
-                        _ChatMessage.meta_data.like(f"%{img_filename}%"),
-                    ),
-                ).all()
-                rows_to_delete = []
-                for m in msgs:
-                    if not m.meta_data:
-                        continue
-                    try:
-                        meta = _json.loads(m.meta_data)
-                    except Exception:
-                        continue
-                    events = meta.get("tool_events") or []
-                    new_events = []
-                    removed_any = False
-                    for ev in events:
-                        if not isinstance(ev, dict):
-                            new_events.append(ev)
-                            continue
-                        is_match = ev.get("image_id") == image_id or (
-                            ev.get("image_url") and img_filename in ev["image_url"]
-                        )
-                        if is_match:
-                            removed_any = True
-                            continue
-                        new_events.append(ev)
-                    if not removed_any:
-                        continue
-                    # If the message has no other tool events left, drop
-                    # it AND the immediately preceding user prompt that
-                    # asked for the image, so no remnant of the exchange
-                    # survives.
-                    if not new_events:
-                        rows_to_delete.append(m)
-                        prev = (
-                            db.query(_ChatMessage)
-                            .filter(
-                                _ChatMessage.session_id == m.session_id,
-                                _ChatMessage.timestamp < m.timestamp,
-                            )
-                            .order_by(_ChatMessage.timestamp.desc())
-                            .first()
-                        )
-                        if prev and prev.role == "user":
-                            prev_meta = {}
-                            try:
-                                prev_meta = _json.loads(prev.meta_data) if prev.meta_data else {}
-                            except Exception:
-                                prev_meta = {}
-                            # Only purge the prompt if it has no tool
-                            # events of its own (i.e. it's a pure user
-                            # message, not an agent step).
-                            if not (prev_meta.get("tool_events") or []):
-                                rows_to_delete.append(prev)
-                    else:
-                        meta["tool_events"] = new_events
-                        m.meta_data = _json.dumps(meta)
-                for m in rows_to_delete:
-                    db.delete(m)
-                if msgs:
-                    db.commit()
-            except Exception as _e:
-                # Cleanup is best-effort — never block the delete itself.
-                logger.warning(f"chat-history cleanup after image delete failed: {_e}")
-
-            return {"status": "deleted", "id": image_id}
-        except HTTPException:
-            raise
-        except Exception:
-            db.rollback()
-            logger.exception("delete_gallery_image: failed")
-            raise HTTPException(500, "Image deletion failed")
-        finally:
-            db.close()
+        return await asyncio.to_thread(_delete_gallery_image_sync, image_id, user)
 
     # ---- POST /api/image/inpaint — proxy to diffusion server OR OpenAI ----
     @router.post("/api/image/inpaint")

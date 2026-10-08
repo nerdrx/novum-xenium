@@ -16,6 +16,9 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 const API_BASE = window.location.origin;
 let _open = false;
 let _notes = [];
+let _notesDataRevision = 0;
+let _notesFetchSequence = 0;
+let _notesLoadFailed = false;
 let _editingId = null;
 let _selectedIds = new Set();
 let _activeLabel = null;
@@ -445,48 +448,74 @@ function _archiveNoteById(id, { card = null, celebrate = false } = {}) {
 }
 
 async function _fetchNotes() {
+  const requestSequence = ++_notesFetchSequence;
+  const dataRevision = _notesDataRevision;
   _loading = true;
   try {
     const url = `${API_BASE}/api/notes${_showingArchived ? '?archived=true' : ''}`;
     const res = await fetch(url, { credentials: 'same-origin' });
-    if (!res.ok) { _notes = []; return; }
+    if (!res.ok) {
+      if (requestSequence === _notesFetchSequence && dataRevision === _notesDataRevision) _notesLoadFailed = true;
+      return false;
+    }
     const data = await res.json();
-    _notes = data.notes || data || [];
+    if (requestSequence !== _notesFetchSequence || dataRevision !== _notesDataRevision) return false;
+    const notes = data?.notes ?? data;
+    if (!Array.isArray(notes)) throw new Error('Invalid notes response');
+    _notes = notes;
+    _notesLoadFailed = false;
+    return true;
   } catch (e) {
     console.error('Failed to fetch notes:', e);
-    _notes = [];
+    if (requestSequence === _notesFetchSequence && dataRevision === _notesDataRevision) _notesLoadFailed = true;
+    return false;
   } finally {
-    _loading = false;
+    if (requestSequence === _notesFetchSequence) _loading = false;
   }
 }
 
 async function _saveNote(note) {
   const method = note.id ? 'PUT' : 'POST';
   const url = note.id ? `${API_BASE}/api/notes/${note.id}` : `${API_BASE}/api/notes`;
-  const res = await fetch(url, {
-    method, credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(note),
-  });
-  if (!res.ok) throw new Error('Failed to save note');
-  return await res.json();
+  _notesDataRevision++;
+  try {
+    const res = await fetch(url, {
+      method, credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(note),
+    });
+    if (!res.ok) throw new Error('Failed to save note');
+    return await res.json();
+  } finally {
+    _notesDataRevision++;
+  }
 }
 
 async function _deleteNoteApi(id) {
   // v2 review — used to swallow 4xx/5xx silently. Throw so callers can
   // distinguish success vs failure and toast accordingly.
-  const r = await fetch(`${API_BASE}/api/notes/${id}`, { method: 'DELETE', credentials: 'same-origin' });
-  if (!r.ok) throw new Error('HTTP ' + r.status);
+  _notesDataRevision++;
+  try {
+    const r = await fetch(`${API_BASE}/api/notes/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } finally {
+    _notesDataRevision++;
+  }
 }
 
 async function _patchNote(id, patch) {
-  const res = await fetch(`${API_BASE}/api/notes/${id}`, {
-    method: 'PUT', credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-  if (!res.ok) throw new Error('Failed to update note');
-  return await res.json();
+  _notesDataRevision++;
+  try {
+    const res = await fetch(`${API_BASE}/api/notes/${id}`, {
+      method: 'PUT', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error('Failed to update note');
+    return await res.json();
+  } finally {
+    _notesDataRevision++;
+  }
 }
 
 // ---- Helpers ----
@@ -632,6 +661,39 @@ function _isNoteFullyDone(note) {
     return note.items.every(it => it.done);
   }
   return false;
+}
+
+function _renderNotesLoadError(body) {
+  body.querySelector('#notes-load-error')?.remove();
+  if (!_notesLoadFailed) return;
+  const error = document.createElement('div');
+  error.id = 'notes-load-error';
+  error.className = 'notes-load-error';
+  error.setAttribute('role', 'alert');
+  error.style.cssText = 'grid-column:1 / -1;display:flex;align-items:center;gap:10px;padding:8px 10px;margin:0 0 8px;border:1px solid var(--border);border-radius:8px;color:var(--fg-dim,var(--fg));font-size:12px;';
+  const message = document.createElement('span');
+  const hasCurrentViewNotes = _notes.some(note => _showingArchived ? note.archived === true : note.archived !== true);
+  message.textContent = !_notes.length
+    ? 'Could not load notes.'
+    : !hasCurrentViewNotes
+      ? (_showingArchived ? 'Could not load archived notes. Retry to view the archive.' : 'Could not load active notes. Retry.')
+      : 'Could not refresh notes. Showing the last loaded list.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'notes-header-btn';
+  retry.textContent = 'Retry';
+  retry.addEventListener('click', async () => {
+    retry.disabled = true;
+    retry.textContent = 'Retrying…';
+    const loaded = await _fetchNotes();
+    if (loaded) _renderNotes();
+    else {
+      retry.disabled = false;
+      retry.textContent = 'Retry';
+    }
+  });
+  error.append(message, retry);
+  body.prepend(error);
 }
 
 // A "checklist note" — todo or goal — has structured items[] that the cards
@@ -1744,7 +1806,8 @@ function _renderNotes() {
   const prevPositions = _captureCardPositions();
   const activeReminderHighlights = _loadActiveHighlights();
 
-  let filtered = _activeLabel ? _notes.filter(n => _noteTags(n).includes(_activeLabel)) : _notes;
+  let filtered = _notes.filter(n => _showingArchived ? n.archived === true : n.archived !== true);
+  if (_activeLabel) filtered = filtered.filter(n => _noteTags(n).includes(_activeLabel));
   if (_activeFilter === 'reminders') {
     filtered = filtered.filter(n => n.due_date && _hasTimeComponent(n.due_date));
   } else if (_activeFilter === 'no-reminders') {
@@ -1800,7 +1863,7 @@ function _renderNotes() {
     body.innerHTML = '';
     _renderLabelsInto(body);
     _renderQuickAdd(body);
-    if (sorted.length === 0) {
+    if (sorted.length === 0 && !_notesLoadFailed) {
       body.insertAdjacentHTML('beforeend', `<div class="notes-empty">All caught up — no pending goal steps right now.</div>`);
     } else {
       let todayHtml = `<div class="notes-today-wrap">
@@ -1826,6 +1889,7 @@ function _renderNotes() {
       body.insertAdjacentHTML('beforeend', todayHtml);
     }
     _wireTodayView(body);
+    _renderNotesLoadError(body);
     return;
   }
   for (const note of sorted) {
@@ -1962,7 +2026,7 @@ function _renderNotes() {
     // Keep the expanded form, replace cards after it
     const next = [...body.children].filter(c => c !== existingForm);
     next.forEach(c => c.remove());
-    if (sorted.length === 0) {
+    if (sorted.length === 0 && !_notesLoadFailed) {
       body.insertAdjacentHTML('beforeend', '<div class="notes-empty-msg">No notes <span style="vertical-align:-3px;margin-left:4px;">' + uiModule.emptyStateIcon('smiley') + '</span></div>');
     } else {
       existingForm.insertAdjacentHTML('afterend', html);
@@ -1971,7 +2035,7 @@ function _renderNotes() {
     body.innerHTML = '';
     _renderLabelsInto(body);
     _renderQuickAdd(body);
-    if (sorted.length === 0) {
+    if (sorted.length === 0 && !_notesLoadFailed) {
       body.insertAdjacentHTML('beforeend', '<div class="notes-empty-msg">No notes yet <span style="vertical-align:-3px;margin-left:4px;">' + uiModule.emptyStateIcon('smiley') + '</span></div>');
     } else {
       body.insertAdjacentHTML('beforeend', html);
@@ -1981,6 +2045,7 @@ function _renderNotes() {
   _bindCardEvents(body);
   _animateReflow(prevPositions);
   _applyMasonry(body);
+  _renderNotesLoadError(body);
 }
 
 // In grid view, lay out the cards as masonry by
@@ -5306,6 +5371,7 @@ let _noteOrderFailureSeq = null;
 function _persistNoteOrder(ids) {
   const snapshot = [...ids];
   const sequence = ++_noteOrderSeq;
+  _notesDataRevision++;
   // Keep the user's dropped order during this session even if persistence is
   // temporarily unavailable; the failure toast offers retry with this exact order.
   _setLocalNoteOrder(snapshot);
@@ -5314,18 +5380,22 @@ function _persistNoteOrder(ids) {
     uiModule.showToast('Saving the latest note order…', { duration: 1800, leadingIcon: 'spinner' });
   }
   const request = _noteOrderQueue.catch(() => {}).then(async () => {
-    const res = await fetch(`${API_BASE}/api/notes/reorder`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: snapshot }),
-    });
-    let data = {};
-    try { data = await res.json(); } catch (_) {}
-    if (!res.ok || data.ok === false || data.success === false) {
-      throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+    try {
+      const res = await fetch(`${API_BASE}/api/notes/reorder`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: snapshot }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (!res.ok || data.ok === false || data.success === false) {
+        throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+      }
+      return { sequence };
+    } finally {
+      _notesDataRevision++;
     }
-    return { sequence };
   });
   _noteOrderQueue = request.catch(() => {});
   return request.catch(error => {
@@ -5355,11 +5425,20 @@ function _showNoteReorderFailure(ids, sequence) {
 
 // Background reminder loop — runs whether panel is open or not
 async function _initReminders() {
+  // An open panel owns its active/archive list request. The panel's initial
+  // fetch already starts the reminder loop; this boot refresh must not replace
+  // the visible list with an unfiltered active-notes response.
+  if (_open) return;
+  const requestSequence = ++_notesFetchSequence;
+  const dataRevision = _notesDataRevision;
   try {
     const res = await fetch(`${API_BASE}/api/notes`, { credentials: 'same-origin' });
     if (res.ok) {
       const data = await res.json();
-      _notes = data.notes || data || [];
+      if (requestSequence !== _notesFetchSequence || dataRevision !== _notesDataRevision) return;
+      const notes = data?.notes ?? data;
+      if (!Array.isArray(notes)) return;
+      _notes = notes;
       _startReminderLoop();
     }
   } catch {}

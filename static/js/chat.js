@@ -1552,6 +1552,7 @@ import { loadPanel } from './panels.js';
     if (!sessionModule.getCurrentSessionId()) {
       // Auto-create a session using default chat config. Always fetch fresh
       // so that a recent Settings change takes effect without a page reload.
+      let defaultChatLoadFailed = false;
       try {
         let dc = (typeof window !== 'undefined' && window.__odysseusDefaultChat) || null;
         if (!dc || !dc.endpoint_url || !dc.model) {
@@ -1563,6 +1564,10 @@ import { loadPanel } from './panels.js';
           if (!dc || !dc.endpoint_url || !dc.model) {
             _sendPerf.mark('default_chat_fetch_begin');
             const dcRes = await fetch('/api/default-chat');
+            if (!dcRes.ok) {
+              defaultChatLoadFailed = true;
+              throw new Error(`Default chat configuration failed (${dcRes.status})`);
+            }
             dc = await dcRes.json();
             _sendPerf.mark('default_chat_fetch_done');
             if (dc && dc.endpoint_url && dc.model) {
@@ -1573,9 +1578,10 @@ import { loadPanel } from './panels.js';
             }
           }
         } catch (_) {
+          defaultChatLoadFailed = true;
           dc = (typeof window !== 'undefined' && window.__odysseusDefaultChat) || null;
         }
-        if (dc.endpoint_url && dc.model) {
+        if (dc && dc.endpoint_url && dc.model) {
           _sendPerf.mark('direct_chat_create_begin');
           await sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id, { source: 'default' });
           _sendPerf.mark('direct_chat_create_done');
@@ -1583,10 +1589,10 @@ import { loadPanel } from './panels.js';
           _sendPerf.mark('direct_chat_materialize_done');
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         } else {
-          el('message').value = '';
-          if (uiModule.autoResize) uiModule.autoResize(el('message'));
           addMessage('assistant',
-            'No chat session active. You can:\n\n' +
+            (defaultChatLoadFailed
+              ? 'Could not load the default chat settings. Your message is still in the composer. Check your connection and retry, or choose a model now.\n\n'
+              : 'No default chat model is configured. Your message is still in the composer. You can:\n\n') +
             '- Open the model picker in the chat box and pick a model\n' +
             '- Use the `+` button in the model picker to add a model endpoint\n' +
             '- Use `/help` to see all available commands');
@@ -1594,10 +1600,10 @@ import { loadPanel } from './panels.js';
           return;
         }
       } catch (e) {
-        el('message').value = '';
-        if (uiModule.autoResize) uiModule.autoResize(el('message'));
         addMessage('assistant',
-          'No chat session active. You can:\n\n' +
+          (defaultChatLoadFailed
+            ? 'Could not load the default chat settings. Your message is still in the composer. Check your connection and retry, or choose a model now.\n\n'
+            : 'Could not start a chat session. Your message is still in the composer. Select a model and retry.\n\n') +
           '- Open the model picker in the chat box and pick a model\n' +
           '- Use the `+` button in the model picker to add a model endpoint\n' +
           '- Use `/help` to see all available commands');

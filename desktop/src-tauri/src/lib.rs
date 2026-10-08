@@ -330,9 +330,9 @@ fn stop_owned_process(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         let group = format!("-{pid}");
-        let _ = Command::new("kill").args(["-TERM", &group]).status();
+        let _ = Command::new("kill").args(["-TERM", "--", &group]).status();
         thread::sleep(Duration::from_millis(200));
-        let _ = Command::new("kill").args(["-KILL", &group]).status();
+        let _ = Command::new("kill").args(["-KILL", "--", &group]).status();
     }
     #[cfg(not(unix))]
     {
@@ -1747,7 +1747,7 @@ mod tests {
         );
         assert!(inventory
             .iter()
-            .any(|m| m.kind == "bind" && m.source.ends_with("data/ollama")));
+            .any(|m| m.kind == "bind" && Path::new(&m.source).ends_with(Path::new("data").join("ollama"))));
         assert!(inventory
             .iter()
             .any(|m| m.kind == "volume" && m.source.ends_with("chromadb-data")));

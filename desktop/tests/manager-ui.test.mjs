@@ -65,6 +65,8 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   await page.goto(url);
   await page.waitForFunction(() => window.__calls.some((call) => call.command === 'get_status'));
   assert.equal(await page.locator('#backend-state-text').textContent(), 'Stopped');
+  assert.equal(await page.locator('body').evaluate(el => getComputedStyle(el).backgroundImage), 'none');
+  assert.equal(await page.locator('.panel').first().evaluate(el => getComputedStyle(el).backgroundImage), 'none');
   assert.equal(await page.locator('[data-action="start"]').isEnabled(), true);
 
   await page.locator('#project').fill('Fixture project');

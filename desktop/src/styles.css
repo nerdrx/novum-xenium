@@ -20,7 +20,7 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(ellipse at 18% -15%, #25123d 0, transparent 48%), var(--ground); }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--ground); }
 button, input { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, a:focus-visible, pre:focus-visible { outline: 2px solid #bd92ff; outline-offset: 3px; }
@@ -45,7 +45,7 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
 .state-unhealthy .state-dot { background: var(--amber); box-shadow: none; }
 .state-stopped .state-dot, .state-unconfigured .state-dot { background: var(--faint); box-shadow: none; }
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr); gap: 16px; }
-.panel { min-width: 0; padding: 22px; background: linear-gradient(145deg, #191522, #100d15 75%); border: 1px solid var(--line); border-radius: 6px; }
+.panel { min-width: 0; padding: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
 .service-panel { grid-column: 1 / -1; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .panel-description { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 15px 0 18px; }

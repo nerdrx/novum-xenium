@@ -752,11 +752,69 @@ async def action_consolidate_memory(owner: str, **kwargs) -> Tuple[str, bool]:
 async def _run_subprocess(argv, *, shell: bool = False, timeout: int = 120, label: str = "Command") -> Tuple[str, bool]:
     """Run an owned process group without leaving it behind on cancellation."""
     import asyncio
+    import codecs
+    import locale
     import os
     import signal
     import subprocess
+    from src.constants import MAX_OUTPUT_CHARS
 
-    async def stop_process_group(process):
+    class _CapturedText:
+        __slots__ = ("prefix", "length")
+
+        def __init__(self):
+            self.prefix = ""
+            self.length = 0
+
+    async def capture_stream(stream):
+        captured = _CapturedText()
+        decoder = codecs.getincrementaldecoder(locale.getpreferredencoding(False))(errors="replace")
+        leading = 0
+        trailing = 0
+        seen_nonspace = False
+
+        def accept(text):
+            nonlocal leading, trailing, seen_nonspace
+            if not text:
+                return
+            captured.length += len(text)
+            if not seen_nonspace:
+                whitespace = len(text) - len(text.lstrip())
+                leading += whitespace
+                text = text[whitespace:]
+                if text:
+                    seen_nonspace = True
+            if text:
+                trailing = trailing + len(text) if text.isspace() else len(text) - len(text.rstrip())
+                room = MAX_OUTPUT_CHARS - len(captured.prefix)
+                if room > 0:
+                    captured.prefix += text[:room]
+
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                break
+            accept(decoder.decode(chunk))
+        accept(decoder.decode(b"", final=True))
+        captured.length = max(0, captured.length - leading - trailing)
+        return captured
+
+    def _bounded_output(prefix, total_chars):
+        if total_chars > MAX_OUTPUT_CHARS:
+            return prefix[:MAX_OUTPUT_CHARS] + f"\n... (truncated, {total_chars} chars total)"
+        return prefix[:total_chars]
+
+    def _start_capture(process):
+        stdout_task = asyncio.create_task(capture_stream(process.stdout))
+        stderr_task = asyncio.create_task(capture_stream(process.stderr))
+
+        async def wait_for_exit_and_pipes():
+            await process.wait()
+            return await asyncio.gather(stdout_task, stderr_task)
+
+        return (stdout_task, stderr_task), asyncio.create_task(wait_for_exit_and_pipes())
+
+    async def stop_process_group(process, readers, completion):
         if os.name == "nt":
             try:
                 killer = await asyncio.create_subprocess_exec(
@@ -782,12 +840,30 @@ async def _run_subprocess(argv, *, shell: bool = False, timeout: int = 120, labe
                 except ProcessLookupError:
                     pass
         try:
-            await asyncio.wait_for(process.communicate(), timeout=5)
-        except (asyncio.TimeoutError, ProcessLookupError):
-            pass
+            await asyncio.wait_for(
+                asyncio.gather(completion, return_exceptions=True), timeout=5,
+            )
+        except asyncio.TimeoutError:
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
+            if not completion.done():
+                completion.cancel()
+            await asyncio.gather(completion, return_exceptions=True)
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*readers, return_exceptions=True), timeout=5,
+            )
+        except asyncio.TimeoutError:
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
 
     process = None
     spawn_task = None
+    readers = None
+    completion = None
     try:
         kwargs = (
             {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
@@ -805,15 +881,20 @@ async def _run_subprocess(argv, *, shell: bool = False, timeout: int = 120, labe
             spawn = asyncio.create_subprocess_exec(*argv, **process_kwargs)
         spawn_task = asyncio.create_task(spawn)
         process = await asyncio.shield(spawn_task)
+        readers, completion = _start_capture(process)
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            stdout, stderr = await asyncio.wait_for(asyncio.shield(completion), timeout=timeout)
         except asyncio.TimeoutError:
-            await stop_process_group(process)
+            await stop_process_group(process, readers, completion)
             return f"{label} timed out ({timeout}s)", False
-        output = (stdout or b"").decode(errors="replace").strip()
-        stderr_text = (stderr or b"").decode(errors="replace").strip()
-        if process.returncode != 0 and stderr_text:
-            output += "\nSTDERR: " + stderr_text
+        output_total = stdout.length
+        output_prefix = stdout.prefix[:min(stdout.length, MAX_OUTPUT_CHARS)]
+        if process.returncode != 0 and stderr.length:
+            separator = "\nSTDERR: "
+            output_total += len(separator) + stderr.length
+            stderr_prefix = stderr.prefix[:min(stderr.length, MAX_OUTPUT_CHARS)]
+            output_prefix = (output_prefix + separator + stderr_prefix)[:MAX_OUTPUT_CHARS]
+        output = _bounded_output(output_prefix, output_total)
         return output or "(no output)", process.returncode == 0
     except asyncio.CancelledError:
         if process is None and spawn_task is not None:
@@ -822,14 +903,18 @@ async def _run_subprocess(argv, *, shell: bool = False, timeout: int = 120, labe
             except Exception:
                 process = None
         if process is not None:
-            await asyncio.shield(stop_process_group(process))
+            if readers is None:
+                readers, completion = _start_capture(process)
+            await asyncio.shield(stop_process_group(process, readers, completion))
         raise
     except Exception as e:
         # Match the former subprocess.run handling for spawn/IO failures.
         if isinstance(e, subprocess.TimeoutExpired):
             return f"{label} timed out ({timeout}s)", False
         if process is not None:
-            await stop_process_group(process)
+            if readers is None:
+                readers, completion = _start_capture(process)
+            await stop_process_group(process, readers, completion)
         return str(e), False
 
 

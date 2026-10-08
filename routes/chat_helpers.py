@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -19,6 +18,7 @@ from src.model_context import estimate_tokens, get_context_length
 from src.auth_helpers import effective_user
 from src.prompt_security import untrusted_context_message
 from src.attachment_refs import attachment_ref
+from src import incognito_context as _incognito_context
 from src.session_titles import (
     first_user_message as _first_user_message,
     needs_auto_name,
@@ -62,9 +62,9 @@ def _is_casual_low_signal(text: str) -> bool:
 # the background work (extraction, auto-naming) silently never runs.
 # Mirrors WebhookManager._spawn_tracked from src/webhook_manager.py.
 _BG_TASKS: set[asyncio.Task] = set()
-_INCOGNITO_CONTEXTS: dict[str, dict[str, Any]] = {}
-_INCOGNITO_CONTEXT_TTL_SECONDS = 6 * 60 * 60
-_INCOGNITO_CONTEXT_MAX_MESSAGES = 80
+_INCOGNITO_CONTEXTS = _incognito_context.INCOGNITO_CONTEXTS
+_INCOGNITO_CONTEXT_LOCK = _incognito_context.INCOGNITO_CONTEXT_LOCK
+_INCOGNITO_OWNER_UNSET = _incognito_context.OWNER_UNSET
 
 
 def _spawn_bg(coro) -> asyncio.Task:
@@ -75,38 +75,9 @@ def _spawn_bg(coro) -> asyncio.Task:
     return task
 
 
-def _prune_incognito_contexts(now: float | None = None):
-    now = now or time.time()
-    stale = [
-        sid for sid, bundle in _INCOGNITO_CONTEXTS.items()
-        if now - float(bundle.get("updated_at") or 0) > _INCOGNITO_CONTEXT_TTL_SECONDS
-    ]
-    for sid in stale:
-        _INCOGNITO_CONTEXTS.pop(sid, None)
-
-
-def _incognito_messages(session_id: str) -> list[dict[str, Any]]:
-    _prune_incognito_contexts()
-    bundle = _INCOGNITO_CONTEXTS.get(str(session_id or ""))
-    if not bundle:
-        return []
-    return [dict(m) for m in bundle.get("messages", []) if isinstance(m, dict)]
-
-
-def _append_incognito_message(session_id: str, role: str, content: Any, metadata: dict | None = None):
-    sid = str(session_id or "").strip()
-    if not sid:
-        return
-    _prune_incognito_contexts()
-    bundle = _INCOGNITO_CONTEXTS.setdefault(sid, {"messages": [], "updated_at": time.time()})
-    msg: dict[str, Any] = {"role": role, "content": content}
-    if metadata:
-        msg["metadata"] = dict(metadata)
-    messages = bundle.setdefault("messages", [])
-    messages.append(msg)
-    if len(messages) > _INCOGNITO_CONTEXT_MAX_MESSAGES:
-        del messages[:-_INCOGNITO_CONTEXT_MAX_MESSAGES]
-    bundle["updated_at"] = time.time()
+_incognito_messages = _incognito_context.incognito_messages
+_append_incognito_message = _incognito_context.append_incognito_message
+_clear_incognito_context = _incognito_context.clear_incognito_context
 
 
 # ── Data containers ────────────────────────────────────────────────────── #
@@ -647,7 +618,10 @@ async def build_chat_context(
     # bleed into context and the turn is not persisted.
     if persist_user_message and incognito:
         user_meta = {"attachments": preprocessed.attachment_meta} if preprocessed.attachment_meta else None
-        _append_incognito_message(session_id, "user", preprocessed.user_content, user_meta)
+        incognito_owner = getattr(sess, "owner", _INCOGNITO_OWNER_UNSET)
+        _append_incognito_message(
+            session_id, "user", preprocessed.user_content, user_meta, owner=incognito_owner
+        )
     elif persist_user_message:
         add_user_message(sess, chat_handler, preprocessed, incognito=False)
 
@@ -756,7 +730,11 @@ async def build_chat_context(
     # Build messages. In Nobody/incognito mode, never read saved session
     # history: the session id may be a temporary wrapper or, in buggy clients, a
     # stale normal session id. Only the ephemeral incognito transcript is safe.
-    messages = preface + (_incognito_messages(session_id) if incognito else sess.get_context_messages())
+    messages = preface + (
+        _incognito_messages(
+            session_id, owner=getattr(sess, "owner", _INCOGNITO_OWNER_UNSET)
+        ) if incognito else sess.get_context_messages()
+    )
 
     # Current date/time — injected as a standalone *user*-role context message
     # placed immediately before the latest user turn, NOT folded into the
@@ -1078,7 +1056,13 @@ def save_assistant_response(
     else:
         _content = full_response
     if incognito:
-        _append_incognito_message(session_id, "assistant", _content, md)
+        _append_incognito_message(
+            session_id,
+            "assistant",
+            _content,
+            md,
+            owner=getattr(sess, "owner", _INCOGNITO_OWNER_UNSET),
+        )
         return None
     sess.add_message(ChatMessage("assistant", _content, metadata=md))
 

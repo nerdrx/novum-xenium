@@ -16,6 +16,9 @@ let sortOrder = 'newest';
 let selectMode = false;
 let selectedIds = new Set();
 let memoriesLoading = false;
+let _memoryLoaded = false;
+let _memoryLoadSeq = 0;
+let _memoryLoadFailed = false;
 
 
 const MEMORY_CATEGORIES = ['fact', 'identity', 'preference', 'contact', 'project', 'goal', 'task'];
@@ -370,48 +373,65 @@ async function syncPrefToggle(elementId, prefKey, onMsg, offMsg, dimBelow = true
 }
 
 export async function loadMemories() {
+  const requestId = ++_memoryLoadSeq;
   _ensureNewMemoryCategorySelect();
-  memoriesLoading = true;
-  renderMemoryList();
-  updateMemoryCount();
+  if (!_memoryLoaded) {
+    memoriesLoading = true;
+    renderMemoryList();
+    updateMemoryCount();
+  }
   try {
     const response = await fetch(`${window.location.origin}/api/memory`);
-
-    if (!response.ok) {
-      console.error('Memory fetch failed with status:', response.status);
-      memories = [];
-      memoriesLoading = false;
-      buildCategoryChips();
-      renderMemoryList();
-      updateMemoryCount();
-      syncToggles();
-      return;
-    }
-
+    if (requestId !== _memoryLoadSeq) return;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-
-    if (data && data.memory) {
-      memories = data.memory;
-    } else if (Array.isArray(data)) {
-      memories = data;
-    } else {
-      memories = [];
-    }
-
+    if (requestId !== _memoryLoadSeq) return;
+    const nextMemories = Array.isArray(data) ? data : data?.memory;
+    if (!Array.isArray(nextMemories)) throw new Error('Invalid memory response');
+    memories = nextMemories;
+    _memoryLoaded = true;
+    _memoryLoadFailed = false;
     memoriesLoading = false;
     buildCategoryChips();
     renderMemoryList();
     updateMemoryCount();
   } catch (error) {
-    console.error('Failed to load memories:', error);
-    memories = [];
-    memoriesLoading = false;
-    buildCategoryChips();
-    renderMemoryList();
-    updateMemoryCount();
+    if (requestId === _memoryLoadSeq) {
+      console.error('Failed to load memories:', error);
+      _memoryLoadFailed = true;
+      _memoryLoadError();
+    }
+  } finally {
+    if (requestId === _memoryLoadSeq) memoriesLoading = false;
   }
-  // Always wire toggles, even if memory API failed
-  syncToggles();
+  if (requestId === _memoryLoadSeq) {
+    if (!_memoryLoaded) {
+      renderMemoryList();
+      updateMemoryCount();
+    }
+    // Always wire toggles, even if memory API failed
+    syncToggles();
+  }
+}
+
+function _memoryLoadError() {
+  const list = document.getElementById('memory-list');
+  if (!list || document.getElementById('memory-load-error')) return;
+  const error = document.createElement('div');
+  error.id = 'memory-load-error';
+  error.className = 'admin-error';
+  error.setAttribute('role', 'alert');
+  error.append(document.createTextNode(_memoryLoaded
+    ? 'Memories could not be refreshed. Your last successful list is kept. '
+    : 'Memories could not be loaded. '));
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'admin-btn-sm';
+  retry.textContent = 'Retry';
+  retry.addEventListener('click', () => loadMemories());
+  error.appendChild(retry);
+  if (!_memoryLoaded) list.replaceChildren(error);
+  else list.prepend(error);
 }
 
 // ---- Bulk select mode ----
@@ -702,6 +722,10 @@ export function renderMemoryList() {
       memoryList.replaceChildren(row);
       return;
     }
+    if (_memoryLoadFailed) {
+      _memoryLoadError();
+      return;
+    }
     const searchTerm = document.getElementById('memory-search')?.value?.trim() || '';
     const _smiley = '<span style="vertical-align:-3px;margin-left:6px;">' + uiModule.emptyStateIcon('smiley') + '</span>';
     if (searchTerm || activeCategory !== 'all') {
@@ -978,7 +1002,7 @@ export function renderMemoryList() {
 
     memoryList.appendChild(item);
   });
-
+  if (_memoryLoadFailed) _memoryLoadError();
 }
 
 // ---- Inline edit with category picker ----
@@ -1081,6 +1105,11 @@ export function updateMemoryCount() {
   if (memoriesLoading) {
     if (h2Count) h2Count.textContent = 'loading...';
     if (tabCount) tabCount.textContent = '...';
+    return;
+  }
+  if (_memoryLoadFailed && !_memoryLoaded) {
+    if (h2Count) h2Count.textContent = 'unavailable';
+    if (tabCount) tabCount.textContent = '—';
     return;
   }
 

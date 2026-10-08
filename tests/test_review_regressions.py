@@ -362,6 +362,7 @@ async def test_build_chat_context_incognito_does_not_duplicate_current_user_mess
 
     chat_helpers = importlib.import_module("routes.chat_helpers")
     chat_helpers._INCOGNITO_CONTEXTS.clear()
+    monkeypatch.setattr(chat_helpers._incognito_context, "session_matches_owner", lambda _sid, _owner: True)
 
     async def fake_preprocess(chat_handler, message, att_ids, sess, **kwargs):
         # **kwargs absorbs auto_opened_docs (added when PDF imports auto-create
@@ -444,6 +445,7 @@ async def test_build_chat_context_incognito_ignores_saved_session_history(monkey
 
     chat_helpers = importlib.import_module("routes.chat_helpers")
     chat_helpers._INCOGNITO_CONTEXTS.clear()
+    monkeypatch.setattr(chat_helpers._incognito_context, "session_matches_owner", lambda _sid, _owner: True)
 
     async def fake_preprocess(chat_handler, message, att_ids, sess, **kwargs):
         return chat_helpers.PreprocessedMessage(

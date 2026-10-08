@@ -598,11 +598,23 @@ class SessionManager:
 
     def delete_session(self, session_id: str) -> bool:
         """Permanently delete a session and all its messages."""
-        db = SessionLocal()
+        incognito_lock = None
+        clear_incognito_context = None
+        db = None
         fenced_run = False
         context_owner = None
         image_lock = None
         try:
+            # Serialize private transcript writes with the permanent delete so
+            # a late stream callback cannot repopulate the deleted session.
+            from src.incognito_context import INCOGNITO_CONTEXT_LOCK, clear_incognito_context as clear_context
+            incognito_lock = INCOGNITO_CONTEXT_LOCK
+            clear_incognito_context = clear_context
+            incognito_lock.acquire()
+        except Exception:
+            logger.warning("Incognito transcript deletion fence unavailable for %s", session_id, exc_info=True)
+        try:
+            db = SessionLocal()
             from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
             image_lock = IMAGE_PERSISTENCE_LOCK
             image_lock.acquire()
@@ -641,6 +653,11 @@ class SessionManager:
                 # Commit the document-detach / message-delete above (a no-op when
                 # the ghost had no rows) together with the session delete.
                 db.commit()
+                if clear_incognito_context is not None:
+                    clear_incognito_context(session_id, context_owner)
+                if incognito_lock is not None:
+                    incognito_lock.release()
+                    incognito_lock = None
                 image_lock.release()
                 image_lock = None
                 try:
@@ -676,15 +693,19 @@ class SessionManager:
 
         except Exception as e:
             logger.error(f"Error deleting session: {e}")
-            db.rollback()
+            if db is not None:
+                db.rollback()
             if fenced_run:
                 from src.agent_runs import complete_session_deletion
                 complete_session_deletion(context_owner, session_id)
             return False
         finally:
+            if incognito_lock is not None:
+                incognito_lock.release()
             if image_lock is not None:
                 image_lock.release()
-            db.close()
+            if db is not None:
+                db.close()
 
     # ------------------------------------------------------------------
     # Session updates

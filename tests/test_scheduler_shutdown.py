@@ -8,7 +8,9 @@ from sqlalchemy import Column, DateTime, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="process-group assertions are POSIX-specific")
+POSIX_PROCESS_GROUP = pytest.mark.skipif(
+    os.name == "nt", reason="process-group assertions are POSIX-specific",
+)
 
 
 def _is_running(pid):
@@ -40,6 +42,20 @@ def _exited_parent_child_script(tmp_path):
         import os, subprocess, sys
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
         open({str(child_pid_file)!r}, 'w').write(f'{{os.getpid()}} {{child.pid}}')
+    """), encoding="utf-8")
+    return script, child_pid_file
+
+
+def _overflow_child_process_script(tmp_path):
+    child_pid_file = tmp_path / "overflow-child.pid"
+    script = tmp_path / "overflow-parent.py"
+    script.write_text(textwrap.dedent(f"""\
+        import subprocess, sys, time
+        sys.stdout.write('x' * 200000)
+        sys.stdout.flush()
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        open({str(child_pid_file)!r}, 'w').write(str(child.pid))
+        time.sleep(60)
     """), encoding="utf-8")
     return script, child_pid_file
 
@@ -83,6 +99,7 @@ def _kill_pid(pid):
         pass
 
 
+@POSIX_PROCESS_GROUP
 def test_subprocess_cancellation_kills_only_owned_process_group(tmp_path):
     from src.builtin_actions import _run_subprocess
 
@@ -103,6 +120,7 @@ def test_subprocess_cancellation_kills_only_owned_process_group(tmp_path):
     asyncio.run(drive())
 
 
+@POSIX_PROCESS_GROUP
 def test_subprocess_cancellation_kills_child_after_parent_exits(tmp_path):
     from src.builtin_actions import _run_subprocess
 
@@ -134,6 +152,7 @@ def test_subprocess_cancellation_kills_child_after_parent_exits(tmp_path):
     asyncio.run(drive())
 
 
+@POSIX_PROCESS_GROUP
 def test_subprocess_cancellation_during_spawn_reaps_created_group(tmp_path, monkeypatch):
     from src.builtin_actions import _run_subprocess
 
@@ -177,6 +196,7 @@ def test_subprocess_cancellation_during_spawn_reaps_created_group(tmp_path, monk
     asyncio.run(drive())
 
 
+@POSIX_PROCESS_GROUP
 def test_subprocess_timeout_still_returns_label_and_reaps_children(tmp_path):
     from src.builtin_actions import _run_subprocess
 
@@ -195,6 +215,116 @@ def test_subprocess_timeout_still_returns_label_and_reaps_children(tmp_path):
             if child_pid_file.exists():
                 child_pid = int(child_pid_file.read_text())
                 _kill_pid(child_pid)
+
+    asyncio.run(drive())
+
+
+def test_subprocess_bounds_both_streams_and_preserves_unicode(tmp_path):
+    from src.builtin_actions import _run_subprocess
+    from src.constants import MAX_OUTPUT_CHARS
+
+    stdout_size = 150_001
+    stderr_size = 150_001
+    separator = "\nSTDERR: "
+
+    async def drive():
+        success = await _run_subprocess([
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('λ' + 'o' * 150000); sys.stdout.flush(); "
+            "sys.stderr.write('é' + 'e' * 150000); sys.stderr.flush()",
+        ])
+        expected_success_total = stdout_size
+        success_suffix = f"\n... (truncated, {expected_success_total} chars total)"
+        assert success[1] is True
+        assert success[0].startswith("λ")
+        assert success[0].endswith(success_suffix)
+        assert len(success[0]) <= MAX_OUTPUT_CHARS + len(success_suffix)
+
+        failure = await _run_subprocess([
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('ok'); sys.stdout.flush(); "
+            "sys.stderr.write('é' + 'e' * 150000); sys.stderr.flush(); sys.exit(7)",
+        ])
+        expected_failure_total = len("ok") + len(separator) + stderr_size
+        failure_suffix = f"\n... (truncated, {expected_failure_total} chars total)"
+        assert failure[1] is False
+        assert failure[0].startswith("ok\nSTDERR: é")
+        assert failure[0].endswith(failure_suffix)
+        assert len(failure[0]) <= MAX_OUTPUT_CHARS + len(failure_suffix)
+
+    asyncio.run(drive())
+
+
+def test_subprocess_trims_stdout_before_appending_failure_stderr():
+    from src.builtin_actions import _run_subprocess
+
+    async def drive():
+        result = await _run_subprocess([
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('hi  \\n'); "
+            "sys.stderr.write('err'); sys.exit(3)",
+        ])
+        assert result == ("hi\nSTDERR: err", False)
+
+    asyncio.run(drive())
+
+
+def test_subprocess_cleanup_consumes_reader_errors(monkeypatch):
+    from src.builtin_actions import _run_subprocess
+
+    class ErrorReader:
+        async def read(self, _size):
+            raise OSError("controlled stream read failure")
+
+    class EmptyReader:
+        async def read(self, _size):
+            return b""
+
+    class FakeProcess:
+        pid = 2_000_000_000
+        returncode = None
+        stdout = ErrorReader()
+        stderr = EmptyReader()
+
+        async def wait(self):
+            self.returncode = 0
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    async def fake_create(*_args, **_kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+
+    result = asyncio.run(_run_subprocess(["fixture-command"]))
+    assert result == ("controlled stream read failure", False)
+
+
+@POSIX_PROCESS_GROUP
+def test_subprocess_cancellation_after_output_overflow_stops_child(tmp_path):
+    from src.builtin_actions import _run_subprocess
+
+    script, child_pid_file = _overflow_child_process_script(tmp_path)
+
+    async def drive():
+        run = asyncio.create_task(_run_subprocess([sys.executable, str(script)]))
+        child_pid = None
+        try:
+            await _wait_for_file(child_pid_file)
+            child_pid = int(child_pid_file.read_text())
+            run.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run
+            await _wait_for_process_exit(child_pid)
+        finally:
+            await _cancel_and_drain(run)
+            if child_pid_file.exists():
+                _kill_pid(int(child_pid_file.read_text()))
 
     asyncio.run(drive())
 

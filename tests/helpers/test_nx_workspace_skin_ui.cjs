@@ -283,6 +283,74 @@ function noOverflow(metrics, label) {
       } else {
         await page.screenshot({ path: path.join(screenshotDir, 'nx-skin-mobile.png'), fullPage: true });
       }
+      // Exercise the actual effect module, including lifecycle under rapid changes.
+      await page.evaluate(() => {
+        window.nxTheme.applyBgPattern('none');
+        const request = window.requestAnimationFrame.bind(window);
+        const cancel = window.cancelAnimationFrame.bind(window);
+        window.effectFrames = new Set();
+        window.requestAnimationFrame = callback => {
+          const id = request(now => { window.effectFrames.delete(id); callback(now); });
+          if (callback.name === 'draw') window.effectFrames.add(id);
+          return id;
+        };
+        window.cancelAnimationFrame = id => { window.effectFrames.delete(id); cancel(id); };
+      });
+      for (const pattern of ['snow', 'fireflies', 'orbits']) {
+        assert.equal(await page.locator(`#theme-bg-pattern-select option[value="${pattern}"]`).count(), 1);
+        await page.evaluate(pattern => {
+          window.nxTheme.applyBgEffectSize(1);
+          window.nxTheme.applyBgEffectColor('#ab89ef');
+          window.nxTheme.applyBgEffectIntensity(0.65);
+          window.nxTheme.applyBgPattern(pattern);
+          window.nxTheme.applyBgPattern(pattern);
+        }, pattern);
+        const canvas = page.locator(`#${pattern}-canvas`);
+        assert.equal(await canvas.count(), 1);
+        assert.equal(await canvas.getAttribute('aria-hidden'), 'true');
+        assert.equal(await canvas.evaluate(c => getComputedStyle(c).pointerEvents), 'none');
+        assert.equal(await canvas.evaluate(c => getComputedStyle(c).opacity), '0.65');
+        assert.equal(await page.evaluate(() => window.effectFrames.size), 1, 'one active effect loop after repeated selection: '+pattern);
+        const before = await canvas.evaluate(c => c.toDataURL());
+        await page.waitForTimeout(100);
+        assert.ok(await canvas.evaluate(c => c.toDataURL()) !== before, 'effect moves');
+        await page.screenshot({ path: path.join(screenshotDir, `nx-effect-${pattern}-${viewport.name}.png`) });
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.waitForTimeout(40);
+        assert.equal(await page.evaluate(() => window.effectFrames.size), 0, 'reduced motion stops animation');
+        const still = await canvas.evaluate(c => c.toDataURL());
+        await page.waitForTimeout(60);
+        assert.ok(await canvas.evaluate(c => c.toDataURL()) === still, 'reduced motion leaves a still background');
+        await page.evaluate(() => window.nxTheme.applyBgEffectSize(2));
+        assert.ok(await canvas.evaluate(c => c.toDataURL()) !== still, 'size control updates still background');
+        await page.evaluate(() => window.nxTheme.applyBgEffectColor('#ff9999'));
+        const resized = await canvas.evaluate(c => c.toDataURL());
+        await page.evaluate(() => window.nxTheme.applyBgEffectColor('#55ff99'));
+        assert.ok(await canvas.evaluate(c => c.toDataURL()) !== resized, 'colour control updates still background');
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await page.evaluate(() => {
+          Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        assert.equal(await page.evaluate(() => window.effectFrames.size), 0, 'hidden tab stops animation');
+        await page.evaluate(() => {
+          delete document.hidden;
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        assert.equal(await page.evaluate(() => window.effectFrames.size), 1, 'visible tab resumes once');
+        await page.evaluate(() => window.nxTheme.applyBgPattern('none'));
+        assert.equal(await canvas.count(), 0, 'switching to Solid removes canvas');
+        assert.equal(await page.evaluate(() => window.effectFrames.size), 0, 'switching cancels animation');
+      }
+      await page.evaluate(() => {
+        window.nxTheme.applyBgPattern('rain');
+        window.nxTheme.applyBgPattern('rain');
+      });
+      await page.waitForTimeout(50);
+      assert.equal(await page.evaluate(() => window.effectFrames.size), 1, 'existing effect does not retain a detached animation loop');
+      await page.evaluate(() => window.nxTheme.applyBgPattern('none'));
+      await page.waitForTimeout(50);
+      assert.equal(await page.evaluate(() => window.effectFrames.size), 0, 'existing effect stops after removal');
       assert.deepEqual(pageErrors, [], `browser runtime errors: ${pageErrors.join('\n')}`);
       await page.close();
     }

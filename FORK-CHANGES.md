@@ -33,6 +33,14 @@ Validation: all 17 native Rust tests and the desktop browser regression passed. 
 
 Validation: headless Chromium checks cover desktop and mobile layouts, logo-only branding, keyboard focus, settings and theme panels, and customization through the existing theme module.
 
+## Additional background effects
+
+- Adds Snow, Fireflies and Orbit rings to the existing Background / Effect selector. Each uses the existing colour, intensity and size controls and theme save/import/export path.
+- New effects pause in hidden tabs and show a still frame with reduced motion enabled. Colour and size changes still update that frame.
+- Re-selecting an existing animated effect no longer leaves its detached canvas animating.
+
+Validation: desktop/mobile Chromium checks cover rendering, controls, repeated selection, cleanup, hidden-tab resume and reduced motion.
+
 ## Included changes
 
 - Tab and Shift+Tab keep native composer focus navigation instead of accidentally switching Plan mode. Plan mode has a visible toggle under More tools, with its pressed state exposed to assistive technology.

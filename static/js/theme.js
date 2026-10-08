@@ -416,13 +416,17 @@ export function applyUiScale(scale) {
 const _BG_CLASSES = ['bg-pattern-dots',
   'bg-pattern-synapse', 'bg-pattern-rain', 'bg-pattern-constellations',
   'bg-pattern-perlin-flow',
-  'bg-pattern-petals', 'bg-pattern-sparkles', 'bg-pattern-embers'];
+  'bg-pattern-petals', 'bg-pattern-sparkles', 'bg-pattern-embers',
+  'bg-pattern-snow', 'bg-pattern-fireflies', 'bg-pattern-orbits'];
 const _CANVAS_PATTERNS = { synapse: _initSynapse, rain: _initRain, constellations: _initConstellations,
   'perlin-flow': _initPerlinFlow,
-  petals: _initPetals, sparkles: _initSparkles, embers: _initEmbers };
+  petals: _initPetals, sparkles: _initSparkles, embers: _initEmbers,
+  snow: () => _initAmbient('snow'), fireflies: () => _initAmbient('fireflies'),
+  orbits: () => _initAmbient('orbits') };
 
 export function applyBgEffectColor(color) {
   document.documentElement.style.setProperty('--bg-effect-color', color || '');
+  _ambientRefresh?.();
 }
 
 export function applyBgEffectIntensity(v) {
@@ -435,6 +439,7 @@ export function applyBgEffectSize(v) {
   // v is a multiplier 0.3..2.5. Default 1 when missing.
   const n = (v === undefined || v === null || isNaN(v)) ? 1 : Math.max(0.2, Math.min(3, Number(v)));
   document.documentElement.style.setProperty('--bg-effect-size', String(n));
+  _ambientRefresh?.();
 }
 
 /** Toggle the global "frosted glass" look — applies a translucent + blurred
@@ -455,6 +460,8 @@ const _STATIC_PATTERNS = new Set(['none', 'dots']);
 
 export function applyBgPattern(pattern) {
   const p = pattern || 'none';
+  _ambientCleanup?.();
+  _ambientCleanup = null;
   document.body.classList.remove(..._BG_CLASSES);
   // Clean up any canvas backgrounds
   document.querySelectorAll('#synapse-canvas, #rain-canvas, #constellations-canvas, #perlin-flow-canvas, #petals-canvas, #sparkles-canvas, #embers-canvas').forEach(c => c.remove());
@@ -1547,6 +1554,98 @@ export function closePopup() {
 // Expose for app.js wiring + AI ui_control
 export function getCustomThemes() { return _loadCustomThemes(); }
 
+// Shared lifecycle for the lightweight ambient effects. Each owns one canvas,
+// pauses while hidden, and renders a still frame when reduced motion is enabled.
+let _ambientCleanup = null;
+let _ambientRefresh = null;
+function _initAmbient(pattern) {
+  const canvas = document.createElement('canvas');
+  canvas.id = `${pattern}-canvas`;
+  canvas.setAttribute('aria-hidden', 'true');
+  canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;opacity:var(--bg-effect-intensity,1)';
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  document.body.prepend(canvas);
+  const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const count = pattern === 'orbits' ? 9 : 65;
+  const particles = Array.from({ length: count }, () => ({
+    x: Math.random(), y: Math.random(), phase: Math.random() * Math.PI * 2,
+    size: 0.6 + Math.random() * 1.3, speed: 0.02 + Math.random() * 0.045,
+  }));
+  let width, height, frame = 0, last = 0, time = 0;
+  function draw(now) {
+    frame = 0;
+    if (!canvas.isConnected || document.hidden) return;
+    const dt = last ? Math.min((now - last) / 1000, 0.05) : 0;
+    last = now;
+    if (!motion.matches) time += dt;
+    const style = getComputedStyle(document.documentElement);
+    const color = style.getPropertyValue('--bg-effect-color').trim() || style.getPropertyValue('--fg').trim();
+    const size = _getEffectSize();
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = ctx.strokeStyle = color;
+    for (const [i, p] of particles.entries()) {
+      ctx.beginPath();
+      if (pattern === 'orbits') {
+        const radius = Math.min(width, height) * (0.12 + i * 0.045) * size;
+        const angle = p.phase + time * p.speed;
+        const x = width * 0.55, y = height * 0.45;
+        ctx.globalAlpha = 0.09;
+        ctx.lineWidth = 1;
+        ctx.ellipse(x, y, radius, radius * 0.55, -0.35, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        // Rotate the point with the ellipse so dots stay on their orbit.
+        const dx = Math.cos(angle) * radius, dy = Math.sin(angle) * radius * 0.55;
+        ctx.arc(x + dx * Math.cos(-0.35) - dy * Math.sin(-0.35),
+          y + dx * Math.sin(-0.35) + dy * Math.cos(-0.35), 2 * size, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.5;
+      } else if (pattern === 'snow') {
+        const x = ((p.x + Math.sin(time * 0.3 + p.phase) * 0.015 + 1) % 1) * width;
+        const y = ((p.y + time * p.speed) % 1) * height;
+        ctx.arc(x, y, p.size * size, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.18 + p.size * 0.12;
+      } else {
+        const x = (p.x + Math.sin(time * p.speed + p.phase) * 0.04) * width;
+        const y = (p.y + Math.cos(time * p.speed * 1.3 + p.phase) * 0.04) * height;
+        ctx.arc(x, y, p.size * size, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.15 + (1 + Math.sin(time * 0.7 + p.phase)) * 0.2;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 7 * size;
+      }
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+    if (!motion.matches) frame = requestAnimationFrame(draw);
+  }
+  function restart() {
+    cancelAnimationFrame(frame);
+    last = 0;
+    draw(performance.now());
+  }
+  function resize() {
+    width = window.innerWidth; height = window.innerHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    restart();
+  }
+  window.addEventListener('resize', resize);
+  document.addEventListener('visibilitychange', restart);
+  motion.addEventListener('change', restart);
+  _ambientRefresh = restart;
+  _ambientCleanup = () => {
+    _ambientRefresh = null;
+    cancelAnimationFrame(frame);
+    window.removeEventListener('resize', resize);
+    document.removeEventListener('visibilitychange', restart);
+    motion.removeEventListener('change', restart);
+    canvas.remove();
+  };
+  resize();
+}
+
 // ── Synapse background effect ──
 // Uses the CSS grid pattern as base, overlays fast-moving small light pulses on grid lines
 function _initSynapse() {
@@ -1597,7 +1696,7 @@ function _initSynapse() {
   }
 
   function draw() {
-    if (!document.body.classList.contains('bg-pattern-synapse')) {
+    if (!canvas.isConnected || !document.body.classList.contains('bg-pattern-synapse')) {
       window.removeEventListener('resize', _onResize);
       canvas.remove();
       return;
@@ -1681,7 +1780,7 @@ function _initRain() {
   }
 
   function draw() {
-    if (!document.body.classList.contains('bg-pattern-rain')) {
+    if (!canvas.isConnected || !document.body.classList.contains('bg-pattern-rain')) {
       window.removeEventListener('resize', _onResize);
       canvas.remove();
       return;
@@ -1767,7 +1866,7 @@ function _initConstellations() {
 
   let t = 0;
   function draw() {
-    if (!document.body.classList.contains('bg-pattern-constellations')) {
+    if (!canvas.isConnected || !document.body.classList.contains('bg-pattern-constellations')) {
       window.removeEventListener('resize', _onResize);
       canvas.remove();
       return;
@@ -1862,7 +1961,7 @@ function _initPerlinFlow() {
     return _fadeStyle;
   }
   function draw() {
-    if (!document.body.classList.contains('bg-pattern-perlin-flow')) { window.removeEventListener('resize', _onResize); canvas.remove(); return; }
+    if (!canvas.isConnected || !document.body.classList.contains('bg-pattern-perlin-flow')) { window.removeEventListener('resize', _onResize); canvas.remove(); return; }
     requestAnimationFrame(draw);
     ctx.fillStyle = getFade();
     ctx.fillRect(0, 0, W, H);
@@ -1916,7 +2015,7 @@ function _initPetals() {
   window.addEventListener('resize', _onResize);
   function getColor() { const s = getComputedStyle(document.documentElement); return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#9cdef2'; }
   function draw() {
-    if (!document.body.classList.contains('bg-pattern-petals')) { window.removeEventListener('resize', _onResize); canvas.remove(); return; }
+    if (!canvas.isConnected || !document.body.classList.contains('bg-pattern-petals')) { window.removeEventListener('resize', _onResize); canvas.remove(); return; }
     requestAnimationFrame(draw);
     ctx.clearRect(0, 0, W, H);
     const c = getColor();
@@ -1978,7 +2077,7 @@ function _initSparkles() {
     ctx.restore();
   }
   function draw() {
-    if (!document.body.classList.contains('bg-pattern-sparkles')) { window.removeEventListener('resize', _onResize); canvas.remove(); return; }
+    if (!canvas.isConnected || !document.body.classList.contains('bg-pattern-sparkles')) { window.removeEventListener('resize', _onResize); canvas.remove(); return; }
     requestAnimationFrame(draw);
     ctx.clearRect(0, 0, W, H);
     const c = getColor();
@@ -2044,7 +2143,7 @@ function _initEmbers() {
     return `rgba(${r},${g},${b},${a})`;
   }
   function draw() {
-    if (!document.body.classList.contains('bg-pattern-embers')) {
+    if (!canvas.isConnected || !document.body.classList.contains('bg-pattern-embers')) {
       window.removeEventListener('resize', _onResize);
       canvas.remove();
       return;

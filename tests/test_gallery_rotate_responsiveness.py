@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import threading
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Request
@@ -29,7 +31,11 @@ def _endpoints():
         if getattr(route, "path", "") == "/api/gallery/{image_id}"
         and "DELETE" in getattr(route, "methods", set())
     )
-    return rotate, delete
+    replace = next(
+        route.endpoint for route in routes
+        if getattr(route, "path", "") == "/api/gallery/{image_id}/replace"
+    )
+    return rotate, delete, replace
 
 
 def _request(body=None):
@@ -47,6 +53,14 @@ def _request(body=None):
         {"type": "http", "method": "POST", "path": "/", "headers": [(b"content-type", b"application/json")]},
         receive,
     )
+
+
+def _form_request():
+    class FormRequest:
+        async def form(self):
+            return {"image": SimpleNamespace(filename="replacement.png", read=lambda: None)}
+
+    return FormRequest()
 
 
 def _seed(tmp_path, monkeypatch, *, owner="alice"):
@@ -83,7 +97,7 @@ async def _wait_thread_event(event: threading.Event):
 
 def test_rotation_keeps_event_loop_responsive_and_updates_file_metadata(tmp_path, monkeypatch):
     db_factory, image_dir, _original = _seed(tmp_path, monkeypatch)
-    rotate, _delete = _endpoints()
+    rotate, _delete, _replace = _endpoints()
     entered = threading.Event()
     release = threading.Event()
     original_rotate = Image.Image.rotate
@@ -125,7 +139,7 @@ def test_rotation_keeps_event_loop_responsive_and_updates_file_metadata(tmp_path
 
 def test_delete_during_rotation_cannot_be_undone_by_late_file_write(tmp_path, monkeypatch):
     db_factory, image_dir, _original = _seed(tmp_path, monkeypatch)
-    rotate, delete = _endpoints()
+    rotate, delete, _replace = _endpoints()
     entered = threading.Event()
     release = threading.Event()
     original_rotate = Image.Image.rotate
@@ -163,9 +177,120 @@ def test_delete_during_rotation_cannot_be_undone_by_late_file_write(tmp_path, mo
     db.close()
 
 
+def test_replace_serializes_with_rotation_compensation(tmp_path, monkeypatch):
+    db_factory, image_dir, _original = _seed(tmp_path, monkeypatch)
+    rotate, _delete, replace = _endpoints()
+    replacement = Image.new("RGB", (60, 15), "green")
+    replacement_buffer = io.BytesIO()
+    replacement.save(replacement_buffer, format="PNG")
+    replacement_bytes = replacement_buffer.getvalue()
+    commit_entered = threading.Event()
+    release_commit = threading.Event()
+    upload_read = threading.Event()
+    main_thread = threading.get_ident()
+    factory_guard = threading.Lock()
+    fail_first_worker_commit = True
+    real_session_local = db_factory
+
+    def session_factory():
+        nonlocal fail_first_worker_commit
+        db = real_session_local()
+        with factory_guard:
+            should_fail = threading.get_ident() != main_thread and fail_first_worker_commit
+            if should_fail:
+                fail_first_worker_commit = False
+        if should_fail:
+            def fail_commit():
+                commit_entered.set()
+                release_commit.wait(3)
+                raise RuntimeError("controlled rotation commit failure")
+
+            db.commit = fail_commit
+        return db
+
+    monkeypatch.setattr(gallery_routes, "SessionLocal", session_factory)
+
+    async def read_replacement(_file, *_args):
+        upload_read.set()
+        return replacement_bytes
+
+    monkeypatch.setattr(gallery_routes, "read_upload_limited", read_replacement)
+
+    async def exercise():
+        rotation = asyncio.create_task(rotate(_request({"angle": 90}), "img-1"))
+        await _wait_thread_event(commit_entered)
+        replacement_task = asyncio.create_task(replace(_form_request(), "img-1"))
+        await _wait_thread_event(upload_read)
+        await asyncio.sleep(0.03)
+        assert not replacement_task.done(), "replacement must wait for rotation compensation"
+        release_commit.set()
+        with pytest.raises(RuntimeError, match="controlled rotation commit failure"):
+            await rotation
+        result = await replacement_task
+        return result
+
+    safety_release = threading.Timer(0.6, release_commit.set)
+    safety_release.start()
+    try:
+        result = asyncio.run(exercise())
+    finally:
+        release_commit.set()
+        safety_release.cancel()
+
+    db = db_factory()
+    row = db.query(GalleryImage).filter_by(id="img-1").one()
+    content = (image_dir / "x.png").read_bytes()
+    assert result == {"ok": True, "width": 60, "height": 15}
+    assert content == replacement_bytes
+    assert row.file_hash == hashlib.sha256(replacement_bytes).hexdigest()
+    assert row.file_size == len(replacement_bytes)
+    assert (row.width, row.height) == (60, 15)
+    db.close()
+
+
+def test_replace_started_before_delete_cannot_recreate_deleted_file(tmp_path, monkeypatch):
+    db_factory, image_dir, _original = _seed(tmp_path, monkeypatch)
+    _rotate, delete, replace = _endpoints()
+    replacement_bytes = b"replacement content"
+    upload_read = threading.Event()
+    release_upload = threading.Event()
+
+    async def gated_read(_file, *_args):
+        upload_read.set()
+        await asyncio.to_thread(release_upload.wait, 3)
+        return replacement_bytes
+
+    monkeypatch.setattr(gallery_routes, "read_upload_limited", gated_read)
+
+    async def exercise():
+        replacement_task = asyncio.create_task(replace(_form_request(), "img-1"))
+        await _wait_thread_event(upload_read)
+        deleted = await delete(_request(), "img-1")
+        release_upload.set()
+        with pytest.raises(HTTPException) as exc:
+            await replacement_task
+        assert exc.value.status_code == 404
+        return deleted
+
+    safety_release = threading.Timer(0.6, release_upload.set)
+    safety_release.start()
+    try:
+        result = asyncio.run(exercise())
+    finally:
+        release_upload.set()
+        safety_release.cancel()
+
+    db = db_factory()
+    row = db.query(GalleryImage).filter_by(id="img-1").one()
+    assert result["status"] == "deleted"
+    assert row.is_active is False
+    assert not (image_dir / "x.png").exists()
+    db.close()
+
+
 def test_concurrent_rotations_reject_stale_source_and_preserve_owner_scope(tmp_path, monkeypatch):
     db_factory, image_dir, original_content = _seed(tmp_path, monkeypatch)
-    rotate, _delete = _endpoints()
+    rotate, _delete, _replace = _endpoints()
     gate = threading.Barrier(2)
     original_rotate = Image.Image.rotate
 
@@ -198,7 +323,7 @@ def test_concurrent_rotations_reject_stale_source_and_preserve_owner_scope(tmp_p
 
 def test_rotation_rejects_other_owner_without_mutating_image(tmp_path, monkeypatch):
     db_factory, image_dir, original = _seed(tmp_path, monkeypatch)
-    rotate, delete = _endpoints()
+    rotate, delete, replace = _endpoints()
     monkeypatch.setattr(gallery_routes, "get_current_user", lambda _request: "bob")
 
     async def exercise():
@@ -214,10 +339,31 @@ def test_rotation_rejects_other_owner_without_mutating_image(tmp_path, monkeypat
     assert db.query(GalleryImage).filter_by(id="img-1").one().is_active is True
     db.close()
 
+    decoded = []
+    original_open = Image.open
+
+    def tracked_open(*args, **kwargs):
+        decoded.append(True)
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", tracked_open)
+
+    async def replace_other_owner():
+        async def replacement_bytes(_file, *_args):
+            return original
+
+        monkeypatch.setattr(gallery_routes, "read_upload_limited", replacement_bytes)
+        with pytest.raises(HTTPException) as exc:
+            await replace(_form_request(), "img-1")
+        assert exc.value.status_code == 403
+
+    asyncio.run(replace_other_owner())
+    assert decoded == []
+
 
 def test_rotation_commit_failure_restores_original_file_and_metadata(tmp_path, monkeypatch):
     db_factory, image_dir, original = _seed(tmp_path, monkeypatch)
-    rotate, _delete = _endpoints()
+    rotate, _delete, _replace = _endpoints()
 
     def failing_factory():
         db = db_factory()
@@ -238,7 +384,7 @@ def test_rotation_commit_failure_restores_original_file_and_metadata(tmp_path, m
 
 def test_image_delete_cleans_only_current_owners_chat_history(tmp_path, monkeypatch):
     db_factory, _image_dir, _original = _seed(tmp_path, monkeypatch)
-    _rotate, delete = _endpoints()
+    _rotate, delete, _replace = _endpoints()
     db = db_factory()
     for owner in ("alice", "bob"):
         db.add(Session(

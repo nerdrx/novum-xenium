@@ -346,6 +346,78 @@ def _rotate_gallery_image_sync(image_id: str, user: str | None, angle: int) -> d
         db.close()
 
 
+def _replace_gallery_image_sync(image_id: str, user: str | None, content: bytes) -> dict[str, Any]:
+    """Replace an image on a worker, serialized with rotation and deletion."""
+    from io import BytesIO
+    from PIL import Image
+    from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
+
+    db = SessionLocal()
+    try:
+        img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
+        if not img:
+            raise HTTPException(404, "Image not found")
+        if not user or img.owner != user:
+            raise HTTPException(403, "Not your image")
+        if img.is_active is False:
+            raise HTTPException(404, "Image not found")
+        filename = img.filename
+        db.rollback()
+
+        # Decode only after the owner and active-row checks, and keep the
+        # expensive image work outside the shared mutation lock.
+        dimensions = None
+        try:
+            with Image.open(BytesIO(content)) as image:
+                dimensions = image.size
+        except Exception:
+            # Preserve the existing behavior for non-decodable uploads: store
+            # bytes and leave previously known dimensions unchanged.
+            pass
+
+        with IMAGE_PERSISTENCE_LOCK:
+            img = db.query(GalleryImage).filter(
+                GalleryImage.id == image_id
+            ).populate_existing().first()
+            if not img:
+                raise HTTPException(404, "Image not found")
+            if not user or img.owner != user:
+                raise HTTPException(403, "Not your image")
+            if img.is_active is False:
+                raise HTTPException(404, "Image not found")
+            if img.filename != filename:
+                raise HTTPException(409, "Image changed during replacement; reload and retry")
+
+            GALLERY_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+            img_path = _gallery_image_path(filename)
+            had_file = img_path.is_file()
+            previous = img_path.read_bytes() if had_file else None
+            _atomic_replace_gallery_image(img_path, content)
+            img.file_hash = hashlib.sha256(content).hexdigest()
+            img.file_size = len(content)
+            if dimensions is not None:
+                img.width, img.height = dimensions
+            try:
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                try:
+                    if previous is None:
+                        img_path.unlink(missing_ok=True)
+                    else:
+                        _atomic_replace_gallery_image(img_path, previous)
+                except Exception as restore_exc:
+                    logger.exception("Could not restore gallery image after replacement commit failure")
+                    raise HTTPException(
+                        500, "Replacement failed and the original image could not be restored"
+                    ) from restore_exc
+                logger.exception("gallery_replace: DB commit failed")
+                raise HTTPException(500, "Image update failed") from exc
+            return {"ok": True, "width": img.width, "height": img.height}
+    finally:
+        db.close()
+
+
 def _delete_gallery_image_sync(image_id: str, user: str | None) -> Dict[str, str]:
     """Soft-delete and unlink on a worker, serialized with rotation writes."""
     from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
@@ -638,43 +710,13 @@ def setup_gallery_routes() -> APIRouter:
     async def gallery_replace(request: Request, image_id: str):
         """Replace an existing gallery image file with a new one."""
         user = get_current_user(request)
-        db = SessionLocal()
-        try:
-            img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
-            if not img:
-                raise HTTPException(404, "Image not found")
-            if not user or img.owner != user:
-                raise HTTPException(403, "Not your image")
+        form = await request.form()
+        file = form.get("image")
+        if not file or not hasattr(file, "read"):
+            raise HTTPException(400, "No image provided")
 
-            form = await request.form()
-            file = form.get("image")
-            if not file or not hasattr(file, 'read'):
-                raise HTTPException(400, "No image provided")
-
-            content = await read_upload_limited(file, GALLERY_UPLOAD_MAX_BYTES, "Gallery replacement")
-            GALLERY_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-            img_path = _gallery_image_path(img.filename)
-            img_path.write_bytes(content)
-
-            # Refresh dimensions in case the editor resized the canvas.
-            # updated_at auto-bumps via TimestampMixin's onupdate hook.
-            try:
-                from PIL import Image
-                from io import BytesIO
-                with Image.open(BytesIO(content)) as new_im:
-                    img.width = new_im.width
-                    img.height = new_im.height
-            except Exception:
-                pass
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-                logger.exception("gallery_replace: DB commit failed")
-                raise HTTPException(500, "Image update failed")
-            return {"ok": True, "width": img.width, "height": img.height}
-        finally:
-            db.close()
+        content = await read_upload_limited(file, GALLERY_UPLOAD_MAX_BYTES, "Gallery replacement")
+        return await asyncio.to_thread(_replace_gallery_image_sync, image_id, user, content)
 
     # ---- POST /api/gallery/{image_id}/rename ----
     @router.post("/api/gallery/{image_id}/rename")

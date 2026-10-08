@@ -6,6 +6,8 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Explicit natural follow-ups such as “continue this exact task” retain the original request for tool selection. Unrelated new requests and greetings remain separate; this does not restore or grant approvals.
+
 - Managed worktree removal reserves its target while Git runs outside the registry lock. Verification and duplicate removal reject the busy target without freezing unrelated async work; failed validation releases the reservation for retry.
 - Gallery saved-project cards support keyboard Resume/Select, expose selection state and keep their Delete control independent.
 - Evaluation setup failures write a sanitized failed-case report and stop before creating later cases.
@@ -297,3 +299,5 @@ A live `gpt-6.1-sol` coding task cloned this public repository with a sparse che
 October 8 worktree responsiveness and evaluation recovery follow-up: the frozen suite passed **6,725 tests with 17 skips**, and all **40** hidden-browser helpers passed offline. A disposable real-Git fixture holds removal I/O while verification returns its busy-target error and an event-loop callback responds; duplicate removal is rejected and dirty-target failure permits a later retry. Browser fixtures cover saved-project Resume, Space selection, selection state and independent Delete confirmation. Evaluation fixtures confirm a session-create HTTP failure writes a sanitized report and stops before another case starts.
 
 The deployed Gallery also passed a hidden full-app check with no source or provider overrides: an owned album opened through Enter, made the request for its exact album filter, selected through Space and showed a visible two-pixel focus outline, with no page errors. Its screenshot was visually inspected and the owned album removed afterwards. This targeted check does not certify all keyboard or screen-reader flows.
+
+October 8 natural-continuation follow-up: the frozen suite passed **6,731 tests with 17 skips**, and all **40** hidden-browser helpers passed offline. A realistic failed-snapshot coding history reproduced missing file tools when its follow-up was classified as a new Tasks request. Narrow continuation matching now retrieves the original coding request, with controls for new topics, greetings and unrelated requests beginning with Continue or Resume. The album browser helper also checks both tab transitions and the exact chosen album filter, rather than accepting an already-active Photos tab. This validation covers classification and browser state; a provider-backed two-turn continuation is a separate check.

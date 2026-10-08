@@ -18,7 +18,8 @@
         border-bottom:1px solid var(--border,#38313f); font:12px var(--font-family,sans-serif); user-select:none; }
       html[data-nx-window-frame=custom] #nx-window-bar { display:flex; }
       html[data-nx-window-frame=custom] body { position:relative!important; top:36px!important;
-        height:calc(100dvh - 36px)!important; transform:translateZ(0); }
+        height:calc(100dvh - 36px)!important; }
+      /* Fixed popups use viewport coordinates. Never transform their body ancestor. */
       html.ui-scale-125[data-nx-window-frame=custom] body { top:36px!important;
         height:calc(100dvh / 1.25 - 36px)!important; }
       #nx-window-drag { display:flex; align-items:center; flex:1; height:100%; padding:0 12px; gap:8px; outline-offset:-3px; }

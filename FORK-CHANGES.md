@@ -4,6 +4,15 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Popup movement and tab rendering fix
+
+- Removes the desktop body transform that made fixed popups use a different coordinate system from their shared drag/resize helpers. Header clicks no longer shift windows below the pointer.
+- Preserves interactive header controls even when a window provides its own drag exclusion selector, fixing Documents close/minimize behaviour.
+- Shows only the title-bar logo in desktop custom-frame mode, with a plain Home sidebar button instead of repeated branding. Browser branding is retained.
+- Removes native button appearance from workspace tabs and draws a straight active underline, avoiding broken rounded border corners in WebKit.
+
+Validation: direct browser regression uses the real shared drag helper to verify stationary header clicks, exact drag displacement and close with the Documents exclusion selector. Desktop tests passed; the Linux AppImage was rebuilt.
+
 ## Integrated desktop window controls
 
 - Adds a theme-aware workbench title bar with minimize, maximize/restore and close. Right-click the title area to restore the native frame; macOS keeps its native frame.

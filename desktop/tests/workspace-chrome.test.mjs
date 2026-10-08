@@ -7,7 +7,12 @@ const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_PACKA
 const script = await fs.readFile(new URL('../src-tauri/src/workspace_chrome.js', import.meta.url), 'utf8');
 
 test('workspace controls use only guarded navigation and preserve theme/layout', async t => {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
+    if (/^\/static\/js\/[A-Za-z]+\.js$/.test(req.url)) {
+      res.setHeader('Content-Type', 'text/javascript');
+      res.end(await fs.readFile(new URL('../../' + req.url.slice(1), import.meta.url)));
+      return;
+    }
     res.setHeader('Content-Type', 'text/html');
     res.end('<!doctype html><html><head><style>:root{--bg:#17151b;--fg:#eee;--border:#554466;--red:#9600ff}body{margin:0;height:100dvh;display:flex}#fixed{position:fixed;top:0}</style></head><body><main>Workspace</main><div id="fixed">Overlay</div></body></html>');
   });
@@ -35,8 +40,33 @@ test('workspace controls use only guarded navigation and preserve theme/layout',
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   assert.equal(await page.locator('#nx-window-bar').count(), 1);
   assert.equal(await page.locator('body').evaluate(el => el.getBoundingClientRect().top), 36);
-  assert.equal(await page.locator('#fixed').evaluate(el => el.getBoundingClientRect().top), 36);
+  assert.equal(await page.locator('#fixed').evaluate(el => el.getBoundingClientRect().top), 0);
   assert.equal(await page.locator('#nx-window-bar').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(23, 21, 27)');
+  // Real shared popup helper, including Documents' custom skip selector.
+  await page.evaluate(async () => {
+    const { makeWindowDraggable } = await import('/static/js/windowDrag.js');
+    const modal = document.createElement('div');
+    modal.id = 'popup';
+    modal.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none';
+    modal.innerHTML = '<section style="width:400px;height:240px;background:#222;pointer-events:auto"><header style="height:44px;display:flex;justify-content:space-between;align-items:center;padding:0 20px"><span>Documents</span><button class="close-btn" id="popup-close">Close popup</button></header></section>';
+    document.body.append(modal);
+    const content = modal.querySelector('section');
+    makeWindowDraggable(modal, {content, header:modal.querySelector('header'), skipSelector:'.modal-close', enableDock:false});
+    modal.querySelector('button').addEventListener('click', () => modal.remove());
+  });
+  const popup = page.locator('#popup section');
+  const before = await popup.boundingBox();
+  await page.locator('#popup header span').click();
+  assert.deepEqual(await popup.boundingBox(), before, 'header click must not shift the popup');
+  await page.mouse.move(before.x + 80, before.y + 22);
+  await page.mouse.down();
+  await page.mouse.move(before.x + 130, before.y + 52, {steps:5});
+  await page.mouse.up();
+  const dragged = await popup.boundingBox();
+  assert.equal(dragged.x, before.x + 50);
+  assert.equal(dragged.y, before.y + 30);
+  await page.getByRole('button', {name:'Close popup'}).click();
+  assert.equal(await page.locator('#popup').count(), 0, 'close receives its click without starting a drag');
   await page.getByRole('button', {name:'Minimize window'}).click();
   await page.getByRole('button', {name:'Maximize window'}).click();
   await page.getByRole('button', {name:'Restore window'}).click();

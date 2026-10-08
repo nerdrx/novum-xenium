@@ -297,7 +297,13 @@ html.nx-workspace .memory-tab.active {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--red) 70%, transparent);
 }
 html.nx-workspace :is(.lib-tab, .admin-tab, .gallery-tab, .preset-tab) {
-  border-radius: var(--nx-control-radius);
+  appearance: none;
+  border: 0;
+  border-radius: var(--nx-control-radius) var(--nx-control-radius) 0 0;
+  box-shadow: none;
+}
+html.nx-workspace :is(.lib-tab, .admin-tab, .gallery-tab, .preset-tab).active {
+  box-shadow: inset 0 -2px 0 var(--accent, var(--red));
 }
 html.nx-workspace :is(.lib-tab, .admin-tab, .gallery-tab, .preset-tab):not(.active):hover {
   background: var(--nx-hover);
@@ -510,4 +516,16 @@ html.nx-workspace.density-spacious .settings-nav-item {
   html.nx-workspace :is(.dropdown-item-compact, .sort-dropdown-item, .settings-search-result) {
     transition-duration: 0.01ms;
   }
+}
+
+/* The desktop frame already carries the brand. Keep sidebar navigation useful. */
+html[data-nx-window-frame="custom"] .sidebar-brand-logo,
+html[data-nx-window-frame="custom"] #welcome-screen .welcome-name {
+  display: none;
+}
+html[data-nx-window-frame="custom"] #sidebar-brand-btn::after {
+  content: "Home";
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 550;
 }

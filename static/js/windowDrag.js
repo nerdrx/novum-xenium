@@ -64,7 +64,7 @@ export function makeWindowDraggable(modal, options = {}) {
   const enableFullscreen = false;
   const onDragEnd = options.onDragEnd || null;
   const onDragStart = options.onDragStart || null;
-  const skipSelector = options.skipSelector || 'button, input, select';
+  const skipSelector = ['button, input, select, textarea, a, [contenteditable]', options.skipSelector].filter(Boolean).join(', ');
   const mobileSkip = (typeof options.mobileSkip === 'number') ? options.mobileSkip : 768;
   const enableTouch = options.enableTouch !== false;
   const enableDock = options.enableDock !== false && !!modal;

@@ -312,6 +312,27 @@ try:
     call('POST',prefix+'/window',{'handle':remote})
     result=call('POST',prefix+'/execute/async',{'script':"const done=arguments[arguments.length-1]; if(!window.__TAURI__?.core?.invoke){done({blocked:true});}else{window.__TAURI__.core.invoke('get_status').then(()=>done({blocked:false}),e=>done({blocked:true,error:String(e)}));}",'args':[]})
     assert result['blocked'],result
+    def wait_for_reload(before):
+        for _ in range(100):
+            try:
+                if execute('return performance.timeOrigin') != before:
+                    return
+            except Exception:
+                pass  # The document may be between navigation and creation.
+            time.sleep(.1)
+        raise AssertionError('workspace did not reload')
+
+    workbench_window = window_ids('Novum Xenium Workbench')[0]
+    subprocess.run(['xdotool', 'windowfocus', '--sync', workbench_window], check=True)
+    for key in ['ctrl+r', 'F5']:
+        before = execute('return performance.timeOrigin')
+        subprocess.run(['xdotool', 'key', '--clearmodifiers', key], check=True)
+        wait_for_reload(before)
+    if watcher:
+        before = execute('return performance.timeOrigin')
+        watcher.click_menu_item('Reload workspace')
+        wait_for_reload(before)
+    print('PASS: native workspace Ctrl+R, F5 and available tray reload', flush=True)
     print('PASS: native config/status/logs/workbench; remote management blocked',flush=True)
     if options.tray_host == 'none':
         workbench_ids=window_ids('Novum Xenium Workbench')

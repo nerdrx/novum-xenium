@@ -773,6 +773,7 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
     let allowed_port = state.workbench_port.clone();
     WebviewWindowBuilder::new(app, "workbench", WebviewUrl::External(parsed))
         .title("Novum Xenium Workbench")
+        .initialization_script(include_str!("workspace_reload.js"))
         .inner_size(1360.0, 900.0)
         .on_navigation(move |next| {
             matches!(next.scheme(), "http" | "https")
@@ -854,6 +855,8 @@ fn show_quit_pending_notice(app: &AppHandle) {
 fn install_tray(app: &AppHandle) -> Result<TrayIcon, String> {
     let workspace = MenuItem::with_id(app, "open-workspace", "Open workspace", true, None::<&str>)
         .map_err(|error| error.to_string())?;
+    let reload = MenuItem::with_id(app, "reload-workspace", "Reload workspace", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
     let manager = MenuItem::with_id(
         app,
         "backend-manager",
@@ -865,7 +868,7 @@ fn install_tray(app: &AppHandle) -> Result<TrayIcon, String> {
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)
         .map_err(|error| error.to_string())?;
     let menu =
-        Menu::with_items(app, &[&workspace, &manager, &quit]).map_err(|error| error.to_string())?;
+        Menu::with_items(app, &[&workspace, &reload, &manager, &quit]).map_err(|error| error.to_string())?;
 
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
@@ -873,6 +876,15 @@ fn install_tray(app: &AppHandle) -> Result<TrayIcon, String> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open-workspace" => restore_workspace(app),
+            "reload-workspace" => {
+                if let Some(window) = app.get_webview_window("workbench") {
+                    if let Err(error) = window.reload() {
+                        eprintln!("Cannot reload workspace: {error}");
+                    }
+                } else {
+                    restore_workspace(app);
+                }
+            }
             "backend-manager" => {
                 show_manager(app);
             }

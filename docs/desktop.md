@@ -67,3 +67,5 @@ gamescope --backend headless --expose-wayland -W 1100 -H 760 -- env GDK_BACKEND=
 Pass `--backend-port` for a non-default port and `--driver` if `tauri-driver` is outside PATH. This requires a debug desktop build and does not need a visible window.
 
 Optional `--tray-host none` and `--tray-host fake` modes also test graceful window close under an isolated `dbus-run-session`; they never use the user's session bus or data directories. The fake-host mode checks hide/restore for both windows, same-window workspace reuse, single-instance handoff, tray Quit, and close behavior after the watcher disappears. These modes additionally need `dbus-python`, GLib introspection bindings, `python3-xlib`, and `xdotool` on Linux.
+
+The workspace supports Ctrl+R (Command+R on macOS) and F5 to reload its current page. The tray menu also offers Reload workspace. Reloading leaves Docker running but can interrupt a page response; closing to the tray preserves the page instead.

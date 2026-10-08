@@ -43,6 +43,10 @@ Validation: desktop/mobile Chromium checks cover rendering, controls, repeated s
 
 - Disables native filled-control appearance on the composer typing area; its surface stays transparent and the outer border retains the focus cue.
 
+## Desktop workspace reload
+
+- Adds Ctrl+R / Command+R and F5 reload shortcuts to the native workspace, plus Reload workspace in the tray menu. Reloading does not restart Docker or grant the workspace native management access.
+
 ## Included changes
 
 - Tab and Shift+Tab keep native composer focus navigation instead of accidentally switching Plan mode. Plan mode has a visible toggle under More tools, with its pressed state exposed to assistive technology.

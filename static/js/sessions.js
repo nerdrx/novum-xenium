@@ -2999,7 +2999,7 @@ function _showDropdown(anchorEl, items) {
 // ──────────────────────────────────────────────
 
 // All mutable archive state lives here; reset on each openArchive().
-const _arc = { data: [], total: 0, search: '', offset: 0, sort: 'recent', model: '', debounce: null, selectMode: false, selected: new Set(), allModelCounts: null };
+const _arc = { data: [], total: 0, search: '', offset: 0, sort: 'recent', model: '', debounce: null, selectMode: false, selected: new Set(), allModelCounts: null, restoring: false };
 
 function _arcRelativeTime(iso) {
   if (!iso) return '';
@@ -3094,18 +3094,32 @@ function _arcRemove(sid) {
 }
 
 async function _arcBulkRestore() {
+  if (_arc.restoring) return;
   const ids = [..._arc.selected];
   if (!ids.length) return;
-  for (const sid of ids) {
-    try {
-      await fetch(`${API_BASE}/api/session/${sid}/unarchive`, { method: 'POST' });
-      _arcRemove(sid);
-    } catch {}
+  _arc.restoring = true;
+  const restored = [];
+  const failed = [];
+  try {
+    for (const sid of ids) {
+      try {
+        const res = await fetch(`${API_BASE}/api/session/${sid}/unarchive`, { method: 'POST' });
+        if (!res.ok) { failed.push(sid); continue; }
+        _arcRemove(sid);
+        restored.push(sid);
+      } catch { failed.push(sid); }
+    }
+    failed.forEach(sid => _arc.selected.add(sid));
+    const message = failed.length
+      ? `Restored ${restored.length} session${restored.length === 1 ? '' : 's'} · ${failed.length} failed`
+      : `${restored.length} session${restored.length === 1 ? '' : 's'} restored`;
+    if (failed.length) uiModule.showError(message);
+    else uiModule.showToast(message);
+    loadSessions();
+  } finally {
+    _arc.restoring = false;
+    _arcRefreshUI();
   }
-  _arc.selected.clear();
-  _arcRefreshUI();
-  uiModule.showToast(`${ids.length} session${ids.length > 1 ? 's' : ''} restored`);
-  loadSessions();
 }
 
 async function _arcBulkDelete() {

@@ -6,6 +6,10 @@ This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE),
 
 ## Included changes
 
+- Archive bulk restore keeps failed chats selected for retry, reports actual outcomes and ignores repeated restore clicks while preserving new selections.
+- Foreground activity requests Stop for every captured scheduled run, including forced runs, while preserving later replacement-run ownership.
+- The Codex image bridge follows a custom CODEX_HOME image cache unless CODEX_IMAGE_ROOT explicitly overrides it.
+
 - Codex image models use the same GPT-image size normalization in chat and MCP requests. The default 512-pixel chat request becomes a supported 1024-pixel square; local diffusion models retain their own sizes.
 - Parallel successful scheduled runs increment their saved counter atomically, including older null counters.
 - Library bulk export reports successful download requests and failed documents separately instead of counting every selected document as exported. Failed selections remain available for retry.
@@ -200,3 +204,5 @@ October 8 request recovery and task/inbox follow-up: the frozen suite passed **6
 The deployed recovery follow-up passed a live `gpt-6-luna` request in **5.74 seconds**: the model recovered an opaque value buried in the middle of a 9,028-character original request through two `context_search` calls. The value was absent from the recovery excerpt and submitted follow-up. No approval grant was restored, and no local model inference ran. The disposable chat was archived afterwards. This checks one detail-retrieval task, not perfect recall of arbitrary long requests. Hidden Chrome also checked the actual live branding/context/Settings wiring with failed account-setting writes intercepted; the later welcome sizing was visually checked at 320 and 390 pixels using only a fixture stylesheet.
 
 October 8 cancellation and Calendar follow-up: the frozen suite passed **6,654 tests with 17 skips**. SQLite fixtures exercise forced parallel Stop and replacement-run ownership; hidden Chrome exercises ordered Calendar edits, failed-save drafts, retry and deletion while writes are pending. Endpoint-probe fixtures retain one worker when a waiter disconnects and permit retry after failure. The mobile welcome was visually checked at 320 and 390 pixels with the candidate stylesheet; actual deployed stylesheet verification remains separate. No model inference ran for this batch.
+
+October 8 image sizing and concurrent-outcome follow-up: the frozen suite passed **6,658 tests with 17 skips**. Fixtures verify supported Codex image sizes for native chat and MCP payloads while preserving local diffusion sizes and owner forwarding. SQLite regressions complete two forced runs from the same starting counter, including a persisted legacy null. Hidden Chrome checks mixed and total Library export failures without real downloads. A fresh standard Docker app passed login, title save, team-task rejection, manifest and scheduled-task create/delete checks. Actual image generation remains separate from these fixture checks.

@@ -240,3 +240,114 @@ def test_concurrent_force_successes_atomically_increment_run_count(
         assert task.next_run is not None
     finally:
         db.close()
+
+
+def test_foreground_stop_cancels_normal_and_force_runs_then_allows_replacement(
+    tmp_path, monkeypatch, real_database_imports,
+):
+    import core.database as database
+    import src.interactive_gate as interactive_gate
+    from src.task_scheduler import TaskScheduler
+
+    engine = create_engine(f"sqlite:///{tmp_path}/foreground-stop.db")
+    database.Base.metadata.create_all(
+        engine,
+        tables=[database.Session.__table__, database.ScheduledTask.__table__, database.TaskRun.__table__],
+    )
+    sessions = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    monkeypatch.setattr(database, "SessionLocal", sessions)
+    db = sessions()
+    db.add(database.ScheduledTask(
+        id="foreground-stop", owner="alice", name="Foreground stop regression",
+        task_type="action", action="test_action", trigger_type="schedule",
+        schedule="daily", scheduled_time="08:00", status="active", run_count=0,
+    ))
+    db.commit()
+    db.close()
+
+    async def quiet(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(interactive_gate, "wait_for_interactive_quiet", quiet)
+    monkeypatch.setattr(interactive_gate, "has_foreground_activity", lambda: False)
+
+    async def drive():
+        scheduler = TaskScheduler.__new__(TaskScheduler)
+        scheduler._task_handles = {}
+        scheduler._all_task_handles = {}
+        scheduler._execution_handles = {}
+        scheduler._executing = set()
+        scheduler._executing_lock = asyncio.Lock()
+        scheduler._run_semaphore = asyncio.Semaphore(1)
+        scheduler._task_defer_counts = {}
+        scheduler._pending_notifications = []
+        scheduler._last_run_model = None
+        scheduler._task_needs_model_slot = lambda _task_id: False
+        started = []
+        releases = {}
+        effects = []
+
+        async def execute_action(_task, *, run_id):
+            event = asyncio.Event()
+            releases[run_id] = event
+            started.append(run_id)
+            await event.wait()
+            effects.append(run_id)
+            return f"done:{run_id}", True
+
+        scheduler._execute_action = execute_action
+        scheduler._deliver_task_result = quiet
+        scheduler._log_to_assistant = lambda *_args, **_kwargs: None
+
+        assert await scheduler.run_task_now("foreground-stop")
+        normal = scheduler._task_handles["foreground-stop"]
+        assert await scheduler.run_task_now("foreground-stop", force=True)
+        forced = scheduler._task_handles["foreground-stop"]
+        for _ in range(100):
+            if len(started) == 2:
+                break
+            await asyncio.sleep(0)
+        assert len(started) == 2
+
+        # Foreground interaction cancels ordinary and force-parallel handles.
+        assert await scheduler.stop_background_tasks_for_foreground(
+            reason="controlled interactive API request",
+        ) == 1
+        await asyncio.gather(normal, forced, return_exceptions=True)
+        assert normal.done() and forced.done()
+        assert effects == []
+
+        db = sessions()
+        try:
+            original_runs = db.query(database.TaskRun).filter_by(task_id="foreground-stop").all()
+            original_ids = {run.id for run in original_runs}
+            assert len(original_ids) == 2
+            assert {run.status for run in original_runs} == {"aborted"}
+        finally:
+            db.close()
+
+        # Once the canceled run releases its reservation, a new normal run
+        # owns it until completion; old callbacks cannot clear that ownership.
+        assert await scheduler.run_task_now("foreground-stop")
+        replacement = scheduler._task_handles["foreground-stop"]
+        for _ in range(100):
+            if len(started) == 3:
+                break
+            await asyncio.sleep(0)
+        assert len(started) == 3
+        assert scheduler._execution_handles["foreground-stop"] is replacement
+        assert scheduler._executing == {"foreground-stop"}
+        releases[started[2]].set()
+        await replacement
+
+        db = sessions()
+        try:
+            task = db.query(database.ScheduledTask).filter_by(id="foreground-stop").one()
+            runs = db.query(database.TaskRun).filter_by(task_id="foreground-stop").all()
+            states = {run.id: run.status for run in runs}
+            replacement_run_id = started[2]
+            assert states[replacement_run_id] == "success"
+            assert all(states[run_id] == "aborted" for run_id in original_ids)
+            assert task.run_count == 1
+        finally:
+            db.close()

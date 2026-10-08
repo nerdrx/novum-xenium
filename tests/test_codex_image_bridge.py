@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -19,6 +20,44 @@ spec.loader.exec_module(bridge)
 
 
 class BridgeTests(unittest.TestCase):
+    def _load_bridge_with_environment(self):
+        spec = importlib.util.spec_from_file_location(
+            "bridge_environment_fixture",
+            Path(__file__).resolve().parents[1] / "scripts/codex_image_bridge.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_custom_codex_home_selects_native_image_cache(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {
+            "CODEX_HOME": root,
+        }, clear=False):
+            os.environ.pop("CODEX_IMAGE_ROOT", None)
+            configured = self._load_bridge_with_environment()
+            expected_root = Path(root) / "generated_images"
+            self.assertEqual(configured.IMAGE_ROOT, expected_root)
+
+            thread = str(uuid.uuid4())
+            directory = expected_root / thread
+            directory.mkdir(parents=True)
+            png = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR"
+                   + struct.pack(">II", 32, 64))
+            (directory / "image.png").write_bytes(png)
+            events = [{"type": "thread.started", "thread_id": thread}]
+            self.assertEqual(configured.image_for_thread(events), (png, 32, 64))
+
+    def test_explicit_image_root_overrides_codex_home(self):
+        with tempfile.TemporaryDirectory() as root:
+            codex_home = Path(root) / "codex-home"
+            image_root = Path(root) / "custom-cache"
+            with patch.dict(os.environ, {
+                "CODEX_HOME": str(codex_home),
+                "CODEX_IMAGE_ROOT": str(image_root),
+            }, clear=False):
+                configured = self._load_bridge_with_environment()
+            self.assertEqual(configured.IMAGE_ROOT, image_root)
+
     def test_rejects_non_image_and_unbounded_requests(self):
         for request in [{}, {"prompt": "x", "model": "chat-model"}, {"prompt": "x", "n": 2},
                         {"prompt": "x", "size": "../../etc/passwd"}, {"prompt": "x" * 32001},

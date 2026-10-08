@@ -2447,18 +2447,34 @@ class TaskScheduler:
         Manual force-runs can be restarted by the user; automatic jobs will be
         deferred by their cancellation path instead of stealing the app.
         """
-        async with self._executing_lock:
-            task_ids = list(self._executing)
-        stopped = 0
+        task_ids = (
+            set(getattr(self, "_executing", set()))
+            | set(getattr(self, "_all_task_handles", {}))
+            | set(getattr(self, "_task_handles", {}))
+        )
+        captured = {}
         for task_id in task_ids:
-            handle = self._task_handles.get(task_id)
-            if handle and not handle.done():
+            handles = set(getattr(self, "_all_task_handles", {}).get(task_id, set()))
+            latest = getattr(self, "_task_handles", {}).get(task_id)
+            if latest:
+                handles.add(latest)
+            active = [handle for handle in handles if not handle.done()]
+            if active or task_id in getattr(self, "_executing", set()):
+                captured[task_id] = active
+
+        stopped = 0
+        # Capture and abort current rows before yielding. In particular, force
+        # runs are absent from _executing but still need cancellation here.
+        for task_id, handles in captured.items():
+            for handle in handles:
                 handle.cancel()
-                stopped += 1
-            if self._mark_run_aborted(task_id):
+            marked = self._mark_run_aborted(
+                task_id, message=f"Stop requested: {reason}", all_runs=True,
+            )
+            if handles or marked:
                 stopped += 1
         if stopped:
-            logger.info("Stopped %d background scheduler task(s): %s", stopped, reason)
+            logger.info("Requested stop for %d background scheduler task(s): %s", stopped, reason)
         return stopped
 
     async def ensure_defaults(self, owner: str):

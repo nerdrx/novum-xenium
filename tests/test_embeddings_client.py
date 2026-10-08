@@ -18,6 +18,36 @@ def test_embedding_url_defaults_when_unconfigured(monkeypatch, configured):
         client._client.close()
 
 
+@pytest.mark.parametrize("configured", [None, "", "custom-embed"])
+def test_embedding_model_defaults_when_compose_value_is_empty(monkeypatch, configured):
+    if configured is None:
+        monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("EMBEDDING_MODEL", configured)
+    client = EmbeddingClient()
+    try:
+        assert client.model == (configured or "all-minilm:l6-v2")
+        sent = []
+        client._client.close()
+        client._client = _FakeEmbeddingHttpClient(lambda payload: (
+            sent.append(payload) or (200, {"data": [{"embedding": [1.0, 0.0]}]})
+        ))
+        client.encode(["hello"])
+        assert sent[0]["model"] == (configured or "all-minilm:l6-v2")
+    finally:
+        if isinstance(client._client, httpx.Client):
+            client._client.close()
+
+
+def test_embedding_explicit_model_overrides_environment(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_MODEL", "configured-embed")
+    client = EmbeddingClient(model="explicit-embed")
+    try:
+        assert client.model == "explicit-embed"
+    finally:
+        client._client.close()
+
+
 class _FakeEmbeddingHttpClient:
     def __init__(self, handler):
         self.handler = handler

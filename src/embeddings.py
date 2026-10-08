@@ -46,7 +46,7 @@ class EmbeddingClient:
         self.url = url or os.getenv("EMBEDDING_URL") or (
             f"http://{os.getenv('LLM_HOST', 'localhost')}:11434/v1/embeddings"
         )
-        self.model = model or os.getenv("EMBEDDING_MODEL", _DEFAULT_MODEL)
+        self.model = model or os.getenv("EMBEDDING_MODEL") or _DEFAULT_MODEL
         self.api_key = api_key or os.getenv("EMBEDDING_API_KEY")
         self._dim: Optional[int] = None
         # Short connect timeout so a DOWN embedding endpoint (e.g. Ollama not

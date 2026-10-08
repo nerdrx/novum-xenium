@@ -694,3 +694,36 @@ def test_url_request_selects_browser_when_retrieval_misses_it(monkeypatch, brows
     assert "download_model" not in names
     assert any(msg.get("content") == question for msg in request["messages"])
     assert estimate_tokens(request["messages"]) + estimate_tool_schema_tokens(tools) + 1024 <= 6000
+
+
+def test_optional_browser_discovery_does_not_starve_forced_web_tool(monkeypatch):
+    """A short conversational follow-up must not fail on unrelated MCP discovery."""
+    import src.model_context as model_context
+
+    browser = {
+        "type": "function", "function": {
+            "name": "mcp__builtin_browser__browser_navigate",
+            "description": "x" * 3000,
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    web = next(s for s in loop.FUNCTION_TOOL_SCHEMAS if s["function"]["name"] == "web_fetch")
+    assert model_context.estimate_tool_schema_tokens([browser]) <= 1500
+    assert model_context.estimate_tool_schema_tokens([browser, web]) > 1500
+    requests = []
+    _configure(monkeypatch, [browser, web], requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 0)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://cloud.test/v1", "unknown-window-model",
+            [{"role": "user", "content": "We are going to rename the app."}],
+            relevant_tools={browser["function"]["name"], "web_fetch"},
+            forced_tools={"web_fetch"}, max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    tools = requests[0]["kwargs"]["tools"]
+    assert "web_fetch" in {s["function"]["name"] for s in tools}
+    assert model_context.estimate_tool_schema_tokens(tools) <= 1500

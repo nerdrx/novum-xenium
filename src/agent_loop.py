@@ -4535,16 +4535,35 @@ async def stream_agent_loop(
                 )
                 coding_core = {"read_file": 0, "edit_file": 1, "bash": 2, "grep": 3,
                                "write_file": 4, "apply_patch": 5, "python": 6}
+                forced_schema_names = {
+                    schema.get("function", {}).get("name", "")
+                    for schema in route_tools
+                    if schema.get("function", {}).get("name", "") in (forced_tools or ())
+                }
+                # Workspace coding keeps its core schemas ahead of optional
+                # tools. Agent-mode web permission alone should not consume
+                # scarce schema space during coding, but otherwise explicitly
+                # forced enabled tools outrank optional browser discovery.
+                required_forced_schema_names = forced_schema_names - WEB_TOOL_NAMES
+                if not (
+                    coding_requested
+                    and "web" not in (_intent.get("domains") or set())
+                ):
+                    required_forced_schema_names = forced_schema_names
+                prioritized_forced_schema_names = required_forced_schema_names
 
                 def schema_priority(schema):
                     name = schema.get("function", {}).get("name", "")
                     if coding_requested and name in coding_core:
-                        return (0, coding_core[name])
+                        return (0, coding_core[name], name)
+                    if name in prioritized_forced_schema_names:
+                        forced_browser_rank = browser_core.get(name, len(browser_core))
+                        return (1, forced_browser_rank, name)
                     if browser_requested and name in browser_core:
-                        return (1, browser_core[name])
+                        return (2, browser_core[name], name)
                     if name in _runtime_skill_tools:
-                        return (2, 0)
-                    return (3 if name in priority_names else 4, 0)
+                        return (3, 0, name)
+                    return (4 if name in priority_names else 5, 0, name)
 
                 for schema in sorted(route_tools, key=schema_priority):
                     if schema in selected:
@@ -4555,22 +4574,6 @@ async def stream_agent_loop(
                         continue
                     selected = candidate_schemas
                     selected_tokens = candidate_tokens
-                forced_schema_names = {
-                    schema.get("function", {}).get("name", "")
-                    for schema in route_tools
-                    if schema.get("function", {}).get("name", "") in (forced_tools or ())
-                }
-                # The Agent-mode search toggle grants permission and normally
-                # makes web tools discoverable, but it is not itself a request
-                # to spend scarce schema tokens on web tools during workspace
-                # coding. Explicit web requests still fail closed when no
-                # forced web schema fits.
-                required_forced_schema_names = forced_schema_names - WEB_TOOL_NAMES
-                if not (
-                    coding_requested
-                    and "web" not in (_intent.get("domains") or set())
-                ):
-                    required_forced_schema_names = forced_schema_names
                 selected_names = {
                     schema.get("function", {}).get("name", "") for schema in selected
                 }

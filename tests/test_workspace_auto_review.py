@@ -54,6 +54,11 @@ def test_dispatch_snapshots_before_write_and_fails_closed(tmp_path, monkeypatch)
     monkeypatch.setattr(workspace_snapshots, "_ROOT", tmp_path / "snapshots")
     monkeypatch.setattr(tool_execution, "_owner_is_admin", lambda owner: True)
     calls = []
+    validated_scopes = []
+    # This dispatch unit fixture has no persisted chat; real ownership and
+    # deletion races are covered by the snapshot route/storage tests.
+    monkeypatch.setattr(workspace_snapshots, "validate_session_scope",
+                        lambda owner, sid: validated_scopes.append((owner, sid)))
     async def execute(block, **kwargs):
         saved = workspace_snapshots.list_snapshots(str(root), "alice", "chat")
         assert len(saved) == 1
@@ -68,9 +73,10 @@ def test_dispatch_snapshots_before_write_and_fails_closed(tmp_path, monkeypatch)
                           workspace=str(root), security_context=security))
     _, result = run()
     assert result["workspace_snapshot_id"]
+    assert validated_scopes == [("alice", "chat")]
     preview = workspace_snapshots.preview_snapshot(str(root), "alice", "chat", result["workspace_snapshot_id"])
     assert "before" in preview["changes"][0]["diff"]
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise OSError("disk full")
     monkeypatch.setattr(workspace_snapshots, "ensure_snapshot", fail)
     _, result = run()

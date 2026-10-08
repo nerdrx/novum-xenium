@@ -45,7 +45,10 @@
       /* Fixed popups use viewport coordinates. Never transform their body ancestor. */
       html.ui-scale-125[data-nx-window-frame=custom] body { top:36px!important;
         height:calc(100dvh / 1.25 - 36px)!important; }
-      html[data-nx-window-manager=true][data-nx-window-frame=custom] body { min-height:0!important; }
+      html[data-nx-window-manager=true][data-nx-window-frame=custom] { overflow:hidden!important; }
+      html[data-nx-window-manager=true][data-nx-window-frame=custom] body {
+        position:fixed!important; inset:36px 0 0!important; width:100%!important; height:auto!important;
+        min-height:0!important; overflow-x:hidden!important; overflow-y:auto!important; }
       html[data-nx-window-manager=true][data-nx-window-frame=custom] .app-shell {
         min-height:calc(100dvh - 36px); }
       #nx-window-drag { display:flex; align-items:center; flex:1; height:100%; padding:0 12px; gap:8px; outline-offset:-3px; }

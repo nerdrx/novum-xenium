@@ -20,6 +20,13 @@
 }
 
 * { box-sizing: border-box; }
+@supports selector(::-webkit-scrollbar) {
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--surface); }
+  ::-webkit-scrollbar-thumb { background-color: var(--violet); border-radius: 4px; border: 2px solid var(--surface); }
+  ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--violet) 80%, white); }
+}
+html { scrollbar-color: var(--violet) var(--surface); scrollbar-width: thin; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--ground); }
 body::before { content: ""; position: fixed; inset: 0; background: url('./assets/orbits.svg') center / cover no-repeat; pointer-events: none; }
 button, input { font: inherit; }
@@ -75,7 +82,7 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
 .notice-info { color: var(--ink); border-color: var(--line); background: var(--surface-raised); }
 .privacy-note { margin: 19px 2px 0; color: var(--faint); font-size: 11px; }
 .footer { border-top: 1px solid var(--line); min-height: 48px; display: flex; justify-content: space-between; align-items: center; color: var(--faint); font-size: 11px; }
-.is-busy [data-action] { cursor: progress; }
+.is-busy .app-shell [data-action] { cursor: progress; }
 
 @media (max-width: 700px) {
   .app-shell { padding: 0 18px; }

@@ -16,6 +16,11 @@ async function startServer() {
   const server = http.createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
+      if (pathname === '/chrome.js') {
+        res.writeHead(200, { 'content-type': 'text/javascript' });
+        res.end(await fs.readFile(path.resolve(here, '../src-tauri/src/workspace_chrome.js')));
+        return;
+      }
       const file = path.resolve(sourceRoot, `.${pathname === '/' ? '/index.html' : pathname}`);
       if (!file.startsWith(sourceRoot + path.sep)) throw new Error('invalid path');
       const body = await fs.readFile(file);
@@ -53,6 +58,17 @@ test('manager uses native IPC safely and browser preview remains inert', async (
     window.confirm = () => window.__confirmUpdate;
     window.__TAURI__ = { core: { invoke: async (command, args) => {
       window.__calls.push({ command, args });
+      if (command === 'mount_manager_chrome') {
+        document.documentElement.dataset.nxWindowManager = 'true';
+        const script = document.createElement('script');
+        script.src = '/chrome.js';
+        document.head.append(script);
+        return;
+      }
+      if (command === 'manager_window_action') {
+        if (args.action === 'ready') document.documentElement.dataset.nxWindowFrame = 'custom';
+        return;
+      }
       if (command === 'get_status') {
         if (window.__holdNextStatus) {
           window.__holdNextStatus = false;
@@ -77,6 +93,29 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   assert.equal(await page.locator('body').evaluate(el => getComputedStyle(el).backgroundImage), 'none');
   assert.equal(await page.locator('.panel').first().evaluate(el => getComputedStyle(el).backgroundImage), 'none');
   assert.equal(await page.locator('[data-action="start"]').isEnabled(), true);
+  await page.waitForSelector('#nx-window-bar');
+  await page.setViewportSize({ width: 1180, height: 600 });
+  await page.waitForFunction(() => document.body.clientHeight === 564 && document.body.scrollHeight > 564);
+  const frameLayout = await page.evaluate(() => {
+    const body = document.body;
+    body.scrollTop = 200;
+    return {
+      top: body.getBoundingClientRect().top,
+      height: body.clientHeight,
+      overflow: getComputedStyle(body).overflowY,
+      scroll: body.scrollTop,
+      rootScroll: document.documentElement.scrollTop,
+      barTop: document.querySelector('#nx-window-bar').getBoundingClientRect().top,
+    };
+  });
+  assert.equal(frameLayout.top, 36);
+  assert.equal(frameLayout.height, 564);
+  assert.equal(frameLayout.overflow, 'auto');
+  assert.ok(frameLayout.scroll > 0, 'manager content must scroll independently');
+  assert.equal(frameLayout.rootScroll, 0);
+  assert.equal(frameLayout.barTop, 0, 'title bar must stay outside scrolling content');
+  await page.evaluate(() => { document.body.scrollTop = 0; });
+  await page.setViewportSize({ width: 1180, height: 900 });
 
   await page.locator('#project').fill('Fixture project');
   await page.locator('#config-form button[type="submit"]').click();
@@ -116,6 +155,13 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   await page.waitForFunction(() => document.querySelector('#backend-state-text').textContent === 'Stopped' && document.querySelector('.dashboard-grid').getAttribute('aria-busy') === 'false');
 
   await page.locator('[data-action="start"]').click();
+  for (const action of ['minimize', 'toggle-maximize', 'close']) {
+    const control = page.locator(`#nx-window-bar [data-action="${action}"]`);
+    assert.equal(await control.isEnabled(), true, 'backend work must not disable window controls');
+    await control.click();
+    assert.ok(await page.evaluate(action => window.__calls.some(call =>
+      call.command === 'manager_window_action' && call.args.action === action), action));
+  }
   await page.waitForFunction(() => typeof window.__finishStart === 'function');
   assert.equal(await page.locator('.dashboard-grid').getAttribute('aria-busy'), 'true');
   assert.equal(await page.locator('#global-notice').textContent(), 'Starting backend…');

@@ -41,7 +41,7 @@ function setBusy(value) {
   state.busy = value;
   document.body.classList.toggle('is-busy', value);
   dashboard.setAttribute('aria-busy', String(value));
-  if (value) document.querySelectorAll('[data-action]').forEach((button) => { button.disabled = true; });
+  if (value) document.querySelectorAll('.app-shell [data-action]').forEach((button) => { button.disabled = true; });
   else syncActions();
 }
 
@@ -195,7 +195,7 @@ configForm.addEventListener('submit', (event) => {
   }, (error) => setInlineMessage(explainError(error, 'Settings were not confirmed. Retry when ready.'), 'error'), 'Saving settings…');
 });
 
-document.querySelectorAll('[data-action]').forEach((button) => {
+document.querySelectorAll('.app-shell [data-action]').forEach((button) => {
   button.addEventListener('click', () => {
     const action = button.dataset.action;
     if (action === 'refresh') {
@@ -247,7 +247,7 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 if (!invoke) {
   setNotice(globalError, 'Native manager controls are unavailable in browser preview. Open this app in the Novum Xenium desktop manager.');
   $('#backend-detail').textContent = 'Browser preview is read-only; it cannot inspect or control a local backend.';
-  document.querySelectorAll('[data-action], #config-form input').forEach((control) => { control.disabled = true; });
+  document.querySelectorAll('.app-shell [data-action], #config-form input').forEach((control) => { control.disabled = true; });
   syncActions();
 } else {
   syncActions();

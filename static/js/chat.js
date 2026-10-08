@@ -165,18 +165,20 @@ import { loadPanel } from './panels.js';
       </svg>${includeLabel ? `<span class="ctx-ring-pct"${idAttr}>${label}%</span>` : ''}`;
   }
 
-  function _renderContextHeaderRing(pill, pct) {
+  function _renderContextHeaderRing(pill, pct, known = true) {
     const value = Math.max(0, Math.min(100, Number(pct || 0)));
-    pill.style.setProperty('--ctx-color', _contextRingColor(value));
+    pill.style.setProperty('--ctx-color', known ? _contextRingColor(value) : 'var(--text-muted, #888)');
     pill.innerHTML = _contextRingMarkup(value, { includeLabel: true, labelId: 'chat-context-pill-label' });
+    if (!known) pill.querySelector('#chat-context-pill-label').textContent = '?';
   }
 
   function _renderCompactMenuContextIcon(pct) {
     const icon = document.querySelector('#export-compact-btn .dropdown-icon');
     if (!icon) return;
-    const value = Math.max(0, Math.min(100, Number(pct || 0)));
     const row = document.getElementById('export-compact-btn');
-    const color = _contextRingColor(value);
+    const known = Number(_contextHeaderData?.context_length) > 0;
+    const value = Math.max(0, Math.min(100, Number(pct || 0)));
+    const color = known ? _contextRingColor(value) : 'var(--text-muted, #888)';
     if (row) row.style.setProperty('--ctx-color', color);
     icon.style.setProperty('--ctx-color', color);
     icon.innerHTML = _contextRingMarkup(value, { includeLabel: false });
@@ -213,6 +215,7 @@ import { loadPanel } from './panels.js';
     if (wasOpen) return;
 
     const d = _contextHeaderData;
+    const knownWindow = Number(d.context_length) > 0;
     const pct = Number(d.context_percent || 0);
     const colorClass = _contextColorClass(pct);
     const modelShort = String(d.model || 'Unknown').split('/').pop();
@@ -235,8 +238,8 @@ import { loadPanel } from './panels.js';
     popup.appendChild(bar);
 
     const rows = [
-      ['Used', `${_fmtContextNumber(d.used_tokens)} / ${_fmtContextNumber(d.context_length)}`],
-      ['Usage', `${pct}%`],
+      ['Used', `${_fmtContextNumber(d.used_tokens)} / ${knownWindow ? _fmtContextNumber(d.context_length) : 'Unknown'}`],
+      ['Usage', knownWindow ? `${pct}%` : 'Unknown window'],
       ['Window model', modelShort],
       ['Messages', `${Number(d.messages || 0).toLocaleString()}`],
       ['Auto compact', `${Number(d.auto_compact_threshold || 85)}%`],
@@ -262,6 +265,13 @@ import { loadPanel } from './panels.js';
       detailTitle.textContent = `${lastRequest.estimated === false ? '' : 'Estimated '}Last Request`;
       popup.appendChild(detailTitle);
       const detailRows = [
+        ...(!knownWindow && lastRequest.total_tokens != null
+          && Number.isFinite(Number(lastRequest.total_tokens))
+          && Number(lastRequest.total_tokens) >= 0
+          && Number.isFinite(Number(lastRequest.input_budget_tokens))
+          && Number(lastRequest.input_budget_tokens) > 0
+          ? [['Last request vs input budget', `${Number(lastRequest.total_tokens).toLocaleString()} / ${Number(lastRequest.input_budget_tokens).toLocaleString()} (${Math.round(Number(lastRequest.total_tokens) / Number(lastRequest.input_budget_tokens) * 100)}%)`]]
+          : []),
         ['Request tokens', lastRequest.total_tokens],
         ['Reserved for response', lastRequest.output_reserve],
         ['Request input budget', lastRequest.input_budget_tokens],
@@ -281,7 +291,9 @@ import { loadPanel } from './panels.js';
         const name = document.createElement('span');
         name.textContent = label;
         const amount = document.createElement('span');
-        amount.textContent = Number(value).toLocaleString();
+        amount.textContent = label === 'Last request vs input budget'
+          ? String(value)
+          : Number(value).toLocaleString();
         row.append(name, amount);
         popup.appendChild(row);
       });
@@ -396,11 +408,15 @@ import { loadPanel } from './panels.js';
       if (!latestSm.getCurrentSessionId || latestSm.getCurrentSessionId() !== sid) return;
       _contextHeaderData = data;
       const pct = Number(data.context_percent || 0);
-      _renderContextHeaderRing(pill, pct);
+      const knownWindow = Number(data.context_length) > 0;
+      _renderContextHeaderRing(pill, pct, knownWindow);
       _renderCompactMenuContextIcon(pct);
-      pill.title = `${_fmtContextNumber(data.used_tokens)} / ${_fmtContextNumber(data.context_length)} tokens · ${String(data.model || '').split('/').pop()}`;
-      pill.classList.remove('warn', 'danger');
-      const colorClass = _contextColorClass(pct);
+      pill.title = knownWindow
+        ? `${_fmtContextNumber(data.used_tokens)} / ${_fmtContextNumber(data.context_length)} tokens · ${String(data.model || '').split('/').pop()}`
+        : `Context window unknown · ${_fmtContextNumber(data.used_tokens)} tokens estimated · ${String(data.model || '').split('/').pop()}`;
+      pill.classList.remove('warn', 'danger', 'unknown');
+      if (!knownWindow) pill.classList.add('unknown');
+      const colorClass = knownWindow ? _contextColorClass(pct) : '';
       if (colorClass) pill.classList.add(colorClass);
       pill.classList.remove('loading');
       if (pill.classList.contains('open')) {

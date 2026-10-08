@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import uuid
 from copy import deepcopy
 
@@ -46,40 +47,52 @@ class GroupRunManager:
         self.runner = runner
         self._tasks = {}
         self._scopes = {}
+        self._delete_fences = set()
+        self._registry_lock = threading.Lock()
         self._lock = asyncio.Lock()
         self._workers = asyncio.Semaphore(max_workers)
 
     def _runner(self):
         return self.runner or _assignment_runner
 
-    async def start(self, session_id, owner, board, participant_sessions, context=None):
+    async def start(self, session_id, owner, board, participant_sessions, context=None,
+                    validate_parent=None):
         if not self._runner():
             raise RuntimeError("Team assignment runner is not configured")
         async with self._lock:
-            if self.store.active_run(session_id, owner) or self.is_active(session_id, owner):
-                raise RuntimeError("A team pass is already running")
-            if len(self._tasks) >= 8:
-                raise RuntimeError("Too many team passes are queued")
-            job_id = uuid.uuid4().hex
-            previous = self.store.get_run(session_id, owner)
-            old_worktrees = (previous or {}).get("state", {}).get("worktrees", {})
-            worktrees = deepcopy(old_worktrees) if isinstance(old_worktrees, dict) else {}
-            state = {"phase": "queued", "task_id": None, "message": "Team pass queued",
-                     "worktrees": worktrees}
-            self.store.save(session_id, owner, board)
-            self.store.create_run(job_id, session_id, owner, state)
-            task = asyncio.create_task(
-                self._run(job_id, session_id, owner, board, participant_sessions, context),
-                name=f"group-team-{job_id}",
-            )
-            self._tasks[job_id] = task
-            self._scopes[job_id] = (session_id, str(owner or ""))
-            task.add_done_callback(lambda done, jid=job_id: self._finished(jid, done))
-            return self.store.get_run(session_id, owner, job_id)
+            with self._registry_lock:
+                if validate_parent is not None:
+                    validate_parent()
+                active = any(self._scopes.get(job_id) == (session_id, str(owner or ""))
+                             and not task.done() for job_id, task in self._tasks.items())
+                if self.store.active_run(session_id, owner) or active:
+                    raise RuntimeError("A team pass is already running")
+                if len(self._tasks) >= 8:
+                    raise RuntimeError("Too many team passes are queued")
+                job_id = uuid.uuid4().hex
+                previous = self.store.get_run(session_id, owner)
+                old_worktrees = (previous or {}).get("state", {}).get("worktrees", {})
+                worktrees = deepcopy(old_worktrees) if isinstance(old_worktrees, dict) else {}
+                state = {"phase": "queued", "task_id": None, "message": "Team pass queued",
+                         "worktrees": worktrees}
+                self.store.save(session_id, owner, board)
+                self.store.create_run(job_id, session_id, owner, state)
+                task = asyncio.create_task(
+                    self._run(job_id, session_id, owner, board, participant_sessions, context),
+                    name=f"group-team-{job_id}",
+                )
+                self._tasks[job_id] = task
+                self._scopes[job_id] = (session_id, str(owner or ""))
+                task.add_done_callback(lambda done, jid=job_id: self._finished(jid, done))
+                return self.store.get_run(session_id, owner, job_id)
 
     def _finished(self, job_id, task):
-        self._tasks.pop(job_id, None)
-        session_id, owner = self._scopes.pop(job_id, (None, None))
+        with self._registry_lock:
+            if self._tasks.get(job_id) is not task:
+                return
+            self._tasks.pop(job_id, None)
+            session_id, owner = self._scopes.pop(job_id, (None, None))
+            self._delete_fences.discard(job_id)
         if session_id and task.cancelled():
             rec = self.store.get_run(session_id, owner, job_id)
             if rec and rec["status"] == "stopping":
@@ -90,13 +103,37 @@ class GroupRunManager:
 
     def is_active(self, session_id, owner):
         scope = (session_id, str(owner or ""))
-        return any(self._scopes.get(job_id) == scope and not task.done()
-                   for job_id, task in self._tasks.items())
+        with self._registry_lock:
+            return any(self._scopes.get(job_id) == scope and not task.done()
+                       for job_id, task in self._tasks.items())
 
     def _persist(self, job_id, session_id, owner, board, status="running", **state):
-        self.store.save(session_id, owner, board)
-        prior = self.store.get_run(session_id, owner, job_id) or {"state": {}}
-        self.store.update_run(job_id, owner, status, {**prior["state"], **state})
+        with self._registry_lock:
+            if job_id in self._delete_fences:
+                return
+            self.store.save(session_id, owner, board)
+            prior = self.store.get_run(session_id, owner, job_id) or {"state": {}}
+            self.store.update_run(job_id, owner, status, {**prior["state"], **state})
+
+    def delete_session(self, session_id, owner):
+        """Fence this owner's parent run before its persisted state is removed."""
+        scope = (session_id, str(owner or ""))
+        with self._registry_lock:
+            matches = [(job_id, task) for job_id, task in self._tasks.items()
+                       if self._scopes.get(job_id) == scope and not task.done()]
+            for job_id, _task in matches:
+                self._delete_fences.add(job_id)
+            self.store.delete(session_id, owner)
+        for job_id, task in matches:
+            loop = task.get_loop()
+            loop.call_soon_threadsafe(self._cancel_deleted_task, job_id, task, scope)
+
+    def _cancel_deleted_task(self, job_id, task, scope):
+        """Run cancellation on the task's loop, guarded by its exact registration."""
+        with self._registry_lock:
+            if (self._tasks.get(job_id) is task and self._scopes.get(job_id) == scope
+                    and job_id in self._delete_fences and not task.done()):
+                task.cancel()
 
     async def _run(self, job_id, session_id, owner, board, participant_sessions, context=None):
         clean = board
@@ -228,7 +265,11 @@ class GroupRunManager:
         rec = self.store.get_run(session_id, owner, job_id)
         if not rec or rec["status"] != "running":
             return False
-        task = self._tasks.get(rec["job_id"])
+        with self._registry_lock:
+            task = self._tasks.get(rec["job_id"])
+            if (self._scopes.get(rec["job_id"]) != (session_id, str(owner or ""))
+                    or rec["job_id"] in self._delete_fences):
+                task = None
         if task and not task.done():
             self.store.update_run(
                 rec["job_id"], owner, "stopping",

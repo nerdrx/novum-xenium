@@ -26,7 +26,7 @@ def _require_interactive(request):
 
 def delete_team_board(session_id: str, owner: str | None) -> None:
     """Internal owner-scoped cleanup hook for permanent session deletion."""
-    _store.delete(session_id, owner)
+    _runs.delete_session(session_id, owner)
 
 
 @router.get("/{session_id}/team")
@@ -119,7 +119,10 @@ async def start_team_run(request: Request, session_id: str, body: dict):
             "isolate_worktrees": isolate_worktrees,
             "source_workspace": source_workspace,
         }
-        run = await _runs.start(session_id, storage_owner_for_request(request), board, sessions, context)
+        run = await _runs.start(
+            session_id, storage_owner_for_request(request), board, sessions, context,
+            validate_parent=lambda: _verify_session_owner(request, session_id),
+        )
     except RuntimeError as exc:
         status = 409 if "already running" in str(exc) or "queued" in str(exc) else 503
         raise HTTPException(status, str(exc)) from exc

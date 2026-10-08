@@ -77,7 +77,7 @@ def test_server_run_owner_checks_parent_and_participant_sessions(tmp_path, monke
     result = asyncio.run(scenario())
     assert result["run"]["status"] == "running"  # status at accepted time
     assert store.get_run("parent", "alice")["status"] == "completed"
-    assert verified == ["parent", "child-session"]
+    assert verified == ["parent", "child-session", "parent"]
 
 
 @pytest.mark.parametrize("change_model_after_queue", [False, True])
@@ -138,6 +138,232 @@ def test_server_run_binds_real_runner_to_verified_child_model(tmp_path, monkeypa
     else:
         assert record["status"] == "completed"
         assert calls == ["alice"]
+
+
+def test_parent_delete_cancels_real_child_run_without_resurrecting_saved_board(tmp_path, monkeypatch):
+    from src import agent_runs, auth_helpers, group_chat_runner
+    from routes import session_routes
+
+    store = GroupCoordinationStore(str(tmp_path / "delete-active-team.db"))
+    entered = asyncio.Event()
+    child_cancelled = asyncio.Event()
+
+    class Sessions:
+        def get_session(self, session_id):
+            return SimpleNamespace(model="gpt-6-luna") if session_id == "child-session" else None
+
+    async def chat_stream(_request):
+        async def events():
+            try:
+                yield 'data: {"delta":"child is working"}\n\n'
+                entered.set()
+                await asyncio.Event().wait()
+            finally:
+                child_cancelled.set()
+
+        return StreamingResponse(events(), headers={"X-Odysseus-Run-Id": "team-delete-child"})
+
+    sessions = Sessions()
+    runner = group_chat_runner.create_assignment_runner(chat_stream, sessions)
+    manager = GroupRunManager(store, runner=runner)
+    monkeypatch.setattr(group_routes, "_store", store)
+    monkeypatch.setattr(group_routes, "_runs", manager)
+    monkeypatch.setattr(group_routes, "_require_interactive", lambda _request: None)
+    monkeypatch.setattr(group_routes, "_verify_session_owner", lambda _request, _sid: None)
+    monkeypatch.setattr(group_routes, "storage_owner_for_request", lambda request: request.owner)
+    monkeypatch.setattr(session_routes, "_verify_session_owner", lambda _request, _sid: None)
+    monkeypatch.setattr(auth_helpers, "storage_owner_for_request", lambda request: request.state.current_user)
+    monkeypatch.setattr(agent_runs, "is_active", lambda _session_id: False)
+    monkeypatch.setattr(agent_runs, "get_active_run", lambda _session_id: None)
+    request = SimpleNamespace(
+        owner="alice", state=SimpleNamespace(current_user="alice"), headers={},
+        scope={"state": {"current_user": "alice"}},
+        app=SimpleNamespace(state=SimpleNamespace(session_manager=sessions)),
+    )
+
+    async def scenario():
+        result = await group_routes.start_team_run(
+            request, "parent", {"board": _board(), "participant_sessions": {"builder": "child-session"}}
+        )
+        job_id = result["run"]["job_id"]
+        task = manager._tasks[job_id]
+        await entered.wait()
+        assert store.get("parent", "alice") is not None
+        await asyncio.to_thread(group_routes.delete_team_board, "parent", "alice")
+        assert store.get("parent", "alice") is None
+        assert store.get_run("parent", "alice", job_id) is None
+        done, _pending = await asyncio.wait({task}, timeout=1)
+        if task not in done:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            pytest.fail("parent deletion did not cancel its active child run")
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)  # let the task's done callback release its fence
+        return job_id
+
+    job_id = asyncio.run(scenario())
+    assert child_cancelled.is_set()
+    assert store.get("parent", "alice") is None
+    assert store.get_run("parent", "alice", job_id) is None
+    assert not manager.is_active("parent", "alice")
+    assert job_id not in manager._delete_fences
+
+
+def test_parent_delete_cannot_split_run_creation_from_task_registration(tmp_path, monkeypatch):
+    import threading
+
+    from src import agent_runs, auth_helpers, group_chat_runner
+    from routes import session_routes
+
+    store = GroupCoordinationStore(str(tmp_path / "delete-enqueue-race.db"))
+    entered_create = threading.Event()
+    release_create = threading.Event()
+    delete_attempted = threading.Event()
+    delete_finished = threading.Event()
+    child_release = asyncio.Event()
+    job_ids = []
+    deletion_was_blocked = []
+
+    class Sessions:
+        def get_session(self, session_id):
+            return SimpleNamespace(model="gpt-6-luna") if session_id == "child-session" else None
+
+    async def chat_stream(_request):
+        async def events():
+            yield 'data: {"delta":"child running"}\n\n'
+            await child_release.wait()
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(events(), headers={"X-Odysseus-Run-Id": "team-enqueue-race"})
+
+    sessions = Sessions()
+    runner = group_chat_runner.create_assignment_runner(chat_stream, sessions)
+    manager = GroupRunManager(store, runner=runner)
+    original_create_run = store.create_run
+
+    def blocked_create_run(job_id, session_id, owner, state):
+        job_ids.append(job_id)
+        original_create_run(job_id, session_id, owner, state)
+        entered_create.set()
+        if not delete_attempted.wait(2):
+            raise RuntimeError("deletion thread did not reach the enqueue boundary")
+        release_create.set()
+
+    store.create_run = blocked_create_run
+    monkeypatch.setattr(group_routes, "_store", store)
+    monkeypatch.setattr(group_routes, "_runs", manager)
+    monkeypatch.setattr(group_routes, "_require_interactive", lambda _request: None)
+    monkeypatch.setattr(group_routes, "_verify_session_owner", lambda _request, _sid: None)
+    monkeypatch.setattr(group_routes, "storage_owner_for_request", lambda request: request.owner)
+    monkeypatch.setattr(session_routes, "_verify_session_owner", lambda _request, _sid: None)
+    monkeypatch.setattr(auth_helpers, "storage_owner_for_request", lambda request: request.state.current_user)
+    monkeypatch.setattr(agent_runs, "is_active", lambda _session_id: False)
+    monkeypatch.setattr(agent_runs, "get_active_run", lambda _session_id: None)
+    request = SimpleNamespace(
+        owner="alice", state=SimpleNamespace(current_user="alice"), headers={},
+        scope={"state": {"current_user": "alice"}},
+        app=SimpleNamespace(state=SimpleNamespace(session_manager=sessions)),
+    )
+
+    def delete_during_create():
+        if not entered_create.wait(2):
+            return
+        acquired = manager._registry_lock.acquire(blocking=False)
+        deletion_was_blocked.append(not acquired)
+        if acquired:
+            manager._registry_lock.release()
+        delete_attempted.set()
+        group_routes.delete_team_board("parent", "alice")
+        delete_finished.set()
+
+    deleter = threading.Thread(target=delete_during_create)
+    deleter.start()
+
+    async def scenario():
+        await group_routes.start_team_run(
+            request, "parent", {"board": _board(), "participant_sessions": {"builder": "child-session"}}
+        )
+        assert job_ids
+        task = manager._tasks[job_ids[0]]
+        assert delete_attempted.is_set()
+        await asyncio.to_thread(deleter.join, 2)
+        assert delete_finished.is_set()
+        done, _pending = await asyncio.wait({task}, timeout=1)
+        if task not in done:
+            child_release.set()
+            await task
+            pytest.fail("deleted parent allowed the queued child run to survive")
+        assert task.cancelled(), "parent deletion must cancel the exact newly registered task"
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    assert deletion_was_blocked == [True]
+    assert store.get("parent", "alice") is None
+    assert store.get_run("parent", "alice", job_ids[0]) is None
+    assert job_ids[0] not in manager._delete_fences
+
+
+def test_parent_is_reverified_after_delete_before_team_run_enqueue(tmp_path, monkeypatch):
+    import threading
+
+    store = GroupCoordinationStore(str(tmp_path / "delete-after-ownercheck.db"))
+    checked_parent = threading.Event()
+    deleted_parent = threading.Event()
+    exists = {"parent": True}
+    parent_checks = []
+    starts = []
+
+    class Sessions:
+        def get_session(self, _session_id):
+            return SimpleNamespace(model="gpt-6-luna")
+
+    manager = GroupRunManager(store, runner=lambda *_args, **_kwargs: starts.append(True))
+    monkeypatch.setattr(group_routes, "_store", store)
+    monkeypatch.setattr(group_routes, "_runs", manager)
+    monkeypatch.setattr(group_routes, "_require_interactive", lambda _request: None)
+    monkeypatch.setattr(group_routes, "storage_owner_for_request", lambda _request: "alice")
+
+    def verify(_request, session_id):
+        if session_id != "parent":
+            return
+        parent_checks.append(True)
+        if not exists["parent"]:
+            raise HTTPException(404, "parent deleted")
+        if len(parent_checks) == 1:
+            checked_parent.set()
+            if not deleted_parent.wait(2):
+                raise RuntimeError("deletion thread did not finish")
+
+    monkeypatch.setattr(group_routes, "_verify_session_owner", verify)
+    request = SimpleNamespace(
+        state=SimpleNamespace(), headers={}, owner="alice", scope={},
+        app=SimpleNamespace(state=SimpleNamespace(session_manager=Sessions())),
+    )
+    body = {"board": _board(), "participant_sessions": {"builder": "child-session"}}
+
+    def delete_after_ownercheck():
+        if not checked_parent.wait(2):
+            return
+        exists["parent"] = False
+        group_routes.delete_team_board("parent", "alice")
+        deleted_parent.set()
+
+    deleter = threading.Thread(target=delete_after_ownercheck)
+    deleter.start()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(group_routes.start_team_run(request, "parent", body))
+    deleter.join(timeout=2)
+
+    assert exc.value.status_code == 404
+    assert len(parent_checks) == 2
+    assert not starts
+    assert not manager._tasks
+    assert store.get("parent", "alice") is None
+    assert store.get_run("parent", "alice") is None
 
 
 def test_server_run_rejects_incognito_before_queueing(tmp_path, monkeypatch):

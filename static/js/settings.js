@@ -46,15 +46,49 @@ let _authPolicy = { password_min_length: 8 };
  */
 async function _postSettings(body) {
   try {
-    return await fetch('/api/auth/settings', {
+    const res = await fetch('/api/auth/settings', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    return res;
   } finally {
     invalidateSettings();
   }
+}
+
+function _createSettingsSaver(messageEl, clearAfterMs) {
+  let pending = Promise.resolve();
+  let sequence = 0;
+  return function save(snapshot) {
+    const current = ++sequence;
+    messageEl.textContent = 'Saving…';
+    messageEl.style.color = 'var(--fg)';
+    const run = async function() {
+      try {
+        await _postSettings(snapshot);
+        if (current !== sequence) return;
+        messageEl.textContent = 'Saved';
+        messageEl.style.color = 'var(--fg)';
+        setTimeout(function() {
+          if (current === sequence && messageEl.textContent === 'Saved') messageEl.textContent = '';
+        }, clearAfterMs);
+      } catch (e) {
+        if (current === sequence) {
+          messageEl.textContent = 'Failed to save';
+          messageEl.style.color = 'var(--red)';
+        }
+      }
+    };
+    const next = pending.then(run, run);
+    pending = next.catch(() => {});
+    return next;
+  };
 }
 
 const el = byId;
@@ -410,15 +444,12 @@ async function initDefaultChat() {
   epSel.addEventListener('change', function() { refreshModels(''); saveDefault(); });
   modelSel.addEventListener('change', saveDefault);
 
-  async function saveDefault() {
-    try {
-      await _postSettings({
-        default_endpoint_id: epSel.value,
-        default_model: modelSel.value
-      });
-      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
-      setTimeout(function() { msg.textContent = ''; }, 2000);
-    } catch (e) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
+  const saveSettings = _createSettingsSaver(msg, 2000);
+  function saveDefault() {
+    return saveSettings({
+      default_endpoint_id: epSel.value,
+      default_model: modelSel.value,
+    });
   }
 
   _registerAiEndpointRefresh(function(endpoints) {
@@ -467,15 +498,12 @@ async function initUtilityModel() {
   // Persist whatever's currently selected. Empty endpoint or model → backend
   // transparently falls back to the chat model (mirrors the teacher panel:
   // no toggle, "—" means "unset, use chat").
-  async function saveUtility() {
-    try {
-      await _postSettings({
-        utility_endpoint_id: epSel.value || '',
-        utility_model: modelSel.value || ''
-      });
-      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
-      setTimeout(function() { msg.textContent = ''; }, 1500);
-    } catch (e) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
+  const saveSettings = _createSettingsSaver(msg, 1500);
+  function saveUtility() {
+    return saveSettings({
+      utility_endpoint_id: epSel.value || '',
+      utility_model: modelSel.value || '',
+    });
   }
 
   epSel.addEventListener('change', function() { refreshModels(''); saveUtility(); });

@@ -1,6 +1,9 @@
 import asyncio
 import json
+import sys
 import time
+import types
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -176,3 +179,58 @@ async def test_connect_all_enabled_timeout_does_not_block_other_servers(monkeypa
 
     assert set(completed) == {1, 3}
     assert elapsed < 1
+
+
+@pytest.mark.asyncio
+async def test_disconnect_all_cancels_pending_connect_before_return(monkeypatch):
+    from src.mcp_manager import McpManager
+
+    manager = McpManager()
+    entered = asyncio.Event()
+    closed = []
+
+    @asynccontextmanager
+    async def fake_transport(_url, auth=None):
+        try:
+            yield (object(), object(), lambda: None)
+        finally:
+            closed.append("transport")
+
+    class FakeSession:
+        def __init__(self, *_streams):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            closed.append("session")
+
+        async def initialize(self):
+            entered.set()
+            await asyncio.Event().wait()
+
+    mcp = types.ModuleType("mcp")
+    mcp.ClientSession = FakeSession
+    mcp_client = types.ModuleType("mcp.client")
+    mcp_http = types.ModuleType("mcp.client.streamable_http")
+    mcp_http.streamablehttp_client = fake_transport
+    monkeypatch.setitem(sys.modules, "mcp", mcp)
+    monkeypatch.setitem(sys.modules, "mcp.client", mcp_client)
+    monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", mcp_http)
+
+    import src.mcp_oauth as mcp_oauth
+    monkeypatch.setattr(mcp_oauth, "build_provider", lambda *_a, **_kw: object())
+    monkeypatch.setattr(mcp_oauth, "clear_auth_url", lambda *_a: None)
+
+    task = asyncio.create_task(manager._connect_http("pending", "pending", "http://example.test/mcp"))
+    manager._connect_tasks["pending"] = task
+    await entered.wait()
+
+    await manager.disconnect_all()
+
+    assert task.cancelled()
+    assert "pending" not in manager._connect_tasks
+    assert "pending" not in manager._sessions
+    assert "pending" not in manager._stacks
+    assert closed == ["session", "transport"]

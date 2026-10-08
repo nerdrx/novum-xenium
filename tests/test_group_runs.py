@@ -1,6 +1,8 @@
 import asyncio
 import threading
 
+import pytest
+
 from src.group_coordination import GroupCoordinationStore
 from src.group_runs import GroupRunManager
 
@@ -75,6 +77,38 @@ def test_stop_cancels_runner_and_preserves_uncertain_working_task(tmp_path):
     assert cancelled.is_set()
     assert run["status"] == "stopped"
     assert store.get("parent", "alice")["tasks"][0]["status"] == "working"
+
+
+def test_parent_delete_fences_only_matching_owner_run(tmp_path):
+    started = {owner: asyncio.Event() for owner in ("alice", "bob")}
+
+    async def runner(_session, _prompt, *, owner, **_kwargs):
+        started[owner].set()
+        await asyncio.Event().wait()
+
+    store = GroupCoordinationStore(str(tmp_path / "group-delete-owner.db"))
+    manager = GroupRunManager(store, runner=runner)
+
+    async def scenario():
+        alice = await manager.start("parent", "alice", board(), {"builder": "a1", "reviewer": "a2"})
+        bob = await manager.start("parent", "bob", board(), {"builder": "b1", "reviewer": "b2"})
+        alice_task = manager._tasks[alice["job_id"]]
+        bob_task = manager._tasks[bob["job_id"]]
+        await asyncio.gather(*(event.wait() for event in started.values()))
+
+        manager.delete_session("parent", "alice")
+        done, _pending = await asyncio.wait({alice_task}, timeout=1)
+        assert alice_task in done and alice_task.cancelled()
+        with pytest.raises(asyncio.CancelledError):
+            await alice_task
+        assert manager.is_active("parent", "bob")
+        assert store.get("parent", "bob") is not None
+
+        assert await manager.stop("parent", "bob", bob["job_id"])
+        with pytest.raises(asyncio.CancelledError):
+            await bob_task
+
+    asyncio.run(scenario())
 
 
 def test_restart_marks_running_job_interrupted(tmp_path):

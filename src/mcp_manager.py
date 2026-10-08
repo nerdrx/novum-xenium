@@ -338,6 +338,8 @@ class McpManager:
 
     async def _connect_http(self, server_id: str, name: str, url: str) -> bool:
         """Connect to a Streamable HTTP MCP server (with automatic OAuth)."""
+        stack = None
+        registered = False
         try:
             from mcp import ClientSession
             from mcp.client.streamable_http import streamablehttp_client
@@ -368,14 +370,15 @@ class McpManager:
                     "input_schema": tool.inputSchema if hasattr(tool, "inputSchema") else {},
                 })
 
+            clear_auth_url(server_id)
             self._sessions[server_id] = session
             self._stacks[server_id] = stack
             self._tools[server_id] = tools
+            registered = True  # The manager now owns the open stack.
             self._connections[server_id] = {
                 "status": "connected", "name": name, "transport": "http",
                 "tool_count": len(tools),
             }
-            clear_auth_url(server_id)
             # Tools changed (this can complete after connect_server already
             # returned, via the background OAuth flow), so bump the generation
             # to invalidate the tool-prompt cache.
@@ -390,6 +393,14 @@ class McpManager:
             logger.error(f"Failed to connect HTTP MCP server {name} ({server_id}): {e}")
             self._connections[server_id] = {"status": "error", "error": str(e), "name": name}
             return False
+        finally:
+            # Cancellation (notably during shutdown) bypasses the Exception
+            # handler. Close any contexts entered before ownership transferred.
+            if stack is not None and not registered:
+                try:
+                    await stack.aclose()
+                except Exception as e:
+                    logger.warning("Error closing incomplete MCP connection %s: %s", server_id, type(e).__name__)
 
     async def disconnect_server(self, server_id: str):
         """Disconnect from an MCP server."""
@@ -398,6 +409,7 @@ class McpManager:
         task = self._connect_tasks.pop(server_id, None)
         if task is not None and not task.done():
             task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         try:
             from src.mcp_oauth import clear_auth_url
             clear_auth_url(server_id)
@@ -419,7 +431,7 @@ class McpManager:
 
     async def disconnect_all(self):
         """Disconnect from all MCP servers."""
-        ids = list(self._sessions.keys())
+        ids = set(self._sessions) | set(self._connect_tasks)
         for sid in ids:
             await self.disconnect_server(sid)
 

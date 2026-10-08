@@ -102,6 +102,7 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "manage_research": "List, read/open, or delete saved DEEP RESEARCH results from the Library. action='list' returns clickable [query](#research-<id>) rows (most-recent first). action='read' (aka open/view/get) with id returns the report + sources. action='delete' with id removes it. Use this for ANY 'open/read/find/delete my research / that report / the research on X' request. NOTE: this is for EXISTING research; to START new research use trigger_research.",
     "manage_settings": "Change ANY real app setting (the ones the Settings panel writes) so the user never has to open it: TTS voice/provider/speed, STT, search engine + result count, default/teacher/task/utility/vision/image/research models, image quality, reminder channel (browser/email/ntfy), agent timeout/tool-call budget, and more. action=set with key (friendly aliases ok: voice, 'search engine', 'default model', 'teacher model', 'image quality', 'reminder channel'...) + value; get/list/reset too. Also toggles tools on/off (disable_tool/enable_tool/list_tools). Secrets/API keys are read-only. Use for any 'change my…/set my…/use X for…/turn on…' preference request.",
     "create_session": "Create a new chat with a name and model.",
+    "delegate_subagent": "Delegate a task to a child agent chat; spawn, inspect status, wait, or cancel. Call list_models first to choose an available child model; omitted model inherits the current chat's model.",
     "list_sessions": "List all chats with their metadata (the UI calls these 'chats'). Use for 'list my chats', 'rename all my chats' (list first, then manage_session to rename each).",
     "send_to_session": "Send a message to another chat. Cross-chat communication.",
     "search_chats": "Search past chats, then read exact saved messages in pages by message_id.",
@@ -374,6 +375,8 @@ class ToolIndex:
                    "delete session", "fork chat", "fork session",
                    "name the chats", "name my chats", "rename them"}):
             {"list_sessions", "manage_session"},
+        frozenset({"delegate", "delegate this", "delegate task", "subagent", "sub-agent", "spawn agent", "parallelize this", "parallelise this", "child agent"}):
+            {"delegate_subagent", "list_models"},
         frozenset({"recurring", "every day", "every hour", "every morning",
                    "every evening", "every night", "every week", "each morning",
                    "daily task", "background task", "scheduled task", "schedule a",

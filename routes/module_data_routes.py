@@ -72,6 +72,14 @@ def setup_module_data_routes(store):
             raise HTTPException(404, 'Module is disabled or missing.')
         if capability not in module.get('permissions', []):
             raise HTTPException(403, 'Module has no permission for this data.')
+        if capability == 'subagents':
+            from src.subagents import list_subagents
+            children = await asyncio.to_thread(list_subagents, storage_owner_for_request(request))
+            items = [{'title': child['name'], 'session_id': child['session_id'],
+                      'model': child.get('model', ''), 'status': child['status'],
+                      'detail': f"Parent chat: {child['parent_session_id']}"}
+                     for child in children]
+            return {'title': 'Subagents', 'summary': {'Tasks': len(items)}, 'items': items}
         if capability == 'git':
             if not owner_is_admin_or_single_user(user):
                 raise HTTPException(403, 'Workspace Git status is admin-only.')

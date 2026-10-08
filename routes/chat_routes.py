@@ -926,6 +926,9 @@ def setup_chat_routes(
         except KeyError:
             raise HTTPException(404, f"Session '{session}' not found")
         owner = effective_user(request)
+        from src.subagents import get_child
+        if get_child(str(session or ""), owner):
+            raise HTTPException(409, "Subagent chats are read-only; inspect or control them from their parent chat.")
         _approval_mode = resolve_tool_approval_mode(request)
         if _clear_orphaned_session_endpoint(sess, owner=owner):
             raise HTTPException(400, "Selected model endpoint was removed. Pick another model in Settings.")
@@ -1315,6 +1318,35 @@ def setup_chat_routes(
             _verify_session_owner(request, session)
             sess = session_manager.get_session(session)
             owner = effective_user(request)
+            from src.subagents import get_child, approval_resume_security
+            _subagent_chat = get_child(str(session or ""), owner)
+            if _subagent_chat:
+                try:
+                    _subagent_security = approval_resume_security(
+                        session, owner, approval_id=tool_approval_id,
+                        recovery_run_id=recovery_run_id,
+                    )
+                except ValueError as error:
+                    raise HTTPException(409, f"{error}; continue work from the parent chat.") from None
+                chat_mode = "agent"
+                _original_workspace = str(_subagent_security.get("workspace") or "")
+                workspace, workspace_rejected = _resolve_request_workspace(request, _original_workspace)
+                if _original_workspace and (not workspace or workspace != _original_workspace):
+                    raise HTTPException(409, "The subagent workspace is no longer available to this account.")
+                from routes.prefs_routes import TOOL_APPROVAL_MODES
+                inherited_approval = _subagent_security.get("approval_mode")
+                if inherited_approval not in TOOL_APPROVAL_MODES:
+                    raise HTTPException(409, "The subagent approval policy is unavailable.")
+                current_approval = _approval_mode
+                if "ask" in (current_approval, inherited_approval):
+                    _approval_mode = "ask"
+                elif "auto" in (current_approval, inherited_approval):
+                    _approval_mode = "auto"
+                else:
+                    _approval_mode = "full"
+                external_untrusted_context_seen = bool(_subagent_security.get("external_untrusted_context_seen"))
+            else:
+                _subagent_security = {}
             recovery_checkpoint = None
             recovery_workspace = None
             if recovery_run_id:
@@ -1339,6 +1371,8 @@ def setup_chat_routes(
                     raise HTTPException(409, "The saved workspace is no longer available to this account.")
             if tool_approval_id:
                 _reject_delegated_tool_approval(request)
+                if _subagent_chat and _subagent_security.get("delegated_credential"):
+                    raise HTTPException(403, "This subagent inherited a delegated credential and cannot approve tools.")
                 pending_tool_approval = tool_approval_store.peek(tool_approval_id)
                 normalized_owner = str(owner or "").strip().casefold()
                 if (
@@ -1390,6 +1424,9 @@ def setup_chat_routes(
                         tool_approval_id,
                     )
                 if decision == "deny":
+                    if _subagent_chat:
+                        from src.subagents import update_status
+                        update_status(session, "done")
                     return StreamingResponse(
                         _tool_approval_resolution_stream(decision),
                         media_type="text/event-stream",
@@ -1398,6 +1435,9 @@ def setup_chat_routes(
                 # Reuse the sealed interrupted request only for internal context,
                 # retrieval, and policy reconstruction; never persist or display it.
                 message = pending_tool_approval.continuation_query
+                if _subagent_chat:
+                    from src.subagents import update_status
+                    update_status(session, "running")
                 # The approval resumes the request whose action was sealed.
                 # A refreshed composer may have loaded different per-mode
                 # defaults, so restore that request's web-search choice before
@@ -1681,10 +1721,18 @@ def setup_chat_routes(
 
         # Build disabled-tools set from frontend toggles + user privileges
         disabled_tools = set()
+        if _subagent_chat:
+            disabled_tools.update(_subagent_security.get("disabled_tools") or ())
+        # Child-agent creation is an explicitly enabled module capability.
+        from src.subagents import subagents_enabled
+        if not subagents_enabled():
+            disabled_tools.add("delegate_subagent")
         # Minting is admin-only, so every owner-keyed check below answers
         # "admin" for a token. Cap it at the non-admin policy instead.
         # stream_agent_loop repeats this from delegated_credential.
         _delegated_credential = is_delegated_credential(request)
+        if _subagent_chat:
+            _delegated_credential = _delegated_credential or bool(_subagent_security.get("delegated_credential"))
         if _delegated_credential:
             disabled_tools.update(delegated_credential_blocked_tools())
         # Only disable bash when the caller *explicitly* set it to a falsy
@@ -1726,6 +1774,7 @@ def setup_chat_routes(
                 "search_chats",       # past chat history
                 "manage_skills",      # skill presets tied to user
                 "create_session",
+                "delegate_subagent",
                 "list_sessions",
                 "manage_session",
                 "send_to_session",
@@ -1815,6 +1864,17 @@ def setup_chat_routes(
             disabled_tools=disabled_tools,
             last_user_message=message,
         )
+        if _subagent_chat:
+            from dataclasses import replace
+            inherited_policy = _subagent_security.get("tool_policy") or {}
+            tool_policy = replace(
+                tool_policy,
+                disabled_tools=frozenset(set(tool_policy.disabled_tools) | set(inherited_policy.get("disabled_tools") or ())),
+                hidden_tools=frozenset(set(tool_policy.hidden_tools) | set(inherited_policy.get("hidden_tools") or ())),
+                block_all_tool_calls=bool(tool_policy.block_all_tool_calls or inherited_policy.get("block_all_tool_calls")),
+                disable_mcp=bool(tool_policy.disable_mcp or inherited_policy.get("disable_mcp")),
+                mode=(str(inherited_policy.get("mode") or tool_policy.mode) if inherited_policy.get("block_all_tool_calls") else tool_policy.mode),
+            )
         disabled_tools = tool_policy.all_disabled_names()
         research_blocked_by_policy = bool(
             tool_policy.blocks("trigger_research")
@@ -2851,11 +2911,36 @@ def setup_chat_routes(
         async def _safe_stream() -> AsyncGenerator[str, None]:
             """Wrapper that guarantees _active_streams cleanup even if stream_with_save
             raises before reaching a mode-specific finally block."""
+            child_status = "done"
+            child_waiting_approval = False
             try:
                 async for chunk in stream_with_save():
+                    if _subagent_chat and chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+                        try:
+                            event_data = json.loads(chunk[6:].split("\n", 1)[0])
+                        except (ValueError, TypeError):
+                            event_data = {}
+                        if isinstance(event_data, dict):
+                            approval = event_data.get("data") if event_data.get("type") == "ask_user" else event_data.get("ask_user")
+                            if isinstance(approval, dict) and approval.get("approval_id"):
+                                child_waiting_approval = True
+                            if event_data.get("type") == "error" or event_data.get("error"):
+                                child_status = "error"
                     yield chunk
+            except asyncio.CancelledError:
+                child_status = "stopped"
+                raise
+            except Exception:
+                child_status = "error"
+                raise
             finally:
                 _active_streams.pop(session, None)
+                if _subagent_chat:
+                    from src.subagents import update_status
+                    try:
+                        update_status(session, "waiting_approval" if child_status == "done" and child_waiting_approval else child_status)
+                    except Exception:
+                        logger.exception("Failed to update subagent approval status for %s", session)
 
         # A request can wait here after its initial ownership check while a
         # deletion or same-ID recreation completes. Recheck both persisted row
@@ -2922,6 +3007,9 @@ def setup_chat_routes(
             },
             persist=not incognito,
         )
+        if _subagent_chat:
+            from src.subagents import update_status
+            update_status(session, "running")
         return StreamingResponse(
             agent_runs.subscribe(session, _detached_run),
             media_type="text/event-stream",

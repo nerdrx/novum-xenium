@@ -60,7 +60,7 @@ Validation: desktop browser tests passed. Native Linux WebKit checks in an isola
 - Adds Settings → Modules for administrator-installed ZIP packages: isolated UI panels, existing MCP references and optional remote MCP connection definitions.
 - Installs, upgrades and restored versions require explicit enabling. Versions are immutable; the previous package can be restored. Tools connect only after an explicit action and keep their own Integrations lifecycle and approval rules.
 - Panels receive theme colours in a one-way message. They have no chat, cookie, storage or native management access; network requests and external scripts are blocked.
-- Adds a working Focus timer example and a [module author guide](docs/modules.md). No marketplace, package scripts or in-process backend plugins are included.
+- Adds a [module author guide](docs/modules.md). No marketplace, package scripts or in-process backend plugins are included.
 
 Validation: module and usage route checks passed (23 tests). Direct Chromium desktop/mobile checks covered install/update/restore, admin restrictions, failed-request retry, explicit MCP connection, keyboard close/focus restoration, local images and real iframe DOM/storage/network isolation. Existing Settings shell checks passed.
 
@@ -468,6 +468,8 @@ Validation for this repair: 72 focused bridge, image routing, cancellation, owne
 
 Administrators can add a public GitHub repository URL, browse its `modules/index.json` catalog and tick a module to install and enable it. Catalogs pin a default-branch commit; refreshing discovers new versions, and updating leaves the package disabled until reviewed. Source collisions cannot replace another repository's module or a ZIP installation. Forgetting a source retains installed packages.
 
-This repository includes Downloads watch, Git desk, Model monitor, Image studio, Research shelf, Run inbox and Focus timer under `modules/`. The six data panels use explicit read grants, a sandbox frame message bridge and the app's existing ownership checks. They do not receive arbitrary API, shell, cookie or desktop access. Existing MCP connection permissions remain independent. The module guide documents each initial panel's limits.
+The initial dashboard examples have been removed. The catalog now ships **Subagents**: model-selected delegation into real child chats, with clickable status cards in the parent chat and a searchable task monitor. Omitting the model uses the parent's model. Explicit choices resolve through the caller's available endpoints. Child agents inherit tool restrictions and approval policy; recursive delegation is disabled.
 
-Validation: package/catalog, URL boundaries, source conflicts, pinned downloads, update/rollback, read grants and owner filtering have focused Python coverage. Browser checks cover repository checkboxes, updates, failures, untrusted frame messages and all six data panels. No model generation is invoked by these checks.
+Module navigation opens on installed panels, with name/description search and enabled/disabled filters. Repository management is separate, and ZIP installation sits under a disclosure below the installed list.
+
+Validation covers repository checkboxes, disabled updates, ownership, sandbox messaging, safe task rendering and child-chat navigation. No model inference is invoked by these checks.

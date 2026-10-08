@@ -15,6 +15,7 @@ let activeFrame = null;
 let activeId = null;
 let activeVersion = null;
 let activeModule = null;
+let visibleSubagents = new Set();
 let returnFocus = null;
 let statusText = '';
 let statusError = false;
@@ -97,10 +98,11 @@ function openPanel(item) {
   activeId = item.id;
   activeVersion = item.version;
   activeModule = item;
+  visibleSubagents.clear();
   document.getElementById('module-window-title').textContent = item.name;
   const tools = element('div', 'modules-frame-controls');
-  const granted = (item.permissions || []).filter(value => ['downloads', 'git', 'models', 'images', 'research', 'runs'].includes(value));
-  const note = element('span', 'modules-detail', `Isolated panel. Read permissions: ${granted.length ? granted.join(', ') : 'none'}. It cannot access chats, cookies or desktop controls.`);
+  const granted = (item.permissions || []).filter(value => ['downloads', 'git', 'models', 'images', 'research', 'runs', 'subagents'].includes(value));
+  const note = element('span', 'modules-detail', `Isolated panel. Declared permissions: ${granted.length ? granted.join(', ') : 'none'}. No cookies or desktop access.`);
   const reload = control('Reload panel', () => {
     if (activeFrame) activeFrame.src = `/api/modules/${encodeURIComponent(item.id)}/panel`;
   });
@@ -116,7 +118,7 @@ function openPanel(item) {
   modal.classList.remove('hidden');
   document.getElementById('module-window-close')?.focus();
 }
-const SOURCE_CAPABILITIES = ['downloads', 'git', 'models', 'images', 'research', 'runs'];
+const SOURCE_CAPABILITIES = ['downloads', 'git', 'models', 'images', 'research', 'runs', 'subagents'];
 const MODULE_DESTINATIONS = {
   gallery: '#tool-gallery-btn', research: '#tool-research-btn',
   tasks: '#tool-tasks-btn',
@@ -127,6 +129,13 @@ function moduleMessage(event) {
   const request = event.data;
   if (!frame?.contentWindow || event.source !== frame.contentWindow || !item || !request || typeof request !== 'object') return;
   if (request.type === 'novum:open') {
+    if (request.action === 'session') {
+      if (!item.permissions?.includes('subagents') || typeof request.session_id !== 'string' || !visibleSubagents.has(request.session_id)) return;
+      const sessionId = request.session_id;
+      closePanel();
+      options.openChat?.(sessionId);
+      return;
+    }
     if (request.action === 'integrations') {
       if (typeof options.openIntegrations === 'function') options.openIntegrations();
       return;
@@ -152,6 +161,7 @@ function moduleMessage(event) {
   api(`/api/modules/${encodeURIComponent(moduleId)}/data/${encodeURIComponent(capability)}${workspace}`)
     .then(data => {
       if (activeFrame !== frame || activeId !== moduleId || activeModule !== item || frame.contentWindow !== event.source) return;
+      if (capability === 'subagents') visibleSubagents = new Set((data.items || []).map(child => child.session_id).filter(id => typeof id === 'string'));
       frame.contentWindow.postMessage({ type: 'novum:response', id: request.id, data }, '*');
     })
     .catch(error => {

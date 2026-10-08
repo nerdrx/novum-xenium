@@ -6,7 +6,7 @@ Administrators install a ZIP, review it and enable it. Ordinary signed-in users 
 
 ## Install from a GitHub repository
 
-In **Settings → Modules**, paste `https://github.com/nerdrx/novum-xenium` and choose **Add repository**. Tick a module to download and enable it. The catalog includes Model monitor, Downloads watch, Git desk, Image studio, Research shelf, Run inbox and Focus timer. Permissions appear beside each module before activation.
+In **Settings → Modules**, paste `https://github.com/nerdrx/novum-xenium` and choose **Add repo**. Tick a module to download and enable it. The catalog contains **Subagents**. It enables real agent delegation and includes a task monitor with links to child chats. Installed panels are shown first; use search and the status filter to find them. Repository management has its own view. Permissions appear beside each module before activation.
 
 A repository is pinned to its current default-branch commit. **Refresh** checks its latest catalog; **Update** downloads a new module version and leaves it disabled for review. Unticking disables a module. Forgetting a repository keeps installed modules. Public GitHub repositories are supported; private repositories and custom Git hosts are not yet supported.
 
@@ -37,7 +37,7 @@ Paths are relative to `modules/`; files are relative to that module directory. I
 
 ## Optional read permissions
 
-A manifest can declare `"permissions": ["models"]`. Supported grants: `downloads`, `git`, `models`, `images`, `research`, `runs`. The host mediates these requests; panels do not receive cookies or arbitrary API access. Git and model-download data require an admin account. Images, research and runs retain the signed-in user's existing ownership rules.
+A manifest can declare `"permissions": ["models"]`. Supported grants: `downloads`, `git`, `models`, `images`, `research`, `runs`, `subagents`. The host mediates these requests; panels do not receive cookies or arbitrary API access. Git and model-download data require an admin account. Images, research and runs retain the signed-in user's existing ownership rules.
 
 ```js
 parent.postMessage({type: 'novum:request', id: 'refresh-1', capability: 'models'}, '*');
@@ -47,20 +47,15 @@ window.addEventListener('message', event => {
 });
 ```
 
-Responses contain `title`, `summary`, `items` and an optional `notice`. Git requests may include a `workspace` folder, checked against the existing allowed workspace policy. Fixed `novum:open` actions (`gallery`, `research`, `tasks`, `integrations`) open the app's existing tools; arbitrary URLs and commands are not accepted.
+Responses contain `title`, `summary`, `items` and an optional `notice`. Git requests may include a `workspace` folder, checked against the existing allowed workspace policy. Fixed `novum:open` actions (`gallery`, `research`, `tasks`, `integrations`) open the app's existing tools; arbitrary URLs and commands are not accepted. A panel with `subagents` permission may send `{type: "novum:open", action: "session", session_id: "…"}` only for a child returned by its latest subagent data response. The normal chat ownership checks still apply.
 
-These first panels provide read-only views, refreshed every 15 seconds while visible and on demand. Image editing and generation remain in Gallery/chat; research detail remains in Research; run approvals remain in their chats. Downloads watch covers Cookbook model downloads, not browser downloads. It does not run after its panel closes or deliver background completion alerts. Git desk shows tracked local changes, not remote pull requests or CI. Model monitor shows available models and, for administrators, loaded Ollama models and VRAM bytes; it does not unload models. These limits appear in the panels themselves.
+## Subagents
 
-## Try a panel
+Enable the Subagents module, switch your chat to **Agent** mode, and ask the model to delegate a task. Each child gets a separate chat. The parent chat shows a subagent card; open it to inspect the task, tools and answer. The module panel lists your delegated work with search and active/finished filters.
 
-The [Focus timer](../examples/modules/focus-timer) is a working, self-contained example. Package it from its own directory so the manifest sits at the ZIP root:
+The parent can discover available models using `list_models` and select one for the task. Omitting the model uses the parent's model and endpoint. Child agents keep the parent's tool restrictions and approval policy. Delegation does not grant extra privileges. Children continue independently after the parent turn; open a child chat to stop its run. Child chats allow approval decisions but no ordinary messages in this first version; send follow-up work from the parent chat.
 
-```bash
-cd examples/modules/focus-timer
-python -m zipfile -c /tmp/focus-timer.zip module.json panel.html
-```
-
-Upload that ZIP in Settings → Modules, enable it, then choose Open panel. The timer lives only while its panel is open; it is not a background reminder service.
+The `subagents` permission enables the host's delegation tools as well as the panel's read-only task list. Third-party panels can request the read grant; only the enabled module with ID `subagents` activates delegation tools. Panels cannot send arbitrary code, endpoints or desktop commands to the host.
 
 ## Package format
 
@@ -69,10 +64,10 @@ Upload that ZIP in Settings → Modules, enable it, then choose Open panel. The 
 ```json
 {
   "api_version": 1,
-  "id": "focus-timer",
-  "name": "Focus timer",
+  "id": "my-panel",
+  "name": "My panel",
   "version": "1.0.0",
-  "description": "A small timer beside your work.",
+  "description": "A panel for your workflow.",
   "panel": "panel.html"
 }
 ```
@@ -130,4 +125,4 @@ window.addEventListener('message', event => {
 });
 ```
 
-Tokens are `bg`, `fg`, `panel`, `border` and `red` (the existing accent token). Panels may request only the declared read permissions and fixed tool-opening actions described above. Use MCP for agent tools. Downloads happen only when an administrator installs or updates a module; there is no automatic marketplace installation.
+Tokens are `bg`, `fg`, `panel`, `border` and `red` (the existing accent token). Panels may request only the declared read permissions and fixed tool-opening actions described above. Use MCP for external agent tools; the `subagents` grant enables the built-in delegation tools. Downloads happen only when an administrator installs or updates a module; there is no automatic marketplace installation.

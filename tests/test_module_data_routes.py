@@ -24,7 +24,7 @@ def test_shipped_catalog_packages_validate(tmp_path):
         manifest, _, _ = _read_package(output.getvalue())
         assert manifest['id'] not in ids
         ids.add(manifest['id'])
-    assert len(ids) == 7
+    assert ids == {'subagents'}
 
 
 def test_real_api_shapes_and_owner_filtered_runs(tmp_path, monkeypatch):
@@ -75,3 +75,31 @@ def test_real_api_shapes_and_owner_filtered_runs(tmp_path, monkeypatch):
     assert client.get('/api/modules/test-panel/data/git').status_code == 403
     store.set_enabled('test-panel', False)
     assert client.get('/api/modules/test-panel/data/images').status_code == 404
+
+
+def test_subagent_panel_data_is_owner_scoped(tmp_path, monkeypatch):
+    from src import subagents
+    monkeypatch.setattr(subagents, 'DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(subagents, '_prune_deleted_sessions', lambda state: None)
+    store = ModuleStore(tmp_path)
+    package = io.BytesIO()
+    with zipfile.ZipFile(package, 'w') as archive:
+        archive.writestr('module.json', json.dumps({'api_version': 1, 'id': 'subagents', 'name': 'Subagents',
+            'version': '1.0.0', 'panel': 'panel.html', 'permissions': ['subagents']}))
+        archive.writestr('panel.html', '<h1>Subagents</h1>')
+    store.install(package.getvalue())
+    store.set_enabled('subagents', True)
+    for owner in ('alice', 'bob'):
+        subagents.register({'session_id': owner+'-child', 'name': owner+' task', 'parent_session_id': owner+'-parent',
+                            'owner': owner, 'status': 'done', 'model': 'test-model'})
+    monkeypatch.setattr(data_routes, 'storage_owner_for_request', lambda request: 'alice')
+    app = FastAPI()
+    app.dependency_overrides[require_user] = lambda: 'alice'
+    app.include_router(data_routes.setup_module_data_routes(store), prefix='/api/modules')
+    with TestClient(app) as client:
+        response = client.get('/api/modules/subagents/data/subagents')
+        assert response.status_code == 200
+        assert [item['session_id'] for item in response.json()['items']] == ['alice-child']
+        assert 'bob' not in response.text
+        store.set_enabled('subagents', False)
+        assert client.get('/api/modules/subagents/data/subagents').status_code == 404

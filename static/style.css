@@ -9971,6 +9971,29 @@ body.fullwidth-chat .chat-history {
   overflow-x: auto;
   overflow-y: hidden;
 }
+.subagent-card { margin: 3px 0; max-width: 100%; }
+.subagent-card-link {
+  display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%;
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--fg); background: color-mix(in srgb, var(--accent, var(--red)) 8%, var(--bg));
+  text-decoration: none; font-size: 12px;
+}
+.subagent-card-link:hover, .subagent-card-link:focus-visible { border-color: var(--accent, var(--red)); outline-offset: 2px; }
+.subagent-card-icon, .subagent-card-status { flex: 0 0 auto; }
+.subagent-card-title { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.subagent-card-status { font-size: 11px; opacity: .65; }
+body.subagent-inspector-active .chat-input-bar { display: none !important; }
+.subagent-inspector-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 auto 14px; max-width: 900px; padding: 10px 14px;
+  border: 1px solid var(--border); border-radius: 10px;
+  color: var(--fg); background: color-mix(in srgb, var(--accent, var(--red)) 8%, var(--bg));
+  font-size: 12px;
+}
+.subagent-inspector-banner a { color: var(--accent, var(--red)); font-weight: 600; white-space: nowrap; }
+@media (max-width: 600px) {
+  .subagent-inspector-banner { align-items: flex-start; flex-direction: column; }
+}
 .agent-thread-node.open .agent-thread-content {
   display: block;
 }

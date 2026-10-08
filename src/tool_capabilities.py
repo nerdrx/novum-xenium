@@ -189,6 +189,12 @@ _register(
     result_integrity=ResultIntegrity.EXTERNAL_UNTRUSTED,
 )
 _register(
+    {"delegate_subagent"},
+    ToolEffect.NETWORK_EGRESS,
+    ToolEffect.WRITE_PRIVATE,
+    result_integrity=ResultIntegrity.EXTERNAL_UNTRUSTED,
+)
+_register(
     {"send_to_session"},
     ToolEffect.NETWORK_EGRESS,
     ToolEffect.WRITE_PRIVATE,
@@ -468,6 +474,12 @@ def capabilities_for_action(tool_name: Any, content: Any) -> ToolCapabilities:
         return base
 
     action = _action_from_content(tool_name, content)
+    if tool_name == "delegate_subagent":
+        if action in {"status", "wait"}:
+            return _capabilities(ToolEffect.READ_PRIVATE, result_integrity=ResultIntegrity.EXTERNAL_UNTRUSTED)
+        if action == "cancel":
+            return _capabilities(ToolEffect.WRITE_PRIVATE, result_integrity=ResultIntegrity.EXTERNAL_UNTRUSTED)
+        return base
     destructive = action in _ACTION_DESTRUCTIVE.get(tool_name, ())
     if tool_name not in _PRIVATE_ACTION_READS:
         if not destructive:

@@ -37,6 +37,7 @@ import {
 } from './chatModelProvenance.js';
 import { createTerminalStreamError, isRecoverableStreamError } from './chatStreamErrors.js';
 import { loadPanel } from './panels.js';
+import { appendSubagentCard } from './subagentCard.js';
 
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -3965,6 +3966,7 @@ import { loadPanel } from './panels.js';
                   const _wasOpen = currentToolBubble.classList.contains('open');
                   currentToolBubble.className = 'agent-thread-node' + (toolStatus.className ? ` ${toolStatus.className}` : '') + (_wasOpen ? ' open' : '');
                   currentToolBubble.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${toolStatus.icon}</span><span class="agent-thread-tool">${esc(json.tool)}</span><span class="agent-thread-status">${toolStatus.label}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml2}${outHtml}${diffHtml}</div>`;
+                  if (json.subagent) appendSubagentCard(currentToolBubble.closest('.agent-thread'), json.subagent);
                   // Reset so thinking spinner between tools says "Thinking" not the old tool's label
                   _lastToolName = '';
                   uiModule.scrollHistory();

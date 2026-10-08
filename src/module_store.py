@@ -85,7 +85,7 @@ def _validate_manifest(raw: bytes) -> dict:
         raise ModulePackageError(400, "mcp_server_ids must be a list of configured server ids")
     manifest["mcp_server_ids"] = list(dict.fromkeys(refs))
     permissions = manifest.get("permissions", [])
-    allowed_permissions = {"downloads", "git", "models", "images", "research", "runs"}
+    allowed_permissions = {"downloads", "git", "models", "images", "research", "runs", "subagents"}
     if not isinstance(permissions, list) or len(permissions) > len(allowed_permissions) or any(
         not isinstance(item, str) or item not in allowed_permissions for item in permissions
     ) or len(set(permissions)) != len(permissions):

@@ -96,7 +96,7 @@ Coordinated task passes run on the server, so closing the tab doesn't stop those
 
 ### Add the bits you need
 
-Paste a public GitHub repository URL in **Settings → Modules**, then tick the panels you want. This repo ships seven examples under [`modules/`](modules/), including Model monitor, Git desk and Image studio. ZIP installation still works. Refresh a repository to discover updates, review each version, and enable it. No rebuild for each module change. Panels run in an isolated frame; tools keep their own MCP permissions. [Build a module](docs/modules.md), or start with the included Focus timer.
+Paste a public GitHub repository URL in **Settings → Modules**, then tick the panels you want. The [`Subagents` module](modules/subagents/) lets your agent split work into child chats you can inspect. ZIP installation still works. Refresh a repository to discover updates, review each version, and enable it. No rebuild for each module change. Panels run in an isolated frame; tools keep their own MCP permissions. [Build a module](docs/modules.md).
 
 ### Still your workspace
 

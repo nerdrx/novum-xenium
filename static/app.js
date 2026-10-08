@@ -4315,7 +4315,7 @@ function startOdysseusApp() {
     uiModule.showToast(`Added ${files.length} file${files.length > 1 ? 's' : ''} to attach`);
   }, true);
 
-  initModules({ openIntegrations: () => settingsModule.open('integrations') });
+  initModules({ openIntegrations: () => settingsModule.open('integrations'), openChat: id => sessionModule.selectSession(id) });
 
   // Home and Settings share the same per-user analytics snapshot.
   initUsage({

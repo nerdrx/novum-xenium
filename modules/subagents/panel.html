@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Subagents</title>
+<style>
+:root{color-scheme:dark;--bg:#101014;--fg:#eee;--panel:#1a171f;--border:#39333f;--red:#ad8bd4}*{box-sizing:border-box}body{margin:0;padding:20px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,sans-serif}header,.row-head,.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{margin:0;font-size:20px}h2{font-size:14px;margin:0;overflow-wrap:anywhere}p{margin:6px 0 0}small,.muted{font-size:12px;opacity:.72}.toolbar{margin:20px 0 12px}input,select,button{font:inherit;color:var(--fg);background:var(--panel);border:2px solid var(--border);border-radius:8px;padding:8px 12px;min-height:38px}input{flex:1;min-width:140px}button{cursor:pointer}button:hover{border-color:var(--red)}button:disabled{opacity:.6;cursor:wait}:focus-visible{outline:2px solid var(--red);outline-offset:3px}#summary{margin-top:16px;display:flex;gap:18px;flex-wrap:wrap;font-size:12px}#agents{display:grid;gap:10px}.agent{border:2px solid var(--border);border-radius:10px;background:var(--panel);padding:14px}.status{font-size:12px;display:inline-flex;align-items:center;gap:6px}.status:before{content:'●';color:var(--red)}.agent button{margin-top:12px}#status{min-height:20px;font-size:12px;overflow-wrap:anywhere}#empty{padding:24px 0}#empty strong{display:block;margin-bottom:8px}#error{color:var(--red)}[hidden]{display:none!important}::-webkit-scrollbar{width:7px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:8px}html{scrollbar-color:var(--border) transparent;scrollbar-width:thin}@media(max-width:420px){body{padding:12px}input{width:100%}.toolbar select{flex:1}}
+</style></head><body>
+<header><div><h1>Subagents</h1><p class="muted">Separate tasks. Real chats. One place to follow along.</p></div><button id="refresh" type="button">Refresh</button></header>
+<div id="summary" aria-label="Agent counts"></div>
+<div class="toolbar"><input id="search" type="search" aria-label="Find a subagent" placeholder="Find a task or model…"><select id="filter" aria-label="Agent status"><option value="all">All agents</option><option value="active">Active</option><option value="finished">Finished</option></select></div>
+<p id="status" role="status"></p><p id="error" role="alert" hidden></p><div id="agents"></div>
+<div id="empty" hidden><strong>No delegated tasks yet.</strong><span class="muted">In Agent mode, ask your model to delegate a specific task to a subagent. Each agent gets its own chat. Open that chat to inspect its work or stop it. Send follow-up work from the parent chat.</span></div>
+<script>
+let agents=[],sequence=0,pending=null,timeout=null;
+const $=id=>document.getElementById(id),active=new Set(['starting','running','queued','waiting','waiting_approval','pending']);
+function node(tag,text,className){const el=document.createElement(tag);el.textContent=text;if(className)el.className=className;return el}
+function render(){
+ const query=$('search').value.trim().toLocaleLowerCase(),filter=$('filter').value;
+ const running=agents.filter(agent=>active.has(agent.status)).length;
+ $('summary').replaceChildren(node('span',`${agents.length} tasks`),node('span',`${running} active`),node('span',`${agents.length-running} finished`));
+ const shown=agents.filter(agent=>(`${agent.title} ${agent.model||''}`.toLocaleLowerCase().includes(query))&&(filter==='all'||(filter==='active')===active.has(agent.status)));
+ $('agents').replaceChildren();
+ for(const agent of shown){const card=node('article','','agent'),head=node('div','','row-head');head.append(node('h2',agent.title||'Subagent'),node('span',agent.status||'Unknown','status'));card.append(head,node('p',agent.model||'','muted'));if(agent.detail)card.append(node('p',agent.detail,'muted'));const open=node('button','Open chat');open.type='button';open.addEventListener('click',()=>parent.postMessage({type:'novum:open',action:'session',session_id:agent.session_id},'*'));card.append(open);$('agents').append(card)}
+ $('empty').hidden=agents.length>0;
+ if(agents.length&&!shown.length)$('agents').append(node('p','No matching agents. Try another name or status.','muted'));
+}
+function refresh(){if(pending)return;pending=`subagents-${++sequence}`;$('refresh').disabled=true;$('status').textContent='Loading agents…';parent.postMessage({type:'novum:request',id:pending,capability:'subagents'},'*');timeout=setTimeout(()=>{pending=null;$('refresh').disabled=false;$('status').textContent='';$('error').hidden=false;$('error').textContent='The workspace did not respond. Try Refresh.'},15000)}
+addEventListener('message',event=>{if(event.source!==parent||!event.data)return;const message=event.data;if(message.type==='novum:theme'){for(const key of ['bg','fg','panel','border','red'])if(typeof message.tokens?.[key]==='string')document.documentElement.style.setProperty(`--${key}`,message.tokens[key]);return}if(message.type!=='novum:response'||message.id!==pending)return;clearTimeout(timeout);pending=null;$('refresh').disabled=false;if(message.error){$('status').textContent='';$('error').hidden=false;$('error').textContent=message.error;return}$('error').hidden=true;agents=Array.isArray(message.data?.items)?message.data.items:[];render();$('status').textContent='Updated';});
+$('refresh').addEventListener('click',refresh);$('search').addEventListener('input',render);$('filter').addEventListener('change',render);setInterval(()=>{if(!document.hidden)refresh()},5000);refresh();
+</script></body></html>

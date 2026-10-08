@@ -13,7 +13,7 @@ TOOL_TAGS = {"bash", "python", "web_search", "web_fetch", "read_file", "write_fi
              "chat_with_model", "create_session", "list_sessions",
              "send_to_session",
              "pipeline",
-             "manage_session", "manage_memory", "list_models",
+             "manage_session", "manage_memory", "list_models", "delegate_subagent",
              "ui_control", "generate_image", "ask_user", "update_plan", "context_search",
              "manage_tasks", "api_call", "ask_teacher", "manage_skills",
              "suggest_document",
@@ -43,4 +43,3 @@ TOOL_TAGS = {"bash", "python", "web_search", "web_fetch", "read_file", "write_fi
              "app_api"} | BUILTIN_EMAIL_TOOLS
 
 ToolBlock = namedtuple("ToolBlock", ["tool_type", "content"])
-

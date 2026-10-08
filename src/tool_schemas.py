@@ -401,6 +401,25 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "delegate_subagent",
+            "description": "Delegate work to an independently running child chat. Before choosing a child model, call list_models and select one suitable for the task. Omit model to inherit this chat's exact model. Child chats inherit tool/approval restrictions and cannot delegate further. Actions: spawn, status, wait, cancel.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["spawn", "status", "wait", "cancel"]},
+                    "task": {"type": "string", "description": "Task for spawn (1-8000 characters)"},
+                    "title": {"type": "string", "description": "Optional short child-chat title"},
+                    "model": {"type": "string", "description": "Optional model name returned by list_models; omit to inherit current chat model. Endpoint URLs and headers are not accepted."},
+                    "session_id": {"type": "string", "description": "Child session id returned by spawn, for status/wait/cancel"},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 30, "description": "Maximum wait duration"}
+                },
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_sessions",
             "description": "List the user's chats (the UI calls them 'chats') as clickable markdown links. Use this to enumerate chats before opening, renaming, archiving, or deleting them. When replying to the user, preserve the returned [title](#session-id) links; do not strip them into plain text. Optionally filter by keyword.",
             "parameters": {
@@ -1569,6 +1588,8 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
                 content += "\n" + args["category"]
         else:
             content = action
+    elif tool_type == "delegate_subagent":
+        content = json.dumps(args)
     elif tool_type == "list_models":
         content = args.get("filter", "")
     elif tool_type == "ui_control":

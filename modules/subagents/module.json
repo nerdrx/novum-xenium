@@ -1,0 +1,11 @@
+{
+  "api_version": 1,
+  "id": "subagents",
+  "name": "Subagents",
+  "version": "1.0.0",
+  "description": "Delegate work to real child agents. Follow their progress and open their chats.",
+  "panel": "panel.html",
+  "permissions": [
+    "subagents"
+  ]
+}

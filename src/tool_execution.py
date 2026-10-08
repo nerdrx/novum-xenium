@@ -844,6 +844,10 @@ async def _direct_fallback(
     progress_cb: Optional[Callable[[Dict], Awaitable[None]]] = None,
     session_id: Optional[str] = None,
     owner: Optional[str] = None,
+    disabled_tools: Optional[set] = None,
+    tool_policy: Optional[Any] = None,
+    workspace: Optional[str] = None,
+    security_context=None,
 ) -> Optional[Dict]:
     _subproc_env = {
         **os.environ,
@@ -859,6 +863,10 @@ async def _direct_fallback(
             "subproc_env": _subproc_env,
             "session_id": session_id,
             "owner": owner,
+            "disabled_tools": set(disabled_tools or ()),
+            "tool_policy": tool_policy,
+            "workspace": workspace,
+            "security_context": security_context,
         }
 
         from src.agent_tools import TOOL_HANDLERS
@@ -1107,6 +1115,8 @@ async def execute_tool_block(
                 else None
             ),
             uploaded_files=uploaded_files,
+            workspace=workspace,
+            security_context=security_context,
         )
         if snapshot:
             output[1]["workspace_snapshot_id"] = snapshot["id"]
@@ -1132,6 +1142,8 @@ async def _execute_tool_block_impl(
     approved_document_version: Optional[int] = None,
     approved_document_digest: Optional[str] = None,
     uploaded_files: Optional[list[Dict[str, Any]]] = None,
+    workspace: Optional[str] = None,
+    security_context=None,
 ) -> Tuple[str, Dict]:
     """Execute a single tool block. Returns (description, result_dict).
 
@@ -1509,7 +1521,11 @@ async def _execute_tool_block_impl(
     elif tool in dynamic_handlers:
         first_line = content.split(chr(10))[0][:80]
         desc = f"registry: {tool} {first_line}".strip()
-        res = await _direct_fallback(tool, content, progress_cb=progress_cb, session_id=session_id, owner=owner)
+        res = await _direct_fallback(
+            tool, content, progress_cb=progress_cb, session_id=session_id, owner=owner,
+            disabled_tools=disabled_tools, tool_policy=tool_policy, workspace=workspace,
+            security_context=security_context,
+        )
 
         if isinstance(res, tuple):
             desc, result = res

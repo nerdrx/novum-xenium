@@ -9,6 +9,7 @@ import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722c
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
 import { installSessionHistory, setSessionHistory } from './sessionHistory.js';
+import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';
 
 const API_BASE = window.location.origin;
 
@@ -1894,6 +1895,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     return; // deactivate does a page reload
   }
   try {
+    clearSubagentInspector();
     const navToken = ++_sessionNavToken;
     const prevSessionId = currentSessionId;
     // Selecting a real persisted chat cancels any deferred "New Chat" model
@@ -2006,6 +2008,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     // place, producing a ReferenceError every selectSession.)
     const isOC = meta && (meta.is_openclaw || id === 'openclaw');
     let msgHistory = [], modelName = null, pageInfo = null;
+    let subagentParentId = '';
     let paintedLoading = false;
     let loadingTimer = null;
     let loadingPaintReady = Promise.resolve();
@@ -2030,6 +2033,8 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
       }
       if (navToken !== _sessionNavToken || currentSessionId !== id) return;
       msgHistory = data.history || [];
+      const subagentMarker = msgHistory.find(msg => msg?.metadata?.subagent?.parent_session_id)?.metadata?.subagent;
+      if (subagentMarker) subagentParentId = subagentMarker.parent_session_id;
       modelName = data.model || null;
       pageInfo = {
         offset: data.offset,
@@ -2061,6 +2066,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     const wouldWipe = !isOC && !msgHistory.length && isSameSession && hasExistingBubbles;
     if (wouldWipe) {
       // Skip the fade/reload; we're already showing the right content.
+      if (subagentParentId) applySubagentInspector(chatHistory, subagentParentId);
       if (chatHistory) chatHistory.classList.remove('no-animate');
       return;
     }
@@ -2082,6 +2088,8 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
       if (navToken !== _sessionNavToken || currentSessionId !== id) return;
       chatHistory.innerHTML = '';
     }
+
+    if (subagentParentId) applySubagentInspector(chatHistory, subagentParentId);
 
     // Suppress per-message entrance animations during bulk history render
     if (chatHistory) chatHistory.classList.add('no-animate');
@@ -2591,6 +2599,7 @@ export function initDragSort() {
 }
 
 function _showHomeFromHistory() {
+  clearSubagentInspector();
   if (currentSessionId) {
     window.chatModule?.detachCurrentStream?.(currentSessionId);
     _deselectCurrentSession(currentSessionId);

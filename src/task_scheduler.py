@@ -436,7 +436,10 @@ class TaskScheduler:
         except Exception:
             logger.debug("Task progress update failed", exc_info=True)
 
-    def _mark_run_aborted(self, task_id: str, run_id: str | None = None, message: str = "Stopped by user") -> bool:
+    def _mark_run_aborted(
+        self, task_id: str, run_id: str | None = None, message: str = "Stopped by user",
+        *, all_runs: bool = False,
+    ) -> bool:
         """Mark an active run as aborted. Used by stop/cancel paths."""
         try:
             from core.database import SessionLocal, TaskRun
@@ -450,13 +453,15 @@ class TaskScheduler:
                         TaskRun.task_id == task_id,
                         TaskRun.status.in_(("queued", "running")),
                     ).order_by(TaskRun.started_at.desc())
-                run = q.first()
-                if not run or run.status not in ("queued", "running"):
+                runs = q.all() if all_runs else [q.first()]
+                runs = [run for run in runs if run and run.status in ("queued", "running")]
+                if not runs:
                     return False
-                run.status = "aborted"
-                run.error = message
-                run.result = run.result or message
-                run.finished_at = _utcnow()
+                for run in runs:
+                    run.status = "aborted"
+                    run.error = message
+                    run.result = run.result or message
+                    run.finished_at = _utcnow()
                 db.commit()
                 return True
             finally:
@@ -2395,21 +2400,32 @@ class TaskScheduler:
             getattr(self, "_deleting_tasks", set()).discard(task_id)
 
     async def stop_task(self, task_id: str, *, drain_timeout: float | None = None) -> bool:
-        """Cancel active work for a task; optionally wait until its handlers drain."""
-        handles = getattr(self, "_all_task_handles", {}).get(task_id, set())
-        if drain_timeout is None:
-            handle = self._task_handles.get(task_id)
-            handles = {handle} if handle else set()
+        """Request cancellation for current runs; optionally wait for them to drain."""
+        execution_was_reserved = task_id in getattr(self, "_executing", set())
+        execution_owner = getattr(self, "_execution_handles", {}).get(task_id)
+        handles = set(getattr(self, "_all_task_handles", {}).get(task_id, set()))
+        latest = getattr(self, "_task_handles", {}).get(task_id)
+        if latest:
+            handles.add(latest)
         active = [handle for handle in handles if not handle.done()]
         for handle in active:
             handle.cancel()
         stopped = bool(active)
+        # Mark only runs present at the instant Stop is requested. This sync
+        # DB operation runs before the first await, so a later replacement run
+        # can't be swept into the same task-ID query.
+        stopped = self._mark_run_aborted(
+            task_id, message="Stop requested", all_runs=True,
+        ) or stopped
         async with self._executing_lock:
-            if task_id in self._executing:
+            current_owner = getattr(self, "_execution_handles", {}).get(task_id)
+            if (
+                execution_was_reserved
+                and task_id in self._executing
+                and current_owner is execution_owner
+            ):
                 self._executing.discard(task_id)
                 stopped = True
-
-        stopped = self._mark_run_aborted(task_id) or stopped
         if drain_timeout is not None and active:
             _done, pending = await asyncio.wait(active, timeout=drain_timeout)
             if pending:

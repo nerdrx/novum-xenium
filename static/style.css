@@ -1975,6 +1975,8 @@ body.bg-pattern-sparkles {
       flex-direction:column;
       align-items:center;
       text-align:center;
+      width:max-content;
+      max-width:calc(100% - 32px);
       pointer-events:none;
       animation: welcome-enter 0.4s ease-out both;
       transition: top 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease, transform 0.3s ease;
@@ -2023,6 +2025,7 @@ body.bg-pattern-sparkles {
       #welcome-screen .incognito-btn { margin-top: 6px; }
     }
     #welcome-screen .welcome-name {
+      white-space:nowrap;
       font-size:2.2rem;
       font-weight:700;
       background: linear-gradient(135deg, var(--brand-color, var(--red)), color-mix(in srgb, var(--brand-color, var(--red)) 60%, var(--fg)));

@@ -914,7 +914,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
         stopped = await task_scheduler.stop_task(task_id)
         if not stopped:
             raise HTTPException(404, "Task is not running")
-        return {"ok": True, "message": "Task stopped"}
+        return {"ok": True, "message": "Stop requested"}
 
     @router.get("/runs/recent")
     async def list_recent_runs(request: Request, limit: int = 50, max_result_chars: int = 6000):

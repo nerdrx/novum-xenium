@@ -104,7 +104,7 @@ def test_stop_task_cleans_up_queued_handle_and_run(tmp_path, monkeypatch):
     try:
         run = db.query(TaskRun).filter(TaskRun.task_id == "queued-task").first()
         assert run.status == "aborted"
-        assert run.error == "Stopped by user"
+        assert run.error == "Stop requested"
         assert run.finished_at is not None
         assert run.finished_at >= run.started_at
     finally:
@@ -385,7 +385,7 @@ def test_force_runs_remain_parallel_and_track_latest_handle(tmp_path, monkeypatc
         assert started == ["forced-task", "forced-task"]
         assert await scheduler.stop_task("forced-task") is True
         await asyncio.sleep(0)
-        assert first.done() is False
+        assert first.cancelled() or first.cancelling()
         assert latest.cancelled() or latest.cancelling()
 
         first.cancel()
@@ -397,6 +397,65 @@ def test_force_runs_remain_parallel_and_track_latest_handle(tmp_path, monkeypatc
             await latest
         except asyncio.CancelledError:
             pass
+
+    asyncio.run(drive())
+
+
+def test_stop_does_not_release_replacement_execution_reservation(tmp_path, monkeypatch):
+    _setup_db(tmp_path, monkeypatch)
+    from src.task_scheduler import TaskScheduler
+
+    async def drive():
+        scheduler = TaskScheduler.__new__(TaskScheduler)
+        scheduler._executing = set()
+        scheduler._executing_lock = asyncio.Lock()
+        scheduler._task_handles = {}
+        scheduler._all_task_handles = {}
+        scheduler._execution_handles = {}
+        scheduler._task_defer_counts = {}
+        scheduler._mark_run_aborted = lambda *_args, **_kwargs: False
+        first_started = asyncio.Event()
+        replacement_started = asyncio.Event()
+        release_replacement = asyncio.Event()
+        run_handles = []
+
+        async def execute(_task_id, **_kwargs):
+            handle = asyncio.current_task()
+            run_handles.append(handle)
+            if len(run_handles) == 1:
+                first_started.set()
+                await asyncio.Future()
+            replacement_started.set()
+            await release_replacement.wait()
+
+        scheduler._execute_task = execute
+        assert await scheduler.run_task_now("reservation-race")
+        first = scheduler._task_handles["reservation-race"]
+        await first_started.wait()
+
+        # Queue a legitimate retry before Stop reaches the same lock. The old
+        # run's cancellation cleanup clears its reservation while both calls
+        # wait; Stop must not then erase the replacement's new ownership.
+        await scheduler._executing_lock.acquire()
+        replacement_request = asyncio.create_task(scheduler.run_task_now("reservation-race"))
+        await asyncio.sleep(0)
+        stop_request = asyncio.create_task(scheduler.stop_task("reservation-race"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)  # let the canceled original clean up its owner
+        scheduler._executing_lock.release()
+
+        assert await replacement_request is True
+        replacement = scheduler._task_handles["reservation-race"]
+        assert await stop_request is True
+        await replacement_started.wait()
+
+        assert scheduler._executing == {"reservation-race"}
+        assert scheduler._execution_handles["reservation-race"] is replacement
+        assert await scheduler.run_task_now("reservation-race") is False
+        assert run_handles == [first, replacement]
+
+        release_replacement.set()
+        await replacement
 
     asyncio.run(drive())
 

@@ -72,6 +72,7 @@ let _view = 'month';
 let _searchQuery = '';
 let _escHandler = null;
 let _modal = null;
+const _calendarSettingsSaveStates = new Map();
 
 let _dragUid = null;
 let _sidebarWasOpen = false;
@@ -110,6 +111,67 @@ function _filterPool(start, end) {
     const evEnd = ev.all_day ? ev.dtend : _localDateOf(ev.dtend || ev.dtstart);
     return evStart < end && evEnd >= start;
   }).sort((a, b) => a.dtstart < b.dtstart ? -1 : 1);
+}
+
+function _calendarSettingsState(id) {
+  let state = _calendarSettingsSaveStates.get(id);
+  if (!state) {
+    state = { sequence: 0, queue: Promise.resolve(), timer: null };
+    _calendarSettingsSaveStates.set(id, state);
+  }
+  return state;
+}
+
+function _calendarSettingsMutationSucceeded(res, data) {
+  if (!res.ok || data?.ok === false || data?.success === false) {
+    throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  }
+}
+
+function _queueCalendarSettingsSave(id, snapshot, state, sequence) {
+  const request = state.queue.catch(() => {}).then(async () => {
+    if (sequence !== state.sequence) return;
+    const res = await fetch(`${API_BASE}/api/calendar/calendars/${id}?name=${encodeURIComponent(snapshot.name)}&color=${encodeURIComponent(snapshot.color)}`, { method: 'PUT', credentials: 'same-origin' });
+    const data = await res.json().catch(() => ({}));
+    _calendarSettingsMutationSucceeded(res, data);
+    if (sequence !== state.sequence) return;
+    const calendar = _calendars.find(c => c.href === id);
+    if (calendar) { calendar.name = snapshot.name; calendar.color = snapshot.color; }
+    state.draft = null;
+    for (const uid of Object.keys(_allEvents)) {
+      if (_allEvents[uid].calendar_href === id) {
+        _allEvents[uid].color = snapshot.color;
+        _allEvents[uid].calendar = snapshot.name;
+      }
+    }
+    localStorage.removeItem(LS_KEY);
+    _fetchedRanges = [];
+    _render();
+    uiModule?.showToast?.(`Saved “${snapshot.name || 'calendar'}”`);
+  });
+  state.queue = request.catch(() => {});
+  request.catch(error => {
+    if (sequence !== state.sequence) return;
+    uiModule?.showToast?.('Could not save calendar. Your latest edits are retained for retry.', {
+      duration: 8000,
+      action: 'Retry',
+      onAction: () => {
+        if (sequence !== state.sequence) return;
+        const retrySequence = ++state.sequence;
+        _queueCalendarSettingsSave(id, snapshot, state, retrySequence);
+      },
+    });
+    console.warn('Calendar settings save failed:', error);
+  });
+}
+
+function _scheduleCalendarSettingsSave(id, snapshot) {
+  const state = _calendarSettingsState(id);
+  if (state.deleting) return;
+  state.draft = { ...snapshot };
+  const sequence = ++state.sequence;
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => _queueCalendarSettingsSave(id, snapshot, state, sequence), 300);
 }
 
 async function _fetchEvents(start, end, force) {
@@ -2529,8 +2591,8 @@ async function _showCalSettings() {
           <div id="cal-settings-list" style="display:flex;flex-direction:column;gap:4px;">
             ${cals.map(c => `
               <div class="cal-settings-row" data-id="${_e(c.href)}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:color-mix(in srgb, var(--fg) 4%, transparent);">
-                <input type="color" value="${c.color || '#5b8abf'}" class="cal-s-color" style="width:24px;height:24px;border:none;background:none;cursor:pointer;padding:0;border-radius:50%;overflow:hidden;" />
-                <input type="text" value="${_e(c.name)}" class="cal-s-name" style="flex:1;background:none;border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--fg);font-size:12px;" />
+                <input type="color" value="${_e(_calendarSettingsState(c.href).draft?.color || c.color || '#5b8abf')}" class="cal-s-color" style="width:24px;height:24px;border:none;background:none;cursor:pointer;padding:0;border-radius:50%;overflow:hidden;" />
+                <input type="text" value="${_e(_calendarSettingsState(c.href).draft?.name ?? c.name)}" class="cal-s-name" style="flex:1;background:none;border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--fg);font-size:12px;" />
                 <button class="cal-s-del" title="Delete calendar" style="background:none;border:none;color:var(--accent, var(--red));opacity:0.75;cursor:pointer;padding:2px;display:flex;position:relative;top:4px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
               </div>
             `).join('')}
@@ -2586,6 +2648,10 @@ async function _showCalSettings() {
     </div>
   `;
   document.body.appendChild(overlay);
+  overlay.querySelectorAll('.cal-settings-row').forEach(row => {
+    const deleting = _calendarSettingsState(row.dataset.id).deleting;
+    row.querySelectorAll('.cal-s-name, .cal-s-color, .cal-s-del').forEach(input => { input.disabled = deleting; });
+  });
 
   const cleanup = () => overlay.remove();
   overlay.querySelector('#cal-settings-close').addEventListener('click', cleanup);
@@ -2649,40 +2715,60 @@ async function _showCalSettings() {
     const nameInput = row.querySelector('.cal-s-name');
     const delBtn = row.querySelector('.cal-s-del');
 
-    let saveTimer;
     const save = () => {
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(async () => {
-        await fetch(`${API_BASE}/api/calendar/calendars/${id}?name=${encodeURIComponent(nameInput.value)}&color=${encodeURIComponent(colorInput.value)}`, { method: 'PUT' });
-        if (uiModule?.showToast) uiModule.showToast(`Saved “${nameInput.value || 'calendar'}”`);
-        // Update local calendar list
-        const c = _calendars.find(c => c.href === id);
-        if (c) { c.name = nameInput.value; c.color = colorInput.value; }
-        // Update colors on cached events
-        for (const uid of Object.keys(_allEvents)) {
-          if (_allEvents[uid].calendar_href === id) {
-            _allEvents[uid].color = colorInput.value;
-            _allEvents[uid].calendar = nameInput.value;
-          }
-        }
-        localStorage.removeItem(LS_KEY);
-        _fetchedRanges = [];
-        _render();
-      }, 300);
+      _scheduleCalendarSettingsSave(id, { name: nameInput.value, color: colorInput.value });
     };
     colorInput.addEventListener('input', save);
-    nameInput.addEventListener('change', save);
+    nameInput.addEventListener('input', save);
     // Upgrade the native color box into the app's themed color picker.
     try { attachColorPicker(colorInput); } catch (_) {}
 
     delBtn.addEventListener('click', async () => {
       const name = nameInput.value;
       if (!await window.styledConfirm(`Delete calendar "${name}" and all its events?`, { confirmText: 'Delete', danger: true })) return;
-      await fetch(`${API_BASE}/api/calendar/calendars/${id}`, { method: 'DELETE' });
-      row.remove();
-      _allEvents = {}; _fetchedRanges = []; localStorage.removeItem(LS_KEY);
-      _calendars = _calendars.filter(c => c.href !== id);
-      _render();
+      const removeCalendar = async () => {
+        const saveState = _calendarSettingsState(id);
+        if (saveState.deleting) return;
+        saveState.deleting = true;
+        const deleteSequence = ++saveState.sequence;
+        clearTimeout(saveState.timer);
+        saveState.timer = null;
+        const activeRow = [...document.querySelectorAll('.cal-settings-row')].find(item => item.dataset.id === id) || row;
+        const activeInputs = activeRow.querySelectorAll('.cal-s-name, .cal-s-color, .cal-s-del');
+        activeInputs.forEach(input => { input.disabled = true; });
+        try {
+          await saveState.queue.catch(() => {});
+          if (deleteSequence !== saveState.sequence) {
+            saveState.deleting = false;
+            activeInputs.forEach(input => { input.disabled = false; });
+            return;
+          }
+          const res = await fetch(`${API_BASE}/api/calendar/calendars/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+          if (res.status !== 404) {
+            const data = await res.json().catch(() => ({}));
+            _calendarSettingsMutationSucceeded(res, data);
+          }
+          document.querySelectorAll('.cal-settings-row').forEach(item => {
+            if (item.dataset.id === id) item.remove();
+          });
+          _allEvents = {}; _fetchedRanges = []; localStorage.removeItem(LS_KEY);
+          _calendars = _calendars.filter(c => c.href !== id);
+          _calendarSettingsSaveStates.delete(id);
+          _render();
+        } catch (err) {
+          saveState.deleting = false;
+          document.querySelectorAll('.cal-settings-row').forEach(item => {
+            if (item.dataset.id === id) item.querySelectorAll('.cal-s-name, .cal-s-color, .cal-s-del').forEach(input => { input.disabled = false; });
+          });
+          uiModule?.showToast?.('Could not delete calendar. It remains listed; check its status or retry.', {
+            duration: 8000,
+            action: 'Retry',
+            onAction: removeCalendar,
+          });
+          console.warn('Calendar delete failed:', err);
+        }
+      };
+      removeCalendar();
     });
   });
 

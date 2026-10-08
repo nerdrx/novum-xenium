@@ -2439,7 +2439,7 @@ function _wireActivityRows(list) {
       if (!entry?.taskId) return;
       try {
         await _stopTask(entry.taskId);
-        uiModule.showToast('Task stopped');
+        uiModule.showToast('Stop requested');
         _renderActivityView();
       } catch (err) {
         uiModule.showError(err.message || 'Failed to stop task');

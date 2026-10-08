@@ -16,8 +16,10 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 const API_BASE = window.location.origin;
 let _open = false;
 let _notes = [];
+let _activeReminderNotes = null;
 let _notesDataRevision = 0;
 let _notesFetchSequence = 0;
+let _reminderBadgeFetchSequence = 0;
 let _notesLoadFailed = false;
 let _editingId = null;
 let _selectedIds = new Set();
@@ -463,6 +465,7 @@ async function _fetchNotes() {
     const notes = data?.notes ?? data;
     if (!Array.isArray(notes)) throw new Error('Invalid notes response');
     _notes = notes;
+    if (!_showingArchived) _activeReminderNotes = notes;
     _notesLoadFailed = false;
     return true;
   } catch (e) {
@@ -472,6 +475,24 @@ async function _fetchNotes() {
   } finally {
     if (requestSequence === _notesFetchSequence) _loading = false;
   }
+}
+
+function _syncActiveReminderNote(note) {
+  if (!_activeReminderNotes || !note?.id) return;
+  const index = _activeReminderNotes.findIndex(item => item.id === note.id);
+  if (note.archived === true) {
+    if (index >= 0) _activeReminderNotes.splice(index, 1);
+  } else if (index >= 0) {
+    Object.assign(_activeReminderNotes[index], note);
+  } else {
+    _activeReminderNotes.push(note);
+  }
+}
+
+function _removeActiveReminderNote(id) {
+  if (!_activeReminderNotes || !id) return;
+  const index = _activeReminderNotes.findIndex(note => note.id === id);
+  if (index >= 0) _activeReminderNotes.splice(index, 1);
 }
 
 async function _saveNote(note) {
@@ -485,7 +506,9 @@ async function _saveNote(note) {
       body: JSON.stringify(note),
     });
     if (!res.ok) throw new Error('Failed to save note');
-    return await res.json();
+    const saved = await res.json();
+    if (_activeReminderNotes !== _notes) _syncActiveReminderNote(saved);
+    return saved;
   } finally {
     _notesDataRevision++;
   }
@@ -498,6 +521,7 @@ async function _deleteNoteApi(id) {
   try {
     const r = await fetch(`${API_BASE}/api/notes/${id}`, { method: 'DELETE', credentials: 'same-origin' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
+    _removeActiveReminderNote(id);
   } finally {
     _notesDataRevision++;
   }
@@ -512,7 +536,9 @@ async function _patchNote(id, patch) {
       body: JSON.stringify(patch),
     });
     if (!res.ok) throw new Error('Failed to update note');
-    return await res.json();
+    const updated = await res.json();
+    _syncActiveReminderNote(updated);
+    return updated;
   } finally {
     _notesDataRevision++;
   }
@@ -985,11 +1011,12 @@ function _advanceRecurring(dateStr, repeat) {
 }
 
 function _checkReminders() {
-  if (!_notes.length) return;
+  const reminderNotes = _showingArchived ? (_activeReminderNotes || []) : _notes;
+  if (!reminderNotes.length) return;
   const now = Date.now();
   const fired = _loadFiredReminders();
   let changed = false;
-  for (const note of _notes) {
+  for (const note of reminderNotes) {
     if (!note.due_date || note.archived) continue;
     if (!_hasTimeComponent(note.due_date)) continue;
     if (fired.has(note.id)) continue;
@@ -1108,7 +1135,8 @@ function _startReminderLoop() {
 }
 
 function _countDueReminders() {
-  return _notes.filter(n => !n.archived && _isDueTodayOrOverdue(n.due_date) && !_isNoteFullyDone(n)).length;
+  const reminderNotes = _showingArchived ? (_activeReminderNotes || []) : _notes;
+  return reminderNotes.filter(n => !n.archived && _isDueTodayOrOverdue(n.due_date) && !_isNoteFullyDone(n)).length;
 }
 
 let _firedDotDismissedAt = (() => {
@@ -1118,11 +1146,11 @@ let _firedDotDismissedAt = (() => {
   } catch { return 0; }
 })();
 
-function _countFiredReminders() {
+function _countFiredReminders(notes = (_showingArchived ? (_activeReminderNotes || []) : _notes)) {
   // Reminders whose time has actually passed (not just date-today),
   // and which fired after the last user dismissal.
   const now = Date.now();
-  return _notes.filter(n => {
+  return notes.filter(n => {
     if (n.archived || _isNoteFullyDone(n)) return false;
     if (!n.due_date || !_hasTimeComponent(n.due_date)) return false;
     const t = new Date(n.due_date).getTime();
@@ -1137,8 +1165,8 @@ export function dismissFiredReminderDot() {
   _updateRailBadge();
 }
 
-function _updateRailBadge() {
-  const fired = _countFiredReminders();
+function _updateRailBadge(reminderNotes = (_showingArchived ? (_activeReminderNotes || []) : _notes)) {
+  const fired = _countFiredReminders(reminderNotes);
   // Rail (mini sidebar) — only show the count when reminders have ACTUALLY
   // fired since the last dismissal (i.e. you haven't opened notes yet).
   // Showing every overdue note forever made the badge feel permanent.
@@ -1192,11 +1220,29 @@ export async function refreshDueBadge(opts = {}) {
   // Usually lightweight, but callers that just created a note reminder can
   // force a refresh so the background reminder loop sees it immediately.
   if (opts.force || _notes.length === 0) {
+    if (_showingArchived) {
+      // Refresh active reminders without replacing the archive list backing
+      // the selected view. Calendar reminders can finish after closePanel().
+      const sequence = ++_reminderBadgeFetchSequence;
+      const dataRevision = _notesDataRevision;
+      try {
+        const res = await fetch(`${API_BASE}/api/notes`, { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const notes = data?.notes ?? data;
+        if (sequence !== _reminderBadgeFetchSequence
+          || dataRevision !== _notesDataRevision
+          || !_showingArchived
+          || !Array.isArray(notes)) return;
+        _activeReminderNotes = notes;
+        _startReminderLoop();
+        _updateRailBadge(notes);
+      } catch {}
+      return;
+    }
     try {
-      const wasArchived = _showingArchived;
-      _showingArchived = false;
-      await _fetchNotes();
-      _showingArchived = wasArchived;
+      const loaded = await _fetchNotes();
+      if (loaded && !_showingArchived) _startReminderLoop();
     } catch {}
   }
   _updateRailBadge();
@@ -1348,6 +1394,7 @@ export function openPanel() {
     };
     syncArchiveBtn();
     archiveBtn.addEventListener('click', async () => {
+      if (!_showingArchived && !_loading) _activeReminderNotes = _notes;
       _showingArchived = !_showingArchived;
       _selectedIds.clear();
       syncArchiveBtn();
@@ -1702,8 +1749,8 @@ export function closePanel(direction) {
     Modals.unregister('notes-panel');
   }
 
-  // Drop the document keydown listener and the 30s reminder interval —
-  // both leaked across open/close cycles in the v2 review.
+  // Drop document listeners while keeping the reminder interval alive; it is
+  // a background task and uses the active-reminder snapshot in archive mode.
   if (_notesKeydownHandler) {
     document.removeEventListener('keydown', _notesKeydownHandler);
     _notesKeydownHandler = null;
@@ -1712,11 +1759,6 @@ export function closePanel(direction) {
     document.removeEventListener('keydown', _notesSelectEscHandler, true);
     _notesSelectEscHandler = null;
   }
-  if (_reminderTimer) {
-    clearInterval(_reminderTimer);
-    _reminderTimer = null;
-  }
-
   document.body.classList.remove('notes-view');
   document.body.classList.remove('notes-mobile-mode');
   document.body.classList.remove('notes-drag-mode');
@@ -5439,6 +5481,7 @@ async function _initReminders() {
       const notes = data?.notes ?? data;
       if (!Array.isArray(notes)) return;
       _notes = notes;
+      _activeReminderNotes = notes;
       _startReminderLoop();
     }
   } catch {}

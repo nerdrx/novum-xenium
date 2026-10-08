@@ -124,6 +124,9 @@ let _albumsLoadSequence = 0;
 let _albumSearch = '';
 let _albumSelectMode = false;
 const _albumSelected = new Set();
+const _albumMutationIds = new Set();
+let _albumCreatePending = false;
+let _albumBulkDeletePending = false;
 
 // ---- API helpers ----
 
@@ -862,56 +865,98 @@ function _wireAlbumsEvents(scope) {
     pop.querySelector('[data-action="rename"]')?.addEventListener('click', async (e) => {
       e.stopPropagation();
       pop.hidden = true;
-      const album = _albums.find(a => a.id === id);
-      const newName = prompt('Rename album:', album?.name || '');
-      if (!newName || !newName.trim() || newName.trim() === album?.name) return;
-      const r = await fetch(`${API_BASE}/api/gallery/albums/${id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin', body: JSON.stringify({ name: newName.trim() }),
-      });
-      if (r.ok) {
+      if (_albumMutationIds.has(id)) return;
+      _albumMutationIds.add(id);
+      try {
+        const album = _albums.find(a => a.id === id);
+        const newName = prompt('Rename album:', album?.name || '');
+        if (!newName || !newName.trim() || newName.trim() === album?.name) return;
+        const r = await fetch(`${API_BASE}/api/gallery/albums/${id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin', body: JSON.stringify({ name: newName.trim() }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const renamed = newName.trim();
+        _albums = _albums.map(a => a.id === id ? { ...a, name: renamed } : a);
         await _fetchAlbums();
         _renderAlbumsTab();
+        _renderAlbums();
         if (uiModule) uiModule.showToast('Album renamed');
-      } else if (uiModule) {
-        uiModule.showError('Rename failed');
+      } catch (error) {
+        console.error('Album rename failed:', error);
+        await _fetchAlbums();
+        _renderAlbumsTab();
+        _renderAlbums();
+        uiModule?.showError?.('Could not confirm the album rename. Check its current name before retrying.');
+      } finally {
+        _albumMutationIds.delete(id);
       }
     });
     pop.querySelector('[data-action="delete"]')?.addEventListener('click', async (e) => {
       e.stopPropagation();
       pop.hidden = true;
-      const album = _albums.find(a => a.id === id);
-      const ok = await uiModule.styledConfirm(
-        `Delete album "${album?.name || ''}"? Photos inside will stay in your library.`,
-        { confirmText: 'Delete', danger: true },
-      );
-      if (!ok) return;
-      const r = await fetch(`${API_BASE}/api/gallery/albums/${id}`, {
-        method: 'DELETE', credentials: 'same-origin',
-      });
-      if (r.ok) {
+      if (_albumMutationIds.has(id)) return;
+      _albumMutationIds.add(id);
+      try {
+        const album = _albums.find(a => a.id === id);
+        const ok = await uiModule.styledConfirm(
+          `Delete album "${album?.name || ''}"? Photos inside will stay in your library.`,
+          { confirmText: 'Delete', danger: true },
+        );
+        if (!ok) return;
+        const r = await fetch(`${API_BASE}/api/gallery/albums/${id}`, {
+          method: 'DELETE', credentials: 'same-origin',
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        _albums = _albums.filter(a => a.id !== id);
+        _albumSelected.delete(id);
         if (_activeAlbum === id) _activeAlbum = null;
         await _fetchAlbums();
         _renderAlbumsTab();
         _renderAlbums();
         if (uiModule) uiModule.showToast('Album deleted');
-      } else if (uiModule) {
-        uiModule.showError('Delete failed');
+      } catch (error) {
+        console.error('Album delete failed:', error);
+        await _fetchAlbums();
+        _renderAlbumsTab();
+        _renderAlbums();
+        uiModule?.showError?.('Could not confirm album deletion. Check the current list before retrying.');
+      } finally {
+        _albumMutationIds.delete(id);
       }
     });
   });
 
   document.getElementById('gallery-albums-new')?.addEventListener('click', async () => {
-    const name = (uiModule.styledPrompt
-      ? await uiModule.styledPrompt('Name your new album.', { title: 'New album', placeholder: 'e.g. Vacation 2026', confirmText: 'Create' })
-      : prompt('Album name:'));
-    if (!name?.trim()) return;
-    await fetch(`${API_BASE}/api/gallery/albums`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin', body: JSON.stringify({ name: name.trim() }),
-    });
-    await _fetchAlbums();
-    _renderAlbumsTab();
+    if (_albumCreatePending) return;
+    _albumCreatePending = true;
+    const createButton = document.getElementById('gallery-albums-new');
+    if (createButton) createButton.setAttribute('aria-disabled', 'true');
+    try {
+      const name = (uiModule.styledPrompt
+        ? await uiModule.styledPrompt('Name your new album.', { title: 'New album', placeholder: 'e.g. Vacation 2026', confirmText: 'Create' })
+        : prompt('Album name:'));
+      if (!name?.trim()) return;
+      const r = await fetch(`${API_BASE}/api/gallery/albums`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin', body: JSON.stringify({ name: name.trim() }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const created = await r.json();
+      if (!created?.id || typeof created.name !== 'string') throw new Error('Invalid create response');
+      if (!_albums.some(a => a.id === created.id)) _albums.unshift({ ...created, count: 0 });
+      uiModule?.showToast?.('Album created');
+      await _fetchAlbums();
+      _renderAlbumsTab();
+    } catch (error) {
+      console.error('Album create failed:', error);
+      await _fetchAlbums();
+      _renderAlbumsTab();
+      uiModule?.showError?.('Could not confirm album creation. Check the list before retrying.');
+    } finally {
+      _albumCreatePending = false;
+      document.getElementById('gallery-albums-new')?.removeAttribute('aria-disabled');
+    }
   });
 
   document.getElementById('gallery-albums-upload')?.addEventListener('click', () => {
@@ -965,26 +1010,60 @@ function _wireAlbumsEvents(scope) {
 }
 
 async function _bulkDeleteAlbums(ids) {
-  if (!ids.length) return;
-  const ok = await uiModule.styledConfirm(
-    `Delete ${ids.length} album${ids.length > 1 ? 's' : ''}? Photos inside will stay in your library.`,
-    { confirmText: 'Delete', danger: true },
-  );
-  if (!ok) return;
-  let failed = 0;
-  for (const id of ids) {
-    const r = await fetch(`${API_BASE}/api/gallery/albums/${id}`, {
-      method: 'DELETE', credentials: 'same-origin',
-    });
-    if (!r.ok) failed++;
-    else if (_activeAlbum === id) _activeAlbum = null;
+  const targets = [...new Set((ids || []).map(String).filter(Boolean))];
+  if (!targets.length || _albumBulkDeletePending) return;
+  _albumBulkDeletePending = true;
+  const deleteButton = document.getElementById('gallery-albums-bulk-delete');
+  if (deleteButton) deleteButton.disabled = true;
+  try {
+    const ok = await uiModule.styledConfirm(
+      `Delete ${targets.length} album${targets.length > 1 ? 's' : ''}? Photos inside will stay in your library.`,
+      { confirmText: 'Delete', danger: true },
+    );
+    if (!ok) return;
+    const deleted = new Set();
+    const failed = new Set();
+    for (const id of targets) {
+      if (_albumMutationIds.has(id)) {
+        failed.add(id);
+        continue;
+      }
+      _albumMutationIds.add(id);
+      try {
+        const r = await fetch(`${API_BASE}/api/gallery/albums/${id}`, {
+          method: 'DELETE', credentials: 'same-origin',
+        });
+        if (!r.ok) { failed.add(id); continue; }
+        deleted.add(id);
+        if (_activeAlbum === id) _activeAlbum = null;
+      } catch (error) {
+        failed.add(id);
+        console.error(`Album delete failed (${id}):`, error);
+      } finally {
+        _albumMutationIds.delete(id);
+      }
+    }
+    // Keep the cached list truthful if its refresh fails; preserve failed and
+    // newly selected ids so the user can retry without losing their selection.
+    _albums = _albums.filter(album => !deleted.has(album.id));
+    for (const id of deleted) _albumSelected.delete(id);
+    if (failed.size) uiModule.showError(`Deleted ${deleted.size}; could not confirm ${failed.size} album deletion${failed.size === 1 ? '' : 's'}. Any albums still listed remain selected.`);
+    else if (uiModule) uiModule.showToast(`Deleted ${deleted.size} album${deleted.size === 1 ? '' : 's'}`);
+    if (!_albumSelected.size) _setAlbumSelectMode(false);
+    else {
+      _updateAlbumBulkCount();
+      _renderAlbumsGrid();
+    }
+    await _fetchAlbums();
+    _renderAlbumsTab();
+    _renderAlbums();
+  } catch (error) {
+    console.error('Bulk album delete failed:', error);
+    uiModule?.showError?.('Could not delete selected albums. They remain selected; please try again.');
+  } finally {
+    _albumBulkDeletePending = false;
+    document.getElementById('gallery-albums-bulk-delete')?.removeAttribute('disabled');
   }
-  if (failed) uiModule.showError(`Failed to delete ${failed} of ${ids.length} albums`);
-  else if (uiModule) uiModule.showToast(`Deleted ${ids.length} album${ids.length > 1 ? 's' : ''}`);
-  _setAlbumSelectMode(false);
-  await _fetchAlbums();
-  _renderAlbumsTab();
-  _renderAlbums();
 }
 
 // Fetch the user's persisted editor drafts and render them as a thumbnail

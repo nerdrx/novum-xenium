@@ -121,6 +121,39 @@ def test_restart_marks_running_job_interrupted(tmp_path):
     assert run["state"]["phase"] == "building"
 
 
+def test_process_cancellation_marks_team_run_interrupted_not_user_stopped(tmp_path):
+    started = asyncio.Event()
+
+    async def runner(*_args, **_kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    path = str(tmp_path / "group-shutdown.db")
+    store = GroupCoordinationStore(path)
+    manager = GroupRunManager(store, runner=runner)
+
+    async def scenario():
+        run = await manager.start("parent", "alice", board(), {"builder": "s1"})
+        task = manager._tasks[run["job_id"]]
+        await started.wait()
+        # Model server/event-loop teardown directly; user Stop goes through
+        # manager.stop(), which durably records "stopping" before cancellation.
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        after_cancel = store.get_run("parent", "alice", run["job_id"])
+        reopened = GroupCoordinationStore(path)
+        after_restart = reopened.get_run("parent", "alice", run["job_id"])
+        saved_board = reopened.get("parent", "alice")
+        return after_cancel, after_restart, saved_board
+
+    after_cancel, after_restart, saved_board = asyncio.run(scenario())
+    assert after_cancel["status"] == "interrupted"
+    assert after_restart["status"] == "interrupted"
+    assert "Server stopped" in after_restart["state"]["message"]
+    assert saved_board["tasks"][0]["status"] == "working"
+
+
 def test_isolated_builder_and_reviewer_share_persisted_worktree(tmp_path, monkeypatch):
     from src import project_workflows
 

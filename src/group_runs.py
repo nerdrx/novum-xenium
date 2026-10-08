@@ -227,9 +227,20 @@ class GroupRunManager:
                 message="Pass complete; human verification is still required.",
             )
         except asyncio.CancelledError:
+            # Only the Stop endpoint records "stopping" before it cancels the
+            # task. Cancellation while still running means process teardown (or
+            # another external interruption), not an explicit user Stop.
+            prior = self.store.get_run(session_id, owner, job_id)
+            stopped = bool(prior and prior["status"] == "stopping")
             self._persist(
-                job_id, session_id, owner, clean, status="stopped",
-                phase="stopped", message="Stopped. A working task may have an uncertain outcome; inspect before retrying.",
+                job_id, session_id, owner, clean,
+                status="stopped" if stopped else "interrupted",
+                phase="stopped" if stopped else "interrupted",
+                message=(
+                    "Stopped. A working task may have an uncertain outcome; inspect before retrying."
+                    if stopped else
+                    "Server stopped during this pass. Inspect the working task; retry only when its outcome is clear."
+                ),
                 worktrees=worktrees,
             )
             raise

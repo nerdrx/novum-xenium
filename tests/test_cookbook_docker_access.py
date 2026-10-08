@@ -1,4 +1,7 @@
+import asyncio
 import socket
+import subprocess
+import threading
 from unittest.mock import AsyncMock
 
 import pytest
@@ -233,6 +236,65 @@ async def test_local_container_serve_allows_generated_docker_exec_when_enabled(
     assert response["error"] == "mock launch stopped"
     runner = next(tmp_path.glob("serve-*_run.sh")).read_text(encoding="utf-8")
     assert "docker exec ollama-rocm ollama show llama3" in runner
+
+
+@pytest.mark.asyncio
+async def test_remote_ollama_port_probe_does_not_block_event_loop(monkeypatch, tmp_path):
+    entered = threading.Event()
+    release = threading.Event()
+    worker_threads = []
+
+    def blocked_ssh(*_args, **_kwargs):
+        worker_threads.append(threading.get_ident())
+        entered.set()
+        release.wait(timeout=3)
+        return subprocess.CompletedProcess([], 0, stdout="11434\n", stderr="")
+
+    async def unavailable(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(cookbook_routes, "require_admin", lambda _request: None)
+    monkeypatch.setattr(cookbook_routes, "validate_remote_host", lambda host: host)
+    monkeypatch.setattr(cookbook_routes, "validate_ssh_port", lambda port: port or "22")
+    monkeypatch.setattr(cookbook_routes, "_binary_available", unavailable)
+    monkeypatch.setattr(cookbook_routes, "TMUX_LOG_DIR", tmp_path)
+    monkeypatch.setattr(subprocess, "run", blocked_ssh)
+
+    endpoint = _model_serve_endpoint()
+    request = Request({
+        "type": "http", "method": "POST", "path": "/api/model/serve",
+        "headers": [], "state": {},
+    })
+    request.state.current_user = "admin"
+    loop = asyncio.get_running_loop()
+    callback_ran = asyncio.Event()
+    callback_saw_probe_still_blocked = []
+
+    def loop_probe():
+        callback_saw_probe_still_blocked.append(not release.is_set())
+        callback_ran.set()
+
+    loop.call_later(0.05, loop_probe)
+    safety_release = threading.Timer(1.5, release.set)
+    safety_release.start()
+    task = asyncio.create_task(endpoint(
+        request,
+        ServeRequest(
+            repo_id="org/model", cmd="ollama serve", remote_host="fake-host",
+        ),
+    ))
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(entered.wait, 1), timeout=1.2)
+        await asyncio.wait_for(callback_ran.wait(), timeout=0.75)
+        assert callback_saw_probe_still_blocked == [True]
+        release.set()
+        result = await task
+        assert result["ok"] is False  # mocked tmux availability failure
+        assert worker_threads and worker_threads[0] != threading.get_ident()
+    finally:
+        release.set()
+        safety_release.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize(

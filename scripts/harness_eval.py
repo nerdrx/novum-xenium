@@ -127,7 +127,7 @@ def stop_exact_run(request_fn, session_id, run_id):
     if not run_id:
         return False
     with request_fn(f"/api/chat/stop/{session_id}",
-                    headers={"X-Odysseus-Run-Id": run_id}, timeout=10):
+                    headers={"X-Odysseus-Run-Id": run_id}, method="POST", timeout=10):
         pass
     return True
 
@@ -146,13 +146,14 @@ def main():
         parser.error("--case-timeout must be a positive finite number")
     cookie = os.environ.get("NX_EVAL_COOKIE", "")
     base = args.base_url.rstrip("/")
-    def request(path, fields=None, *, headers=None, timeout=600):
+    def request(path, fields=None, *, headers=None, method=None, timeout=600):
         payload = urllib.parse.urlencode(fields).encode() if fields is not None else None
         request_headers = {"Cookie": cookie}
         request_headers.update(headers or {})
         if payload is not None:
             request_headers["Content-Type"] = "application/x-www-form-urlencoded"
-        return urllib.request.urlopen(urllib.request.Request(base + path, data=payload, headers=request_headers), timeout=timeout)
+        return urllib.request.urlopen(urllib.request.Request(
+            base + path, data=payload, headers=request_headers, method=method), timeout=timeout)
     report = {"model": args.model, "endpoint_id": args.endpoint_id, "cases": []}
     batch = "nx-eval-" + uuid.uuid4().hex[:10]
     for case in CASES:

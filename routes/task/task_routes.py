@@ -7,6 +7,7 @@ import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -859,15 +860,25 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                     raise HTTPException(404, "Task not found")
                 if user and task.owner != user:
                     raise HTTPException(403, "Access denied")
-                # Cascade: cookbook_serve tasks may have a linked calendar
-                # event (created via the "Create event in calendar" toggle
-                # in the schedule modal). If so, delete it too.
-                _maybe_cascade_calendar_event(task)
+                # Detach only the values needed by the best-effort calendar
+                # cascade; never pass a live ORM object into the worker thread.
+                cascade_task = SimpleNamespace(
+                    id=task.id,
+                    task_type=task.task_type,
+                    action=task.action,
+                    owner=task.owner,
+                    prompt=getattr(task, "prompt", None),
+                    name=task.name,
+                )
                 db.delete(task)
                 db.commit()
-                return {"ok": True}
             finally:
                 db.close()
+            # The helper performs synchronous HTTP calls back into this app.
+            # Offload after committing/closing the ORM session so it cannot
+            # block the event loop or share session state across threads.
+            await asyncio.to_thread(_maybe_cascade_calendar_event, cascade_task)
+            return {"ok": True}
         finally:
             task_scheduler.finish_task_deletion(task_id)
 

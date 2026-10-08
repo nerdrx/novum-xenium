@@ -51,10 +51,49 @@ def test_timeout_stop_targets_only_stream_run():
 
     assert harness_eval.stop_exact_run(request, "session-a", "run-a") is True
     assert seen == [("/api/chat/stop/session-a", {
-        "headers": {"X-Odysseus-Run-Id": "run-a"}, "timeout": 10,
+        "headers": {"X-Odysseus-Run-Id": "run-a"}, "method": "POST", "timeout": 10,
     })]
     assert harness_eval.stop_exact_run(request, "session-a", None) is False
     assert len(seen) == 1
+
+
+def test_stop_exact_run_uses_post_and_run_header():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from urllib.request import Request, urlopen
+
+    seen = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.update(method="POST", path=self.path,
+                        run_id=self.headers.get("X-Odysseus-Run-Id"))
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self):
+            self.send_error(405)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, *, headers, method, timeout):
+        req = Request(f"http://127.0.0.1:{server.server_port}{path}",
+                      headers=headers, method=method)
+        return urlopen(req, timeout=timeout)
+
+    try:
+        assert harness_eval.stop_exact_run(request, "session-a", "run-a") is True
+        assert seen == {"method": "POST", "path": "/api/chat/stop/session-a",
+                        "run_id": "run-a"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 @pytest.mark.parametrize("case", harness_eval.CASES, ids=lambda case: case["name"])

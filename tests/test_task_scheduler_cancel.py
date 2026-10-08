@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from types import SimpleNamespace
 
 from sqlalchemy import Column, DateTime, String, Text, create_engine
@@ -530,6 +531,79 @@ def test_delete_task_drains_active_run_before_removing_task(tmp_path, monkeypatc
             db.close()
 
     asyncio.run(drive())
+
+
+def test_calendar_cascade_does_not_block_async_task_delete(tmp_path, monkeypatch):
+    session_local, ScheduledTask, _ = _setup_db(tmp_path, monkeypatch)
+    db = session_local()
+    db.add(ScheduledTask(
+        id="delete-calendar-task", owner="alice", name="Serve model",
+        task_type="action", action="cookbook_serve", status="active",
+    ))
+    db.commit()
+    db.close()
+
+    import routes.task.task_routes as task_routes
+
+    entered = threading.Event()
+    release = threading.Event()
+    received = []
+
+    def blocked_cascade(task):
+        received.append((task, threading.get_ident()))
+        entered.set()
+        release.wait(timeout=3)
+
+    class Scheduler:
+        def begin_task_deletion(self, _task_id): pass
+        async def stop_task(self, _task_id, drain_timeout): return True
+        def finish_task_deletion(self, _task_id): pass
+
+    monkeypatch.setattr(task_routes, "SessionLocal", session_local)
+    monkeypatch.setattr(task_routes, "ScheduledTask", ScheduledTask)
+    monkeypatch.setattr(task_routes, "get_current_user", lambda _request: "alice")
+    monkeypatch.setattr(task_routes, "_maybe_cascade_calendar_event", blocked_cascade)
+    router = task_routes.setup_task_routes(Scheduler())
+    delete_endpoint = next(
+        route.endpoint for route in router.routes
+        if getattr(route, "path", None) == "/api/tasks/{task_id}"
+        and "DELETE" in getattr(route, "methods", set())
+    )
+
+    async def drive():
+        safety_release = threading.Timer(2, release.set)
+        safety_release.start()
+        try:
+            deletion = asyncio.create_task(delete_endpoint(SimpleNamespace(), "delete-calendar-task"))
+            assert await asyncio.to_thread(entered.wait, 1), "calendar cascade did not start"
+
+            # A tiny event-loop turn must complete while the synchronous
+            # internal HTTP cascade is still blocked in its worker thread.
+            loop_progress = []
+            await asyncio.sleep(0)
+            loop_progress.append(not release.is_set())
+            assert loop_progress == [True]
+
+            release.set()
+            assert await deletion == {"ok": True}
+        finally:
+            release.set()
+            safety_release.cancel()
+
+    asyncio.run(drive())
+    assert len(received) == 1
+    dto, worker_thread = received[0]
+    assert type(dto) is SimpleNamespace
+    assert (dto.id, dto.task_type, dto.action, dto.owner, dto.name) == (
+        "delete-calendar-task", "action", "cookbook_serve", "alice", "Serve model",
+    )
+    assert worker_thread != threading.get_ident()
+
+    db = session_local()
+    try:
+        assert db.query(ScheduledTask).filter_by(id="delete-calendar-task").first() is None
+    finally:
+        db.close()
 
 
 def test_timed_out_delete_keeps_dispatch_fence_until_cancelled_run_exits(tmp_path, monkeypatch):

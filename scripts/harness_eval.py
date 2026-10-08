@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+import signal
 import subprocess
 import time
 import urllib.parse
@@ -35,6 +36,7 @@ INCOMPLETE_EVENTS = {
     "ask_user", "rounds_exhausted", "budget_exceeded",
     "loop_breaker_triggered", "intent_nudge_exhausted",
 }
+_FILE_CHECK_DRAIN_TIMEOUT = 2
 
 
 def parse_event(event_name, payload):
@@ -80,9 +82,40 @@ def stream_events(response, deadline):
             current_event = "message"
 
 
-def run_file_check(case, fixture):
-    return subprocess.run([os.sys.executable, "-c", case["check"]], cwd=fixture,
-                          capture_output=True, timeout=15)
+def run_file_check(case, fixture, timeout=15):
+    command = [os.sys.executable, "-c", case["check"]]
+    process = subprocess.Popen(
+        command, cwd=fixture, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=(os.name == "posix"),
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        # The verifier imports generated files, which can spawn child
+        # processes. Stop children in its process group before moving on to
+        # the next fixture; independently detached children need separate cleanup.
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+        try:
+            stdout, stderr = process.communicate(timeout=_FILE_CHECK_DRAIN_TIMEOUT)
+        except subprocess.TimeoutExpired as drain_exc:
+            # A child can deliberately detach from the verifier's process
+            # group while inheriting its pipes. Do not let draining those
+            # descriptors turn the verifier timeout into an unbounded wait.
+            stdout = drain_exc.output if drain_exc.output is not None else exc.output
+            stderr = drain_exc.stderr if drain_exc.stderr is not None else exc.stderr
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+        exc.output = stdout
+        exc.stderr = stderr
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def case_passes(*, done, errors, check_returncode, tool_calls):

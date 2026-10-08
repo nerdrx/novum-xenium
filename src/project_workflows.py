@@ -24,6 +24,7 @@ _ACTIVE_VERIFICATIONS: set[tuple[str, str]] = set()
 _MAX_CHECKS = 8
 _MAX_TIMEOUT = 600
 _OUTPUT_LIMIT = 6000
+_IGNORE_LIST_LIMIT = 2_000_000
 _INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}
 _SKIP_DIRS = {".git", ".nx-worktrees", "node_modules", "vendor", "venv", ".venv", "__pycache__", "dist", "build"}
 
@@ -488,8 +489,72 @@ def _worktree_owner_root(owner: str, project: str) -> Path:
     return (base / _digest(owner) / project).resolve()
 
 
+def _ignored_untracked_paths(repo: str) -> tuple[set[str], bool]:
+    """Read bounded Git ignore results for the map without hiding tracked files."""
+    env = {
+        key: os.environ[key]
+        for key in ("PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "LANG", "LC_ALL")
+        if os.environ.get(key)
+    }
+    env.update({"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull})
+    try:
+        process = subprocess.Popen(
+            ["git", "-C", repo, "-c", "core.fsmonitor=false", "ls-files",
+             "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=env,
+        )
+    except OSError:
+        return set(), False
+    assert process.stdout is not None
+    output = bytearray()
+    overflow = False
+    read_failed = False
+
+    def drain():
+        nonlocal overflow, read_failed
+        try:
+            while chunk := process.stdout.read(65536):
+                if len(output) + len(chunk) > _IGNORE_LIST_LIMIT:
+                    overflow = True
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    break
+                output.extend(chunk)
+        except OSError:
+            read_failed = True
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    try:
+        returncode = process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        returncode = -1
+    except OSError:
+        returncode = -1
+    reader.join(timeout=1)
+    complete = returncode == 0 and not overflow and not read_failed and not reader.is_alive()
+    raw = bytes(output)
+    if not complete:
+        raw = raw[:raw.rfind(b"\0") + 1] if b"\0" in raw else b""
+    ignored = {os.fsdecode(item).rstrip("/") for item in raw.split(b"\0") if item}
+    return ignored, complete
+
+
 def inspect_project(owner: str, workspace: str, *, include_instructions: bool = True) -> dict[str, Any]:
     repo = resolve_repository(workspace)
+    ignored_paths, ignore_scan_complete = _ignored_untracked_paths(repo)
     display: list[str] = []
     instruction_paths: list[str] = []
     instruction_content: list[dict[str, Any]] = []
@@ -502,10 +567,22 @@ def inspect_project(owner: str, workspace: str, *, include_instructions: bool = 
         dirs, files = [], []
         try:
             with os.scandir(current) as entries:
-                for index, entry in enumerate(entries):
-                    if index >= per_dir_budget or entries_seen >= entry_budget:
+                entries_in_dir = 0
+                for entry in entries:
+                    relative_path = os.path.relpath(entry.path, repo).replace(os.sep, "/")
+                    rel_parent = os.path.relpath(current, repo).replace(os.sep, "/")
+                    is_instruction = (
+                        entry.name in _INSTRUCTION_FILES
+                        or (rel_parent == ".github/instructions" and entry.name.endswith(".instructions.md"))
+                    )
+                    if include_instructions and is_instruction:
+                        instruction_paths.append(os.path.relpath(entry.path, repo))
+                    if relative_path in ignored_paths:
+                        continue
+                    if entries_in_dir >= per_dir_budget or entries_seen >= entry_budget:
                         map_truncated = True
                         break
+                    entries_in_dir += 1
                     entries_seen += 1
                     try:
                         if entry.is_symlink():
@@ -515,10 +592,6 @@ def inspect_project(owner: str, workspace: str, *, include_instructions: bool = 
                                 dirs.append(entry.name)
                         elif entry.is_file(follow_symlinks=False):
                             files.append(entry.name)
-                            rel_parent = os.path.relpath(current, repo).replace(os.sep, "/")
-                            if include_instructions and (entry.name in _INSTRUCTION_FILES
-                                    or (rel_parent == ".github/instructions" and entry.name.endswith(".instructions.md"))):
-                                instruction_paths.append(os.path.relpath(entry.path, repo))
                     except OSError:
                         continue
         except OSError:
@@ -562,7 +635,7 @@ def inspect_project(owner: str, workspace: str, *, include_instructions: bool = 
         "project_id": project_id(owner, repo),
         "repository": repo,
         "workspace_map": display[:240],
-        "map_truncated": map_truncated or entries_seen >= entry_budget,
+        "map_truncated": map_truncated or entries_seen >= entry_budget or not ignore_scan_complete,
         "instructions": instruction_content,
     }
 

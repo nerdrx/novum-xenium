@@ -121,6 +121,76 @@ def test_verification_timeout_still_writes_case_report(tmp_path, monkeypatch):
     assert "private verification command" not in json.dumps(report)
 
 
+def test_file_check_timeout_kills_spawned_child(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import time
+
+    if os.name != "posix":
+        pytest.skip("run_file_check only kills verifier process groups on POSIX")
+
+    marker = tmp_path / "child-survived-timeout"
+    child = f"import time; time.sleep(0.35); open({str(marker)!r}, 'w').write('survived')"
+    check = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "time.sleep(30)"
+    )
+    case = {"name": "spawn-child", "check": check}
+    with pytest.raises(subprocess.TimeoutExpired):
+        harness_eval.run_file_check(case, tmp_path, timeout=0.1)
+
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.02)
+    assert not marker.exists(), "timed-out verifier left its spawned child running"
+
+
+def test_file_check_timeout_bounds_drain_when_detached_child_holds_pipes(tmp_path, monkeypatch):
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    if os.name != "posix":
+        pytest.skip("detached process-group fixture requires POSIX")
+
+    pid_file = tmp_path / "detached-child.pid"
+    started_file = tmp_path / "detached-child.started"
+    child = (
+        "import os, time; "
+        f"f=open({str(started_file)!r}, 'w'); f.write(str(os.getpid())); f.flush(); "
+        "time.sleep(10)"
+    )
+    check = (
+        "import os, subprocess, sys, time\n"
+        f"child=subprocess.Popen([sys.executable, '-c', {child!r}], start_new_session=True)\n"
+        f"open({str(pid_file)!r}, 'w').write(str(child.pid))\n"
+        f"deadline=time.monotonic()+5\n"
+        f"while not os.path.exists({str(started_file)!r}) and time.monotonic()<deadline:\n"
+        "    time.sleep(0.01)\n"
+        "time.sleep(30)"
+    )
+    monkeypatch.setattr(harness_eval, "_FILE_CHECK_DRAIN_TIMEOUT", 0.1)
+    started = time.monotonic()
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            harness_eval.run_file_check({"name": "detached-child", "check": check}, tmp_path, timeout=2)
+        assert time.monotonic() - started < 3, "detached child kept timeout cleanup blocked"
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and not pid_file.exists():
+            time.sleep(0.02)
+        assert pid_file.exists(), "detached-child fixture did not start"
+    finally:
+        if pid_file.exists() and pid_file.read_text().strip():
+            try:
+                os.killpg(int(pid_file.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 @pytest.mark.parametrize("payload", ["not JSON", "null", "[]"])
 def test_error_event_stays_error_without_valid_object(payload):
     assert harness_eval.parse_event("error", payload) == {"stream_error": True}

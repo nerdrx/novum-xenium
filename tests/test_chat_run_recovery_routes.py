@@ -37,6 +37,14 @@ class _ToolPolicy:
         return []
 
 
+class _PreservingToolPolicy(_ToolPolicy):
+    def __init__(self, disabled=None):
+        self._disabled = set(disabled or ())
+
+    def all_disabled_names(self):
+        return sorted(self._disabled)
+
+
 class _NullQuery:
     def filter(self, *_args, **_kwargs):
         return self
@@ -227,6 +235,67 @@ def test_chat_stream_continue_claims_once_and_preserves_saved_read_only_mode(tmp
     again = _continue(client, workspace=workspace)
     assert again.status_code == 409
     assert captured["loop_kwargs"]["plan_mode"] is True
+
+
+def test_recovery_copy_does_not_override_explicit_bash_off(tmp_path, monkeypatch):
+    from src.action_intents import classify_tool_intent
+
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    store = _interrupted_store(
+        tmp_path / "bash-off.sqlite", workspace=workspace, plan_mode=False,
+    )
+    client, captured = _recovery_post_client(
+        monkeypatch, checkpoint_store=store, workspace=workspace,
+    )
+    monkeypatch.setattr(chat_routes, "_classify_tool_intent", classify_tool_intent)
+    monkeypatch.setattr(
+        chat_routes, "build_effective_tool_policy",
+        lambda **kwargs: _PreservingToolPolicy(kwargs.get("disabled_tools")),
+    )
+
+    response = _continue(client, workspace=workspace, extra={
+        "message": (
+            "Continue the interrupted task in the saved workspace. Check whether "
+            "any uncertain action already took effect before repeating it, then "
+            "complete the original request."
+        ),
+        "mode": "chat",
+        "plan_mode": "false",
+        "allow_bash": "false",
+    })
+
+    assert response.status_code == 200, response.text[:500]
+    assert captured["loop_kwargs"]["workspace"] == workspace
+    assert captured["loop_kwargs"]["plan_mode"] is False
+    assert "bash" in captured["loop_kwargs"]["disabled_tools"]
+    assert any("Continue the interrupted task" in str(message) for message in captured["messages"])
+    assert "Do not replay the saved tool call" in str(captured["messages"])
+    assert store.get("session-a", "alice")["status"] == "continued"
+
+
+def test_ordinary_workspace_intent_still_auto_enables_bash(tmp_path, monkeypatch):
+    from src.action_intents import classify_tool_intent
+
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "ordinary.sqlite"), recover_on_open=False)
+    client, captured = _recovery_post_client(
+        monkeypatch, checkpoint_store=store, workspace=workspace,
+    )
+    monkeypatch.setattr(chat_routes, "_classify_tool_intent", classify_tool_intent)
+    monkeypatch.setattr(
+        chat_routes, "build_effective_tool_policy",
+        lambda **kwargs: _PreservingToolPolicy(kwargs.get("disabled_tools")),
+    )
+
+    response = client.post("/api/chat_stream", data={
+        "session": "session-a", "message": "Fix the repo bug and run tests",
+        "mode": "chat", "allow_bash": "false", "workspace": workspace,
+    }, headers={"x-test-user": "alice"})
+
+    assert response.status_code == 200, response.text[:500]
+    assert "bash" not in (captured["loop_kwargs"]["disabled_tools"] or [])
 
 
 @pytest.mark.parametrize("mismatch", ["workspace", "model", "endpoint"])

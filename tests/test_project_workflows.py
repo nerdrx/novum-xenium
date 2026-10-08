@@ -43,6 +43,86 @@ def test_inspect_returns_bounded_reviewable_guidance(repo):
     assert "never executed automatically" in report["instructions"][0]["notice"]
 
 
+def test_inspect_skips_gitignored_artifacts_before_map_budget(repo):
+    (repo / ".gitignore").write_text("ignored.txt\nz-cache/\n", encoding="utf-8")
+    source = repo / "src"
+    source.mkdir()
+    (source / "important.py").write_text("print('source')\n", encoding="utf-8")
+    cache = repo / "z-cache"
+    cache.mkdir()
+    for index in range(400):
+        (cache / f"blob-{index:03}.bin").write_bytes(b"ignored artifact")
+    git(repo, "add", ".gitignore", "src/important.py")
+    git(repo, "commit", "-qm", "add source map fixture")
+
+    report = workflows.inspect_project("alice", str(repo), include_instructions=False)
+
+    assert "src/important.py" in report["workspace_map"]
+    assert not any(path.startswith("z-cache/") for path in report["workspace_map"])
+    assert report["map_truncated"] is False
+
+
+def test_inspect_keeps_tracked_files_matching_ignore_rules(repo):
+    (repo / ".gitignore").write_text("ignored.txt\n*.ignored\n", encoding="utf-8")
+    (repo / "kept.ignored").write_text("tracked despite pattern\n", encoding="utf-8")
+    (repo / "skipped.ignored").write_text("untracked ignored\n", encoding="utf-8")
+    git(repo, "add", ".gitignore")
+    git(repo, "add", "-f", "kept.ignored")
+    git(repo, "commit", "-qm", "add tracked ignored-pattern fixture")
+
+    report = workflows.inspect_project("alice", str(repo), include_instructions=False)
+
+    assert "kept.ignored" in report["workspace_map"]
+    assert "skipped.ignored" not in report["workspace_map"]
+
+
+def test_inspect_keeps_tracked_file_inside_gitignored_directory(repo):
+    (repo / ".gitignore").write_text("ignored.txt\nz-cache/\n", encoding="utf-8")
+    cache = repo / "z-cache"
+    cache.mkdir()
+    (cache / "tracked.py").write_text("print('tracked')\n", encoding="utf-8")
+    (cache / "untracked.bin").write_bytes(b"ignored artifact")
+    git(repo, "add", ".gitignore")
+    git(repo, "add", "-f", "z-cache/tracked.py")
+    git(repo, "commit", "-qm", "add file below ignored directory")
+
+    report = workflows.inspect_project("alice", str(repo), include_instructions=False)
+
+    assert "z-cache/tracked.py" in report["workspace_map"]
+    assert "z-cache/untracked.bin" not in report["workspace_map"]
+
+
+def test_ignored_root_agents_remains_guidance_but_not_map_entry(repo):
+    (repo / ".gitignore").write_text("ignored.txt\nAGENTS.md\n", encoding="utf-8")
+    git(repo, "rm", "--cached", "-q", "AGENTS.md")
+    git(repo, "add", ".gitignore")
+    git(repo, "commit", "-qm", "ignore local project guidance")
+
+    report = workflows.inspect_project("alice", str(repo))
+    prompt = workflows.project_prompt_context("alice", str(repo))
+
+    assert "AGENTS.md" not in report["workspace_map"]
+    assert any(item["path"] == "AGENTS.md" and "never execute it" in item["content"]
+               for item in report["instructions"])
+    assert "never execute it" in prompt
+
+
+def test_ignore_scan_process_failure_uses_truncated_map_fallback(repo, monkeypatch):
+    def unavailable_process(*_args, **_kwargs):
+        raise ProcessLookupError("fixture process race")
+
+    with monkeypatch.context() as context:
+        context.setattr(workflows.subprocess, "Popen", unavailable_process)
+        ignored, complete = workflows._ignored_untracked_paths(str(repo))
+
+    assert ignored == set()
+    assert complete is False
+
+    monkeypatch.setattr(workflows, "_ignored_untracked_paths", lambda _repo: (set(), False))
+    report = workflows.inspect_project("alice", str(repo), include_instructions=False)
+    assert report["map_truncated"] is True
+
+
 def test_prompt_context_uses_only_applicable_ancestor_instructions(repo):
     (repo / "src").mkdir()
     (repo / "tests").mkdir()

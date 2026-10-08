@@ -14,6 +14,10 @@ import fileHandlerModule from './fileHandler.js';
 const API_BASE = window.location.origin;
 let _open = false;
 let _galleryResizeHandler = null;
+let _libraryRequestSequence = 0;
+let _libraryRefreshPending = false;
+let _libraryResultsFilterKey = null;
+let _galleryScrollHandler = null;
 
 // ── Image editor, loaded on first use ──
 // galleryEditor.js plus everything under js/editor/ is 54 modules / 576 KB.
@@ -121,6 +125,15 @@ const _albumSelected = new Set();
 // ---- API helpers ----
 
 async function _fetchLibrary(append) {
+  const requestFilters = _galleryLibraryFilterKey();
+  if (append && (_libraryRefreshPending || requestFilters !== _libraryResultsFilterKey)) return;
+  if (!append) _libraryRefreshPending = true;
+  else _offset = _items.length;
+  const requestSequence = ++_libraryRequestSequence;
+  const isCurrentRequest = () => requestSequence === _libraryRequestSequence &&
+    _open && requestFilters === _galleryLibraryFilterKey();
+  const grid = document.getElementById('gallery-grid');
+  if (!append && grid) grid.setAttribute('aria-busy', 'true');
   // Recompute the page size each fetch so resizing / fullscreening the
   // window between loads pulls the right number of photos.
   _limit = _computeFetchLimit();
@@ -150,11 +163,14 @@ async function _fetchLibrary(append) {
   if (_favoritesOnly) params.set('favorites', 'true');
   try {
     const res = await fetch(`${API_BASE}/api/gallery/library?${params}`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (!isCurrentRequest()) return;
     if (append) {
       _items = _items.concat(data.items || []);
     } else {
       _items = data.items || [];
+      _libraryResultsFilterKey = requestFilters;
     }
     // Cache an "empty" verdict so the next open of an empty gallery doesn't
     // flash skeleton tiles before the real "No photos yet" message.
@@ -173,8 +189,46 @@ async function _fetchLibrary(append) {
     _renderModels(data.models || []);
     _renderStats();
   } catch (e) {
+    if (!isCurrentRequest()) return;
     console.error('Gallery fetch error:', e);
+    if (_items.length) {
+      uiModule?.showError?.('Could not refresh gallery photos; previous results remain visible.');
+    } else {
+      _renderGrid();
+      const empty = document.querySelector('#gallery-grid .gallery-empty');
+      if (empty) {
+        empty.classList.add('gallery-load-error');
+        empty.textContent = 'Could not load photos.';
+        empty.setAttribute('role', 'alert');
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'gallery-load-more';
+        retry.textContent = 'Retry';
+        retry.addEventListener('click', () => _fetchLibrary(false));
+        empty.appendChild(document.createElement('br'));
+        empty.appendChild(retry);
+      }
+      uiModule?.showError?.('Could not load gallery photos. Retry below.');
+    }
+  } finally {
+    if (!append && isCurrentRequest()) {
+      _libraryRefreshPending = false;
+      document.getElementById('gallery-grid')?.removeAttribute('aria-busy');
+    }
   }
+}
+
+function _invalidateGalleryLibraryRequest() {
+  _libraryRequestSequence += 1;
+  _libraryRefreshPending = true;
+  document.getElementById('gallery-grid')?.setAttribute('aria-busy', 'true');
+}
+
+function _galleryLibraryFilterKey() {
+  return JSON.stringify([
+    _sort, _sort === 'shuffle' ? _shuffleSeed : null, _search,
+    _activeTags, _activeModel, _activeAlbum, _favoritesOnly,
+  ]);
 }
 
 async function _fetchAlbums() {
@@ -2230,8 +2284,9 @@ export function openGallery() {
   const searchInput = document.getElementById('gallery-search');
   searchInput.addEventListener('input', () => {
     clearTimeout(_searchDebounce);
+    _search = searchInput.value.trim();
+    _invalidateGalleryLibraryRequest();
     _searchDebounce = setTimeout(() => {
-      _search = searchInput.value.trim();
       _fetchLibrary(false);
     }, 300);
   });
@@ -2276,7 +2331,6 @@ export function openGallery() {
   });
 
   document.getElementById('gallery-load-more').addEventListener('click', () => {
-    _offset = _items.length;
     _fetchLibrary(true);
   });
 
@@ -2290,21 +2344,21 @@ export function openGallery() {
   let _scrollTick = false;
   const _maybeAutoLoad = () => {
     _scrollTick = false;
-    if (!_open || _loadingMore || _items.length >= _total) return;
+    if (!_open || _loadingMore || _libraryRefreshPending || _items.length >= _total) return;
     const btn = document.getElementById('gallery-load-more');
     if (!btn || btn.style.display === 'none' || !btn.offsetParent) return;  // hidden / nothing more
     const r = btn.getBoundingClientRect();
     if (r.top <= window.innerHeight + 600) {   // within 600px of the viewport bottom
       _loadingMore = true;
-      _offset = _items.length;
       Promise.resolve(_fetchLibrary(true)).finally(() => { _loadingMore = false; });
     }
   };
-  document.addEventListener('scroll', () => {
+  _galleryScrollHandler = () => {
     if (_scrollTick) return;
     _scrollTick = true;
     requestAnimationFrame(_maybeAutoLoad);
-  }, true);
+  };
+  document.addEventListener('scroll', _galleryScrollHandler, true);
 
   // When the window grows (e.g. entering fullscreen), the visible grid
   // can hold more photos than the last page fetched — top up so there's
@@ -2314,10 +2368,9 @@ export function openGallery() {
   const _onGalleryResize = () => {
     clearTimeout(_resizeTopUpTimer);
     _resizeTopUpTimer = setTimeout(() => {
-      if (!_open) return;
+      if (!_open || _libraryRefreshPending) return;
       if (_items.length >= _total) return;        // already have everything
       if (_computeFetchLimit() <= _items.length) return; // viewport not bigger than current load
-      _offset = _items.length;
       _fetchLibrary(true);
     }, 300);
   };
@@ -2933,10 +2986,16 @@ function _doCloseGallery() {
     return;
   }
   _open = false;
+  _libraryRequestSequence += 1;
+  _libraryRefreshPending = false;
   clearTimeout(_searchDebounce);
   if (_galleryResizeHandler) {
     window.removeEventListener('resize', _galleryResizeHandler);
     _galleryResizeHandler = null;
+  }
+  if (_galleryScrollHandler) {
+    document.removeEventListener('scroll', _galleryScrollHandler, true);
+    _galleryScrollHandler = null;
   }
   // Detach the face-overlay resize listener so we don't leak a
   // handler past close (v2 review HIGH-9).

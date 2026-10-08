@@ -4,6 +4,13 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Integrated desktop window controls
+
+- Adds a theme-aware workbench title bar with minimize, maximize/restore and close. Right-click the title area to restore the native frame; macOS keeps its native frame.
+- Keeps container/file-management permissions confined to the bundled manager. The remote workspace gets only guarded window-control navigation, and native decorations remain until the custom bar mounts successfully.
+
+Validation: desktop browser tests passed. Native Linux WebKit checks in an isolated KWin compositor verified rendered buttons against real maximized/minimized window states, close, native-frame fallback and denied manager IPC. Gamescope does not provide normal maximize behaviour. Physical drag remains unverified because virtual Xwayland rejected injected pointer events; handler checks passed. Windows runtime is unverified.
+
 ## Updateable modules
 
 - Adds Settings → Modules for administrator-installed ZIP packages: isolated UI panels, existing MCP references and optional remote MCP connection definitions.

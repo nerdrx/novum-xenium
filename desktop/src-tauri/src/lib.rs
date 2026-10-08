@@ -742,6 +742,84 @@ async fn read_logs(
     .map_err(|e| format!("Log worker failed: {e}"))?
 }
 
+fn workbench_origin_allowed(url: &tauri::Url, port: u16) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url
+            .host_str()
+            .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]"))
+        && url.port_or_known_default() == Some(port)
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
+fn workbench_window_action(url: &tauri::Url) -> Option<&str> {
+    if url.scheme() != "nx-workbench"
+        || !matches!(url.path(), "" | "/")
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    url.host_str().filter(|action| {
+        matches!(
+            *action,
+            "ready" | "drag" | "minimize" | "toggle-maximize" | "close" | "native-frame"
+        )
+    })
+}
+
+fn workbench_control_origin_allowed(url: &tauri::Url, port: u16) -> bool {
+    // Match app_url exactly, even though the pre-existing navigation policy
+    // accepts loopback aliases. Embedded providers never get this bridge.
+    workbench_origin_allowed(url, port)
+        && url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+}
+
+fn update_workbench_chrome(window: &WebviewWindow) {
+    if let Ok(maximized) = window.is_maximized() {
+        let _ = window.eval(&format!(
+            "document.documentElement.dataset.nxMaximized='{maximized}';"
+        ));
+    }
+}
+
+fn handle_workbench_window_action(window: &WebviewWindow, action: &str) -> tauri::Result<()> {
+    match action {
+        "ready" if !cfg!(target_os = "macos") => {
+            window.set_decorations(false)?;
+            // If injection cannot complete, immediately retain native controls.
+            if let Err(error) =
+                window.eval("document.documentElement.dataset.nxWindowFrame='custom';")
+            {
+                let _ = window.set_decorations(true);
+                return Err(error);
+            }
+            update_workbench_chrome(window);
+        }
+        "native-frame" | "ready" => {
+            window.set_decorations(true)?;
+            let _ = window.eval("document.documentElement.dataset.nxWindowFrame='native';");
+        }
+        "drag" => window.start_dragging()?,
+        "minimize" => window.minimize()?,
+        "toggle-maximize" => {
+            if window.is_maximized()? {
+                window.unmaximize()?;
+            } else {
+                window.maximize()?;
+            }
+        }
+        // close() retains the existing CloseRequested / hide-to-tray behavior.
+        "close" => window.close()?,
+        _ => {}
+    }
+    Ok(())
+}
+
 fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<WorkbenchResult, String> {
     let path = config_path(&app)?;
     let config = load_config_at(&path)?.ok_or("Save a checkout before opening the workbench.")?;
@@ -771,16 +849,44 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
     }
     state.workbench_port.store(config.port, Ordering::Release);
     let allowed_port = state.workbench_port.clone();
+    let navigation_app = app.clone();
     WebviewWindowBuilder::new(app, "workbench", WebviewUrl::External(parsed))
         .title("Novum Xenium Workbench")
         .initialization_script(include_str!("workspace_reload.js"))
+        .initialization_script(include_str!("workspace_chrome.js"))
         .inner_size(1360.0, 900.0)
         .on_navigation(move |next| {
-            matches!(next.scheme(), "http" | "https")
-                && next
-                    .host_str()
-                    .is_some_and(|h| h == "127.0.0.1" || h == "localhost" || h == "::1")
-                && next.port_or_known_default() == Some(allowed_port.load(Ordering::Acquire))
+            let port = allowed_port.load(Ordering::Acquire);
+            if next.scheme() == "nx-workbench" {
+                if let (Some(action), Some(window)) = (
+                    workbench_window_action(next),
+                    navigation_app.get_webview_window("workbench"),
+                ) {
+                    // Only the validated backend document can request window actions.
+                    // This callback exposes no source-frame identity; the protocol has
+                    // no file/process/container operations and never grants native IPC.
+                    if window
+                        .url()
+                        .is_ok_and(|url| workbench_control_origin_allowed(&url, port))
+                    {
+                        if let Err(error) = handle_workbench_window_action(&window, action) {
+                            eprintln!("Workspace window action {action} failed: {error}");
+                            let _ = window.set_decorations(true);
+                            let _ = window
+                                .eval("document.documentElement.dataset.nxWindowFrame='native';");
+                        }
+                    }
+                }
+                return false;
+            }
+            workbench_origin_allowed(next, port)
+        })
+        .on_page_load(|window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                // Failed loads still have usable OS controls, even before JS mounts.
+                let _ = window.set_decorations(true);
+                let _ = window.eval("document.documentElement.dataset.nxWindowFrame='native';");
+            }
         })
         .build()
         .map_err(|e| format!("Cannot open workbench: {e}"))?;
@@ -855,8 +961,14 @@ fn show_quit_pending_notice(app: &AppHandle) {
 fn install_tray(app: &AppHandle) -> Result<TrayIcon, String> {
     let workspace = MenuItem::with_id(app, "open-workspace", "Open workspace", true, None::<&str>)
         .map_err(|error| error.to_string())?;
-    let reload = MenuItem::with_id(app, "reload-workspace", "Reload workspace", true, None::<&str>)
-        .map_err(|error| error.to_string())?;
+    let reload = MenuItem::with_id(
+        app,
+        "reload-workspace",
+        "Reload workspace",
+        true,
+        None::<&str>,
+    )
+    .map_err(|error| error.to_string())?;
     let manager = MenuItem::with_id(
         app,
         "backend-manager",
@@ -867,8 +979,8 @@ fn install_tray(app: &AppHandle) -> Result<TrayIcon, String> {
     .map_err(|error| error.to_string())?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)
         .map_err(|error| error.to_string())?;
-    let menu =
-        Menu::with_items(app, &[&workspace, &reload, &manager, &quit]).map_err(|error| error.to_string())?;
+    let menu = Menu::with_items(app, &[&workspace, &reload, &manager, &quit])
+        .map_err(|error| error.to_string())?;
 
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
@@ -1722,6 +1834,11 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
             if !matches!(window.label(), "main" | "workbench") {
                 return;
             }
+            if window.label() == "workbench" && matches!(event, WindowEvent::Resized(_)) {
+                if let Some(webview) = window.app_handle().get_webview_window("workbench") {
+                    update_workbench_chrome(&webview);
+                }
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
                 if let Some(state) = app.try_state::<NativeState>() {
@@ -1797,6 +1914,62 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn workspace_window_controls_are_narrow_and_origin_pinned() {
+        for action in [
+            "ready",
+            "drag",
+            "minimize",
+            "toggle-maximize",
+            "close",
+            "native-frame",
+        ] {
+            let url = format!("nx-workbench://{action}").parse().unwrap();
+            assert_eq!(workbench_window_action(&url), Some(action));
+        }
+        for url in [
+            "nx-workbench://start_backend",
+            "nx-workbench://close/other",
+            "nx-workbench://close?command=stop_backend",
+            "nx-workbench://close#other",
+            "nx-workbench://user@close",
+            "http://close",
+            "nx-workbench://close:7000",
+        ] {
+            assert_eq!(workbench_window_action(&url.parse().unwrap()), None);
+        }
+        for url in [
+            "http://127.0.0.1:7000/",
+            "http://localhost:7000/login",
+            "http://[::1]:7000/",
+        ] {
+            assert!(workbench_origin_allowed(&url.parse().unwrap(), 7000));
+        }
+        for url in [
+            "http://localhost:7001/",
+            "http://localhost.evil:7000/",
+            "https://evil:7000/",
+            "file:///tmp/page",
+            "http://user:pass@localhost:7000/",
+        ] {
+            assert!(!workbench_origin_allowed(&url.parse().unwrap(), 7000));
+        }
+        assert!(workbench_control_origin_allowed(
+            &"http://127.0.0.1:7000/".parse().unwrap(),
+            7000
+        ));
+        for url in [
+            "http://localhost:7000/",
+            "https://127.0.0.1:7000/",
+            "http://127.0.0.1:7001/",
+        ] {
+            assert!(!workbench_control_origin_allowed(
+                &url.parse().unwrap(),
+                7000
+            ));
+        }
+    }
 
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

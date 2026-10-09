@@ -68,6 +68,10 @@ explicit stop action. Register only after the server is healthy. Keep the
 current Ollama endpoint available so users choose either provider per chat.
 Do not automatically start large models or unload unrelated Ollama models.
 
+Model profiles may opt out of zVram's system-wide swap-growth stop with
+`ignore_swap_guard`. This requires zVram 0.4.2 or newer; the available-RAM
+launch and runtime guards remain enabled.
+
 The active Novum web backend runs inside Docker while zVram and the model
 server run on the host. Implement host launch/control through a narrow desktop
 adapter with typed, allowlisted model actions, rather than a web endpoint that

@@ -4,7 +4,8 @@ const elements = {
   error: $('#zvram-error'), status: $('#zvram-status'), hardware: $('#zvram-hardware'),
   gpu: $('#zvram-gpu'), memory: $('#zvram-memory'), form: $('#zvram-profile-form'),
   model: $('#zvram-model'), alias: $('#zvram-alias'), port: $('#zvram-port'), context: $('#zvram-context'),
-  compressed: $('#zvram-compressed'), budgetDetails: $('#zvram-budget-details'), profileList: $('#zvram-profile-list'),
+  compressed: $('#zvram-compressed'), ignoreSwapGuard: $('#zvram-ignore-swap-guard'),
+  budgetDetails: $('#zvram-budget-details'), profileList: $('#zvram-profile-list'),
 };
 const budgetInputs = ['resident', 'cold', 'clean-cache', 'headroom', 'virtual'].map(id => $(`#zvram-${id}`));
 let invoke = null;
@@ -13,6 +14,7 @@ let available = false;
 let profiles = [];
 let models = [];
 let aliasTouched = false;
+let ignoreSwapGuardSupported = false;
 
 function showError(message = '') {
   elements.error.textContent = message;
@@ -47,6 +49,10 @@ function updateControls() {
   elements.model.disabled = !usable || !models.length;
   $('#zvram-save').disabled = !usable || !selectedModel();
   elements.compressed.disabled = !usable;
+  elements.ignoreSwapGuard.disabled = !usable || !ignoreSwapGuardSupported;
+  $('#zvram-swap-guard-note').textContent = ignoreSwapGuardSupported
+    ? 'For this profile only. The available-RAM guard remains active.'
+    : 'Requires zVram 0.4.2 or newer. The available-RAM guard remains active.';
   budgetInputs.forEach(input => { input.disabled = !usable || !elements.compressed.checked; });
   for (const button of elements.profileList.querySelectorAll('button')) {
     const profile = profiles.find(item => String(item.profile || item.name || '') === button.dataset.profile);
@@ -112,7 +118,7 @@ function renderProfiles() {
     head.append(name, state);
     const meta = document.createElement('p');
     meta.className = 'zvram-profile-meta';
-    meta.textContent = `${profile.model || profile.name || profile.profile || 'Model'} · ${profile.port || 'No port'} · context ${profile.context || 'unknown'}${profile.compressed ? ' · experimental BP16' : ''}`;
+    meta.textContent = `${profile.model || profile.name || profile.profile || 'Model'} · ${profile.port || 'No port'} · context ${profile.context || 'unknown'}${profile.compressed ? ' · experimental BP16' : ''}${profile.ignore_swap_guard ? ' · swap guard ignored' : ''}`;
     const actions = document.createElement('div');
     actions.className = 'zvram-profile-actions';
     const addButton = (action, label, disabled = false) => {
@@ -146,6 +152,7 @@ function renderProfiles() {
 function renderStatus(result) {
   if (!result || typeof result !== 'object') throw new Error('The manager returned an invalid zVram status.');
   available = result.available === true;
+  ignoreSwapGuardSupported = result.ignore_swap_guard_supported === true;
   if (typeof result.installation === 'string') elements.installation.textContent = result.installation || 'No installation selected.';
   models = Array.isArray(result.models) ? result.models.filter(model => model && typeof model.name === 'string' && typeof model.path === 'string') : [];
   profiles = Array.isArray(result.profiles) ? result.profiles.filter(profile => profile && typeof profile === 'object') : [];
@@ -238,7 +245,8 @@ elements.form.addEventListener('submit', async event => {
   if (!model || !available) { showError('Choose an available GGUF model first.'); return; }
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(alias)) { showError('Enter a model alias using letters, numbers, dots, underscores or hyphens.'); return; }
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isInteger(context) || context < 256) { showError('Enter a valid port and context size.'); return; }
-  const request = { action: 'save', profile: slug(alias), model: model.path, alias, port, context, compressed: elements.compressed.checked };
+  const request = { action: 'save', profile: slug(alias), model: model.path, alias, port, context,
+    compressed: elements.compressed.checked, ignore_swap_guard: elements.ignoreSwapGuard.checked };
   if (request.compressed) {
     const values = budgetInputs.map(input => Number(input.value));
     if (values.some(value => !Number.isInteger(value) || value <= 0)) { showError('Memory budgets must be positive whole numbers.'); return; }

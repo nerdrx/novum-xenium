@@ -19,12 +19,23 @@ import uuid
 _ALLOWED_KEYS = {
     "action", "profile", "model", "alias", "port", "context", "compressed",
     "resident_mib", "cold_mib", "clean_cache_mib", "headroom_mib", "virtual_gib",
+    "ignore_swap_guard",
 }
 _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _ALIAS_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,128}\Z")
 _MODEL_LIMIT = 256
 _PROFILE_LIMIT = 128
 _STATE_NAME = "novum_profiles.json"
+_IGNORE_SWAP_GUARD_VERSION = (0, 4, 2)
+
+
+def _supports_ignore_swap_guard(root):
+    try:
+        version = (Path(root) / "VERSION").read_text().strip()
+        match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
+        return bool(match and tuple(map(int, match.groups())) >= _IGNORE_SWAP_GUARD_VERSION)
+    except OSError:
+        return False
 
 
 def _load_module(name, path):
@@ -183,6 +194,9 @@ def _parameters(request, model_helper, backend_checkout):
         compressed = False
     if type(compressed) is not bool:
         raise ValueError("compressed must be a boolean")
+    ignore_swap_guard = request.get("ignore_swap_guard", False)
+    if type(ignore_swap_guard) is not bool:
+        raise ValueError("ignore_swap_guard must be a boolean")
     values = {
         "resident_mib": _integer(request, "resident_mib", 19456),
         "cold_mib": _integer(request, "cold_mib", 26624),
@@ -194,7 +208,8 @@ def _parameters(request, model_helper, backend_checkout):
         raise ValueError("clean_cache_mib cannot exceed cold_mib")
     return {
         "model": model["path"], "model_name": model["name"], "alias": alias,
-        "port": port, "context": context, "compressed": compressed, **values,
+        "port": port, "context": context, "compressed": compressed,
+        "ignore_swap_guard": ignore_swap_guard, **values,
     }
 
 
@@ -224,6 +239,7 @@ def _build_manager_profile(model_helper, name, params):
         "env": overrides, "resident_mib": params["resident_mib"] if params["compressed"] else None,
         "cold_mib": params["cold_mib"],
         "min_available_mib": 16384 if params["compressed"] else 4096,
+        "ignore_swap_guard": params["ignore_swap_guard"],
     }
 
 
@@ -322,7 +338,7 @@ def _save_manager_profile(manager_helper, manager, profile, owned_names):
         raise ValueError("Invalid generated model environment")
     allowed = {
         "name", "priority", "mode", "command", "resident_mib", "cold_mib",
-        "env", "min_available_mib", "max_swap_growth_mib",
+        "env", "min_available_mib", "max_swap_growth_mib", "ignore_swap_guard",
     }
     stored = {key: value for key, value in profile.items() if key in allowed and value is not None}
     with manager.lock():
@@ -365,6 +381,7 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
         profiles.append({
             "name": name, "alias": alias, "port": port, "context": context,
             "compressed": compressed, "running": running, "state": state,
+            "ignore_swap_guard": params.get("ignore_swap_guard", False) is True,
             "healthy": False,
             "lastlog": _clean_text(row.get("lastlog", "")),
         })
@@ -390,6 +407,7 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
         gpu = []
     return {
         "available": True, "installation": installation,
+        "ignore_swap_guard_supported": _supports_ignore_swap_guard(installation),
         "models": models, "profiles": profiles,
         "memory": {key: value for key, value in memory.items()
                    if isinstance(key, str) and type(value) is int},
@@ -431,6 +449,8 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
         name = request.get("profile")
         if action == "save":
             params = _parameters(request, model_helper, backend_checkout)
+            if params["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
+                raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if params["port"] == backend_port:
                 raise ValueError("Profile port must differ from the Novum backend port")
             name = _profile_name(request, params["alias"], params["model_name"])
@@ -455,6 +475,8 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
 
         if action == "start":
             current = _parameters({**params, "profile": name}, model_helper, backend_checkout)
+            if current["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
+                raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if _owned_profile_running(manager_helper, manager, name, current):
                 raise ValueError("Profile is already running")
             if not _port_is_free(current["port"]):

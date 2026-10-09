@@ -579,6 +579,10 @@ def _explicit_model_list_timeout(base_url: str, endpoint_kind: str = "auto", req
 
 
 def _cached_model_ids(ep: Any) -> List[str]:
+    # zVram advertises internal preset IDs; its registered aliases are the
+    # public inventory. User checkbox updates must not reveal preset IDs.
+    if getattr(ep, "name", "") == "zVram · Local models":
+        return _parse_model_list(getattr(ep, "pinned_models", None))
     return _parse_model_list(getattr(ep, "cached_models", None))
 
 
@@ -850,8 +854,19 @@ def _openai_model_ids(data: Any) -> List[str]:
         items = data.get("data")
     else:
         items = None
-    return [m["id"] for m in (items or [])
-            if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]]
+    ids = []
+    for model in items or []:
+        if not isinstance(model, dict) or not isinstance(model.get("id"), str) or not model["id"]:
+            continue
+        model_id = model["id"]
+        aliases = model.get("aliases")
+        if (re.fullmatch(r"nx-model-\d+(?::LOCAL)?", model_id)
+                and isinstance(aliases, list) and len(aliases) == 1
+                and isinstance(aliases[0], str) and aliases[0].strip()):
+            model_id = aliases[0].strip()
+        if model_id not in ids:
+            ids.append(model_id)
+    return ids
 
 
 def _ollama_model_names(data: Any) -> List[str]:
@@ -2351,8 +2366,8 @@ def setup_model_routes(model_discovery):
                     logger.warning("Manual model refresh failed for endpoint %s at %s: %s", ep_id, base, exc)
                     probed = []
                 if probed:
-                    all_models = probed
-                    ep.cached_models = json.dumps(all_models)
+                    ep.cached_models = json.dumps(probed)
+                    all_models = _cached_model_ids(ep)
                     db.commit()
                     _invalidate_models_cache()
                     response.headers["X-Model-Refresh-Status"] = "refreshed"

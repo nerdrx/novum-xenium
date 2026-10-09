@@ -11,7 +11,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sourceRoot = path.resolve(here, '../src');
 
-test('zVram provider stays manual and saves, starts, registers, and stops through typed IPC', async t => {
+test('zVram router starts once, registers after health, and loads chat-selected models', async t => {
   const server = http.createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
@@ -35,14 +35,13 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
     window.__calls = [];
-    window.__holdStart = false;
-    window.__finishStart = null;
     window.__failAction = '';
     window.__zvram = {
-      available: true, installation: '/opt/zvram',
+      available: true, installation: '/opt/zvram', router_supported: true,
       ignore_swap_guard_supported: true,
-      models: [{ name: 'Test Model.gguf', path: '/models/test.gguf', size: 1234 }],
-      profiles: [{ profile: 'nx-test-model-gguf', alias: 'nx-test-model-gguf', model: '/models/test.gguf', port: 8097, context: 4096, compressed: false, running: false, healthy: false, state: 'Stopped' }],
+      models: [{ name: 'Test Model.gguf', path: '/models/test.gguf', size: 1234 }, { name: 'Second.gguf', path: '/models/second.gguf', size: 5678 }],
+      router: { name: 'nx-zvram-router', running: false, healthy: false, state: 'stopped', models: [] },
+      profiles: [{ name: 'legacy-model', alias: 'Qwen 9B', port: 8097, running: true, state: 'running', lastlog: '' }],
       memory: { ram_available_mib: 8000, swap_available_mib: 12000 }, gpu: [{ card: 'card1', vram_used_mib: 9000, vram_total_mib: 24000 }],
     };
     window.__TAURI__ = { core: { invoke: async (command, args) => {
@@ -54,9 +53,12 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
       if (command === 'zvram_action') {
         const request = args.request;
         if (window.__failAction === request.action) { window.__failAction = ''; throw 'Fixture action failure'; }
-        if (request.action === 'start' && window.__holdStart) await new Promise(resolve => { window.__finishStart = resolve; });
-        if (request.action === 'start') window.__zvram.profiles[0] = { ...window.__zvram.profiles[0], running: true, healthy: true, state: 'Healthy' };
-        if (request.action === 'stop') window.__zvram.profiles[0] = { ...window.__zvram.profiles[0], running: false, healthy: false, state: 'Stopped' };
+        if (request.action === 'router_start') {
+          window.__zvram.router = { name: 'nx-zvram-router', running: true, healthy: true, state: 'running', port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, models: [] };
+        }
+        if (request.action === 'router_register') window.__zvram.router.registered = true;
+        if (request.action === 'router_stop') window.__zvram.router = { ...window.__zvram.router, running: false, healthy: false, state: 'stopped', models: [] };
+        if (request.action === 'stop') window.__zvram.profiles = window.__zvram.profiles.map(profile => profile.name === request.profile ? { ...profile, running: false, state: 'stopped' } : profile);
         return { available: true, message: `${request.action} completed` };
       }
       throw new Error(`unexpected command: ${command}`);
@@ -68,18 +70,21 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
   assert.equal(await page.evaluate(() => window.__calls.some(call => call.command.startsWith('zvram_'))), false, 'zVram stays idle until its panel opens');
   await page.locator('#zvram-panel > summary').focus();
   await page.keyboard.press('Enter');
-  assert.equal(await disclosure.evaluate(element => element.open), true);
-
   await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_status'));
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
-  assert.equal(await page.evaluate(() => window.__calls.some(call => call.command === 'zvram_choose_installation' || call.command === 'zvram_action')), false, 'Auto-discovery needs no folder picker and starts no model');
   assert.equal(await page.locator('#zvram-installation').textContent(), '/opt/zvram');
-  assert.equal(await page.locator('#zvram-model option').count(), 1);
-  assert.match(await page.locator('#zvram-model option').textContent(), /1\.2 KiB/);
-  assert.equal(await page.locator('#zvram-alias').inputValue(), 'nx-test-model-gguf');
-  assert.equal(await page.locator('#zvram-compressed').isChecked(), false);
+  assert.match(await page.locator('#zvram-model-list').textContent(), /Test Model\.gguf, Second\.gguf/);
   assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), false);
   assert.equal(await page.locator('#zvram-ignore-swap-guard').isEnabled(), true);
+  assert.equal(await page.locator('#zvram-router-state-value').textContent(), 'Server stopped');
+  assert.equal(await page.locator('#zvram-start').isDisabled(), true, 'legacy server on configured router port blocks start');
+  assert.match(await page.locator('#zvram-status').textContent(), /Legacy server Qwen 9B is using port 8097/);
+  await page.locator('#zvram-legacy-profiles > summary').click();
+  assert.equal(await page.locator('#zvram-legacy-list').getByText('Stop').isEnabled(), true);
+  await page.locator('#zvram-legacy-list button').click();
+  await page.waitForFunction(() => document.getElementById('zvram-status').textContent === 'Legacy model stopped.');
+  assert.equal(await page.locator('#zvram-start').isEnabled(), true);
+
   await page.evaluate(() => { window.__zvram.ignore_swap_guard_supported = false; });
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
@@ -88,62 +93,66 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
   await page.evaluate(() => { window.__zvram.ignore_swap_guard_supported = true; });
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
-  assert.equal(await page.locator('#zvram-resident').isDisabled(), true);
-  assert.match(await page.locator('#zvram-gpu').textContent(), /card1: 9,000 \/ 24,000 MiB allocated/);
-  assert.match(await page.locator('#zvram-memory').textContent(), /RAM available MiB: 8000 · Swap available MiB: 12000/);
+  await page.evaluate(() => { window.__zvram.router_supported = false; });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.match(await page.locator('#zvram-status').textContent(), /llama-server build lacks model-router support/i);
+  assert.equal(await page.locator('#zvram-start').isDisabled(), true);
+  await page.evaluate(() => { window.__zvram.router_supported = true; });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
 
-  await page.locator('#zvram-alias').fill('nx-test');
-  await page.locator('#zvram-profile-form button[type="submit"]').click();
-  await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_action'));
-  let saved = await page.evaluate(() => window.__calls.find(call => call.command === 'zvram_action').args.request);
-  assert.deepEqual(saved, { action: 'save', profile: 'nx-test', model: '/models/test.gguf', alias: 'nx-test', port: 8097, context: 4096, compressed: false, ignore_swap_guard: false });
-
-  assert.match(await page.locator('#zvram-gpu').textContent(), /card1: 9,000 \/ 24,000 MiB allocated/);
+  await page.locator('#zvram-port').fill('8098');
+  await page.locator('#zvram-context').fill('8192');
   await page.locator('#zvram-compressed').check();
-  assert.equal(await page.locator('#zvram-resident').isDisabled(), false);
   await page.locator('#zvram-budget-details > summary').click();
   await page.locator('#zvram-resident').fill('0');
-  await page.locator('#zvram-profile-form button[type="submit"]').click();
-  assert.equal(await page.locator('#zvram-resident').evaluate(input => input.validity.rangeUnderflow), true);
-  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').length), 1);
-  await page.locator('#zvram-resident').fill('10000');
-  await page.locator('#zvram-cold').fill('4000');
-  await page.locator('#zvram-clean-cache').fill('512');
+  await page.locator('#zvram-start').click();
+  assert.equal(await page.evaluate(() => window.__calls.some(call => call.command === 'zvram_action' && call.args.request.action === 'router_start')), false, 'invalid budgets never start a server');
+  await page.locator('#zvram-resident').fill('12000');
+  await page.locator('#zvram-cold').fill('8000');
+  await page.locator('#zvram-clean-cache').fill('1024');
   await page.locator('#zvram-headroom').fill('1024');
-  await page.locator('#zvram-virtual').fill('32');
+  await page.locator('#zvram-virtual').fill('40');
   await page.locator('#zvram-ignore-swap-guard').check();
-  await page.locator('#zvram-profile-form button[type="submit"]').click();
-  await page.waitForFunction(() => window.__calls.filter(call => call.command === 'zvram_action').length === 2);
-  saved = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action')[1].args.request);
-  assert.equal(saved.compressed, true);
-  assert.equal(saved.ignore_swap_guard, true);
-  assert.equal(saved.resident_mib, 10000);
-  assert.equal(saved.cold_mib, 4000);
-  assert.equal(saved.clean_cache_mib, 512);
-  assert.equal(saved.virtual_gib, 32);
 
-  await page.evaluate(() => { window.__holdStart = true; });
-  const start = page.locator('[data-zvram-action="start"]');
-  await start.click();
-  await page.waitForFunction(() => typeof window.__finishStart === 'function');
-  assert.equal(await start.isDisabled(), true);
-  await start.click({ force: true });
-  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'start').length), 1, 'duplicate start clicks must not race');
-  await page.evaluate(() => { window.__holdStart = false; window.__finishStart(); });
-  await page.waitForFunction(() => document.querySelector('#zvram-profile-list').textContent.includes('Healthy') && document.querySelector('#zvram-profile-list [data-zvram-action="register"]:not(:disabled)'));
+  await page.evaluate(() => { window.__failAction = 'router_start'; });
+  await page.locator('#zvram-start').click();
+  await page.waitForFunction(() => document.getElementById('zvram-error').textContent.includes('Fixture action failure'));
+  assert.equal(await page.evaluate(() => window.__calls.some(call => call.command === 'zvram_action' && call.args.request.action === 'router_register')), false, 'provider registration never runs when start fails');
 
-  await page.evaluate(() => { window.__failAction = 'register'; });
-  await page.locator('[data-zvram-action="register"]').click();
-  await page.waitForFunction(() => document.querySelector('#zvram-error').textContent.includes('Fixture action failure'));
-  assert.equal(await page.locator('[data-zvram-action="register"]').isEnabled(), true, 'failed action unlocks retry');
-  await page.locator('[data-zvram-action="register"]').click();
-  await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_action' && call.args.request.action === 'register'));
-  await page.locator('[data-zvram-action="stop"]').click();
-  await page.waitForFunction(() => document.querySelector('#zvram-profile-list').textContent.includes('Stopped'));
-  assert.equal(await page.locator('[data-zvram-action="start"]').isEnabled(), true);
-  assert.equal(await page.locator('[data-zvram-action="stop"]').isEnabled(), false);
-  assert.equal(await page.evaluate(() => window.__calls.some(call => ['start_backend', 'stop_backend', 'save_config'].includes(call.command))), false, 'provider buttons must not trigger general manager actions');
+  await page.evaluate(() => { window.__failAction = 'router_register'; });
+  await page.locator('#zvram-start').click();
+  await page.waitForFunction(() => document.getElementById('zvram-error').textContent.includes('Fixture action failure'));
+  assert.equal(await page.locator('#zvram-connect').isEnabled(), true, 'healthy but unregistered router can retry connection');
+  await page.locator('#zvram-connect').click();
+  await page.waitForFunction(() => document.getElementById('zvram-status').textContent.includes('Provider connected'));
+  const requests = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').map(call => call.args.request));
+  assert.deepEqual(requests.map(request => request.action), ['stop', 'router_start', 'router_start', 'router_register', 'router_register']);
+  assert.deepEqual(requests[1], {
+    action: 'router_start', port: 8098, context: 8192, compressed: true,
+    ignore_swap_guard: true, resident_mib: 12000, cold_mib: 8000,
+    clean_cache_mib: 1024, headroom_mib: 1024, virtual_gib: 40,
+  });
+  assert.equal(await page.locator('#zvram-router-state-value').textContent(), 'Provider ready');
+  assert.equal(await page.locator('#zvram-router-models').textContent(), 'No model loaded');
+  assert.equal(await page.locator('#zvram-start').isDisabled(), true, 'running router cannot be started twice');
+  assert.equal(await page.locator('#zvram-stop').isEnabled(), true);
+  await page.evaluate(() => { window.__zvram.router.models = [
+    { id: 'qwen3.5:9b', status: 'unloaded' },
+    { id: 'qwen3.8:27b', status: 'loaded' },
+    { id: 'tiny:135m', status: 'loading' },
+  ]; });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.locator('#zvram-router-models').textContent(), 'Active: qwen3.8:27b, tiny:135m', 'only loaded/loading models appear active');
+
+  await page.locator('#zvram-stop').click();
+  await page.waitForFunction(() => document.getElementById('zvram-router-state-value').textContent === 'Server stopped');
+  const actions = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').map(call => call.args.request.action));
+  assert.equal(actions.at(-1), 'router_stop');
+  assert.equal(await page.evaluate(() => window.__calls.some(call => ['start_backend', 'stop_backend', 'save_config'].includes(call.command))), false, 'provider buttons do not trigger general manager actions');
   await page.setViewportSize({ width: 320, height: 844 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'collapsed provider should fit narrow desktop window');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'collapsed provider fits narrow desktop window');
   assert.deepEqual(errors, []);
 });

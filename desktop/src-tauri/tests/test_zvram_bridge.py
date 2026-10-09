@@ -96,6 +96,96 @@ class ManagerHelpers:
 
 
 class BridgeTests(unittest.TestCase):
+    def router_command(self, model, alias, **options):
+        return (['zvram', '--no-live-control', '--', 'server', '--model', model, '--alias', alias,
+                 '--host', '127.0.0.1', '--port', str(options['port']), '--ctx-size', str(options['context'])], {})
+
+    def start_router(self, **options):
+        with mock.patch.object(bridge, '_router_supported', return_value=True), \
+                mock.patch.object(bridge, '_port_is_free', return_value=True), \
+                mock.patch.object(self.model_helper, 'build_server_command', side_effect=self.router_command):
+            return self.dispatch({'action': 'router_start', **options})
+
+    def test_router_start_discovers_models_without_a_saved_profile(self):
+        result = self.start_router(ignore_swap_guard=True)
+        self.assertTrue(result['started'])
+        self.assertEqual(self.manager.starts, ['nx-zvram-router'])
+        self.assertEqual(result['profiles'], [])
+        stored = json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']
+        argv = stored['command']
+        self.assertNotIn('--model', argv)
+        self.assertNotIn('--alias', argv)
+        self.assertEqual(argv[argv.index('--models-max') + 1], '1')
+        self.assertIn('--models-autoload', argv)
+        self.assertTrue(stored['ignore_swap_guard'])
+        self.assertEqual(stored['min_available_mib'], 4096)
+        self.assertIn('LLAMA_CACHE', stored['env'])
+        preset = self.home / 'router-models.ini'
+        self.assertEqual(preset.stat().st_mode & 0o777, 0o600)
+        self.assertIn(f'[tiny]\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
+
+    def test_router_start_validates_capability_port_and_name(self):
+        with mock.patch.object(bridge, '_router_supported', return_value=False):
+            with self.assertRaisesRegex(ValueError, 'router support'):
+                self.dispatch({'action': 'router_start'})
+        with mock.patch.object(bridge, '_router_supported', return_value=True), \
+                mock.patch.object(bridge, '_port_is_free', return_value=False):
+            with self.assertRaisesRegex(ValueError, 'port'):
+                self.dispatch({'action': 'router_start'})
+        with mock.patch.object(self.model_helper, 'discover_models', return_value=[
+                {'name': 'bad]\n[evil', 'path': str(self.model), 'size': 4}]):
+            with self.assertRaisesRegex(ValueError, 'represented safely'):
+                self.start_router()
+        self.assertEqual(self.manager.starts, [])
+
+    def test_router_stop_and_registration_require_owned_router(self):
+        with self.assertRaisesRegex(ValueError, 'Start the model router'):
+            self.dispatch({'action': 'router_stop'})
+        self.start_router()
+        with self.assertRaisesRegex(ValueError, 'owned model router'):
+            self.dispatch({'action': 'router_register'})
+        self.dispatch({'action': 'router_stop'})
+        self.assertEqual(self.manager.stops, ['nx-zvram-router'])
+
+    def test_router_starting_worker_is_not_reported_as_stopped_or_replaced(self):
+        self.start_router()
+        preset = (self.home / 'router-models.ini').read_bytes()
+        self.manager.job_path('nx-zvram-router').write_text(json.dumps({'owned': True}))
+        params = bridge._read_state(self.manager)
+        with mock.patch.object(self.manager, 'list_profiles', return_value=[{'name': 'nx-zvram-router', 'state': 'starting'}]), \
+                mock.patch.object(bridge, '_owned_profile_running', return_value=False):
+            status = bridge._router_status(self.model_helper, self.manager_helper, self.manager, params)
+        self.assertEqual(status['state'], 'starting')
+        self.assertFalse(status['healthy'])
+        with self.assertRaisesRegex(ValueError, 'already running'):
+            self.start_router(context=8192)
+        self.assertEqual((self.home / 'router-models.ini').read_bytes(), preset)
+
+    def test_router_registration_advertises_all_models_and_preserves_foreign_provider(self):
+        params = {'port': 8097, 'model_ids': ['tiny', 'other']}
+        inventory = [{'id': 'tiny', 'status': 'unloaded'}, {'id': 'other', 'status': 'loaded'}]
+        with mock.patch.object(bridge, '_router_inventory', return_value=inventory), \
+                mock.patch.object(self.model_helper, 'session_cookie', return_value='private', create=True), \
+                mock.patch.object(self.model_helper, '_request', create=True) as request:
+            request.side_effect = [[], {'id': 'created'}]
+            bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
+            self.assertEqual(json.loads(request.call_args.args[3]['pinned_models']), ['tiny', 'other'])
+            self.assertEqual(request.call_args.args[3]['name'], 'zVram · Local models')
+            request.reset_mock()
+            request.side_effect = [[{'id': 'foreign', 'name': 'Ollama', 'base_url': 'http://127.0.0.1:8097/v1'}]]
+            with self.assertRaisesRegex(ValueError, 'another provider'):
+                bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
+            self.assertEqual(request.call_count, 1)
+
+    def test_router_inventory_requires_expected_models_and_preserves_load_state(self):
+        params = {'port': 8097, 'model_ids': ['tiny']}
+        with mock.patch.object(bridge, '_local_json') as request:
+            request.side_effect = [{'status': 'ok'}, {'data': [{'id': 'tiny', 'status': {'value': 'unloaded'}}]}]
+            self.assertEqual(bridge._router_inventory(params), [{'id': 'tiny', 'status': 'unloaded'}])
+            request.side_effect = [{'status': 'ok'}, {'data': []}]
+            with self.assertRaisesRegex(ValueError, 'advertise'):
+                bridge._router_inventory(params)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name)

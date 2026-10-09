@@ -99,10 +99,10 @@
 
           <details class="panel zvram-panel" id="zvram-panel">
             <summary class="zvram-summary">
-              <span><span class="eyebrow">Experimental provider</span><strong>zVram model server</strong></span>
-              <span class="zvram-summary-note">Separate from Ollama · manual controls only</span>
+              <span><span class="eyebrow">Experimental provider</span><strong>zVram model router</strong></span>
+              <span class="zvram-summary-note">Separate from Ollama · one model loaded at a time</span>
             </summary>
-            <p class="panel-description">Installed zVram is detected automatically. Choose a model to manage a separate local Vulkan server. This does not change Ollama or your default model.</p>
+            <p class="panel-description">Start one local Vulkan server for your GGUF library. Choose a model in chat; llama-server loads that model on demand. This does not change Ollama or your default model.</p>
             <div class="zvram-toolbar">
               <button class="button button-secondary" type="button" id="zvram-choose">Choose installation</button>
               <button class="button button-quiet button-small" type="button" id="zvram-refresh">Refresh</button>
@@ -114,11 +114,14 @@
               <div><span>GPU</span><strong id="zvram-gpu">—</strong></div>
               <div><span>Memory status</span><strong id="zvram-memory">—</strong></div>
             </div>
-            <form id="zvram-profile-form" class="zvram-form">
-              <h3>Save model profile</h3>
-              <label class="field"><span>GGUF model</span><select id="zvram-model" required disabled><option value="">Choose an installation first</option></select></label>
+            <section class="zvram-router-state" aria-live="polite">
+              <strong id="zvram-router-state-value">Server stopped</strong>
+              <span id="zvram-router-models">No model loaded</span>
+              <span id="zvram-router-log" hidden></span>
+            </section>
+            <form id="zvram-router-form" class="zvram-form">
+              <h3>Provider settings</h3>
               <div class="zvram-form-grid">
-                <label class="field"><span>Model alias</span><input id="zvram-alias" type="text" maxlength="80" required placeholder="nx-my-model"></label>
                 <label class="field field-port"><span>Port</span><input id="zvram-port" type="number" min="1" max="65535" value="8097" required></label>
                 <label class="field"><span>Context size</span><input id="zvram-context" type="number" min="256" step="256" value="4096" required></label>
               </div>
@@ -136,12 +139,20 @@
                   <label class="field"><span>Virtual heap (GiB)</span><input id="zvram-virtual" type="number" min="1" value="40" disabled></label>
                 </div>
               </details>
-              <button class="button button-primary" type="submit" id="zvram-save" disabled>Save profile</button>
+              <div class="zvram-provider-actions">
+                <button class="button button-primary" type="submit" id="zvram-start" disabled>Start provider</button>
+                <button class="button button-secondary" type="button" id="zvram-connect" disabled>Connect provider</button>
+                <button class="button button-secondary" type="button" id="zvram-stop" disabled>Stop provider</button>
+              </div>
             </form>
-            <section class="zvram-profiles" aria-labelledby="zvram-profiles-heading">
-              <h3 id="zvram-profiles-heading">Saved profiles</h3>
-              <div id="zvram-profile-list" class="zvram-profile-list"><p class="panel-description">Profiles appear after a refresh.</p></div>
+            <section class="zvram-model-library" aria-labelledby="zvram-models-heading">
+              <h3 id="zvram-models-heading">Detected local models</h3>
+              <p class="panel-description" id="zvram-model-list">Refresh to discover GGUF models.</p>
             </section>
+            <details class="zvram-legacy-profiles" id="zvram-legacy-profiles">
+              <summary>Legacy saved model profiles</summary>
+              <div id="zvram-legacy-list"><p class="panel-description">No legacy profiles.</p></div>
+            </details>
           </details>
         </div>
         <p class="privacy-note">This manager runs locally. It does not store credentials.</p>

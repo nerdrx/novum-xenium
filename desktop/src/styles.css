@@ -120,6 +120,14 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
 .zvram-profile-log { border-left: 2px solid var(--line); padding-left: 9px; }
 .zvram-profile-actions { justify-content: flex-start; flex-wrap: wrap; }
 .zvram-profile-actions .button { flex: 1 1 auto; }
+.zvram-provider-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.zvram-router-state { display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 6px; padding: 11px; margin-top: 14px; }
+.zvram-router-state span, .zvram-model-library .panel-description { color: var(--muted); font-size: 12px; }
+.zvram-model-library { border-top: 1px solid var(--line); padding-top: 15px; margin-top: 18px; }
+.zvram-model-library h3 { margin: 0; font-size: 14px; }
+.zvram-legacy-profiles { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 14px; }
+.zvram-legacy-profiles summary { color: var(--muted); cursor: pointer; font-size: 12px; }
+.zvram-legacy-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 9px; color: var(--muted); font-size: 12px; }
 .zvram-panel button:disabled, .zvram-panel input:disabled, .zvram-panel select:disabled { opacity: .45; cursor: not-allowed; }
 .footer { border-top: 1px solid var(--line); min-height: 48px; display: flex; justify-content: space-between; align-items: center; color: var(--faint); font-size: 11px; }
 .is-busy .app-shell [data-action] { cursor: progress; }

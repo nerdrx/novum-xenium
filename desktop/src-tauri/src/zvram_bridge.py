@@ -361,6 +361,8 @@ def _router_status(model_helper, manager_helper, manager, params_state):
     if not result['running'] and result['state'] in ('starting', 'running'):
         worker_alive = manager_helper.owned_worker(manager_helper.read_json(manager.job_path(_ROUTER_NAME), {}))
         result['state'] = 'starting' if worker_alive else 'stopped'
+    if result['state'] == 'stopped' and 'live_control' not in params:
+        result['live_control'] = params.get('compressed', False) is True or _supports_live_control(model_helper)
     if result['running']:
         try:
             result['models'] = _router_inventory(params)

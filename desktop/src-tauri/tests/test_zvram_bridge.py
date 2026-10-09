@@ -163,6 +163,14 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'requires a newer zVram'):
             bridge._parameters({'model': str(self.model), 'live_control': True}, old_helper, self.checkout)
         self.assertTrue(result['live_control_supported'])
+        legacy = {'router': True, 'compressed': False}
+        status = bridge._router_status(self.model_helper, self.manager_helper, self.manager,
+                                       {'nx-zvram-router': legacy})
+        self.assertTrue(status['live_control'], 'stopped legacy router defaults on for its next launch')
+        legacy['live_control'] = False
+        status = bridge._router_status(self.model_helper, self.manager_helper, self.manager,
+                                       {'nx-zvram-router': legacy})
+        self.assertFalse(status['live_control'], 'explicit opt-out is preserved')
 
     def test_router_stop_and_registration_require_owned_router(self):
         with self.assertRaisesRegex(ValueError, 'Start the model router'):

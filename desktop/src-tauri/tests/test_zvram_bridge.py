@@ -122,7 +122,7 @@ class BridgeTests(unittest.TestCase):
         self.assertIn('LLAMA_CACHE', stored['env'])
         preset = self.home / 'router-models.ini'
         self.assertEqual(preset.stat().st_mode & 0o777, 0o600)
-        self.assertIn(f'[tiny]\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
+        self.assertIn(f'[nx-model-0]\nalias = tiny\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
 
     def test_router_start_validates_capability_port_and_name(self):
         with mock.patch.object(bridge, '_router_supported', return_value=False):
@@ -166,11 +166,17 @@ class BridgeTests(unittest.TestCase):
         inventory = [{'id': 'tiny', 'status': 'unloaded'}, {'id': 'other', 'status': 'loaded'}]
         with mock.patch.object(bridge, '_router_inventory', return_value=inventory), \
                 mock.patch.object(self.model_helper, 'session_cookie', return_value='private', create=True), \
+                mock.patch.object(bridge, '_local_json', return_value={'data': [{'id': 'nx-model-0:LOCAL'}, {'id': 'nx-model-1:LOCAL'}]}), \
                 mock.patch.object(self.model_helper, '_request', create=True) as request:
-            request.side_effect = [[], {'id': 'created'}]
+            request.side_effect = [[], {'id': 'created'}, {}]
             bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
-            self.assertEqual(json.loads(request.call_args.args[3]['pinned_models']), ['tiny', 'other'])
-            self.assertEqual(request.call_args.args[3]['name'], 'zVram · Local models')
+            self.assertEqual(json.loads(request.call_args_list[1].args[3]['pinned_models']), ['tiny', 'other'])
+            self.assertEqual(request.call_args_list[1].args[3]['name'], 'zVram · Local models')
+            self.assertEqual(request.call_args.args[3]['hidden'], ['nx-model-0:LOCAL', 'nx-model-1:LOCAL'])
+            request.reset_mock()
+            request.side_effect = [[{'id': 'created', 'name': 'zVram · Local models', 'base_url': 'http://127.0.0.1:8097/v1'}], {'id': 'created'}, {}]
+            bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
+            self.assertEqual(request.call_args_list[1].args[0], 'http://127.0.0.1:8000/api/model-endpoints/created')
             request.reset_mock()
             request.side_effect = [[{'id': 'foreign', 'name': 'Ollama', 'base_url': 'http://127.0.0.1:8097/v1'}]]
             with self.assertRaisesRegex(ValueError, 'another provider'):
@@ -181,6 +187,8 @@ class BridgeTests(unittest.TestCase):
         params = {'port': 8097, 'model_ids': ['tiny']}
         with mock.patch.object(bridge, '_local_json') as request:
             request.side_effect = [{'status': 'ok'}, {'data': [{'id': 'tiny', 'status': {'value': 'unloaded'}}]}]
+            self.assertEqual(bridge._router_inventory(params), [{'id': 'tiny', 'status': 'unloaded'}])
+            request.side_effect = [{'status': 'ok'}, {'data': [{'id': 'nx-model-0:LOCAL', 'aliases': ['tiny'], 'status': {'value': 'unloaded'}}]}]
             self.assertEqual(bridge._router_inventory(params), [{'id': 'tiny', 'status': 'unloaded'}])
             request.side_effect = [{'status': 'ok'}, {'data': []}]
             with self.assertRaisesRegex(ValueError, 'advertise'):

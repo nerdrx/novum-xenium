@@ -275,12 +275,13 @@ def _build_router_profile(model_helper, manager, params, models):
     command += ['--models-preset', str(_router_preset_path(manager)), '--models-max', '1', '--models-autoload']
     lines = ['version = 1', '']
     seen = set()
-    for model in models:
+    for index, model in enumerate(models):
         name, path = model['name'], model['path']
         if not _ALIAS_RE.fullmatch(name) or name in seen or any(c in path for c in '\r\n\0;#') or path != path.strip():
             raise ValueError('A discovered model name or path cannot be represented safely in the router preset')
         seen.add(name)
-        lines += [f'[{name}]', f'model = {path}', 'load-on-startup = false', '']
+        # llama.cpp normalizes preset section names; explicit aliases preserve chat IDs.
+        lines += [f'[nx-model-{index}]', f'alias = {name}', f'model = {path}', 'load-on-startup = false', '']
     path = _router_preset_path(manager)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex)
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
@@ -308,11 +309,18 @@ def _router_inventory(params):
         raise ValueError('The model router returned an invalid inventory')
     rows = inventory.get('data', [])
     expected = params['model_ids']
-    if not isinstance(rows, list) or not set(expected).issubset({row.get('id') for row in rows if isinstance(row, dict)}):
-        raise ValueError('The model router does not advertise the discovered models')
-    return [{'id': row['id'], 'status': _clean_text(row.get('status', {}).get('value', 'available'))
-             if isinstance(row.get('status', {}), dict) else 'available'}
-            for row in rows if isinstance(row, dict) and row.get('id') in expected]
+    if not isinstance(rows, list):
+        raise ValueError('The model router returned an invalid inventory')
+    inventory = []
+    for name in expected:
+        row = next((row for row in rows if isinstance(row, dict) and
+                    (row.get('id') == name or name in (row.get('aliases') or []))), None)
+        if row is None:
+            raise ValueError('The model router does not advertise the discovered models')
+        status = row.get('status', {})
+        inventory.append({'id': name, 'status': _clean_text(status.get('value', 'available'))
+                          if isinstance(status, dict) else 'available'})
+    return inventory
 
 
 def _router_status(model_helper, manager_helper, manager, params_state):
@@ -349,11 +357,19 @@ def _register_router(model_helper, params, backend_checkout, cookie_path, backen
     if existing:
         if not existing.get('name', '').startswith('zVram · '):
             raise ValueError('This port belongs to another provider')
-        return model_helper._request(api + '/' + urllib.parse.quote(str(existing['id']), safe=''), cookie,
-                                     'PATCH', {'name': name, 'is_enabled': True, 'pinned_models': ids})
-    return model_helper._request(api, cookie, 'POST', {'name': name, 'base_url': base,
-        'endpoint_kind': 'local', 'model_type': 'llm', 'skip_probe': 'false',
-        'pinned_models': json.dumps(ids), 'shared': 'false'}, form=True)
+        endpoint = model_helper._request(api + '/' + urllib.parse.quote(str(existing['id']), safe=''), cookie,
+                                        'PATCH', {'name': name, 'is_enabled': True, 'pinned_models': ids})
+    else:
+        endpoint = model_helper._request(api, cookie, 'POST', {'name': name, 'base_url': base,
+            'endpoint_kind': 'local', 'model_type': 'llm', 'skip_probe': 'false',
+            'pinned_models': json.dumps(ids), 'shared': 'false'}, form=True)
+    # Keep internal preset IDs out of the chat picker; requests use the public aliases.
+    rows = _local_json(base + '/models').get('data', [])
+    hidden = [row['id'] for row in rows if isinstance(row, dict) and
+              isinstance(row.get('id'), str) and row['id'] not in ids]
+    model_helper._request(api + '/' + urllib.parse.quote(str(endpoint['id']), safe='') + '/models',
+                          cookie, 'PATCH', {'hidden': hidden, 'pinned_models': ids})
+    return endpoint
 
 
 def _health(model_helper, alias, port):

@@ -21,6 +21,9 @@ enum ZvramAction {
     Stop,
     Register,
     Status,
+    RouterStart,
+    RouterStop,
+    RouterRegister,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -49,6 +52,10 @@ pub(super) struct ZvramRequest {
     headroom_mib: Option<u32>,
     #[serde(default)]
     virtual_gib: Option<u32>,
+    #[serde(default)]
+    ignore_swap_guard: Option<bool>,
+    #[serde(default)]
+    live_control: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -180,6 +187,8 @@ fn unavailable_status(message: &str) -> Value {
         "message": message,
         "models": [],
         "profiles": [],
+        "router_supported": false,
+        "router": null,
     })
 }
 
@@ -370,6 +379,8 @@ impl ZvramRequest {
             clean_cache_mib: None,
             headroom_mib: None,
             virtual_gib: None,
+            ignore_swap_guard: None,
+            live_control: None,
         }
     }
 }
@@ -409,6 +420,31 @@ mod tests {
         .is_err());
         assert!(serde_json::from_value::<ZvramRequest>(json!({
             "action": "unknown"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn router_request_and_swap_guard_field_are_typed() {
+        let request: ZvramRequest = serde_json::from_value(json!({
+            "action": "router_start",
+            "port": 8097,
+            "context": 8192,
+            "compressed": true,
+            "ignore_swap_guard": true,
+            "live_control": true,
+            "resident_mib": 12288,
+            "cold_mib": 8192
+        }))
+        .unwrap();
+        let encoded = serde_json::to_value(request).unwrap();
+        assert_eq!(encoded["action"], "router_start");
+        assert_eq!(encoded["ignore_swap_guard"], true);
+        assert_eq!(encoded["live_control"], true);
+        assert_eq!(encoded["context"], 8192);
+        assert!(serde_json::from_value::<ZvramRequest>(json!({
+            "action": "router_start",
+            "ignore_swap_guard": "yes"
         }))
         .is_err());
     }

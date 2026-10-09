@@ -4,13 +4,16 @@ import contextlib
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
 import re
 import socket
 import shutil
+import subprocess
 import sys
+import urllib.parse
 import urllib.error
 import urllib.request
 import uuid
@@ -19,12 +22,32 @@ import uuid
 _ALLOWED_KEYS = {
     "action", "profile", "model", "alias", "port", "context", "compressed",
     "resident_mib", "cold_mib", "clean_cache_mib", "headroom_mib", "virtual_gib",
+    "ignore_swap_guard",
+    "live_control",
 }
 _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _ALIAS_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,128}\Z")
 _MODEL_LIMIT = 256
 _PROFILE_LIMIT = 128
 _STATE_NAME = "novum_profiles.json"
+_IGNORE_SWAP_GUARD_VERSION = (0, 4, 2)
+_ROUTER_NAME = "nx-zvram-router"
+
+
+def _supports_ignore_swap_guard(root):
+    try:
+        version = (Path(root) / "VERSION").read_text().strip()
+        match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
+        return bool(match and tuple(map(int, match.groups())) >= _IGNORE_SWAP_GUARD_VERSION)
+    except OSError:
+        return False
+
+
+def _supports_live_control(model_helper):
+    try:
+        return "live_control" in inspect.signature(model_helper.build_server_command).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
 
 
 def _load_module(name, path):
@@ -117,7 +140,7 @@ def _request_object(value):
     if unknown:
         raise ValueError("Request contains unsupported fields")
     action = value.get("action")
-    if action not in {"status", "save", "start", "stop", "register"}:
+    if action not in {"status", "save", "start", "stop", "register", "router_start", "router_stop", "router_register"}:
         raise ValueError("Unsupported zVram action")
     return value
 
@@ -183,6 +206,21 @@ def _parameters(request, model_helper, backend_checkout):
         compressed = False
     if type(compressed) is not bool:
         raise ValueError("compressed must be a boolean")
+    ignore_swap_guard = request.get("ignore_swap_guard", False)
+    if ignore_swap_guard is None:
+        ignore_swap_guard = False
+    if type(ignore_swap_guard) is not bool:
+        raise ValueError("ignore_swap_guard must be a boolean")
+    live_control_supported = _supports_live_control(model_helper)
+    live_control = request.get("live_control", live_control_supported)
+    if live_control is None:
+        live_control = live_control_supported
+    if type(live_control) is not bool:
+        raise ValueError("live_control must be a boolean")
+    if compressed:
+        live_control = True
+    elif live_control and not live_control_supported:
+        raise ValueError("Live VRAM management requires a newer zVram installation")
     values = {
         "resident_mib": _integer(request, "resident_mib", 19456),
         "cold_mib": _integer(request, "cold_mib", 26624),
@@ -194,7 +232,9 @@ def _parameters(request, model_helper, backend_checkout):
         raise ValueError("clean_cache_mib cannot exceed cold_mib")
     return {
         "model": model["path"], "model_name": model["name"], "alias": alias,
-        "port": port, "context": context, "compressed": compressed, **values,
+        "port": port, "context": context, "compressed": compressed,
+        "ignore_swap_guard": ignore_swap_guard, **values,
+        "live_control": live_control,
     }
 
 
@@ -210,13 +250,16 @@ def _model_server(model_helper):
 
 
 def _build_manager_profile(model_helper, name, params):
-    command, environment = model_helper.build_server_command(
-        params["model"], params["alias"], port=params["port"],
+    options = dict(
+        port=params["port"],
         context=params["context"], compressed=params["compressed"],
         resident_mib=params["resident_mib"], cold_mib=params["cold_mib"],
         clean_cache_mib=params["clean_cache_mib"], headroom_mib=params["headroom_mib"],
         virtual_gib=params["virtual_gib"], server=_model_server(model_helper),
     )
+    if _supports_live_control(model_helper):
+        options["live_control"] = params["live_control"]
+    command, environment = model_helper.build_server_command(params["model"], params["alias"], **options)
     overrides = {key: value for key, value in environment.items()
                  if key.startswith(("ZVRAM_", "GGML_"))}
     return {
@@ -224,7 +267,136 @@ def _build_manager_profile(model_helper, name, params):
         "env": overrides, "resident_mib": params["resident_mib"] if params["compressed"] else None,
         "cold_mib": params["cold_mib"],
         "min_available_mib": 16384 if params["compressed"] else 4096,
+        "ignore_swap_guard": params["ignore_swap_guard"],
+        "live_control": params["live_control"],
     }
+
+
+def _router_supported(model_helper):
+    binary = _model_server(model_helper)
+    if not binary:
+        return False
+    try:
+        result = subprocess.run([binary, '--help'], capture_output=True, timeout=5)
+        return result.returncode == 0 and all(flag in result.stdout + result.stderr for flag in
+            (b'--models-preset', b'--models-max', b'--models-autoload'))
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _router_preset_path(manager):
+    return manager.home / 'router-models.ini'
+
+
+def _build_router_profile(model_helper, manager, params, models):
+    # Reuse the installed helper's paging options; only replace the single-model
+    # server arguments. Router children inherit its arguments and environment.
+    profile = _build_manager_profile(model_helper, _ROUTER_NAME, params)
+    command = profile['command']
+    for flag in ('--model', '--alias'):
+        index = command.index(flag, command.index('--') + 1)
+        del command[index:index + 2]
+    command += ['--models-preset', str(_router_preset_path(manager)), '--models-max', '1', '--models-autoload']
+    lines = ['version = 1', '']
+    seen = set()
+    for index, model in enumerate(models):
+        name, path = model['name'], model['path']
+        if not _ALIAS_RE.fullmatch(name) or name in seen or any(c in path for c in '\r\n\0;#') or path != path.strip():
+            raise ValueError('A discovered model name or path cannot be represented safely in the router preset')
+        seen.add(name)
+        # llama.cpp normalizes preset section names; explicit aliases preserve chat IDs.
+        lines += [f'[nx-model-{index}]', f'alias = {name}', f'model = {path}', 'load-on-startup = false', '']
+    path = _router_preset_path(manager)
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write('\n'.join(lines))
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    # Expose only our discovered GGUF presets, not unrelated HF cache entries.
+    cache = manager.home / 'router-cache'
+    cache.mkdir(mode=0o700, exist_ok=True)
+    if cache.is_symlink() or cache.stat().st_uid != os.getuid():
+        raise ValueError('Unsafe router cache directory')
+    profile['env']['LLAMA_CACHE'] = str(cache)
+    return profile
+
+
+def _router_inventory(params):
+    health = _local_json(f'http://127.0.0.1:{params["port"]}/health')
+    if not isinstance(health, dict) or health.get('status') not in ('ok', 'healthy'):
+        raise ValueError('The model router is not ready')
+    inventory = _local_json(f'http://127.0.0.1:{params["port"]}/v1/models')
+    if not isinstance(inventory, dict):
+        raise ValueError('The model router returned an invalid inventory')
+    rows = inventory.get('data', [])
+    expected = params['model_ids']
+    if not isinstance(rows, list):
+        raise ValueError('The model router returned an invalid inventory')
+    inventory = []
+    for name in expected:
+        row = next((row for row in rows if isinstance(row, dict) and
+                    (row.get('id') == name or name in (row.get('aliases') or []))), None)
+        if row is None:
+            raise ValueError('The model router does not advertise the discovered models')
+        status = row.get('status', {})
+        inventory.append({'id': name, 'status': _clean_text(status.get('value', 'available'))
+                          if isinstance(status, dict) else 'available'})
+    return inventory
+
+
+def _router_status(model_helper, manager_helper, manager, params_state):
+    params = params_state.get(_ROUTER_NAME, {})
+    result = {'name': _ROUTER_NAME, 'running': False, 'healthy': False, 'state': 'stopped',
+              'port': params.get('port', 8097), 'context': params.get('context', 4096), 'models': []}
+    if params.get('router') is not True:
+        return result
+    row = next((row for row in manager.list_profiles() if row.get('name') == _ROUTER_NAME), {})
+    result.update(state=row.get('state', 'stopped'), lastlog=_clean_text(row.get('lastlog', '')),
+                  compressed=params.get('compressed', False), ignore_swap_guard=params.get('ignore_swap_guard', False),
+                  live_control=params.get('live_control', False) is True or params.get('compressed', False) is True)
+    result['running'] = _owned_profile_running(manager_helper, manager, _ROUTER_NAME, params)
+    if not result['running'] and result['state'] in ('starting', 'running'):
+        worker_alive = manager_helper.owned_worker(manager_helper.read_json(manager.job_path(_ROUTER_NAME), {}))
+        result['state'] = 'starting' if worker_alive else 'stopped'
+    if result['state'] == 'stopped' and 'live_control' not in params:
+        result['live_control'] = params.get('compressed', False) is True or _supports_live_control(model_helper)
+    if result['running']:
+        try:
+            result['models'] = _router_inventory(params)
+            result['healthy'] = True
+        except (OSError, ValueError, TypeError, KeyError, urllib.error.URLError):
+            pass
+    return result
+
+
+def _register_router(model_helper, params, backend_checkout, cookie_path, backend_port):
+    models = _router_inventory(params)
+    ids = [model['id'] for model in models]
+    base = f'http://127.0.0.1:{params["port"]}/v1'
+    cookie = model_helper.session_cookie(cookie_path)
+    api = f'http://127.0.0.1:{backend_port}/api/model-endpoints'
+    endpoints = model_helper._request(api, cookie)
+    existing = next((ep for ep in endpoints if ep.get('base_url', '').rstrip('/') == base), None)
+    name = 'zVram · Local models'
+    if existing:
+        if not existing.get('name', '').startswith('zVram · '):
+            raise ValueError('This port belongs to another provider')
+        endpoint = model_helper._request(api + '/' + urllib.parse.quote(str(existing['id']), safe=''), cookie,
+                                        'PATCH', {'name': name, 'is_enabled': True, 'pinned_models': ids})
+    else:
+        endpoint = model_helper._request(api, cookie, 'POST', {'name': name, 'base_url': base,
+            'endpoint_kind': 'local', 'model_type': 'llm', 'skip_probe': 'false',
+            'pinned_models': json.dumps(ids), 'shared': 'false'}, form=True)
+    # Keep internal preset IDs out of the chat picker; requests use the public aliases.
+    rows = _local_json(base + '/models').get('data', [])
+    hidden = [row['id'] for row in rows if isinstance(row, dict) and
+              isinstance(row.get('id'), str) and row['id'] not in ids]
+    model_helper._request(api + '/' + urllib.parse.quote(str(endpoint['id']), safe='') + '/models',
+                          cookie, 'PATCH', {'hidden': hidden, 'pinned_models': ids})
+    return endpoint
 
 
 def _health(model_helper, alias, port):
@@ -263,6 +435,8 @@ def _local_json(url):
 
 def _port_is_free(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        # Match llama-server: expired connections must not block a restart.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("127.0.0.1", port))
             return True
@@ -296,7 +470,8 @@ def _owned_profile_running(manager_helper, manager, name, params):
                 Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if part]
         return (
             _has_pair(argv, "--port", str(params["port"]))
-            and _has_pair(argv, "--alias", params["alias"])
+            and (_has_pair(argv, '--models-preset', str(_router_preset_path(manager))) if params.get('router')
+                 else _has_pair(argv, "--alias", params["alias"]))
             and _has_pair(argv, "--host", "127.0.0.1")
         )
     except (OSError, KeyError, TypeError, ValueError):
@@ -322,7 +497,7 @@ def _save_manager_profile(manager_helper, manager, profile, owned_names):
         raise ValueError("Invalid generated model environment")
     allowed = {
         "name", "priority", "mode", "command", "resident_mib", "cold_mib",
-        "env", "min_available_mib", "max_swap_growth_mib",
+        "env", "min_available_mib", "max_swap_growth_mib", "ignore_swap_guard", "live_control",
     }
     stored = {key: value for key, value in profile.items() if key in allowed and value is not None}
     with manager.lock():
@@ -345,6 +520,8 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
     for name, params in sorted(params_state.items())[:_PROFILE_LIMIT]:
         if not isinstance(name, str) or not _PROFILE_RE.fullmatch(name) or not isinstance(params, dict):
             continue
+        if params.get('router') is True:
+            continue
         try:
             alias = params["alias"]
             port = params["port"]
@@ -365,6 +542,8 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
         profiles.append({
             "name": name, "alias": alias, "port": port, "context": context,
             "compressed": compressed, "running": running, "state": state,
+            "ignore_swap_guard": params.get("ignore_swap_guard", False) is True,
+            "live_control": params.get("live_control", False) is True or compressed,
             "healthy": False,
             "lastlog": _clean_text(row.get("lastlog", "")),
         })
@@ -390,7 +569,11 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
         gpu = []
     return {
         "available": True, "installation": installation,
+        "ignore_swap_guard_supported": _supports_ignore_swap_guard(installation),
         "models": models, "profiles": profiles,
+        "router": _router_status(model_helper, manager_helper, manager, params_state),
+        "router_supported": _router_supported(model_helper),
+        "live_control_supported": _supports_live_control(model_helper),
         "memory": {key: value for key, value in memory.items()
                    if isinstance(key, str) and type(value) is int},
         "gpu": [
@@ -428,9 +611,48 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
         if action == "status":
             return _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
 
+        if action.startswith('router_'):
+            if action == 'router_start':
+                if not _router_supported(model_helper):
+                    raise ValueError('Install a llama-server build with model router support')
+                previous = params_state.get(_ROUTER_NAME, {})
+                if manager_helper.owned_worker(manager_helper.read_json(manager.job_path(_ROUTER_NAME), {})):
+                    raise ValueError('The model router is already running')
+                models = _model_rows(model_helper, backend_checkout)
+                if not models:
+                    raise ValueError('No local GGUF models were discovered')
+                params = _parameters({**request, 'model': models[0]['path'], 'alias': 'zvram-router'}, model_helper, backend_checkout)
+                params.update(router=True, model_ids=[model['name'] for model in models])
+                if params['port'] == backend_port or not _port_is_free(params['port']):
+                    raise ValueError('Router port is already in use or belongs to Novum')
+                if params['ignore_swap_guard'] and not _supports_ignore_swap_guard(root):
+                    raise ValueError('Ignoring the swap-growth guard requires zVram 0.4.2 or newer')
+                if _ROUTER_NAME in params_state and previous.get('router') is not True:
+                    raise ValueError('The router profile name is already used by a legacy profile')
+                profile = _build_router_profile(model_helper, manager, params, models)
+                _save_manager_profile(manager_helper, manager, profile, params_state)
+                params_state[_ROUTER_NAME] = params
+                _write_state(manager, params_state)
+                _start_manager(manager, _ROUTER_NAME)
+            else:
+                params = params_state.get(_ROUTER_NAME, {})
+                if params.get('router') is not True:
+                    raise ValueError('Start the model router first')
+                if action == 'router_stop':
+                    manager.stop(_ROUTER_NAME)
+                else:
+                    if not _owned_profile_running(manager_helper, manager, _ROUTER_NAME, params):
+                        raise ValueError('Start the owned model router before connecting it')
+                    _register_router(model_helper, params, backend_checkout, cookie_path, backend_port)
+            status = _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
+            status['registered' if action == 'router_register' else 'started' if action == 'router_start' else 'stopped'] = True
+            return status
+
         name = request.get("profile")
         if action == "save":
             params = _parameters(request, model_helper, backend_checkout)
+            if params["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
+                raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if params["port"] == backend_port:
                 raise ValueError("Profile port must differ from the Novum backend port")
             name = _profile_name(request, params["alias"], params["model_name"])
@@ -454,13 +676,19 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
         params = params_state[name]
 
         if action == "start":
-            current = _parameters({**params, "profile": name}, model_helper, backend_checkout)
+            saved_request = {**params, "profile": name}
+            saved_request.setdefault("live_control", params.get("compressed", False) is True)
+            current = _parameters(saved_request, model_helper, backend_checkout)
+            if current["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
+                raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if _owned_profile_running(manager_helper, manager, name, current):
                 raise ValueError("Profile is already running")
             if not _port_is_free(current["port"]):
                 raise ValueError("Profile port is already in use")
             _save_manager_profile(manager_helper, manager,
                                   _build_manager_profile(model_helper, name, current), params_state)
+            params_state[name] = current
+            _write_state(manager, params_state)
             _start_manager(manager, name)
             status = _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
             status["started"] = True

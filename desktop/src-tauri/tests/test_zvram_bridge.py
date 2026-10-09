@@ -18,8 +18,11 @@ SPEC.loader.exec_module(bridge)
 
 
 class ModelHelper:
-    def build_server_command(self, model, alias, **kwargs):
-        return (["server", "--model", model, "--alias", alias], {
+    def build_server_command(self, model, alias, *, live_control=False, **kwargs):
+        command = ["server", "--model", model, "--alias", alias]
+        if not live_control:
+            command.append("--no-live-control")
+        return (command, {
             "ZVRAM_TYPED": "yes", "GGML_CACHE": "safe", "API_TOKEN": "never",
         })
 
@@ -96,12 +99,156 @@ class ManagerHelpers:
 
 
 class BridgeTests(unittest.TestCase):
+    def router_command(self, model, alias, **options):
+        command = ['zvram']
+        if not options.get('live_control', False):
+            command.append('--no-live-control')
+        return (command + ['--', 'server', '--model', model, '--alias', alias,
+                 '--host', '127.0.0.1', '--port', str(options['port']), '--ctx-size', str(options['context'])], {})
+
+    def start_router(self, **options):
+        with mock.patch.object(bridge, '_router_supported', return_value=True), \
+                mock.patch.object(bridge, '_port_is_free', return_value=True), \
+                mock.patch.object(bridge, '_supports_live_control', return_value=True), \
+                mock.patch.object(self.model_helper, 'build_server_command', side_effect=self.router_command):
+            return self.dispatch({'action': 'router_start', **options})
+
+    def test_router_start_discovers_models_without_a_saved_profile(self):
+        result = self.start_router(ignore_swap_guard=True)
+        self.assertTrue(result['started'])
+        self.assertEqual(self.manager.starts, ['nx-zvram-router'])
+        self.assertEqual(result['profiles'], [])
+        stored = json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']
+        argv = stored['command']
+        self.assertNotIn('--model', argv)
+        self.assertNotIn('--alias', argv)
+        self.assertEqual(argv[argv.index('--models-max') + 1], '1')
+        self.assertIn('--models-autoload', argv)
+        self.assertTrue(stored['live_control'])
+        self.assertNotIn('--no-live-control', argv)
+        self.assertTrue(stored['ignore_swap_guard'])
+        self.assertEqual(stored['min_available_mib'], 4096)
+        self.assertIn('LLAMA_CACHE', stored['env'])
+        preset = self.home / 'router-models.ini'
+        self.assertEqual(preset.stat().st_mode & 0o777, 0o600)
+        self.assertIn(f'[nx-model-0]\nalias = tiny\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
+
+    def test_router_start_validates_capability_port_and_name(self):
+        with mock.patch.object(bridge, '_router_supported', return_value=False):
+            with self.assertRaisesRegex(ValueError, 'router support'):
+                self.dispatch({'action': 'router_start'})
+        with mock.patch.object(bridge, '_router_supported', return_value=True), \
+                mock.patch.object(bridge, '_port_is_free', return_value=False):
+            with self.assertRaisesRegex(ValueError, 'port'):
+                self.dispatch({'action': 'router_start'})
+        with mock.patch.object(self.model_helper, 'discover_models', return_value=[
+                {'name': 'bad]\n[evil', 'path': str(self.model), 'size': 4}]):
+            with self.assertRaisesRegex(ValueError, 'represented safely'):
+                self.start_router()
+        self.assertEqual(self.manager.starts, [])
+
+    def test_live_control_is_opt_out_and_old_runtime_defaults_off(self):
+        result = self.start_router(live_control=False)
+        stored = json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']
+        self.assertFalse(stored['live_control'])
+        self.assertIn('--no-live-control', stored['command'])
+
+        class OldModelHelper(ModelHelpers):
+            def build_server_command(self, model, alias, **kwargs):
+                return super().build_server_command(model, alias, **kwargs)
+
+        old_helper = OldModelHelper(self.model)
+        params = bridge._parameters({'model': str(self.model)}, old_helper, self.checkout)
+        self.assertFalse(params['live_control'])
+        with self.assertRaisesRegex(ValueError, 'requires a newer zVram'):
+            bridge._parameters({'model': str(self.model), 'live_control': True}, old_helper, self.checkout)
+        self.assertTrue(result['live_control_supported'])
+        legacy = {'router': True, 'compressed': False}
+        status = bridge._router_status(self.model_helper, self.manager_helper, self.manager,
+                                       {'nx-zvram-router': legacy})
+        self.assertTrue(status['live_control'], 'stopped legacy router defaults on for its next launch')
+        legacy['live_control'] = False
+        status = bridge._router_status(self.model_helper, self.manager_helper, self.manager,
+                                       {'nx-zvram-router': legacy})
+        self.assertFalse(status['live_control'], 'explicit opt-out is preserved')
+
+    def test_router_stop_and_registration_require_owned_router(self):
+        with self.assertRaisesRegex(ValueError, 'Start the model router'):
+            self.dispatch({'action': 'router_stop'})
+        self.start_router()
+        with self.assertRaisesRegex(ValueError, 'owned model router'):
+            self.dispatch({'action': 'router_register'})
+        self.dispatch({'action': 'router_stop'})
+        self.assertEqual(self.manager.stops, ['nx-zvram-router'])
+
+    def test_router_starting_worker_is_not_reported_as_stopped_or_replaced(self):
+        self.start_router()
+        preset = (self.home / 'router-models.ini').read_bytes()
+        self.manager.job_path('nx-zvram-router').write_text(json.dumps({'owned': True}))
+        params = bridge._read_state(self.manager)
+        with mock.patch.object(self.manager, 'list_profiles', return_value=[{'name': 'nx-zvram-router', 'state': 'starting'}]), \
+                mock.patch.object(bridge, '_owned_profile_running', return_value=False):
+            status = bridge._router_status(self.model_helper, self.manager_helper, self.manager, params)
+        self.assertEqual(status['state'], 'starting')
+        self.assertFalse(status['healthy'])
+        with self.assertRaisesRegex(ValueError, 'already running'):
+            self.start_router(context=8192)
+        self.assertEqual((self.home / 'router-models.ini').read_bytes(), preset)
+
+    def test_router_registration_advertises_all_models_and_preserves_foreign_provider(self):
+        params = {'port': 8097, 'model_ids': ['tiny', 'other']}
+        inventory = [{'id': 'tiny', 'status': 'unloaded'}, {'id': 'other', 'status': 'loaded'}]
+        with mock.patch.object(bridge, '_router_inventory', return_value=inventory), \
+                mock.patch.object(self.model_helper, 'session_cookie', return_value='private', create=True), \
+                mock.patch.object(bridge, '_local_json', return_value={'data': [{'id': 'nx-model-0:LOCAL'}, {'id': 'nx-model-1:LOCAL'}]}), \
+                mock.patch.object(self.model_helper, '_request', create=True) as request:
+            request.side_effect = [[], {'id': 'created'}, {}]
+            bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
+            self.assertEqual(json.loads(request.call_args_list[1].args[3]['pinned_models']), ['tiny', 'other'])
+            self.assertEqual(request.call_args_list[1].args[3]['name'], 'zVram · Local models')
+            self.assertEqual(request.call_args.args[3]['hidden'], ['nx-model-0:LOCAL', 'nx-model-1:LOCAL'])
+            request.reset_mock()
+            request.side_effect = [[{'id': 'created', 'name': 'zVram · Local models', 'base_url': 'http://127.0.0.1:8097/v1'}], {'id': 'created'}, {}]
+            bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
+            self.assertEqual(request.call_args_list[1].args[0], 'http://127.0.0.1:8000/api/model-endpoints/created')
+            request.reset_mock()
+            request.side_effect = [[{'id': 'foreign', 'name': 'Ollama', 'base_url': 'http://127.0.0.1:8097/v1'}]]
+            with self.assertRaisesRegex(ValueError, 'another provider'):
+                bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
+            self.assertEqual(request.call_count, 1)
+
+    def test_port_check_allows_time_wait_but_rejects_a_listener(self):
+        import socket
+        with socket.socket() as server:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(("127.0.0.1", 0))
+            port = server.getsockname()[1]
+            server.listen()
+            self.assertFalse(bridge._port_is_free(port))
+            with socket.create_connection(("127.0.0.1", port)) as client:
+                connection, _ = server.accept()
+                connection.close()
+                self.assertEqual(client.recv(1), b"")
+        self.assertTrue(bridge._port_is_free(port))
+
+    def test_router_inventory_requires_expected_models_and_preserves_load_state(self):
+        params = {'port': 8097, 'model_ids': ['tiny']}
+        with mock.patch.object(bridge, '_local_json') as request:
+            request.side_effect = [{'status': 'ok'}, {'data': [{'id': 'tiny', 'status': {'value': 'unloaded'}}]}]
+            self.assertEqual(bridge._router_inventory(params), [{'id': 'tiny', 'status': 'unloaded'}])
+            request.side_effect = [{'status': 'ok'}, {'data': [{'id': 'nx-model-0:LOCAL', 'aliases': ['tiny'], 'status': {'value': 'unloaded'}}]}]
+            self.assertEqual(bridge._router_inventory(params), [{'id': 'tiny', 'status': 'unloaded'}])
+            request.side_effect = [{'status': 'ok'}, {'data': []}]
+            with self.assertRaisesRegex(ValueError, 'advertise'):
+                bridge._router_inventory(params)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name)
         self.root = self.base / "zvram"
         self.checkout = self.base / "backend"
         self.root.mkdir()
+        (self.root / "VERSION").write_text("0.4.2\n")
         self.checkout.mkdir()
         self.model = self.checkout / "tiny.gguf"
         self.model.write_bytes(b"gguf")
@@ -174,7 +321,8 @@ class BridgeTests(unittest.TestCase):
             "model": "/models/a.gguf", "alias": "a", "port": 8097,
             "context": 4096, "compressed": False, "resident_mib": 19456,
             "cold_mib": 26624, "clean_cache_mib": 1024,
-            "headroom_mib": 1536, "virtual_gib": 96,
+            "headroom_mib": 1536, "virtual_gib": 96, "ignore_swap_guard": False,
+            "live_control": True,
         })
         self.assertEqual(profile["env"], {"ZVRAM_TYPED": "yes", "GGML_CACHE": "safe"})
         self.assertNotIn("API_TOKEN", profile["env"])
@@ -221,6 +369,25 @@ class BridgeTests(unittest.TestCase):
         status = self.dispatch({"action": "status"})
         self.assertEqual(status["profiles"][0]["alias"], "tiny")
 
+    def test_ignore_swap_guard_is_opt_in_and_persisted_to_manager(self):
+        result = self.dispatch(self.save_request(ignore_swap_guard=True))
+        self.assertTrue(result["ignore_swap_guard_supported"])
+        self.assertTrue(result["profiles"][0]["ignore_swap_guard"])
+        manager_profile = json.loads(self.manager.profiles_path.read_text())["tiny"]
+        saved_state = json.loads((self.home / bridge._STATE_NAME).read_text())["tiny"]
+        self.assertIs(manager_profile["ignore_swap_guard"], True)
+        self.assertIs(saved_state["ignore_swap_guard"], True)
+
+        self.dispatch(self.save_request())
+        manager_profile = json.loads(self.manager.profiles_path.read_text())["tiny"]
+        self.assertIs(manager_profile["ignore_swap_guard"], False)
+
+    def test_ignore_swap_guard_requires_zvram_042(self):
+        (self.root / "VERSION").write_text("0.4.1\n")
+        self.assertFalse(bridge._supports_ignore_swap_guard(self.root))
+        with self.assertRaisesRegex(ValueError, "requires zVram 0.4.2 or newer"):
+            self.dispatch(self.save_request(ignore_swap_guard=True))
+
     def test_save_rejects_undiscovered_model_and_backend_port(self):
         with self.assertRaisesRegex(ValueError, "discovered GGUF"):
             self.dispatch(self.save_request(model=str(self.base / "elsewhere.gguf")))
@@ -235,6 +402,9 @@ class BridgeTests(unittest.TestCase):
 
     def test_start_rebuilds_persisted_command_and_checks_port(self):
         self.dispatch(self.save_request())
+        saved = json.loads((self.home / bridge._STATE_NAME).read_text())
+        saved["tiny"].pop("live_control")
+        (self.home / bridge._STATE_NAME).write_text(json.dumps(saved))
         profiles = json.loads(self.manager.profiles_path.read_text())
         profiles["tiny"]["command"] = ["/attacker/command"]
         self.manager.profiles_path.write_text(json.dumps(profiles))
@@ -247,6 +417,9 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(result["started"])
         stored = json.loads(self.manager.profiles_path.read_text())["tiny"]
         self.assertEqual(stored["command"][:2], ["server", "--model"])
+        self.assertIn("--no-live-control", stored["command"])
+        saved = json.loads((self.home / bridge._STATE_NAME).read_text())
+        self.assertIs(saved["tiny"]["live_control"], False)
         self.assertEqual(self.manager.starts, ["tiny"])
 
     def test_register_requires_owned_running_healthy_endpoint(self):

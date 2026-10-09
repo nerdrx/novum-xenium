@@ -52,7 +52,11 @@ python3 zvram_model.py list
 `build_server_command(path, alias, ...)` returns `(argv, environment)` for a
 controller to pass directly to `subprocess.Popen`, without shell expansion.
 `mode="native"` produces an unwrapped reference command. The default `spill`
-mode uses the virtual heap; `compressed=True` explicitly opts into experimental
+mode uses the virtual heap. With zVram 0.4.4 or newer, live VRAM management is
+enabled by default; `live_control=False` explicitly selects plain spill without
+runtime residency caps. The desktop exposes this choice independently from BP16.
+Older installations keep plain spill and show that an update is needed for this
+setting. `compressed=True` explicitly opts into experimental
 BP16 range paging. The latter accepts `resident_mib`, `cold_mib`,
 `clean_cache_mib`, and `headroom_mib`. These are eligible allocation budgets,
 not global physical VRAM reservations or cross-process scheduling guarantees.
@@ -89,12 +93,20 @@ the desktop app is required; the helper does not bypass authentication.
 
 ## Desktop controls
 
-The provider settings choose port, context, and opt-in paging. Start once, then
+The provider settings choose port, context, live management, and opt-in BP16 paging. Start once, then
 choose models directly in chat; separate Save and Start actions for every
 model are unnecessary. Show startup/health/error state and offer an explicit
 stop action. Register only after the server is healthy. Keep the
 current Ollama endpoint available so users choose either provider per chat.
 Do not automatically start large models or unload unrelated Ollama models.
+
+Live VRAM management applies to the next provider launch and changes automatic
+paging behavior. BP16 always needs paging, so its checkbox keeps live management
+enabled. Existing servers must restart to enable it; running Vulkan devices
+cannot gain paging retroactively. An idle router may have no Vulkan device or
+control endpoint: the standalone manager controls the loaded model worker's
+endpoint once it is created. This setting does not grant process ownership over
+external servers.
 
 Model profiles may opt out of zVram's system-wide swap-growth stop with
 `ignore_swap_guard`. This requires zVram 0.4.2 or newer; the available-RAM

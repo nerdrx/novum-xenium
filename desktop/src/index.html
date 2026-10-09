@@ -126,6 +126,8 @@
                 <label class="field"><span>Context size</span><input id="zvram-context" type="number" min="256" step="256" value="4096" required></label>
               </div>
               <label class="zvram-optin"><input id="zvram-compressed" type="checkbox"><span>Enable experimental BP16 paging</span></label>
+              <label class="zvram-optin"><input id="zvram-live-control" type="checkbox" checked><span>Enable live VRAM management</span></label>
+              <p class="zvram-budget-note" id="zvram-live-control-note">Live VRAM management can snapshot allocations during idle periods. Turn it off to preserve spill performance.</p>
               <label class="zvram-optin"><input id="zvram-ignore-swap-guard" type="checkbox"><span>Ignore system swap-growth guard</span></label>
               <p class="zvram-budget-note" id="zvram-swap-guard-note">For this profile only. Requires zVram 0.4.2 or newer; the available-RAM guard remains active.</p>
               <p class="zvram-budget-note">These are eligible allocation budgets, not reserved physical VRAM. Native and untracked allocations remain outside the resident limit.</p>

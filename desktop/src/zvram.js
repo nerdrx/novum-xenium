@@ -4,6 +4,7 @@ const elements = {
   error: $('#zvram-error'), status: $('#zvram-status'), hardware: $('#zvram-hardware'),
   gpu: $('#zvram-gpu'), memory: $('#zvram-memory'), form: $('#zvram-router-form'),
   port: $('#zvram-port'), context: $('#zvram-context'), compressed: $('#zvram-compressed'),
+  liveControl: $('#zvram-live-control'),
   ignoreSwapGuard: $('#zvram-ignore-swap-guard'), start: $('#zvram-start'),
   connect: $('#zvram-connect'), stop: $('#zvram-stop'), legacyList: $('#zvram-legacy-list'),
   routerState: $('#zvram-router-state-value'), routerModels: $('#zvram-router-models'),
@@ -15,6 +16,7 @@ let busy = false;
 let available = false;
 let routerSupported = false;
 let ignoreSwapGuardSupported = false;
+let liveControlSupported = false;
 let router = {};
 let models = [];
 let legacyProfiles = [];
@@ -41,6 +43,7 @@ function updateControls() {
   elements.port.disabled = !usable || active;
   elements.context.disabled = !usable || active;
   elements.compressed.disabled = !usable || active;
+  elements.liveControl.disabled = !usable || active || !liveControlSupported || elements.compressed.checked;
   elements.ignoreSwapGuard.disabled = !usable || active || !ignoreSwapGuardSupported;
   budgetInputs.forEach(input => { input.disabled = !usable || active || !elements.compressed.checked; });
   for (const button of elements.legacyList.querySelectorAll('button[data-legacy-profile]')) {
@@ -50,6 +53,11 @@ function updateControls() {
   $('#zvram-swap-guard-note').textContent = ignoreSwapGuardSupported
     ? 'For this router only. The available-RAM guard remains active.'
     : 'Requires zVram 0.4.2 or newer. The available-RAM guard remains active.';
+  $('#zvram-live-control-note').textContent = liveControlSupported
+    ? elements.compressed.checked
+      ? 'BP16 paging enables live VRAM management automatically.'
+      : 'Snapshots allocations during idle periods; turn it off to preserve spill performance.'
+    : 'This zVram installation does not support live VRAM management. Choose a newer installation to enable it.';
 }
 
 function renderMetrics(node, value) {
@@ -86,7 +94,13 @@ function renderStatus(result) {
   available = result.available === true;
   routerSupported = result.router_supported === true;
   ignoreSwapGuardSupported = result.ignore_swap_guard_supported === true;
+  const previouslySupported = liveControlSupported;
+  liveControlSupported = result.live_control_supported === true;
   router = result.router && typeof result.router === 'object' ? result.router : {};
+  if (typeof router.live_control === 'boolean') elements.liveControl.checked = router.live_control;
+  else if (!liveControlSupported) elements.liveControl.checked = false;
+  else if (!previouslySupported) elements.liveControl.checked = true;
+  if (typeof router.compressed === 'boolean') elements.compressed.checked = router.compressed;
   if (typeof result.installation === 'string') elements.installation.textContent = result.installation || 'No installation selected.';
   models = Array.isArray(result.models) ? result.models.filter(model => model && typeof model.name === 'string') : [];
   legacyProfiles = Array.isArray(result.profiles)
@@ -188,6 +202,7 @@ function buildRouterRequest() {
   const request = {
     action: 'router_start', port, context,
     compressed: elements.compressed.checked,
+    live_control: elements.compressed.checked || elements.liveControl.checked,
     ignore_swap_guard: elements.ignoreSwapGuard.checked,
   };
   if (request.compressed) {
@@ -213,10 +228,13 @@ async function waitUntilHealthy() {
 }
 
 elements.compressed.addEventListener('change', () => {
+  if (elements.compressed.checked) elements.liveControl.checked = true;
   const active = router.running === true || ['starting', 'running'].includes(router.state);
   budgetInputs.forEach(input => { input.disabled = !invoke || busy || !available || active || !elements.compressed.checked; });
   elements.budgetDetails.classList.toggle('is-opted-in', elements.compressed.checked);
+  updateControls();
 });
+elements.liveControl.addEventListener('change', updateControls);
 elements.choose.addEventListener('click', async () => {
   try {
     const result = await perform('Choose installation', () => invoke('zvram_choose_installation'));

@@ -4,6 +4,7 @@ import contextlib
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ _ALLOWED_KEYS = {
     "action", "profile", "model", "alias", "port", "context", "compressed",
     "resident_mib", "cold_mib", "clean_cache_mib", "headroom_mib", "virtual_gib",
     "ignore_swap_guard",
+    "live_control",
 }
 _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _ALIAS_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,128}\Z")
@@ -38,6 +40,13 @@ def _supports_ignore_swap_guard(root):
         match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
         return bool(match and tuple(map(int, match.groups())) >= _IGNORE_SWAP_GUARD_VERSION)
     except OSError:
+        return False
+
+
+def _supports_live_control(model_helper):
+    try:
+        return "live_control" in inspect.signature(model_helper.build_server_command).parameters
+    except (TypeError, ValueError, AttributeError):
         return False
 
 
@@ -202,6 +211,16 @@ def _parameters(request, model_helper, backend_checkout):
         ignore_swap_guard = False
     if type(ignore_swap_guard) is not bool:
         raise ValueError("ignore_swap_guard must be a boolean")
+    live_control_supported = _supports_live_control(model_helper)
+    live_control = request.get("live_control", live_control_supported)
+    if live_control is None:
+        live_control = live_control_supported
+    if type(live_control) is not bool:
+        raise ValueError("live_control must be a boolean")
+    if compressed:
+        live_control = True
+    elif live_control and not live_control_supported:
+        raise ValueError("Live VRAM management requires a newer zVram installation")
     values = {
         "resident_mib": _integer(request, "resident_mib", 19456),
         "cold_mib": _integer(request, "cold_mib", 26624),
@@ -215,6 +234,7 @@ def _parameters(request, model_helper, backend_checkout):
         "model": model["path"], "model_name": model["name"], "alias": alias,
         "port": port, "context": context, "compressed": compressed,
         "ignore_swap_guard": ignore_swap_guard, **values,
+        "live_control": live_control,
     }
 
 
@@ -230,13 +250,16 @@ def _model_server(model_helper):
 
 
 def _build_manager_profile(model_helper, name, params):
-    command, environment = model_helper.build_server_command(
-        params["model"], params["alias"], port=params["port"],
+    options = dict(
+        port=params["port"],
         context=params["context"], compressed=params["compressed"],
         resident_mib=params["resident_mib"], cold_mib=params["cold_mib"],
         clean_cache_mib=params["clean_cache_mib"], headroom_mib=params["headroom_mib"],
         virtual_gib=params["virtual_gib"], server=_model_server(model_helper),
     )
+    if _supports_live_control(model_helper):
+        options["live_control"] = params["live_control"]
+    command, environment = model_helper.build_server_command(params["model"], params["alias"], **options)
     overrides = {key: value for key, value in environment.items()
                  if key.startswith(("ZVRAM_", "GGML_"))}
     return {
@@ -245,6 +268,7 @@ def _build_manager_profile(model_helper, name, params):
         "cold_mib": params["cold_mib"],
         "min_available_mib": 16384 if params["compressed"] else 4096,
         "ignore_swap_guard": params["ignore_swap_guard"],
+        "live_control": params["live_control"],
     }
 
 
@@ -331,7 +355,8 @@ def _router_status(model_helper, manager_helper, manager, params_state):
         return result
     row = next((row for row in manager.list_profiles() if row.get('name') == _ROUTER_NAME), {})
     result.update(state=row.get('state', 'stopped'), lastlog=_clean_text(row.get('lastlog', '')),
-                  compressed=params.get('compressed', False), ignore_swap_guard=params.get('ignore_swap_guard', False))
+                  compressed=params.get('compressed', False), ignore_swap_guard=params.get('ignore_swap_guard', False),
+                  live_control=params.get('live_control', False) is True or params.get('compressed', False) is True)
     result['running'] = _owned_profile_running(manager_helper, manager, _ROUTER_NAME, params)
     if not result['running'] and result['state'] in ('starting', 'running'):
         worker_alive = manager_helper.owned_worker(manager_helper.read_json(manager.job_path(_ROUTER_NAME), {}))
@@ -470,7 +495,7 @@ def _save_manager_profile(manager_helper, manager, profile, owned_names):
         raise ValueError("Invalid generated model environment")
     allowed = {
         "name", "priority", "mode", "command", "resident_mib", "cold_mib",
-        "env", "min_available_mib", "max_swap_growth_mib", "ignore_swap_guard",
+        "env", "min_available_mib", "max_swap_growth_mib", "ignore_swap_guard", "live_control",
     }
     stored = {key: value for key, value in profile.items() if key in allowed and value is not None}
     with manager.lock():
@@ -516,6 +541,7 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
             "name": name, "alias": alias, "port": port, "context": context,
             "compressed": compressed, "running": running, "state": state,
             "ignore_swap_guard": params.get("ignore_swap_guard", False) is True,
+            "live_control": params.get("live_control", False) is True or compressed,
             "healthy": False,
             "lastlog": _clean_text(row.get("lastlog", "")),
         })
@@ -545,6 +571,7 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
         "models": models, "profiles": profiles,
         "router": _router_status(model_helper, manager_helper, manager, params_state),
         "router_supported": _router_supported(model_helper),
+        "live_control_supported": _supports_live_control(model_helper),
         "memory": {key: value for key, value in memory.items()
                    if isinstance(key, str) and type(value) is int},
         "gpu": [
@@ -647,7 +674,9 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
         params = params_state[name]
 
         if action == "start":
-            current = _parameters({**params, "profile": name}, model_helper, backend_checkout)
+            saved_request = {**params, "profile": name}
+            saved_request.setdefault("live_control", params.get("compressed", False) is True)
+            current = _parameters(saved_request, model_helper, backend_checkout)
             if current["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
                 raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if _owned_profile_running(manager_helper, manager, name, current):
@@ -656,6 +685,8 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
                 raise ValueError("Profile port is already in use")
             _save_manager_profile(manager_helper, manager,
                                   _build_manager_profile(model_helper, name, current), params_state)
+            params_state[name] = current
+            _write_state(manager, params_state)
             _start_manager(manager, name)
             status = _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
             status["started"] = True

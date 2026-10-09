@@ -54,6 +54,8 @@ pub(super) struct ZvramRequest {
     virtual_gib: Option<u32>,
     #[serde(default)]
     ignore_swap_guard: Option<bool>,
+    #[serde(default)]
+    live_control: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -378,6 +380,7 @@ impl ZvramRequest {
             headroom_mib: None,
             virtual_gib: None,
             ignore_swap_guard: None,
+            live_control: None,
         }
     }
 }
@@ -429,6 +432,7 @@ mod tests {
             "context": 8192,
             "compressed": true,
             "ignore_swap_guard": true,
+            "live_control": true,
             "resident_mib": 12288,
             "cold_mib": 8192
         }))
@@ -436,6 +440,7 @@ mod tests {
         let encoded = serde_json::to_value(request).unwrap();
         assert_eq!(encoded["action"], "router_start");
         assert_eq!(encoded["ignore_swap_guard"], true);
+        assert_eq!(encoded["live_control"], true);
         assert_eq!(encoded["context"], 8192);
         assert!(serde_json::from_value::<ZvramRequest>(json!({
             "action": "router_start",

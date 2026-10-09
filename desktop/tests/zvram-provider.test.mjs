@@ -39,6 +39,7 @@ test('zVram router starts once, registers after health, and loads chat-selected 
     window.__zvram = {
       available: true, installation: '/opt/zvram', router_supported: true,
       ignore_swap_guard_supported: true,
+      live_control_supported: true,
       models: [{ name: 'Test Model.gguf', path: '/models/test.gguf', size: 1234 }, { name: 'Second.gguf', path: '/models/second.gguf', size: 5678 }],
       router: { name: 'nx-zvram-router', running: false, healthy: false, state: 'stopped', models: [] },
       profiles: [{ name: 'legacy-model', alias: 'Qwen 9B', port: 8097, running: true, state: 'running', lastlog: '' }],
@@ -73,6 +74,8 @@ test('zVram router starts once, registers after health, and loads chat-selected 
   await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_status'));
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
   assert.equal(await page.locator('#zvram-installation').textContent(), '/opt/zvram');
+  assert.equal(await page.locator('#zvram-live-control').isChecked(), true, 'live management is opt-out by default');
+  assert.equal(await page.locator('#zvram-live-control').isEnabled(), true);
   assert.match(await page.locator('#zvram-model-list').textContent(), /Test Model\.gguf, Second\.gguf/);
   assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), false);
   assert.equal(await page.locator('#zvram-ignore-swap-guard').isEnabled(), true);
@@ -105,6 +108,8 @@ test('zVram router starts once, registers after health, and loads chat-selected 
   await page.locator('#zvram-port').fill('8098');
   await page.locator('#zvram-context').fill('8192');
   await page.locator('#zvram-compressed').check();
+  assert.equal(await page.locator('#zvram-live-control').isChecked(), true);
+  assert.equal(await page.locator('#zvram-live-control').isDisabled(), true, 'BP16 paging enables live management automatically');
   await page.locator('#zvram-budget-details > summary').click();
   await page.locator('#zvram-resident').fill('0');
   await page.locator('#zvram-start').click();
@@ -131,7 +136,7 @@ test('zVram router starts once, registers after health, and loads chat-selected 
   assert.deepEqual(requests.map(request => request.action), ['stop', 'router_start', 'router_start', 'router_register', 'router_register']);
   assert.deepEqual(requests[1], {
     action: 'router_start', port: 8098, context: 8192, compressed: true,
-    ignore_swap_guard: true, resident_mib: 12000, cold_mib: 8000,
+    live_control: true, ignore_swap_guard: true, resident_mib: 12000, cold_mib: 8000,
     clean_cache_mib: 1024, headroom_mib: 1024, virtual_gib: 40,
   });
   assert.equal(await page.locator('#zvram-router-state-value').textContent(), 'Provider ready');
@@ -152,6 +157,18 @@ test('zVram router starts once, registers after health, and loads chat-selected 
   const actions = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').map(call => call.args.request.action));
   assert.equal(actions.at(-1), 'router_stop');
   assert.equal(await page.evaluate(() => window.__calls.some(call => ['start_backend', 'stop_backend', 'save_config'].includes(call.command))), false, 'provider buttons do not trigger general manager actions');
+  await page.evaluate(() => {
+    window.__zvram.live_control_supported = false;
+    window.__zvram.router = { running: false, state: 'stopped', models: [], compressed: false };
+  });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.locator('#zvram-live-control').isDisabled(), true);
+  assert.equal(await page.locator('#zvram-live-control').isChecked(), false);
+  await page.evaluate(() => { window.__zvram.live_control_supported = true; });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.locator('#zvram-live-control').isChecked(), true, 'new supported installation defaults live management on');
   await page.setViewportSize({ width: 320, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'collapsed provider fits narrow desktop window');
   assert.deepEqual(errors, []);

@@ -18,8 +18,11 @@ SPEC.loader.exec_module(bridge)
 
 
 class ModelHelper:
-    def build_server_command(self, model, alias, **kwargs):
-        return (["server", "--model", model, "--alias", alias], {
+    def build_server_command(self, model, alias, *, live_control=False, **kwargs):
+        command = ["server", "--model", model, "--alias", alias]
+        if not live_control:
+            command.append("--no-live-control")
+        return (command, {
             "ZVRAM_TYPED": "yes", "GGML_CACHE": "safe", "API_TOKEN": "never",
         })
 
@@ -97,12 +100,16 @@ class ManagerHelpers:
 
 class BridgeTests(unittest.TestCase):
     def router_command(self, model, alias, **options):
-        return (['zvram', '--no-live-control', '--', 'server', '--model', model, '--alias', alias,
+        command = ['zvram']
+        if not options.get('live_control', False):
+            command.append('--no-live-control')
+        return (command + ['--', 'server', '--model', model, '--alias', alias,
                  '--host', '127.0.0.1', '--port', str(options['port']), '--ctx-size', str(options['context'])], {})
 
     def start_router(self, **options):
         with mock.patch.object(bridge, '_router_supported', return_value=True), \
                 mock.patch.object(bridge, '_port_is_free', return_value=True), \
+                mock.patch.object(bridge, '_supports_live_control', return_value=True), \
                 mock.patch.object(self.model_helper, 'build_server_command', side_effect=self.router_command):
             return self.dispatch({'action': 'router_start', **options})
 
@@ -117,6 +124,8 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('--alias', argv)
         self.assertEqual(argv[argv.index('--models-max') + 1], '1')
         self.assertIn('--models-autoload', argv)
+        self.assertTrue(stored['live_control'])
+        self.assertNotIn('--no-live-control', argv)
         self.assertTrue(stored['ignore_swap_guard'])
         self.assertEqual(stored['min_available_mib'], 4096)
         self.assertIn('LLAMA_CACHE', stored['env'])
@@ -137,6 +146,23 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'represented safely'):
                 self.start_router()
         self.assertEqual(self.manager.starts, [])
+
+    def test_live_control_is_opt_out_and_old_runtime_defaults_off(self):
+        result = self.start_router(live_control=False)
+        stored = json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']
+        self.assertFalse(stored['live_control'])
+        self.assertIn('--no-live-control', stored['command'])
+
+        class OldModelHelper(ModelHelpers):
+            def build_server_command(self, model, alias, **kwargs):
+                return super().build_server_command(model, alias, **kwargs)
+
+        old_helper = OldModelHelper(self.model)
+        params = bridge._parameters({'model': str(self.model)}, old_helper, self.checkout)
+        self.assertFalse(params['live_control'])
+        with self.assertRaisesRegex(ValueError, 'requires a newer zVram'):
+            bridge._parameters({'model': str(self.model), 'live_control': True}, old_helper, self.checkout)
+        self.assertTrue(result['live_control_supported'])
 
     def test_router_stop_and_registration_require_owned_router(self):
         with self.assertRaisesRegex(ValueError, 'Start the model router'):
@@ -288,6 +314,7 @@ class BridgeTests(unittest.TestCase):
             "context": 4096, "compressed": False, "resident_mib": 19456,
             "cold_mib": 26624, "clean_cache_mib": 1024,
             "headroom_mib": 1536, "virtual_gib": 96, "ignore_swap_guard": False,
+            "live_control": True,
         })
         self.assertEqual(profile["env"], {"ZVRAM_TYPED": "yes", "GGML_CACHE": "safe"})
         self.assertNotIn("API_TOKEN", profile["env"])
@@ -367,6 +394,9 @@ class BridgeTests(unittest.TestCase):
 
     def test_start_rebuilds_persisted_command_and_checks_port(self):
         self.dispatch(self.save_request())
+        saved = json.loads((self.home / bridge._STATE_NAME).read_text())
+        saved["tiny"].pop("live_control")
+        (self.home / bridge._STATE_NAME).write_text(json.dumps(saved))
         profiles = json.loads(self.manager.profiles_path.read_text())
         profiles["tiny"]["command"] = ["/attacker/command"]
         self.manager.profiles_path.write_text(json.dumps(profiles))
@@ -379,6 +409,9 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(result["started"])
         stored = json.loads(self.manager.profiles_path.read_text())["tiny"]
         self.assertEqual(stored["command"][:2], ["server", "--model"])
+        self.assertIn("--no-live-control", stored["command"])
+        saved = json.loads((self.home / bridge._STATE_NAME).read_text())
+        self.assertIs(saved["tiny"]["live_control"], False)
         self.assertEqual(self.manager.starts, ["tiny"])
 
     def test_register_requires_owned_running_healthy_endpoint(self):

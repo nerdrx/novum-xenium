@@ -183,6 +183,20 @@ class BridgeTests(unittest.TestCase):
                 bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
             self.assertEqual(request.call_count, 1)
 
+    def test_port_check_allows_time_wait_but_rejects_a_listener(self):
+        import socket
+        with socket.socket() as server:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(("127.0.0.1", 0))
+            port = server.getsockname()[1]
+            server.listen()
+            self.assertFalse(bridge._port_is_free(port))
+            with socket.create_connection(("127.0.0.1", port)) as client:
+                connection, _ = server.accept()
+                connection.close()
+                self.assertEqual(client.recv(1), b"")
+        self.assertTrue(bridge._port_is_free(port))
+
     def test_router_inventory_requires_expected_models_and_preserves_load_state(self):
         params = {'port': 8097, 'model_ids': ['tiny']}
         with mock.patch.object(bridge, '_local_json') as request:

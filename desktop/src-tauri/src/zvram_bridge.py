@@ -408,6 +408,8 @@ def _local_json(url):
 
 def _port_is_free(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        # Match llama-server: expired connections must not block a restart.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("127.0.0.1", port))
             return True

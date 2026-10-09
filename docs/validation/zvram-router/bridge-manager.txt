@@ -1,0 +1,15 @@
+[55755] [zvram] device=AMD Radeon RX 7900 XTX (RADV NAVI31) policy=allowed
+[55755] 0.00.120.511 I srv  llama_server: model loaded
+0.00.570.407 I srv  proxy_reques: proxying request to model tiny-a on port 55755
+0.00.721.497 I srv          join: request for name=tiny-b queued at position 1
+0.00.721.504 I srv          tick: evicting idle LRU name=tiny-a for a queued request
+0.00.721.510 I srv  ensure_model: waiting until model name=tiny-b is fully loaded...
+0.00.810.804 I srv           run: instance name=tiny-a exited with status 0
+0.00.810.819 I srv  ensure_model: slot available, loading queued model name=tiny-b
+0.00.810.877 I srv          load: spawning server instance with name=tiny-b on port 43067
+0.00.810.905 I srv          load:   tiny-b
+[43067] [zvram] device=AMD Radeon RX 7900 XTX (RADV NAVI31) policy=allowed
+[43067] 0.00.100.537 I srv  llama_server: model loaded
+0.00.916.065 I srv  proxy_reques: proxying request to model tiny-b on port 43067
+0.01.468.353 I srv    unload_all: stopping model instance name=tiny-b
+0.01.539.032 I srv           run: instance name=tiny-b exited with status 0

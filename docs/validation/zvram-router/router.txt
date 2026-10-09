@@ -1,0 +1,28 @@
+0.00.251.610 I srv    operator():   [    preset] tiny-a
+0.00.251.610 I srv    operator():   [    preset] tiny-b
+0.00.408.285 I srv          join: request for name=tiny-a queued at position 1
+0.00.408.289 I srv  ensure_model: waiting until model name=tiny-a is fully loaded...
+0.00.408.292 I srv  ensure_model: slot available, loading queued model name=tiny-a
+0.00.408.338 I srv          load: spawning server instance with name=tiny-a on port 56719
+0.00.408.355 I srv          load:   /home/nerdrx/Documents/ChatGPT/NX/zvram/build/third-party/llama-vulkan-build/bin/llama-server
+0.00.408.359 I srv          load:   tiny-a
+0.00.408.360 I srv          load:   /home/nerdrx/Documents/ChatGPT/NX/zvram/build/third-party/models/SmolLM2-135M-Instruct-f16.gguf
+[56719] 0.00.023.662 I srv    load_model: loading model '/home/nerdrx/Documents/ChatGPT/NX/zvram/build/third-party/models/SmolLM2-135M-Instruct-f16.gguf'
+[56719] [zvram] device=AMD Radeon RX 7900 XTX (RADV NAVI31) policy=allowed
+[56719] 0.00.606.100 I srv  llama_server: model loaded
+0.01.022.075 I srv  proxy_reques: proxying request to model tiny-a on port 56719
+0.01.178.083 I srv          join: request for name=tiny-b queued at position 1
+0.01.178.087 I srv          tick: evicting idle LRU name=tiny-a for a queued request
+0.01.178.102 I srv  ensure_model: waiting until model name=tiny-b is fully loaded...
+0.01.271.145 I srv           run: instance name=tiny-a exited with status 0
+0.01.271.164 I srv  ensure_model: slot available, loading queued model name=tiny-b
+0.01.271.251 I srv          load: spawning server instance with name=tiny-b on port 52165
+0.01.271.279 I srv          load:   /home/nerdrx/Documents/ChatGPT/NX/zvram/build/third-party/llama-vulkan-build/bin/llama-server
+0.01.271.280 I srv          load:   tiny-b
+0.01.271.281 I srv          load:   /home/nerdrx/Documents/ChatGPT/NX/zvram/build/third-party/models/SmolLM2-135M-Instruct-f16.gguf
+[52165] 0.00.033.171 I srv    load_model: loading model '/home/nerdrx/Documents/ChatGPT/NX/zvram/build/third-party/models/SmolLM2-135M-Instruct-f16.gguf'
+[52165] [zvram] device=AMD Radeon RX 7900 XTX (RADV NAVI31) policy=allowed
+[52165] 0.00.269.467 I srv  llama_server: model loaded
+0.01.548.231 I srv  proxy_reques: proxying request to model tiny-b on port 52165
+0.01.692.102 I srv    unload_all: stopping model instance name=tiny-b
+0.01.762.120 I srv           run: instance name=tiny-b exited with status 0

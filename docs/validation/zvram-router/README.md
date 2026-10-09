@@ -7,7 +7,9 @@ zVram: launched with `--no-live-control --vulkan-virtual-gib 96`; router environ
 GPU: CPU-only (`--gpu-layers 0`) because RX 7900 XTX render node was active with VRChat/desktop processes; no GPU load claim. This run validates routing and launcher environment inheritance, not GPU layer mapping.
 Elapsed: 1.81 s. Router process cleaned up; exit 0.
 
-Command shape: `zvram --no-live-control --vulkan-virtual-gib 96 llama-server --models-preset <temporary-ini> --models-max 1 --models-autoload --host 127.0.0.1 --port <free> --ctx-size 512 --parallel 1 --batch-size 32 --gpu-layers 0 --no-warmup`.
+Command shape: `zvram --no-live-control --vulkan-virtual-gib 96 -- llama-server --models-preset <temporary-ini> --models-max 1 --models-autoload --host 127.0.0.1 --port <free> --ctx-size 512 --parallel 1 --batch-size 32 --gpu-layers 0 --no-warmup`.
+
+Filtered runtime logs: [router](router.txt) and [actual bridge/manager](bridge-manager.txt).
 
 Per-alias status evidence:
 ```json

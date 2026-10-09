@@ -102,6 +102,7 @@ class BridgeTests(unittest.TestCase):
         self.root = self.base / "zvram"
         self.checkout = self.base / "backend"
         self.root.mkdir()
+        (self.root / "VERSION").write_text("0.4.2\n")
         self.checkout.mkdir()
         self.model = self.checkout / "tiny.gguf"
         self.model.write_bytes(b"gguf")
@@ -174,7 +175,7 @@ class BridgeTests(unittest.TestCase):
             "model": "/models/a.gguf", "alias": "a", "port": 8097,
             "context": 4096, "compressed": False, "resident_mib": 19456,
             "cold_mib": 26624, "clean_cache_mib": 1024,
-            "headroom_mib": 1536, "virtual_gib": 96,
+            "headroom_mib": 1536, "virtual_gib": 96, "ignore_swap_guard": False,
         })
         self.assertEqual(profile["env"], {"ZVRAM_TYPED": "yes", "GGML_CACHE": "safe"})
         self.assertNotIn("API_TOKEN", profile["env"])
@@ -220,6 +221,25 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(stored["env"], {"ZVRAM_TYPED": "yes", "GGML_CACHE": "safe"})
         status = self.dispatch({"action": "status"})
         self.assertEqual(status["profiles"][0]["alias"], "tiny")
+
+    def test_ignore_swap_guard_is_opt_in_and_persisted_to_manager(self):
+        result = self.dispatch(self.save_request(ignore_swap_guard=True))
+        self.assertTrue(result["ignore_swap_guard_supported"])
+        self.assertTrue(result["profiles"][0]["ignore_swap_guard"])
+        manager_profile = json.loads(self.manager.profiles_path.read_text())["tiny"]
+        saved_state = json.loads((self.home / bridge._STATE_NAME).read_text())["tiny"]
+        self.assertIs(manager_profile["ignore_swap_guard"], True)
+        self.assertIs(saved_state["ignore_swap_guard"], True)
+
+        self.dispatch(self.save_request())
+        manager_profile = json.loads(self.manager.profiles_path.read_text())["tiny"]
+        self.assertIs(manager_profile["ignore_swap_guard"], False)
+
+    def test_ignore_swap_guard_requires_zvram_042(self):
+        (self.root / "VERSION").write_text("0.4.1\n")
+        self.assertFalse(bridge._supports_ignore_swap_guard(self.root))
+        with self.assertRaisesRegex(ValueError, "requires zVram 0.4.2 or newer"):
+            self.dispatch(self.save_request(ignore_swap_guard=True))
 
     def test_save_rejects_undiscovered_model_and_backend_port(self):
         with self.assertRaisesRegex(ValueError, "discovered GGUF"):

@@ -40,6 +40,7 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
     window.__failAction = '';
     window.__zvram = {
       available: true, installation: '/opt/zvram',
+      ignore_swap_guard_supported: true,
       models: [{ name: 'Test Model.gguf', path: '/models/test.gguf', size: 1234 }],
       profiles: [{ profile: 'nx-test-model-gguf', alias: 'nx-test-model-gguf', model: '/models/test.gguf', port: 8097, context: 4096, compressed: false, running: false, healthy: false, state: 'Stopped' }],
       memory: { ram_available_mib: 8000, swap_available_mib: 12000 }, gpu: [{ card: 'card1', vram_used_mib: 9000, vram_total_mib: 24000 }],
@@ -77,6 +78,16 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
   assert.match(await page.locator('#zvram-model option').textContent(), /1\.2 KiB/);
   assert.equal(await page.locator('#zvram-alias').inputValue(), 'nx-test-model-gguf');
   assert.equal(await page.locator('#zvram-compressed').isChecked(), false);
+  assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), false);
+  assert.equal(await page.locator('#zvram-ignore-swap-guard').isEnabled(), true);
+  await page.evaluate(() => { window.__zvram.ignore_swap_guard_supported = false; });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.locator('#zvram-ignore-swap-guard').isDisabled(), true);
+  assert.match(await page.locator('#zvram-swap-guard-note').textContent(), /requires zVram 0\.4\.2 or newer/i);
+  await page.evaluate(() => { window.__zvram.ignore_swap_guard_supported = true; });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
   assert.equal(await page.locator('#zvram-resident').isDisabled(), true);
   assert.match(await page.locator('#zvram-gpu').textContent(), /card1: 9,000 \/ 24,000 MiB allocated/);
   assert.match(await page.locator('#zvram-memory').textContent(), /RAM available MiB: 8000 · Swap available MiB: 12000/);
@@ -85,7 +96,7 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
   await page.locator('#zvram-profile-form button[type="submit"]').click();
   await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_action'));
   let saved = await page.evaluate(() => window.__calls.find(call => call.command === 'zvram_action').args.request);
-  assert.deepEqual(saved, { action: 'save', profile: 'nx-test', model: '/models/test.gguf', alias: 'nx-test', port: 8097, context: 4096, compressed: false });
+  assert.deepEqual(saved, { action: 'save', profile: 'nx-test', model: '/models/test.gguf', alias: 'nx-test', port: 8097, context: 4096, compressed: false, ignore_swap_guard: false });
 
   assert.match(await page.locator('#zvram-gpu').textContent(), /card1: 9,000 \/ 24,000 MiB allocated/);
   await page.locator('#zvram-compressed').check();
@@ -100,10 +111,12 @@ test('zVram provider stays manual and saves, starts, registers, and stops throug
   await page.locator('#zvram-clean-cache').fill('512');
   await page.locator('#zvram-headroom').fill('1024');
   await page.locator('#zvram-virtual').fill('32');
+  await page.locator('#zvram-ignore-swap-guard').check();
   await page.locator('#zvram-profile-form button[type="submit"]').click();
   await page.waitForFunction(() => window.__calls.filter(call => call.command === 'zvram_action').length === 2);
   saved = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action')[1].args.request);
   assert.equal(saved.compressed, true);
+  assert.equal(saved.ignore_swap_guard, true);
   assert.equal(saved.resident_mib, 10000);
   assert.equal(saved.cold_mib, 4000);
   assert.equal(saved.clean_cache_mib, 512);

@@ -321,3 +321,20 @@ def test_compose_runs_migration_for_all_variants(compose_file):
         "./scripts/migrate_searxng_settings.py:"
         "/tmp/migrate-searxng-settings.py:ro,z" in text
     )
+
+
+def test_ai_engine_defaults_are_loaded_and_enabled():
+    import ast
+
+    settings = yaml.safe_load((ROOT / "config/searxng/settings.yml").read_text())
+    source = ast.parse((ROOT / "services/search/providers.py").read_text())
+    assignment = next(node for node in source.body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "_GENERAL_ENGINES"
+                              for target in node.targets))
+    defaults = ast.literal_eval(assignment.value.args[1]).split(",")
+    loaded = settings["use_default_settings"]["engines"]["keep_only"]
+    enabled = {engine["name"] for engine in settings["engines"] if not engine["disabled"]}
+    assert set(defaults) <= set(loaded) & enabled
+    assert "json" in settings["search"]["formats"]
+    for compose in COMPOSE_FILES:
+        assert "SEARXNG_GENERAL_ENGINES=${SEARXNG_GENERAL_ENGINES-" + ",".join(defaults) + "}" in compose.read_text()

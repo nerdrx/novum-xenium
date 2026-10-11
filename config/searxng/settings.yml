@@ -1,9 +1,58 @@
-use_default_settings: true
-
+# Curated web, news, code and research sources; JSON is used by agent tools.
+# Optional engines remain selectable in Preferences; they failed local smoke checks.
+use_default_settings:
+  engines:
+    keep_only:
+    - bing
+    - mwmbl
+    - wiby
+    - wikipedia
+    - bing news
+    - github
+    - stackoverflow
+    - semantic scholar
+    - crossref
+    - duckduckgo
+    - brave
+    - google
+    - arxiv
+    - google news
+    - startpage
 server:
-  secret_key: "__SEARXNG_SECRET__"
-
+  secret_key: __SEARXNG_SECRET__
 search:
   formats:
-    - html
-    - json
+  - html
+  - json
+engines:
+- name: bing
+  disabled: false
+- name: mwmbl
+  disabled: false
+- name: wiby
+  disabled: false
+- name: wikipedia
+  disabled: false
+- name: bing news
+  disabled: false
+- name: github
+  disabled: false
+- name: stackoverflow
+  disabled: false
+- name: semantic scholar
+  disabled: false
+- name: crossref
+  disabled: false
+  timeout: 8
+- name: duckduckgo
+  disabled: true
+- name: brave
+  disabled: true
+- name: google
+  disabled: true
+- name: arxiv
+  disabled: true
+- name: google news
+  disabled: true
+- name: startpage
+  disabled: true

@@ -42,6 +42,7 @@ services:
       - HF_TOKEN=${HF_TOKEN:-}
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
       - SEARXNG_INSTANCE=http://searxng:8080
+      - SEARXNG_GENERAL_ENGINES=${SEARXNG_GENERAL_ENGINES-bing,mwmbl,wiby,wikipedia}
       - CHROMADB_HOST=chromadb
       - CHROMADB_PORT=8000
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/app.db}

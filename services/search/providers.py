@@ -125,11 +125,9 @@ def _safesearch_for(provider: str) -> Optional[str]:
 
 _NEWS_HINTS = ("news", "nyheter", "headlines", "breaking", "latest", "today", "idag")
 
-# Default general engines (google/duckduckgo/brave/startpage/wikipedia) are
-# routinely rate-limited / CAPTCHA-blocked on this instance and return nothing.
-# Pin engines that actually respond so non-news queries get results without any
-# third-party API fallback. Override via SEARXNG_GENERAL_ENGINES.
-_GENERAL_ENGINES = os.environ.get("SEARXNG_GENERAL_ENGINES", "bing,mojeek,presearch")
+# Keep AI general searches aligned with the bundled SearXNG engine set.
+# Override with SEARXNG_GENERAL_ENGINES; an empty value uses category defaults.
+_GENERAL_ENGINES = os.environ.get("SEARXNG_GENERAL_ENGINES", "bing,mwmbl,wiby,wikipedia")
 
 
 def searxng_search_api(query: str, count: Optional[int] = None, categories: str = "general",

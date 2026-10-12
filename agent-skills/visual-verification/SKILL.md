@@ -1,7 +1,7 @@
 ---
 name: visual-verification
 description: Verify GUI, UI, frontend, website, CSS, and theme changes in a real rendered interface, including behavior and accessibility.
-version: 1.0.0
+version: 1.0.1
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -19,7 +19,8 @@ After implementing or changing a graphical interface, and before claiming it is 
 4. Render at the normal desktop size and a smaller supported window size. Check scrolling, titlebars, dialogs, menus, form labels, and focus outlines. Test the requested theme; do not infer it from a filename or screenshot caption.
 5. Use the main controls with a small real input. Verify the resulting file, server response, or saved state through an independent observation. Check failure and cancellation behavior. Printed claims, file listings, fake progress, and a successful build alone do not prove the user action works.
 6. Inspect the screenshot when image viewing is available. If the model cannot view images, inspect DOM and computed styles and provide the screenshot for human review; report that visual inspection remains unverified. Never pretend an unseen screenshot was reviewed.
-7. Repair the highest-impact issue, then rerun the failed path. State the tested behavior and remaining limitations clearly.
+7. Critique the actual rendered screen: does the first visual emphasis identify the main task, is the reading order clear, and can required inputs and the primary action be found without unnecessary scrolling? Compare spacing, typography, icon treatment, and repeated controls with the design guide. Record concrete observed defects and corrections rather than saying the screen looks modern.
+8. Repair the highest-impact issue, then rerun the failed path. State the tested behavior and remaining limitations clearly. Share the real application screenshot when possible, with its tested viewport and any unverified interactions; do not replace it with an AI-generated mockup.
 
 ## Pitfalls
 - Clicking a mocked handler and treating its alert as a successful operation.

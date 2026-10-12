@@ -2929,6 +2929,9 @@ def _build_system_prompt(
     if not suppress_local_context and not suppress_skills and "manage_skills" not in (disabled_tools or []):
         try:
             last_user = _extract_last_user_message(messages)
+            _skill_query = str(
+                _classify_agent_request(messages, last_user).get("retrieval_query") or last_user
+            ).strip()
             # Respect the user's skills-enabled toggle (mirrors memory_enabled).
             # When off, don't inject relevant skills into the prompt.
             _skills_on = True
@@ -2939,7 +2942,7 @@ def _build_system_prompt(
                 _skills_on = _prefs.get("skills_enabled", True)
             except Exception:
                 pass
-            if last_user and _skills_on:
+            if _skill_query and _skills_on:
                 from services.memory.skills import SkillsManager
                 from src.constants import DATA_DIR
                 sm = SkillsManager(DATA_DIR)
@@ -2969,7 +2972,7 @@ def _build_system_prompt(
                                    if all(t in allowed_tools for t in (s.get("requires_toolsets") or []))
                                    and not any(t in allowed_tools for t in (s.get("fallback_for_toolsets") or []))]
                 relevant_skills = sm.get_relevant_skills(
-                    last_user,
+                    _skill_query,
                     skills=eligible_skills,
                     threshold=0.25,
                     max_items=_skill_max_injected,

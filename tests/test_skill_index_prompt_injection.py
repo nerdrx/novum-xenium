@@ -242,6 +242,82 @@ def test_disabled_skill_tool_has_no_skill_discovery_context(tmp_path, monkeypatc
     assert not any("inbox-bomb" in str(m.get("content") or "") for m in output)
 
 
+def _gui_task_messages(latest, *, trusted_anchor=True):
+    return [
+        {
+            "role": "system",
+            "content": "[Conversation summary]\nEarlier context compacted.",
+            "metadata": {
+                "compacted": True,
+                "agent_task_anchor": {
+                    "trusted": trusted_anchor,
+                    "content": "Build a GUI for an FFmpeg wrapper with input, output, options, and status.",
+                },
+            },
+        },
+        {"role": "user", "content": latest},
+    ]
+
+
+def _gui_skill_suggestions(output):
+    skills_message = next(
+        (m.get("content", "") for m in output
+         if m.get("role") == "user" and (m.get("metadata") or {}).get("trusted") is False
+         and "Source: skills" in (m.get("content") or "")),
+        "",
+    )
+    marker = "## Suggested skills for this request"
+    return skills_message.split(marker, 1)[1] if marker in skills_message else ""
+
+
+def _seed_gui_skill(data_dir):
+    from services.memory.skills import SkillsManager
+    sm = SkillsManager(str(data_dir))
+    sm.add_skill(
+        name="ffmpeg-gui-layout",
+        title="FFmpeg GUI layout",
+        description="Design a clear GUI layout for an FFmpeg desktop wrapper",
+        when_to_use="Build a GUI for an FFmpeg wrapper with input output options and status",
+        tags=["gui", "ffmpeg", "desktop"],
+        procedure=["Use a compact input and output layout."],
+        status="published",
+        owner="alice",
+    )
+
+
+def test_skill_suggestions_keep_gui_task_after_name_reply(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    _seed_gui_skill(data_dir)
+    _patch_prefs(monkeypatch, data_dir)
+    from src.agent_loop import _build_system_prompt
+
+    output, _ = _build_system_prompt(
+        messages=_gui_task_messages("VioletStream"), model="test-model",
+        active_document=None, mcp_mgr=None, owner="alice",
+    )
+
+    assert "ffmpeg-gui-layout" in _gui_skill_suggestions(output)
+
+
+def test_skill_suggestions_clear_for_unrelated_task_or_untrusted_anchor(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    _seed_gui_skill(data_dir)
+    _patch_prefs(monkeypatch, data_dir)
+    from src.agent_loop import _build_system_prompt
+
+    unrelated, _ = _build_system_prompt(
+        messages=_gui_task_messages("What is the capital of France?"), model="test-model",
+        active_document=None, mcp_mgr=None, owner="alice",
+    )
+    untrusted, _ = _build_system_prompt(
+        messages=_gui_task_messages("VioletStream", trusted_anchor=False), model="test-model",
+        active_document=None, mcp_mgr=None, owner="alice",
+    )
+
+    assert "ffmpeg-gui-layout" not in _gui_skill_suggestions(unrelated)
+    assert "ffmpeg-gui-layout" not in _gui_skill_suggestions(untrusted)
+
+
 def test_skill_prompt_index_is_bounded_and_searchable():
     from services.memory.skills import format_skill_index
     skills = [{"name": f"skill-{i}", "description": "long description " * 100,

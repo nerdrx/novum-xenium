@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import subprocess
 import sys
+import threading
+import time
 import unittest
 from contextlib import nullcontext, redirect_stdout
 from unittest import mock
@@ -107,6 +109,7 @@ class BridgeTests(unittest.TestCase):
                  '--host', '127.0.0.1', '--port', str(options['port']), '--ctx-size', str(options['context'])], {})
 
     def start_router(self, **options):
+        options.setdefault('mode', 'zvram')
         with mock.patch.object(bridge, '_router_supported', return_value=True), \
                 mock.patch.object(bridge, '_port_is_free', return_value=True), \
                 mock.patch.object(bridge, '_supports_live_control', return_value=True), \
@@ -132,6 +135,76 @@ class BridgeTests(unittest.TestCase):
         preset = self.home / 'router-models.ini'
         self.assertEqual(preset.stat().st_mode & 0o777, 0o600)
         self.assertIn(f'[nx-model-0]\nalias = tiny\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
+
+    def test_regular_router_uses_native_server_and_persists_autostart(self):
+        with mock.patch.object(bridge, '_router_supported', return_value=True), \
+                mock.patch.object(bridge, '_port_is_free', return_value=True), \
+                mock.patch.object(bridge, '_supports_live_control', return_value=True), \
+                mock.patch.object(self.model_helper, 'build_server_command',
+                                  return_value=(['/usr/bin/llama-server', '--model', str(self.model),
+                                                 '--alias', 'local', '--host', '127.0.0.1',
+                                                 '--port', '8097'], {'ZVRAM_BAD': 'drop', 'LLAMA_OK': 'keep'})):
+            result = self.dispatch({'action': 'router_start', 'mode': 'regular'})
+        stored = json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']
+        self.assertEqual(stored['mode'], 'native')
+        self.assertEqual(stored['command'][0], '/usr/bin/llama-server')
+        self.assertNotIn('zvram', stored['command'])
+        self.assertEqual(stored['env'], {'LLAMA_CACHE': str(self.home / 'router-cache')})
+        self.assertEqual(result['router']['mode'], 'regular')
+        self.assertTrue(result['router']['auto_start'])
+
+    def test_configure_while_stopped_persists_mode_and_autostart_without_starting(self):
+        with mock.patch.object(bridge, '_router_supported', return_value=True), \
+                mock.patch.object(bridge, '_port_is_free', return_value=True), \
+                mock.patch.object(bridge, '_supports_live_control', return_value=True):
+            result = self.dispatch({'action': 'router_configure', 'mode': 'regular',
+                                    'auto_start': False})
+        self.assertTrue(result['configured'])
+        self.assertEqual(result['router']['mode'], 'regular')
+        self.assertFalse(result['router']['auto_start'])
+        self.assertEqual(self.manager.starts, [])
+
+    def test_partial_configure_preserves_saved_router_tuning(self):
+        with mock.patch.object(bridge, '_router_supported', return_value=True), \
+                mock.patch.object(bridge, '_port_is_free', return_value=True), \
+                mock.patch.object(bridge, '_supports_live_control', return_value=True), \
+                mock.patch.object(self.model_helper, 'build_server_command',
+                                  side_effect=self.router_command):
+            self.dispatch({'action': 'router_configure', 'mode': 'zvram',
+                           'port': 9081, 'context': 8192, 'auto_start': False})
+            result = self.dispatch({'action': 'router_configure', 'mode': 'regular'})
+        self.assertEqual(result['router']['port'], 9081)
+        self.assertEqual(result['router']['context'], 8192)
+        self.assertEqual(result['router']['mode'], 'regular')
+        self.assertFalse(result['router']['auto_start'])
+
+    def test_running_router_configure_waits_for_owned_worker_exit(self):
+        class AsyncStopManager(Manager):
+            def stop(self, name):
+                self.stops.append(name)
+                self.job_path(name).write_text(json.dumps({'owned': True}))
+
+                def finish_stop():
+                    time.sleep(0.15)
+                    self.job_path(name).unlink(missing_ok=True)
+
+                threading.Thread(target=finish_stop, daemon=True).start()
+                return True
+
+        manager = AsyncStopManager(self.home)
+        with mock.patch.object(bridge, '_router_supported', return_value=True), \
+                mock.patch.object(bridge, '_port_is_free', return_value=True), \
+                mock.patch.object(bridge, '_supports_live_control', return_value=True), \
+                mock.patch.object(bridge, '_owned_profile_running', side_effect=[True, False]), \
+                mock.patch.object(self.model_helper, 'build_server_command',
+                                  return_value=(['llama-server', '--model', str(self.model),
+                                                 '--alias', 'local'], {})):
+            result = bridge.dispatch(self.root, self.checkout, self.base / 'cookie', 8000,
+                                     {'action': 'router_configure', 'mode': 'regular',
+                                      'auto_start': True}, helpers=self.helpers, manager=manager)
+        self.assertTrue(result['configured'])
+        self.assertEqual(manager.stops, ['nx-zvram-router'])
+        self.assertEqual(manager.starts, ['nx-zvram-router'])
 
     def test_router_start_validates_capability_port_and_name(self):
         with mock.patch.object(bridge, '_router_supported', return_value=False):
@@ -180,6 +253,8 @@ class BridgeTests(unittest.TestCase):
             self.dispatch({'action': 'router_register'})
         self.dispatch({'action': 'router_stop'})
         self.assertEqual(self.manager.stops, ['nx-zvram-router'])
+        status = self.dispatch({'action': 'status'})
+        self.assertFalse(status['router']['auto_start'])
 
     def test_router_starting_worker_is_not_reported_as_stopped_or_replaced(self):
         self.start_router()
@@ -315,6 +390,8 @@ class BridgeTests(unittest.TestCase):
     def test_request_rejects_unknown_fields(self):
         with self.assertRaisesRegex(ValueError, "unsupported fields"):
             bridge._request_object({"action": "status", "command": ["evil"]})
+        self.assertEqual(bridge._request_object({'action': 'router_start', 'port': None}),
+                         {'action': 'router_start'})
 
     def test_generated_profile_keeps_only_model_helper_overrides(self):
         profile = bridge._build_manager_profile(ModelHelper(), "demo", {

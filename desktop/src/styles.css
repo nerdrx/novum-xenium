@@ -81,15 +81,21 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
 .notice-error { color: #ffdce0; border-color: #773b47; background: #251118; }
 .notice-info { color: var(--ink); border-color: var(--line); background: var(--surface-raised); }
 .privacy-note { margin: 19px 2px 0; color: var(--faint); font-size: 11px; }
-.zvram-panel { grid-column: 1 / -1; padding: 0; overflow: hidden; }
-.zvram-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 22px; cursor: pointer; list-style: none; }
-.zvram-summary::-webkit-details-marker { display: none; }
-.zvram-summary::after { content: "+"; color: var(--violet); font-size: 20px; }
-.zvram-panel[open] > .zvram-summary::after { content: "−"; }
+.zvram-panel { grid-column: 1 / -1; overflow: hidden; }
+.zvram-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 12px; }
 .zvram-summary .eyebrow { display: block; margin-bottom: 4px; }
 .zvram-summary strong { font-size: 15px; }
 .zvram-summary-note, .zvram-installation { color: var(--muted); font-size: 11px; }
-.zvram-panel > :not(summary) { margin-left: 22px; margin-right: 22px; }
+.zvram-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.zvram-mode label { display: flex; align-items: center; gap: 10px; min-height: 60px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--ground); cursor: pointer; }
+.zvram-mode label:has(input:checked) { border-color: var(--violet); background: var(--surface-raised); }
+.zvram-mode input { accent-color: var(--violet); }
+.zvram-mode strong, .zvram-mode small { display: block; }
+.zvram-mode strong { font-size: 12px; }
+.zvram-mode small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.zvram-advanced { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 15px; }
+.zvram-advanced > summary { color: var(--muted); cursor: pointer; font-size: 12px; }
+.zvram-advanced > .zvram-toolbar { margin-top: 12px; }
 .zvram-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 12px; }
 .zvram-installation { min-width: 0; overflow-wrap: anywhere; }
 .zvram-error { padding: 10px 12px; border: 1px solid #773b47; color: #ffdce0; background: #251118; font-size: 12px; }
@@ -144,9 +150,8 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
   .form-footer { align-items: flex-start; flex-direction: column; }
   .form-footer .button { width: 100%; }
   .field-port { max-width: none; }
-  .zvram-summary { padding: 16px 18px; }
+  .zvram-summary { padding-bottom: 12px; }
   .zvram-summary-note { display: none; }
-  .zvram-panel > :not(summary) { margin-left: 18px; margin-right: 18px; }
-  .zvram-form-grid, .zvram-hardware { grid-template-columns: minmax(0, 1fr); }
+  .zvram-form-grid, .zvram-hardware, .zvram-mode { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; } }

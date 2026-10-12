@@ -54,7 +54,7 @@ Copy an image to another app, save it with a native file dialog or open it in yo
 
 Install a [desktop release](https://github.com/nerdrx/novum-xenium/releases) directly or through [NX Hub](https://github.com/nerdrx/nx-hub). The current app adopts an existing Compose checkout; it does not install Docker, WSL or Git for you.
 
-On Linux, the manager can also discover existing GGUF models and launch a separate [zVram provider](docs/desktop.md#zvram-model-providers-linux). Save a profile, start it when needed, then register the healthy endpoint. Paging is experimental and opt-in. Ollama stays available.
+On Linux, the [local model provider](docs/desktop.md#local-model-provider-linux) starts with Novum and loads your existing GGUF models on demand. Choose **Regular** for plain llama-server or **zVram** for memory management. Connection to chat is automatic once signed in; port and paging controls live under Advanced settings. Ollama stays available.
 
 Linux is tested locally. Windows builds run in CI; Windows runtime testing is still needed. [Desktop setup and update details](docs/desktop.md).
 

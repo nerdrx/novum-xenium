@@ -2296,9 +2296,10 @@ def test_manual_refresh_timeout_keeps_cached_models_and_warns(monkeypatch):
     assert "kept cached models" in response.headers["X-Model-Refresh-Warning"]
 
 
-def test_zvram_router_picker_uses_public_aliases_after_checkbox_changes():
+@pytest.mark.parametrize("provider_name", ["Local models", "zVram · Local models"])
+def test_zvram_router_picker_uses_public_aliases_after_checkbox_changes(provider_name):
     ep = _make_endpoint(
-        name="zVram · Local models",
+        name=provider_name,
         base_url="http://127.0.0.1:8097/v1",
         endpoint_kind="local",
         cached_models=json.dumps(["nx-model-0", "nx-model-1"]),

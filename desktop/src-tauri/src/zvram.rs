@@ -24,38 +24,43 @@ enum ZvramAction {
     RouterStart,
     RouterStop,
     RouterRegister,
+    RouterConfigure,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(super) struct ZvramRequest {
     action: ZvramAction,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     alias: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     context: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     compressed: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     resident_mib: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     cold_mib: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     clean_cache_mib: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     headroom_mib: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     virtual_gib: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     ignore_swap_guard: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     live_control: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_start: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -364,6 +369,96 @@ pub(super) async fn zvram_action(
     .map_err(|e| format!("zVram action worker failed: {e}"))?
 }
 
+pub(super) fn monitor_autostart(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut start_attempts = 0u8;
+        let mut start_succeeded = false;
+        let mut registered = false;
+        let mut registration_ticks = 0u8;
+        let mut last_mode: Option<String> = None;
+        let mut first_attempt = true;
+        loop {
+            if !first_attempt {
+                std::thread::sleep(Duration::from_secs(10));
+            }
+            first_attempt = false;
+            let Some(state) = app.try_state::<NativeState>() else { break };
+            if state.quit_pending.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            let Ok(_guard) = state.zvram_operation.lock() else { continue };
+            let Ok(install_path) = zvram_config_path(&app) else { continue };
+            let backend_path = match config_path(&app) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            let backend = match load_config_at(&backend_path) {
+                Ok(Some(config)) => config,
+                _ => continue,
+            };
+            let backend_checkout = Path::new(&backend.checkout);
+            let Some(installation) = (match read_or_detect_installation(&install_path, || {
+                detect_installation(Some(backend_checkout))
+            }) {
+                Ok(installation) => installation,
+                Err(_) => continue,
+            }) else {
+                continue;
+            };
+            let status = match run_bridge(&app, &installation, &ZvramRequest::status()) {
+                Ok(status) if status["available"] == true => status,
+                _ => continue,
+            };
+            let router = &status["router"];
+            let mode = router["mode"].as_str().unwrap_or("regular").to_string();
+            if last_mode.as_deref().is_some_and(|previous| previous != mode) {
+                registered = false;
+                registration_ticks = 0;
+                start_attempts = 0;
+                start_succeeded = false;
+            }
+            last_mode = Some(mode.clone());
+            let router_running = router["running"] == true;
+            if !router_running {
+                registered = false;
+                registration_ticks = 0;
+            }
+            let router_state = router["state"].as_str().unwrap_or("stopped");
+            if router["auto_start"] != false
+                && !router_running
+                && !matches!(router_state, "starting" | "running")
+                && !start_succeeded
+                && start_attempts < 6
+            {
+                let start = ZvramRequest {
+                    action: ZvramAction::RouterStart,
+                    mode: Some(mode),
+                    auto_start: Some(true),
+                    ..ZvramRequest::status()
+                };
+                start_succeeded = run_bridge(&app, &installation, &start).is_ok();
+                start_attempts += 1;
+            }
+            if router_running && registered {
+                registration_ticks = registration_ticks.saturating_add(1);
+                if registration_ticks >= 12 {
+                    registered = false;
+                    registration_ticks = 0;
+                }
+            }
+            if router_running && !registered && router["auto_start"] != false {
+                let register = ZvramRequest {
+                    action: ZvramAction::RouterRegister,
+                    ..ZvramRequest::status()
+                };
+                if run_bridge(&app, &installation, &register).is_ok() {
+                    registered = true;
+                }
+            }
+        }
+    });
+}
+
 impl ZvramRequest {
     fn status() -> Self {
         Self {
@@ -381,6 +476,8 @@ impl ZvramRequest {
             virtual_gib: None,
             ignore_swap_guard: None,
             live_control: None,
+            mode: None,
+            auto_start: None,
         }
     }
 }
@@ -445,6 +542,25 @@ mod tests {
         assert!(serde_json::from_value::<ZvramRequest>(json!({
             "action": "router_start",
             "ignore_swap_guard": "yes"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn router_mode_configuration_is_typed() {
+        let request: ZvramRequest = serde_json::from_value(json!({
+            "action": "router_configure",
+            "mode": "regular",
+            "auto_start": false
+        }))
+        .unwrap();
+        let encoded = serde_json::to_value(request).unwrap();
+        assert_eq!(encoded["mode"], "regular");
+        assert_eq!(encoded["auto_start"], false);
+        assert!(encoded.get("port").is_none());
+        assert!(serde_json::from_value::<ZvramRequest>(json!({
+            "action": "router_configure",
+            "auto_start": "yes"
         }))
         .is_err());
     }

@@ -101,29 +101,29 @@ Settings → Communications → Reminders has a desktop-notifications switch and
 Notifications use a small native route restricted to the configured local backend, with bounded text and a one-per-second limit. The workbench still has no container-management IPC access. Notification clicks do not currently navigate to the related chat. Linux delivery was checked against a private D-Bus notification service; Windows runtime behavior is not yet verified.
 
 
-## zVram model providers (Linux)
+## Local model provider (Linux)
 
-Open **zVram model server** in the backend manager. It finds installed zVram
-through PATH or the NX Hub launcher in `~/.local/bin`, and remembers the location.
-A valid saved selection takes priority. If nothing is found, use **Choose installation**
-to select your trusted [zVram checkout](https://github.com/nerdrx/zVram). It needs the model bridge and
-manager from the `feat/xenium-vram-manager` branch, Python 3, and a built Vulkan
-`llama-server`. Novum does not download weights or build zVram automatically.
+The manager includes a **Local model provider** for llama models. Choose
+**Regular** to run llama-server directly, or **zVram** to enable experimental
+memory paging. Both modes use the local model picker in chat. The provider starts
+automatically when Novum opens by default; turn off **Start provider when Novum
+opens** to keep it stopped on later launches. **Apply settings** saves changes
+without starting a stopped provider. Changes to a running provider restart that
+managed provider.
 
-Choose one of the GGUF models discovered in the configured workspace's Ollama
-store, set an alias, port and context, then save its profile. **Start** launches
-only that profile. Refresh to see readiness, then **Register provider** adds it
-to your signed-in workspace's model picker. Login in the workspace first.
-Registration requires a healthy loopback server advertising the configured
-alias. The backend must be able to reach the host's loopback endpoint; a
-container with a separate network namespace cannot use `127.0.0.1` on the host.
+Both modes currently use the compatible zVram model helper to discover models
+and connect the provider to chat. The manager finds an installation through
+PATH or the NX Hub launcher in `~/.local/bin`. If needed, open **Advanced
+settings** and choose your trusted [zVram checkout](https://github.com/nerdrx/zVram).
+It needs the model bridge and manager from the `feat/xenium-vram-manager`
+branch, Python 3, and a built Vulkan `llama-server`. Novum does not download
+weights or build zVram automatically. Models discovered in the configured
+workspace's Ollama store appear in chat after the provider is ready.
 
-Paging is an explicit experimental option. Its MiB settings describe eligible
-allocation budgets, not reserved physical VRAM. Validate each model/context/GPU
-combination. The supervisor retains its RAM and swap guards and **Stop** acts
-only on Novum's managed profile. Profiles do not start on app launch, and closing
-Novum does not stop the separate managed server. Stop it before changing a
-running profile. The standalone zVram manager remains a separate app.
+Advanced settings retain the port, context size, BP16 option and memory budgets.
+Paging budgets describe eligible allocation limits, not reserved physical VRAM.
+Validate each model/context/GPU combination. **Stop** applies only to Novum's
+managed provider; the standalone zVram manager remains a separate app.
 
 These host controls require the Linux desktop app. Browser-only clients and
 other platforms can use an already-running compatible provider through the

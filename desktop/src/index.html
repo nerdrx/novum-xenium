@@ -97,19 +97,19 @@
             </div>
           </section>
 
-          <details class="panel zvram-panel" id="zvram-panel">
-            <summary class="zvram-summary">
-              <span><span class="eyebrow">Experimental provider</span><strong>zVram model router</strong></span>
-              <span class="zvram-summary-note">Separate from Ollama · one model loaded at a time</span>
-            </summary>
-            <p class="panel-description">Start one local Vulkan server for your GGUF library. Choose a model in chat; llama-server loads that model on demand. This does not change Ollama or your default model.</p>
-            <div class="zvram-toolbar">
-              <button class="button button-secondary" type="button" id="zvram-choose">Choose installation</button>
-              <button class="button button-quiet button-small" type="button" id="zvram-refresh">Refresh</button>
-              <span id="zvram-installation" class="zvram-installation">No installation selected.</span>
+          <section class="panel zvram-panel" id="zvram-panel" aria-labelledby="zvram-heading">
+            <div class="zvram-summary">
+              <span><span class="eyebrow">Local AI</span><strong id="zvram-heading">Local model provider</strong></span>
+              <span class="zvram-summary-note">Runs on this computer · available in chat</span>
             </div>
+            <p class="panel-description">Use your local llama models in chat. Regular mode runs llama-server directly; zVram adds experimental memory paging.</p>
+            <div class="zvram-mode" role="radiogroup" aria-label="Local provider mode">
+              <label><input type="radio" name="zvram-mode" value="regular" id="zvram-mode-regular"><span><strong>Regular</strong><small>Direct llama-server</small></span></label>
+              <label><input type="radio" name="zvram-mode" value="zvram" id="zvram-mode-zvram"><span><strong>zVram</strong><small>Memory paging</small></span></label>
+            </div>
+            <label class="zvram-optin"><input id="zvram-auto-start" type="checkbox" checked><span>Start provider when Novum opens</span></label>
             <p id="zvram-error" class="zvram-error" role="alert" hidden></p>
-            <p id="zvram-status" class="zvram-status" role="status" aria-live="polite">Open this panel to find zVram and inspect local models.</p>
+            <p id="zvram-status" class="zvram-status" role="status" aria-live="polite">Checking your local provider…</p>
             <div class="zvram-hardware" id="zvram-hardware" hidden>
               <div><span>GPU</span><strong id="zvram-gpu">—</strong></div>
               <div><span>Memory status</span><strong id="zvram-memory">—</strong></div>
@@ -120,12 +120,18 @@
               <span id="zvram-router-log" hidden></span>
             </section>
             <form id="zvram-router-form" class="zvram-form">
-              <h3>Provider settings</h3>
+              <details class="zvram-advanced" id="zvram-advanced">
+                <summary>Advanced settings</summary>
+                <div class="zvram-toolbar">
+                  <button class="button button-secondary" type="button" id="zvram-choose">Choose installation</button>
+                  <button class="button button-quiet button-small" type="button" id="zvram-refresh">Refresh</button>
+                  <span id="zvram-installation" class="zvram-installation">Checking installation…</span>
+                </div>
               <div class="zvram-form-grid">
                 <label class="field field-port"><span>Port</span><input id="zvram-port" type="number" min="1" max="65535" value="8097" required></label>
                 <label class="field"><span>Context size</span><input id="zvram-context" type="number" min="256" step="256" value="4096" required></label>
               </div>
-              <label class="zvram-optin"><input id="zvram-compressed" type="checkbox"><span>Enable experimental BP16 paging</span></label>
+              <label class="zvram-optin"><input id="zvram-compressed" type="checkbox"><span>Enable BP16 paging</span></label>
               <label class="zvram-optin"><input id="zvram-live-control" type="checkbox" checked><span>Enable live VRAM management</span></label>
               <p class="zvram-budget-note" id="zvram-live-control-note">Live VRAM management can snapshot allocations during idle periods. Turn it off to preserve spill performance.</p>
               <label class="zvram-optin"><input id="zvram-ignore-swap-guard" type="checkbox"><span>Ignore system swap-growth guard</span></label>
@@ -141,8 +147,10 @@
                   <label class="field"><span>Virtual heap (GiB)</span><input id="zvram-virtual" type="number" min="1" value="40" disabled></label>
                 </div>
               </details>
+              </details>
               <div class="zvram-provider-actions">
-                <button class="button button-primary" type="submit" id="zvram-start" disabled>Start provider</button>
+                <button class="button button-secondary" type="submit" id="zvram-apply" disabled>Apply settings</button>
+                <button class="button button-primary" type="button" id="zvram-start" disabled>Start provider</button>
                 <button class="button button-secondary" type="button" id="zvram-connect" disabled>Connect provider</button>
                 <button class="button button-secondary" type="button" id="zvram-stop" disabled>Stop provider</button>
               </div>
@@ -155,7 +163,7 @@
               <summary>Legacy saved model profiles</summary>
               <div id="zvram-legacy-list"><p class="panel-description">No legacy profiles.</p></div>
             </details>
-          </details>
+          </section>
         </div>
         <p class="privacy-note">This manager runs locally. It does not store credentials.</p>
       </main>

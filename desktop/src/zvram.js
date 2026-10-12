@@ -9,6 +9,8 @@ const elements = {
   connect: $('#zvram-connect'), stop: $('#zvram-stop'), legacyList: $('#zvram-legacy-list'),
   routerState: $('#zvram-router-state-value'), routerModels: $('#zvram-router-models'),
   routerLog: $('#zvram-router-log'), modelList: $('#zvram-model-list'), budgetDetails: $('#zvram-budget-details'),
+  apply: $('#zvram-apply'), modeRegular: $('#zvram-mode-regular'), modeZvram: $('#zvram-mode-zvram'),
+  autoStart: $('#zvram-auto-start'),
 };
 const budgetInputs = ['resident', 'cold', 'clean-cache', 'headroom', 'virtual'].map(id => $(`#zvram-${id}`));
 let invoke = null;
@@ -17,7 +19,9 @@ let available = false;
 let routerSupported = false;
 let ignoreSwapGuardSupported = false;
 let liveControlSupported = false;
+let liveControlTouched = false;
 let router = {};
+let configurationDirty = false;
 let models = [];
 let legacyProfiles = [];
 
@@ -32,20 +36,25 @@ function setStatus(message) {
 
 function updateControls() {
   const usable = !!invoke && available && !busy;
+  const zvramSelected = elements.modeZvram.checked;
   const running = router.running === true;
   const active = running || ['starting', 'running'].includes(router.state);
   const portConflict = legacyProfiles.some(profile => profile.running === true && Number(profile.port) === Number(elements.port.value));
   elements.choose.disabled = !invoke || busy;
   elements.refresh.disabled = !invoke || busy;
   elements.start.disabled = !usable || !routerSupported || active || portConflict;
+  elements.apply.disabled = !usable || !routerSupported;
+  elements.modeRegular.disabled = !usable;
+  elements.modeZvram.disabled = !usable;
+  elements.autoStart.disabled = !invoke || busy;
   elements.connect.disabled = !usable || !routerSupported || router.healthy !== true;
   elements.stop.disabled = !usable || !routerSupported || !active;
   elements.port.disabled = !usable || active;
   elements.context.disabled = !usable || active;
-  elements.compressed.disabled = !usable || active;
-  elements.liveControl.disabled = !usable || active || !liveControlSupported || elements.compressed.checked;
-  elements.ignoreSwapGuard.disabled = !usable || active || !ignoreSwapGuardSupported;
-  budgetInputs.forEach(input => { input.disabled = !usable || active || !elements.compressed.checked; });
+  elements.compressed.disabled = !usable || active || !zvramSelected;
+  elements.liveControl.disabled = !usable || active || !zvramSelected || !liveControlSupported || elements.compressed.checked;
+  elements.ignoreSwapGuard.disabled = !usable || active || !zvramSelected || !ignoreSwapGuardSupported;
+  budgetInputs.forEach(input => { input.disabled = !usable || active || !zvramSelected || !elements.compressed.checked; });
   for (const button of elements.legacyList.querySelectorAll('button[data-legacy-profile]')) {
     const profile = legacyProfiles.find(item => item.name === button.dataset.legacyProfile);
     button.disabled = !usable || !profile || profile.running !== true;
@@ -97,6 +106,10 @@ function renderStatus(result) {
   const previouslySupported = liveControlSupported;
   liveControlSupported = result.live_control_supported === true;
   router = result.router && typeof result.router === 'object' ? result.router : {};
+  configurationDirty = false;
+  elements.modeRegular.checked = router.mode !== 'zvram';
+  elements.modeZvram.checked = router.mode === 'zvram';
+  elements.autoStart.checked = typeof router.auto_start === 'boolean' ? router.auto_start : true;
   if (typeof router.live_control === 'boolean') elements.liveControl.checked = router.live_control;
   else if (!liveControlSupported) elements.liveControl.checked = false;
   else if (!previouslySupported) elements.liveControl.checked = true;
@@ -117,7 +130,8 @@ function renderStatus(result) {
   elements.routerState.textContent = router.healthy === true ? 'Provider ready'
     : router.state === 'starting' ? 'Starting provider'
       : router.running === true ? 'Server running · checking health'
-        : 'Server stopped';
+        : ['failed', 'exited'].includes(router.state) ? 'Provider failed'
+        : 'Provider stopped';
   const loadedModels = Array.isArray(router.models)
     ? router.models.filter(model => typeof model === 'string' || /^(loaded|loading)$/i.test(String(model?.status || '')))
       .map(model => typeof model === 'string' ? model : model?.id || model?.model).filter(Boolean)
@@ -129,13 +143,14 @@ function renderStatus(result) {
   renderLegacyProfiles();
 
   if (result.message) setStatus(String(result.message));
-  else if (!available) setStatus('Choose a zVram installation or check its status.');
-  else if (!routerSupported) setStatus('This llama-server build lacks model-router support. Install a llama-server build with --models-preset, --models-max, and --models-autoload, then refresh.');
-  else if (router.healthy) setStatus('Provider is ready. Choose a registered local model in chat.');
+  else if (!available) setStatus('Choose a zVram installation in Advanced settings to use local models.');
+  else if (!routerSupported) setStatus('This llama-server build needs model-router support. Check Advanced settings.');
+  else if (router.healthy) setStatus('Your local provider is ready. Choose a local model in chat.');
   else if (router.state === 'starting') setStatus('Provider is starting.');
-  else if (router.running) setStatus('Provider is running; waiting for health.');
+  else if (router.running) setStatus('Provider is running; checking that it is ready.');
+  else if (['failed', 'exited'].includes(router.state)) setStatus(`Provider failed to start. ${router.lastlog || 'Check Advanced settings and try again.'}`);
   else if (conflict) setStatus(`Legacy server ${conflict.alias || conflict.name} is using port ${conflict.port}. Stop it below or choose another port.`);
-  else setStatus(`${models.length} local GGUF model${models.length === 1 ? '' : 's'} found. Start the provider to use them in chat.`);
+  else setStatus(`Provider is ready to start. ${models.length} local model${models.length === 1 ? '' : 's'} found.`);
   updateControls();
 }
 
@@ -200,10 +215,11 @@ function buildRouterRequest() {
     throw new Error('Enter a valid port and context size.');
   }
   const request = {
-    action: 'router_start', port, context,
-    compressed: elements.compressed.checked,
-    live_control: elements.compressed.checked || elements.liveControl.checked,
-    ignore_swap_guard: elements.ignoreSwapGuard.checked,
+    action: 'router_start', mode: elements.modeZvram.checked ? 'zvram' : 'regular',
+    auto_start: elements.autoStart.checked, port, context,
+    compressed: elements.modeZvram.checked && elements.compressed.checked,
+    live_control: elements.modeZvram.checked && (elements.compressed.checked || elements.liveControl.checked),
+    ignore_swap_guard: elements.modeZvram.checked && elements.ignoreSwapGuard.checked,
   };
   if (request.compressed) {
     const values = budgetInputs.map(input => Number(input.value));
@@ -213,6 +229,12 @@ function buildRouterRequest() {
     [request.resident_mib, request.cold_mib, request.clean_cache_mib, request.headroom_mib, request.virtual_gib] = values;
   }
   return request;
+}
+
+async function configureRouter() {
+  const request = buildRouterRequest();
+  request.action = 'router_configure';
+  await invoke('zvram_action', { request });
 }
 
 async function waitUntilHealthy() {
@@ -234,7 +256,19 @@ elements.compressed.addEventListener('change', () => {
   elements.budgetDetails.classList.toggle('is-opted-in', elements.compressed.checked);
   updateControls();
 });
-elements.liveControl.addEventListener('change', updateControls);
+elements.liveControl.addEventListener('change', () => {
+  liveControlTouched = true;
+  configurationDirty = true;
+  updateControls();
+});
+elements.modeZvram.addEventListener('change', () => {
+  if (liveControlSupported && !liveControlTouched) elements.liveControl.checked = true;
+  configurationDirty = true;
+  updateControls();
+});
+for (const input of [elements.modeRegular, elements.autoStart, elements.port, elements.context, elements.compressed, elements.ignoreSwapGuard, ...budgetInputs]) {
+  input.addEventListener('change', () => { configurationDirty = true; updateControls(); });
+}
 elements.choose.addEventListener('click', async () => {
   try {
     const result = await perform('Choose installation', () => invoke('zvram_choose_installation'));
@@ -246,10 +280,6 @@ elements.choose.addEventListener('click', async () => {
 });
 elements.refresh.addEventListener('click', () => { refreshStatus().catch(() => {}); });
 elements.port.addEventListener('input', updateControls);
-$('#zvram-panel').addEventListener('toggle', () => {
-  if ($('#zvram-panel').open && invoke && !busy) refreshStatus().catch(() => {});
-});
-
 elements.form.addEventListener('submit', async event => {
   event.preventDefault();
   let request;
@@ -261,12 +291,27 @@ elements.form.addEventListener('submit', async event => {
   }
   if (!available || !routerSupported) { showError('Choose a compatible zVram installation first.'); return; }
   try {
+    await perform(router.running ? 'Apply settings' : 'Save settings', async () => {
+      await configureRouter();
+      if (router.running) {
+        await waitUntilHealthy();
+        await invoke('zvram_action', { request: { action: 'router_register' } });
+      }
+      await loadStatus();
+      setStatus(router.running ? 'Settings applied. Your provider is ready.' : 'Settings saved. Start the provider when you are ready.');
+    });
+  } catch (_) { /* Error is already visible. */ }
+});
+
+elements.start.addEventListener('click', async () => {
+  try {
     await perform('Start provider', async () => {
-      await invoke('zvram_action', { request });
+      await configureRouter();
+      await invoke('zvram_action', { request: { action: 'router_start', ...buildRouterRequest() } });
       await waitUntilHealthy();
       await invoke('zvram_action', { request: { action: 'router_register' } });
       await loadStatus();
-      setStatus('Provider is ready. Choose a registered local model in chat.');
+      setStatus('Your local provider is ready. Choose a local model in chat.');
     });
   } catch (_) { /* Error is already visible. */ }
 });
@@ -304,7 +349,7 @@ elements.legacyList.addEventListener('click', async event => {
 });
 
 setInterval(() => {
-  if (invoke && !busy && router.running === true && $('#zvram-panel').open) loadStatus().catch(() => {});
+  if (invoke && !busy && !configurationDirty && router.running === true) loadStatus().catch(() => {});
 }, 2000);
 
 function initZvram(invokeFn) {
@@ -317,6 +362,7 @@ function initZvram(invokeFn) {
     return;
   }
   updateControls();
+  refreshStatus().catch(() => {});
 }
 
 export { initZvram, renderStatus, refreshStatus };

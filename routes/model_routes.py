@@ -581,7 +581,7 @@ def _explicit_model_list_timeout(base_url: str, endpoint_kind: str = "auto", req
 def _cached_model_ids(ep: Any) -> List[str]:
     # zVram advertises internal preset IDs; its registered aliases are the
     # public inventory. User checkbox updates must not reveal preset IDs.
-    if getattr(ep, "name", "") == "zVram · Local models":
+    if getattr(ep, "name", "") in {"Local models", "zVram · Local models"}:
         return _parse_model_list(getattr(ep, "pinned_models", None))
     return _parse_model_list(getattr(ep, "cached_models", None))
 

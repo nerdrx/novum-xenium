@@ -2238,6 +2238,7 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
         )
         .manage(NativeState::default())
         .setup(|app| {
+            zvram::monitor_autostart(app.handle().clone());
             match install_tray(&app.handle()) {
                 Ok(tray) => {
                     let state = app.state::<NativeState>();

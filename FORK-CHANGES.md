@@ -493,3 +493,11 @@ server, inspect readiness and register the verified endpoint. Registration uses
 the signed-in desktop session. Model files, Ollama and defaults stay unchanged.
 Experimental paging requires an explicit opt-in; RAM/swap guards remain active.
 General process management stays in the separate zVram application.
+
+
+## Automatic local model provider
+
+- The Linux manager offers Regular (direct llama-server) and zVram modes under Local AI. Fresh setups default to Regular; existing zVram settings keep their mode. Both use one router and load models on demand.
+- Startup brings up the owned provider and retries connecting it to chat after the backend/session becomes available. Explicit Stop disables startup, and a failed running provider is not continuously restarted.
+- Mode changes wait for the owned worker to exit before saving settings and reusing its port. Advanced installation, context and paging settings remain available.
+- Validation: 28 Python adapter tests, 32 Rust tests, the focused browser flow and 3 model-picker regression cases passed. A headless native AppImage check automatically started Regular on a saved non-default port, produced a SmolLM2 GPU reply, switched to zVram on the same port, produced another reply, and verified Stop remained stopped. BP16 was disabled. A separate Qwen coder probe passed Vulkan device creation with the repaired layer but hit the swap-growth guard; large-model completion is not claimed.

@@ -13,6 +13,7 @@ import socket
 import shutil
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -24,6 +25,7 @@ _ALLOWED_KEYS = {
     "resident_mib", "cold_mib", "clean_cache_mib", "headroom_mib", "virtual_gib",
     "ignore_swap_guard",
     "live_control",
+    "mode", "auto_start",
 }
 _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _ALIAS_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,128}\Z")
@@ -32,6 +34,8 @@ _PROFILE_LIMIT = 128
 _STATE_NAME = "novum_profiles.json"
 _IGNORE_SWAP_GUARD_VERSION = (0, 4, 2)
 _ROUTER_NAME = "nx-zvram-router"
+_ROUTER_MODES = {"regular", "zvram"}
+_ROUTER_STOP_TIMEOUT = 10
 
 
 def _supports_ignore_swap_guard(root):
@@ -46,6 +50,16 @@ def _supports_ignore_swap_guard(root):
 def _supports_live_control(model_helper):
     try:
         return "live_control" in inspect.signature(model_helper.build_server_command).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def _supports_native_mode(model_helper):
+    try:
+        parameters = inspect.signature(model_helper.build_server_command).parameters
+        return "mode" in parameters or any(
+            item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values()
+        )
     except (TypeError, ValueError, AttributeError):
         return False
 
@@ -140,9 +154,9 @@ def _request_object(value):
     if unknown:
         raise ValueError("Request contains unsupported fields")
     action = value.get("action")
-    if action not in {"status", "save", "start", "stop", "register", "router_start", "router_stop", "router_register"}:
+    if action not in {"status", "save", "start", "stop", "register", "router_start", "router_stop", "router_register", "router_configure"}:
         raise ValueError("Unsupported zVram action")
-    return value
+    return {key: item for key, item in value.items() if item is not None}
 
 
 def _integer(request, key, default, minimum=1, maximum=1048576):
@@ -206,21 +220,29 @@ def _parameters(request, model_helper, backend_checkout):
         compressed = False
     if type(compressed) is not bool:
         raise ValueError("compressed must be a boolean")
+    mode = request.get("mode", "zvram")
+    if not isinstance(mode, str) or mode not in _ROUTER_MODES:
+        raise ValueError("mode must be regular or zvram")
+    if mode == "regular":
+        compressed = False
     ignore_swap_guard = request.get("ignore_swap_guard", False)
     if ignore_swap_guard is None:
         ignore_swap_guard = False
     if type(ignore_swap_guard) is not bool:
         raise ValueError("ignore_swap_guard must be a boolean")
     live_control_supported = _supports_live_control(model_helper)
-    live_control = request.get("live_control", live_control_supported)
+    live_control = request.get("live_control", live_control_supported if mode == "zvram" else False)
     if live_control is None:
         live_control = live_control_supported
     if type(live_control) is not bool:
         raise ValueError("live_control must be a boolean")
     if compressed:
         live_control = True
-    elif live_control and not live_control_supported:
+    elif mode == "zvram" and live_control and not live_control_supported:
         raise ValueError("Live VRAM management requires a newer zVram installation")
+    if mode == "regular":
+        live_control = False
+        ignore_swap_guard = False
     values = {
         "resident_mib": _integer(request, "resident_mib", 19456),
         "cold_mib": _integer(request, "cold_mib", 26624),
@@ -235,6 +257,7 @@ def _parameters(request, model_helper, backend_checkout):
         "port": port, "context": context, "compressed": compressed,
         "ignore_swap_guard": ignore_swap_guard, **values,
         "live_control": live_control,
+        "mode": mode,
     }
 
 
@@ -259,15 +282,25 @@ def _build_manager_profile(model_helper, name, params):
     )
     if _supports_live_control(model_helper):
         options["live_control"] = params["live_control"]
+    mode = params.get("mode", "zvram")
+    if mode not in _ROUTER_MODES:
+        raise ValueError("mode must be regular or zvram")
+    if mode == "regular":
+        options.update(mode="native", compressed=False)
     command, environment = model_helper.build_server_command(params["model"], params["alias"], **options)
-    overrides = {key: value for key, value in environment.items()
-                 if key.startswith(("ZVRAM_", "GGML_"))}
+    if mode == "regular" and not _supports_native_mode(model_helper):
+        try:
+            command = command[command.index("--") + 1:]
+        except ValueError:
+            raise ValueError("Installed model helper cannot build a native llama-server command") from None
+    overrides = ({key: value for key, value in environment.items()
+                  if key.startswith(("ZVRAM_", "GGML_"))} if mode == "zvram" else {})
     return {
-        "name": name, "priority": "normal", "mode": "wrapped", "command": command,
+        "name": name, "priority": "normal", "mode": "native" if mode == "regular" else "wrapped", "command": command,
         "env": overrides, "resident_mib": params["resident_mib"] if params["compressed"] else None,
         "cold_mib": params["cold_mib"],
         "min_available_mib": 16384 if params["compressed"] else 4096,
-        "ignore_swap_guard": params["ignore_swap_guard"],
+        "ignore_swap_guard": params["ignore_swap_guard"] if mode == "zvram" else False,
         "live_control": params["live_control"],
     }
 
@@ -288,15 +321,30 @@ def _router_preset_path(manager):
     return manager.home / 'router-models.ini'
 
 
+def _router_cache_path(manager):
+    cache = manager.home / 'router-cache'
+    cache.mkdir(mode=0o700, exist_ok=True)
+    if cache.is_symlink() or cache.stat().st_uid != os.getuid():
+        raise ValueError('Unsafe router cache directory')
+    return cache
+
+
 def _build_router_profile(model_helper, manager, params, models):
     # Reuse the installed helper's paging options; only replace the single-model
     # server arguments. Router children inherit its arguments and environment.
     profile = _build_manager_profile(model_helper, _ROUTER_NAME, params)
     command = profile['command']
+    start = 0 if params.get("mode", "zvram") == "regular" else command.index('--') + 1
     for flag in ('--model', '--alias'):
-        index = command.index(flag, command.index('--') + 1)
+        index = command.index(flag, start)
         del command[index:index + 2]
     command += ['--models-preset', str(_router_preset_path(manager)), '--models-max', '1', '--models-autoload']
+    _write_router_preset(manager, models)
+    profile['env']['LLAMA_CACHE'] = str(_router_cache_path(manager))
+    return profile
+
+
+def _write_router_preset(manager, models):
     lines = ['version = 1', '']
     seen = set()
     for index, model in enumerate(models):
@@ -315,13 +363,6 @@ def _build_router_profile(model_helper, manager, params, models):
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-    # Expose only our discovered GGUF presets, not unrelated HF cache entries.
-    cache = manager.home / 'router-cache'
-    cache.mkdir(mode=0o700, exist_ok=True)
-    if cache.is_symlink() or cache.stat().st_uid != os.getuid():
-        raise ValueError('Unsafe router cache directory')
-    profile['env']['LLAMA_CACHE'] = str(cache)
-    return profile
 
 
 def _router_inventory(params):
@@ -352,11 +393,13 @@ def _router_status(model_helper, manager_helper, manager, params_state):
     result = {'name': _ROUTER_NAME, 'running': False, 'healthy': False, 'state': 'stopped',
               'port': params.get('port', 8097), 'context': params.get('context', 4096), 'models': []}
     if params.get('router') is not True:
+        result.update(mode='regular', auto_start=True)
         return result
     row = next((row for row in manager.list_profiles() if row.get('name') == _ROUTER_NAME), {})
     result.update(state=row.get('state', 'stopped'), lastlog=_clean_text(row.get('lastlog', '')),
                   compressed=params.get('compressed', False), ignore_swap_guard=params.get('ignore_swap_guard', False),
                   live_control=params.get('live_control', False) is True or params.get('compressed', False) is True)
+    result.update(mode=params.get('mode', 'zvram'), auto_start=params.get('auto_start', True) is True)
     result['running'] = _owned_profile_running(manager_helper, manager, _ROUTER_NAME, params)
     if not result['running'] and result['state'] in ('starting', 'running'):
         worker_alive = manager_helper.owned_worker(manager_helper.read_json(manager.job_path(_ROUTER_NAME), {}))
@@ -380,9 +423,9 @@ def _register_router(model_helper, params, backend_checkout, cookie_path, backen
     api = f'http://127.0.0.1:{backend_port}/api/model-endpoints'
     endpoints = model_helper._request(api, cookie)
     existing = next((ep for ep in endpoints if ep.get('base_url', '').rstrip('/') == base), None)
-    name = 'zVram · Local models'
+    name = 'Local models' if params.get('mode') == 'regular' else 'zVram · Local models'
     if existing:
-        if not existing.get('name', '').startswith('zVram · '):
+        if existing.get('name') not in ('Local models', 'zVram · Local models'):
             raise ValueError('This port belongs to another provider')
         endpoint = model_helper._request(api + '/' + urllib.parse.quote(str(existing['id']), safe=''), cookie,
                                         'PATCH', {'name': name, 'is_enabled': True, 'pinned_models': ids})
@@ -513,6 +556,16 @@ def _save_manager_profile(manager_helper, manager, profile, owned_names):
         manager_helper.write_json(manager.profiles_path, profiles)
 
 
+def _wait_for_owned_worker_exit(manager_helper, manager, name):
+    deadline = time.monotonic() + _ROUTER_STOP_TIMEOUT
+    while time.monotonic() < deadline:
+        job = manager_helper.read_json(manager.job_path(name), {})
+        if not manager_helper.owned_worker(job):
+            return
+        time.sleep(0.1)
+    raise ValueError("The owned model router did not stop in time")
+
+
 def _status(model_helper, manager_helper, manager, backend_checkout, params_state, installation):
     models = _model_rows(model_helper, backend_checkout)
     manager_rows = {row.get("name"): row for row in manager.list_profiles() if isinstance(row, dict)}
@@ -612,40 +665,62 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
             return _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
 
         if action.startswith('router_'):
-            if action == 'router_start':
+            if action in ('router_start', 'router_configure'):
                 if not _router_supported(model_helper):
                     raise ValueError('Install a llama-server build with model router support')
                 previous = params_state.get(_ROUTER_NAME, {})
-                if manager_helper.owned_worker(manager_helper.read_json(manager.job_path(_ROUTER_NAME), {})):
+                running = _owned_profile_running(manager_helper, manager, _ROUTER_NAME, previous)
+                if action == 'router_start' and manager_helper.owned_worker(manager_helper.read_json(manager.job_path(_ROUTER_NAME), {})):
                     raise ValueError('The model router is already running')
                 models = _model_rows(model_helper, backend_checkout)
                 if not models:
                     raise ValueError('No local GGUF models were discovered')
-                params = _parameters({**request, 'model': models[0]['path'], 'alias': 'zvram-router'}, model_helper, backend_checkout)
-                params.update(router=True, model_ids=[model['name'] for model in models])
+                merged = {**previous, **request}
+                if 'mode' not in request:
+                    merged['mode'] = previous.get('mode', 'zvram' if previous.get('router') else 'regular')
+                merged.update(action='router_start', model=models[0]['path'], alias='local-router')
+                params = _parameters(merged, model_helper, backend_checkout)
+                params.update(router=True, model_ids=[model['name'] for model in models],
+                              auto_start=(request.get('auto_start', True) if action == 'router_start'
+                                          else request.get('auto_start', previous.get('auto_start', True))))
+                if type(params['auto_start']) is not bool:
+                    raise ValueError('auto_start must be a boolean')
                 if params['port'] == backend_port or not _port_is_free(params['port']):
-                    raise ValueError('Router port is already in use or belongs to Novum')
-                if params['ignore_swap_guard'] and not _supports_ignore_swap_guard(root):
+                    if not (action == 'router_configure' and running and params['port'] == previous.get('port')):
+                        raise ValueError('Router port is already in use or belongs to Novum')
+                if params['mode'] == 'zvram' and params['ignore_swap_guard'] and not _supports_ignore_swap_guard(root):
                     raise ValueError('Ignoring the swap-growth guard requires zVram 0.4.2 or newer')
                 if _ROUTER_NAME in params_state and previous.get('router') is not True:
                     raise ValueError('The router profile name is already used by a legacy profile')
                 profile = _build_router_profile(model_helper, manager, params, models)
+                if action == 'router_configure' and running:
+                    if not manager.stop(_ROUTER_NAME):
+                        raise ValueError('The owned model router stopped before settings could be applied')
+                    _wait_for_owned_worker_exit(manager_helper, manager, _ROUTER_NAME)
                 _save_manager_profile(manager_helper, manager, profile, params_state)
                 params_state[_ROUTER_NAME] = params
                 _write_state(manager, params_state)
-                _start_manager(manager, _ROUTER_NAME)
+                if action == 'router_start' or running:
+                    _start_manager(manager, _ROUTER_NAME)
             else:
                 params = params_state.get(_ROUTER_NAME, {})
                 if params.get('router') is not True:
                     raise ValueError('Start the model router first')
                 if action == 'router_stop':
-                    manager.stop(_ROUTER_NAME)
+                    stopped = bool(manager.stop(_ROUTER_NAME))
+                    params['auto_start'] = False
+                    _write_state(manager, params_state)
                 else:
                     if not _owned_profile_running(manager_helper, manager, _ROUTER_NAME, params):
                         raise ValueError('Start the owned model router before connecting it')
                     _register_router(model_helper, params, backend_checkout, cookie_path, backend_port)
             status = _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
-            status['registered' if action == 'router_register' else 'started' if action == 'router_start' else 'stopped'] = True
+            if action in ('router_start', 'router_configure'):
+                status['started' if action == 'router_start' else 'configured'] = True
+            elif action == 'router_stop':
+                status['stopped'] = stopped
+            elif action == 'router_register':
+                status['registered'] = True
             return status
 
         name = request.get("profile")

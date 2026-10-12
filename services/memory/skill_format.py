@@ -292,7 +292,7 @@ def parse_body(body: str) -> Dict[str, Any]:
         if m:
             heading = m.group(1).strip().lower()
             key = _HEADING_TO_KEY.get(heading)
-            sections.append((key, []))
+            sections.append((key, [] if key is not None else [line]))
             continue
         sections[-1][1].append(line)
 

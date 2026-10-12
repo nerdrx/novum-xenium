@@ -37,3 +37,23 @@ def test_news_queries_prefer_news_sources_over_sports_and_social_results():
     assert "https://www.cbc.ca/news/canada" in top_urls
     assert "https://www.ctvnews.ca/canada" in top_urls
     assert ranked[-1]["url"].startswith("https://sports.yahoo.com/")
+
+
+def test_github_cli_result_outranks_unrelated_freebsd_org_result():
+    query = "create private github repository github cli"
+    results = [
+        {
+            "title": "FreeBSD VuXML - entry date index",
+            "url": "http://www.vuxml.org/freebsd/",
+            "snippet": "Ports Collection repository, path ports/security/vuxml/vuln.xml as a local copy, compressed with bzip2 as a local copy.",
+        },
+        {
+            "title": "Blog posts - cri.dev",
+            "url": "https://cri.dev/posts/",
+            "snippet": "Create a new Github repository from the command line 01/04 About vanity metrics and social media bullshit 2013 10/12 Simple templating with regular expressions.",
+        },
+    ]
+
+    ranked = rank_search_results(query, results)
+
+    assert ranked[0]["url"] == "https://cri.dev/posts/"

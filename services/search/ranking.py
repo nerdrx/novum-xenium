@@ -119,8 +119,6 @@ def rank_search_results(query: str, results: List[dict]) -> List[dict]:
             return 1.0
         if netloc.endswith(".edu") or netloc.endswith(".gov"):
             return 1.0
-        if netloc.endswith(".org"):
-            return 0.7
         return 0.4
 
     def news_quality_adjustment(title: str, snippet: str, url: str) -> float:

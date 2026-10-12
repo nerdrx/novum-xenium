@@ -12,6 +12,7 @@ from contextlib import ExitStack
 from typing import Optional, Dict, Any, Tuple, List
 
 from src.constants import MAX_READ_CHARS, MAX_DIFF_LINES, MAX_OUTPUT_CHARS
+from src.agent_tools.syntax_feedback import syntax_feedback
 
 _CODENAV_SKIP_DIRS = frozenset({
     ".git", ".hg", ".svn", "node_modules", "venv", ".venv", "__pycache__",
@@ -22,6 +23,17 @@ _CODENAV_MAX_HITS = 200
 _CODENAV_MAX_LINE = 400
 _GREP_TIMEOUT_SECONDS = 20
 _GREP_STDERR_PREFIX = 20_000
+
+
+async def _add_syntax_feedback(result: dict, path: str, source: str) -> dict:
+    try:
+        warning = await asyncio.to_thread(syntax_feedback, path, source)
+    except Exception:
+        return result
+    if warning:
+        result["syntax_warning"] = warning
+        result["output"] = f"{result.get('output') or ''}\n{warning}".strip()
+    return result
 
 
 def _supports_safe_file_mutations() -> bool:
@@ -462,7 +474,7 @@ class EditFileTool:
         diff = _unified_diff(original, updated, path)
         if diff:
             result["diff"] = diff
-        return result
+        return await _add_syntax_feedback(result, path, updated)
 
 class ReadFileTool:
     async def execute(self, content: str, ctx: dict) -> dict:
@@ -583,7 +595,7 @@ class WriteFileTool:
         result = {"output": f"Wrote {size} bytes to {path}", "exit_code": 0}
         if diff:
             result["diff"] = diff
-        return result
+        return await _add_syntax_feedback(result, path, body)
 
 class ApplyPatchTool:
     async def execute(self, content: str, ctx: dict) -> dict:
@@ -699,6 +711,25 @@ class ApplyPatchTool:
             "output": f"Applied patch ({len(prepared)} file{'s' if len(prepared) != 1 else ''}, +{added}/-{removed})",
             "exit_code": 0,
         }
+        syntax_warnings = []
+        syntax_candidates = [
+            (path, new) for kind, path, _old, new, *_rest in prepared
+            if kind != "delete" and os.path.splitext(path)[1].lower()
+            in {".py", ".js", ".mjs", ".cjs"}
+        ]
+        for path, new in syntax_candidates[:4]:
+            checked = await _add_syntax_feedback({}, path, new)
+            warning = checked.get("syntax_warning")
+            if warning:
+                syntax_warnings.append(f"{path}: {warning}")
+        if len(syntax_candidates) > 4:
+            syntax_warnings.append(
+                f"Syntax feedback skipped for {len(syntax_candidates) - 4} additional "
+                "source files to keep checks bounded."
+            )
+        if syntax_warnings:
+            result["syntax_warning"] = "\n".join(syntax_warnings)
+            result["output"] += "\n" + result["syntax_warning"]
         if diffs:
             result["diff"] = {
                 "text": diff_text,

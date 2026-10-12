@@ -6706,7 +6706,7 @@ async def stream_agent_loop(
             if (not security_decision.allowed and not blocked_by_tool_policy
                     and not blocked_by_disabled_tools and not plan_mode
                     and approval_mode == "auto" and not delegated_credential
-                    and (_coding_grounding.may_mutate or block.tool_type in _coding_grounding.research_tools)):
+                    and _coding_grounding.allows_tool(block.tool_type, block.content)):
                 action = candidate_action(block.tool_type, block.content, workspace)
                 if action and action["kind"] == "workspace_edit" and not run_security.workspace_snapshots_enabled:
                     action = None
@@ -6762,8 +6762,7 @@ async def stream_agent_loop(
                     "Tool blocked before approval by current policy: %s",
                     block.tool_type,
                 )
-            elif (not _coding_grounding.may_mutate
-                  and block.tool_type not in _coding_grounding.research_tools):
+            elif not _coding_grounding.allows_tool(block.tool_type, block.content):
                 desc = f"{block.tool_type}: RESEARCH FIRST"
                 result = {"error": _coding_grounding.directive, "exit_code": 1,
                           "blocked": True, "policy": "coding_grounding"}

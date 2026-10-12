@@ -36,7 +36,7 @@ def test_failed_lookup_escape_is_bounded_and_respects_disabled_tools():
     gate = CodingGrounding(task(), disabled_tools={"read_file", "web_search", "web_fetch",
                                                     "mcp__builtin_browser__browser_snapshot",
                                                     "get_workspace", "ls", "glob", "grep",
-                                                    "search_tools", "ask_user"})
+                                                    "search_tools", "ask_user", "manage_skills"})
     assert gate.research_tools == set()
     assert gate.may_mutate
 
@@ -125,3 +125,24 @@ def test_directive_points_to_requested_documentation_before_search():
     assert "next documentation lookup should be web_fetch" in gate.directive
     offline = CodingGrounding(f"Build a GUI app offline using local docs; source: {url}")
     assert "next documentation lookup should be web_fetch" not in offline.directive
+
+
+def test_skill_reads_are_allowed_but_do_not_replace_documentation():
+    gate = CodingGrounding('Build a GUI app following https://vendor.example/docs')
+    assert 'manage_skills' in gate.research_tools
+    for action in ('list', 'index', 'view', 'view_ref', 'search'):
+        assert gate.allows_tool('manage_skills', '{"action":"' + action + '","name":"ui-design"}')
+    for action in ('add', 'edit', 'delete', 'import', ''):
+        assert not gate.allows_tool('manage_skills', '{"action":"' + action + '"}')
+    assert not gate.allows_tool('manage_skills', 'malformed')
+    gate.observe('manage_skills', {'output': 'A design procedure', 'exit_code': 0}, '{"action":"view"}')
+    assert gate.attempts == 0
+    assert not gate.may_mutate
+    disabled = CodingGrounding('Build a GUI app', disabled_tools={'manage_skills'})
+    assert not disabled.allows_tool('manage_skills', '{"action":"view"}')
+
+
+def test_skill_discovery_alone_cannot_trap_tasks_when_source_reads_disabled():
+    gate = CodingGrounding('Build a GUI app', disabled_tools={'web_search', 'web_fetch', 'read_file'})
+    assert 'manage_skills' in gate.research_tools
+    assert gate.may_mutate

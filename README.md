@@ -169,3 +169,7 @@ Novum Xenium is an independent fork of [Odysseus](https://github.com/odysseus-de
 **AGPL-3.0-or-later.** Original authors and third-party notices remain in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md). See [LICENSE](LICENSE). Keep the license and notices, and provide corresponding source as required when distributing or serving modified versions.
 
 The [upstream demo](https://odysseus-dev.github.io/odysseus/) shows the original product. This repo's [change record](FORK-CHANGES.md) describes the NX version.
+
+### Design skills for coding agents
+
+Import [UI design](agent-skills/ui-design/SKILL.md) and [visual verification](agent-skills/visual-verification/SKILL.md) from **Brain → Skills → Import URL** using their GitHub file URLs. They teach the agent to read the requested brand guide, build the main workflow first, and verify rendered styles and real behavior. They are reusable guidance, not a certificate that an app works. Skill procedures remain available through `manage_skills` during coding research; writes to the skill library remain behind the research gate.

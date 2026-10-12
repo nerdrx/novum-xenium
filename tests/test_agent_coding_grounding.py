@@ -128,3 +128,25 @@ def test_explicit_no_web_hides_search_and_fetch_during_research(monkeypatch, tmp
     assert executed == ["read_file", "write_file"]
     assert any(event.get("type") == "coding_research"
                and event.get("status") == "sources_read" for event in events)
+
+
+def test_research_can_load_owned_skill_but_cannot_edit_it(monkeypatch, tmp_path):
+    from services.memory.skills import SkillsManager
+    monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
+        'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
+        'category': 'design', 'tags': ['gui'], 'procedure': [],
+    }])
+    url = 'https://vendor.example/docs/gui'
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
+         _call('manage_skills', {'action': 'delete', 'name': 'ui-design'}, 'delete'),
+         _call('web_fetch', {'url': url}, 'fetch'),
+         'data: {"delta":"Ready."}\n\n'],
+        {'manage_skills': [{'output': 'Inspect design tokens and render the interface.', 'exit_code': 0}],
+         'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}]},
+    )
+    assert 'manage_skills' in requests[0]
+    assert not ({'bash', 'write_file'} & requests[1])
+    assert executed == ['manage_skills', 'web_fetch']
+    assert any(event.get('type') == 'coding_research' and event.get('status') == 'sources_read' for event in events)

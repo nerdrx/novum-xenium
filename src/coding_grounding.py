@@ -9,7 +9,7 @@ import json
 import re
 from urllib.parse import urlsplit
 
-from src.tool_capabilities import tool_result_is_successful
+from src.tool_capabilities import ToolEffect, capabilities_for_action, tool_result_is_successful
 
 
 _SUBSTANTIVE_CODE_TASK = re.compile(
@@ -84,10 +84,20 @@ class CodingGrounding:
     @property
     def research_tools(self):
         """Available tools for a brief lookup phase; no deep-research sidebar."""
-        tools = {"get_workspace", "ls", "glob", "grep", "read_file", "search_tools", "ask_user"}
+        tools = {"get_workspace", "ls", "glob", "grep", "read_file", "search_tools", "ask_user", "manage_skills"}
         if self.web_allowed:
             tools.update({"web_search", "web_fetch"})
         return tools - self.disabled_tools if self.required else set()
+
+    def allows_tool(self, tool_name, content=None):
+        """Expose skill discovery, while keeping skill mutations behind the gate."""
+        if self.may_mutate:
+            return True
+        if tool_name not in self.research_tools:
+            return False
+        if tool_name == "manage_skills":
+            return capabilities_for_action(tool_name, content).effects == frozenset({ToolEffect.READ_PRIVATE})
+        return True
 
     @property
     def directive(self):
@@ -106,6 +116,7 @@ class CodingGrounding:
         return (
             "## Coding research gate\n"
             "Before the first workspace mutation, inspect relevant local project guidance and documentation. "
+            "Load any relevant available skill with manage_skills action=view; skill reads are permitted during research. "
             + source_rule
             + url_rule
             + "Count evidence only after a successful tool result returns readable source or document content. "
@@ -129,7 +140,7 @@ class CodingGrounding:
             not self.required or self.has_evidence
             or self.failures >= self.max_failures
             or self.attempts >= self.max_attempts
-            or not self.research_tools
+            or not (self.research_tools & _RESEARCH_ATTEMPTS)
         )
 
     def observe(self, tool_name, result, content=None):

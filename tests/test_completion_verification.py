@@ -1,5 +1,7 @@
 """The independent verifier fails closed when it cannot establish completion."""
 
+import json
+
 import pytest
 
 from src.completion_verification import (
@@ -52,6 +54,7 @@ def test_prompt_requires_request_derived_functional_and_external_evidence():
     assert "real input" in prompt
     assert "matching authorized tool" in prompt
     assert "untrusted tool data" in prompt
+    assert "A successful file write proves only that content was written" in prompt
     assert "<user_request>" in prompt and "<actions_taken>" in prompt
 
 
@@ -74,7 +77,7 @@ def test_compaction_keeps_latest_validation_after_long_earlier_writes():
     assert "python -m pytest -q tests/test_app.py" in snapshot
     assert "exit_code=0" in snapshot
     assert "TAIL: 4 passed" in snapshot
-    assert "Earlier action evidence omitted" in snapshot
+    assert "Some action details omitted" in snapshot
 
 
 def test_compaction_shows_selected_events_in_chronological_order_and_bounds_fields():
@@ -94,6 +97,81 @@ def test_compaction_shows_selected_events_in_chronological_order_and_bounds_fiel
     present = [position for position in positions if position >= 0]
     assert present == sorted(present)
     assert "THIRD_TAIL" in snapshot
+
+
+def test_compaction_preserves_distinct_early_file_writes_with_latest_checks():
+    events = [
+        {"tool": "write_file", "command": json.dumps({
+            "path": "src/main.js", "content": "main source",
+        }), "exit_code": 0, "output": "WROTE_MAIN"},
+        {"tool": "write_file", "command": json.dumps({
+            "path": "public/index.html", "content": "main UI",
+        }), "exit_code": 0, "output": "WROTE_UI"},
+        *[
+            {"tool": "write_file", "command": json.dumps({
+                "path": f"docs/generated-{i}.md", "content": "reference",
+            }), "exit_code": 0, "output": f"WROTE_DOC_{i}"}
+            for i in range(60)
+        ],
+        {"tool": "mcp__github__create_repository", "command": "create private repository",
+         "exit_code": 0, "output": "EXTERNAL_ACTION: repository created"},
+        *[
+            {"tool": "read_file", "command": json.dumps({"path": f"docs/ref-{i}.md"}),
+             "exit_code": 0, "output": "documentation " + "x" * 1200}
+            for i in range(12)
+        ],
+        {"tool": "bash", "command": "npm test", "exit_code": 0,
+         "output": "FUNCTIONAL_CHECK: 8 passed"},
+    ]
+
+    snapshot = compact_action_evidence(events)
+
+    assert len(snapshot) <= 8000
+    assert "src/main.js" in snapshot and "WROTE_MAIN" in snapshot
+    assert "public/index.html" in snapshot and "WROTE_UI" in snapshot
+    assert "FUNCTIONAL_CHECK: 8 passed" in snapshot
+    assert "EXTERNAL_ACTION: repository created" in snapshot
+    assert "WROTE_DOC_59" not in snapshot
+
+
+def test_compaction_uses_latest_write_status_per_target_path():
+    path = "src/main.js"
+    events = [
+        {"tool": "write_file", "command": json.dumps({"path": path, "content": "first"}),
+         "exit_code": 0, "output": "INITIAL_WRITE"},
+        {"tool": "edit_file", "command": json.dumps({"path": path, "old_string": "x"}),
+         "exit_code": 1, "output": "LATEST_WRITE_FAILED"},
+        {"tool": "bash", "command": "npm test", "exit_code": 0, "output": "CHECK_RESULT"},
+    ]
+
+    snapshot = compact_action_evidence(events)
+
+    assert "LATEST_WRITE_FAILED" in snapshot
+    assert "INITIAL_WRITE" not in snapshot
+    assert "CHECK_RESULT" in snapshot
+
+
+def test_write_path_containing_build_or_test_is_not_a_validation():
+    events = [
+        {"tool": "bash", "command": "npm test", "exit_code": 0,
+         "output": "REAL_TEST_RESULT"},
+        {"tool": "write_file", "command": json.dumps({
+            "path": "public/build/test/index.js", "content": "source",
+        }), "exit_code": 0, "output": "WRITE_RESULT"},
+        {"tool": "read_file", "command": json.dumps({
+            "path": "tests/test_app.py",
+        }), "exit_code": 0, "output": "READ_RESULT"},
+        *[
+            {"tool": "read_file", "command": json.dumps({"path": f"docs/guide-{i}.md"}),
+             "exit_code": 0, "output": "guide " + "x" * 900}
+            for i in range(10)
+        ],
+    ]
+
+    snapshot = compact_action_evidence(events, limit=1200)
+
+    assert len(snapshot) <= 1200
+    assert "REAL_TEST_RESULT" in snapshot
 
 @pytest.mark.parametrize(("response", "expected"), [
     ("Work appears complete.\nVERIFICATION: SUCCESS", []),

@@ -18,6 +18,7 @@ in `untrusted_context_message`, not just the matched-skills block.
 """
 
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -316,6 +317,65 @@ def test_skill_suggestions_clear_for_unrelated_task_or_untrusted_anchor(tmp_path
 
     assert "ffmpeg-gui-layout" not in _gui_skill_suggestions(unrelated)
     assert "ffmpeg-gui-layout" not in _gui_skill_suggestions(untrusted)
+
+
+def test_coding_grounding_uses_exact_prompt_matched_skills_without_injecting_bodies(
+    tmp_path, monkeypatch,
+):
+    from src.coding_grounding import CodingGrounding
+    data_dir = tmp_path / "data"
+    _seed_gui_skill(data_dir)
+    _patch_prefs(monkeypatch, data_dir)
+    from src.agent_loop import _build_system_prompt
+
+    gate = CodingGrounding("Build a GUI for an FFmpeg wrapper with input, output, options, and status.")
+    output, _ = _build_system_prompt(
+        messages=_gui_task_messages("VioletStream"), model="test-model",
+        active_document=None, mcp_mgr=None, owner="alice",
+        relevant_tools={"read_file"},  # ordinary route retrieval may omit skill tools
+        coding_grounding=gate,
+    )
+    suggestions = _gui_skill_suggestions(output)
+    suggested_names = set(re.findall(r"^- `([^`]+)`", suggestions, flags=re.MULTILINE))
+
+    assert "ffmpeg-gui-layout" in suggested_names
+    assert gate.skill_candidates == suggested_names
+    assert "Use a compact input and output layout." not in "\n".join(
+        str(m.get("content") or "") for m in output
+    )
+
+
+@pytest.mark.parametrize("case", ["skills_off", "manage_skills_disabled", "max_zero", "suppressed"])
+def test_coding_grounding_skips_skill_read_when_skills_are_unavailable_or_off(
+    tmp_path, monkeypatch, case,
+):
+    from src.coding_grounding import CodingGrounding
+    data_dir = tmp_path / "data"
+    _seed_gui_skill(data_dir)
+    _patch_prefs(monkeypatch, data_dir)
+    from src import agent_loop
+    original_loader = sys.modules["routes.prefs_routes"]._load_for_user
+    prefs = original_loader()
+    if case == "skills_off":
+        prefs["skills_enabled"] = False
+    elif case == "max_zero":
+        prefs["skill_max_injected"] = 0
+    monkeypatch.setattr(
+        sys.modules["routes.prefs_routes"], "_load_for_user", lambda user=None: prefs,
+    )
+    gate = CodingGrounding("Build a GUI for an FFmpeg wrapper with input, output, options, and status.")
+    output, _ = agent_loop._build_system_prompt(
+        messages=_gui_task_messages("VioletStream"), model="test-model",
+        active_document=None, mcp_mgr=None, owner="alice",
+        disabled_tools={"manage_skills"} if case == "manage_skills_disabled" else None,
+        suppress_skills=case == "suppressed",
+        coding_grounding=gate,
+    )
+
+    assert not gate.skill_candidates
+    assert "Suggested skills for this request" not in "\n".join(
+        str(m.get("content") or "") for m in output
+    )
 
 
 def test_skill_prompt_index_is_bounded_and_searchable():

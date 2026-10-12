@@ -142,6 +142,60 @@ def test_skill_reads_are_allowed_but_do_not_replace_documentation():
     assert not disabled.allows_tool('manage_skills', '{"action":"view"}')
 
 
+def test_matched_skill_view_and_documentation_are_independent_requirements():
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["gui-workflow"])
+    assert gate.skill_review_pending
+    assert not gate.may_mutate
+
+    assert gate.observe("read_file", {"output": "Use framework v2", "exit_code": 0}, "README.md")
+    assert not gate.may_mutate  # documentation does not count as viewing the procedure
+    assert gate.observe("manage_skills", {"results": "Procedure body"},
+                        '{"action":"view","name":"gui-workflow"}')
+    assert not gate.skill_review_pending
+    assert gate.may_mutate
+
+
+def test_skill_view_must_match_a_suggested_candidate_and_failure_escape_is_bounded():
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["gui-workflow"])
+    gate.observe("read_file", {"output": "Use framework v2", "exit_code": 0}, "README.md")
+
+    assert not gate.observe("manage_skills", {"results": "Other procedure"},
+                            '{"action":"view","name":"unrelated"}')
+    assert not gate.may_mutate
+    assert not gate.observe("manage_skills", {"error": "not found", "exit_code": 1},
+                            '{"action":"view","name":"gui-workflow"}')
+    assert gate.may_mutate  # two completed, unsuccessful lookups release the gate
+    assert "do not claim that its procedure was consulted" in gate.directive
+
+
+def test_pending_approval_does_not_count_as_skill_view_or_failed_lookup():
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["gui-workflow"])
+    gate.observe("read_file", {"output": "Use framework v2", "exit_code": 0}, "README.md")
+
+    assert not gate.observe("manage_skills", {"approval_required": True},
+                            '{"action":"view","name":"gui-workflow"}')
+    assert gate.skill_view_attempts == 0
+    assert not gate.may_mutate
+    assert gate.observe("manage_skills", {"results": "Procedure body"},
+                        '{"action":"view","name":"gui-workflow"}')
+    assert gate.may_mutate
+
+
+def test_skill_candidate_settings_and_tool_availability_can_skip_the_read_gate():
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["gui-workflow"], available=False)
+    assert not gate.skill_candidates
+    assert gate.may_mutate is False  # the independent documentation gate remains
+
+    docs_only = CodingGrounding(task(), disabled_tools={"manage_skills"})
+    docs_only.set_skill_candidates(["gui-workflow"])
+    assert not docs_only.skill_candidates
+    assert "manage_skills" not in docs_only.research_tools
+
+
 def test_skill_discovery_alone_cannot_trap_tasks_when_source_reads_disabled():
     gate = CodingGrounding('Build a GUI app', disabled_tools={'web_search', 'web_fetch', 'read_file'})
     assert 'manage_skills' in gate.research_tools

@@ -71,7 +71,15 @@ def _approval(tool_name, arguments):
     )
 
 
+def _no_suggested_skills(monkeypatch):
+    # These cases isolate documentation gating; skill consultation has its own
+    # loop coverage below with an explicit candidate fixture.
+    from services.memory.skills import SkillsManager
+    monkeypatch.setattr(SkillsManager, "load", lambda self, owner=None: [])
+
+
 def test_fetching_task_docs_opens_coding_tools(monkeypatch, tmp_path):
+    _no_suggested_skills(monkeypatch)
     url = "https://vendor.example/docs/api"
     events, requests, histories, executed = _run(
         monkeypatch,
@@ -94,6 +102,7 @@ def test_fetching_task_docs_opens_coding_tools(monkeypatch, tmp_path):
 
 
 def test_hidden_write_before_fetch_is_blocked_without_execution(monkeypatch, tmp_path):
+    _no_suggested_skills(monkeypatch)
     url = "https://vendor.example/docs/api"
     events, requests, histories, executed = _run(
         monkeypatch,
@@ -110,6 +119,7 @@ def test_hidden_write_before_fetch_is_blocked_without_execution(monkeypatch, tmp
 
 
 def test_two_failed_lookups_open_bounded_escape(monkeypatch, tmp_path):
+    _no_suggested_skills(monkeypatch)
     url = "https://vendor.example/docs/api"
     events, requests, _, executed = _run(
         monkeypatch,
@@ -133,6 +143,7 @@ def test_two_failed_lookups_open_bounded_escape(monkeypatch, tmp_path):
 
 
 def test_explicit_no_web_hides_search_and_fetch_during_research(monkeypatch, tmp_path):
+    _no_suggested_skills(monkeypatch)
     events, requests, _, executed = _run(
         monkeypatch,
         tmp_path,
@@ -155,6 +166,7 @@ def test_research_can_load_owned_skill_but_cannot_edit_it(monkeypatch, tmp_path)
     monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
         'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
         'category': 'design', 'tags': ['gui'], 'procedure': [],
+        'when_to_use': 'Build a GUI app following a framework documentation guide.',
     }])
     url = 'https://vendor.example/docs/gui'
     events, requests, _, executed = _run(
@@ -163,7 +175,8 @@ def test_research_can_load_owned_skill_but_cannot_edit_it(monkeypatch, tmp_path)
          _call('manage_skills', {'action': 'delete', 'name': 'ui-design'}, 'delete'),
          _call('web_fetch', {'url': url}, 'fetch'),
          'data: {"delta":"Ready."}\n\n'],
-        {'manage_skills': [{'output': 'Inspect design tokens and render the interface.', 'exit_code': 0}],
+        {'manage_skills': [{'results': 'Inspect design tokens and render the interface.'},
+                           {'error': 'Cannot edit a skill during research.', 'exit_code': 1}],
          'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}]},
     )
     assert 'manage_skills' in requests[0]
@@ -185,7 +198,7 @@ def test_read_only_skill_approval_keeps_research_gate(monkeypatch, tmp_path):
         [_call('web_fetch', {'url': url}, 'fetch'),
          _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
          'data: {"delta":"Ready."}\n\n'],
-        {'manage_skills': [{'output': 'Read-only skill contents.', 'exit_code': 0}],
+        {'manage_skills': [{'results': 'Read-only skill contents.'}],
          'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
          'write_file': [{'output': 'saved', 'exit_code': 0}]},
         exact_approval=_approval('manage_skills', approved_view),
@@ -197,11 +210,48 @@ def test_read_only_skill_approval_keeps_research_gate(monkeypatch, tmp_path):
 
 def test_approved_workspace_mutation_keeps_resume_behavior(monkeypatch, tmp_path):
     approved_write = {'path': 'app.py', 'content': 'approved'}
+    later_write = {'path': 'next.py', 'content': 'later'}
+    url = 'https://vendor.example/docs/gui'
     events, requests, _, executed = _run(
-        monkeypatch, tmp_path, 'Build a GUI app following https://vendor.example/docs/gui.',
-        ['data: {"delta":"Continuing the approved change."}\n\n'],
-        {'write_file': [{'output': 'saved', 'exit_code': 0}]},
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('write_file', later_write, 'unapproved-write'),
+         _call('web_fetch', {'url': url}, 'fetch'),
+         _call('write_file', later_write, 'later-write'),
+         'data: {"delta":"Continuing the approved change."}\n\n'],
+        {'write_file': [{'output': 'approved file saved', 'exit_code': 0},
+                        {'output': 'later file saved', 'exit_code': 0}],
+         'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}]},
         exact_approval=_approval('write_file', approved_write),
     )
-    assert 'write_file' in requests[0]
-    assert executed == ['write_file']
+    # The exact sealed write executes once. It does not unlock a different
+    # model-proposed write on the resumed task before documentation research.
+    assert not ({'bash', 'write_file'} & requests[0])
+    assert not ({'bash', 'write_file'} & requests[1])
+    assert 'write_file' in requests[2]
+    assert executed == ['write_file', 'web_fetch', 'write_file']
+
+
+def test_documentation_evidence_still_waits_for_suggested_skill_view(monkeypatch, tmp_path):
+    from services.memory.skills import SkillsManager
+    monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
+        'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
+        'category': 'design', 'tags': ['gui'], 'procedure': [],
+        'when_to_use': 'Build a GUI app following a framework documentation guide.',
+    }])
+    url = 'https://vendor.example/docs/gui'
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('write_file', {'path': 'too-early.py', 'content': 'no'}, 'early'),
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
+         _call('write_file', {'path': 'app.py', 'content': 'ok'}, 'write'),
+         'data: {"delta":"Implemented after reading both references."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'manage_skills': [{'results': 'Use a compact GUI layout.'}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    assert not ({'bash', 'write_file'} & requests[1])
+    assert 'manage_skills' in requests[1]
+    assert 'write_file' in requests[3]
+    assert executed == ['web_fetch', 'manage_skills', 'write_file']

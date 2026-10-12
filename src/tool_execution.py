@@ -16,6 +16,7 @@ import logging
 import os
 import pathlib
 import re
+import signal
 import stat
 import sys
 import time
@@ -1567,17 +1568,32 @@ def format_tool_result(description: str, result: Dict) -> str:
     """Format a tool result into text for feeding back to the LLM."""
     parts = [f"### {description}"]
 
+    def append_exit_code(code: Any, *, always: bool = False) -> None:
+        if not always and code in (0, None):
+            return
+        parts.append(f"**exit_code:** {code if code is not None else 'unknown'}")
+        # Negative subprocess statuses mean signal termination on POSIX only.
+        # Windows uses negative statuses for ordinary process exit values too.
+        if os.name == "posix" and isinstance(code, int) and not isinstance(code, bool) and code < 0:
+            try:
+                signame = signal.Signals(-code).name
+            except ValueError:
+                return
+            parts.append(
+                f"**process status:** terminated by {signame}; the command did not finish, "
+                "and trailing shell commands may not have run."
+            )
+
     if "stdout" in result:
         if result["stdout"]:
             parts.append(f"**stdout:**\n```\n{result['stdout']}\n```")
         if result["stderr"]:
             parts.append(f"**stderr:**\n```\n{result['stderr']}\n```")
-        parts.append(f"**exit_code:** {result.get('exit_code', 'unknown')}")
+        append_exit_code(result.get("exit_code"), always=True)
     elif "output" in result:
         # bash / python canonical result shape: {"output": ..., "exit_code": ...}
         parts.append(f"```\n{result['output']}\n```")
-        if result.get("exit_code") not in (0, None):
-            parts.append(f"**exit_code:** {result['exit_code']}")
+        append_exit_code(result.get("exit_code"))
     elif "content" in result:
         parts.append(f"**content ({result.get('size', '?')} chars):**\n```\n{result['content']}\n```")
     elif "response" in result:

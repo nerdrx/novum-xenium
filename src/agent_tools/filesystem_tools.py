@@ -36,6 +36,45 @@ async def _add_syntax_feedback(result: dict, path: str, source: str) -> dict:
     return result
 
 
+def _edit_near_miss_context(source: str, old_string: str, limit: int = 1500) -> str:
+    """Show a small exact-line anchor when an edit's context no longer matches."""
+    anchors = {
+        line.strip()
+        for line in str(old_string or "").splitlines()[:50]
+        if 8 <= len(line.strip()) <= 250
+    }
+    if not anchors:
+        return ""
+
+    lines = str(source or "").splitlines()
+    matches = {}
+    for number, line in enumerate(lines, 1):
+        anchor = line.strip()
+        if anchor in anchors and anchor not in matches:
+            matches[anchor] = number
+            if len(matches) == len(anchors):
+                break
+    if not matches:
+        return ""
+
+    anchor = max(matches, key=len)
+    center = matches[anchor] - 1
+    start = max(0, center - 2)
+    end = min(len(lines), center + 3)
+    excerpt_lines = []
+    for index in range(start, end):
+        text = lines[index]
+        if len(text) > 220:
+            text = text[:105] + " …[line shortened]… " + text[-90:]
+        excerpt_lines.append(f"{index + 1}: {text}")
+    excerpt = (
+        "Nearby actual source (no edit was applied):\n"
+        + "\n".join(excerpt_lines)
+        + "\nRetry with exact old text, omitting line-number prefixes. Read shortened lines in full first."
+    )
+    return excerpt[:limit]
+
+
 def _supports_safe_file_mutations() -> bool:
     required = (os.open, os.stat, os.mkdir, os.unlink, os.rename, os.link)
     return (
@@ -464,7 +503,11 @@ class EditFileTool:
             return {"error": f"edit_file: {path}: {e}", "exit_code": 1}
 
         if status == "not_found":
-            return {"error": f"edit_file: old_string not found in {path}. Read the file and match it exactly.", "exit_code": 1}
+            error = f"edit_file: old_string not found in {path}. Read the file and match it exactly."
+            context = _edit_near_miss_context(original, old)
+            if context:
+                error += "\n" + context
+            return {"error": error, "exit_code": 1}
         if status.startswith("not_unique"):
             n = status.split(":", 1)[1]
             return {"error": f"edit_file: old_string is not unique in {path} ({n} matches). Add surrounding context or set replace_all=true.", "exit_code": 1}

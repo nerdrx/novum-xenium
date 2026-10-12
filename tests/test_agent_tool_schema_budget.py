@@ -750,3 +750,39 @@ def test_new_application_uses_coding_tools_without_selected_workspace():
     assert not loop._use_coding_tools("Open the project page and click Save.", None)
     assert not loop._use_coding_tools("We are going to rename the app.", None)
     assert loop._use_coding_tools("Fix main.py", "/workspace")
+
+
+@pytest.mark.parametrize("limit,context,expected", [(0, 32768, 16384), (4096, 32768, 4096), (24000, 32768, 24000)])
+def test_coding_output_budget_preserves_explicit_limits(monkeypatch, limit, context, expected):
+    requests = []
+    _configure(monkeypatch, [], requests)
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *a, **k: context)
+
+    async def run():
+        return [chunk async for chunk in loop.stream_agent_loop(
+            "http://127.0.0.1:11434/v1", "test-model",
+            [{"role": "user", "content": "Build a complete FFmpeg GUI application and create a private GitHub repo."}],
+            max_tokens=limit, max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert requests[0]["kwargs"]["max_tokens"] == expected
+
+
+def test_coding_output_budget_fits_remaining_context(monkeypatch):
+    requests = []
+    _configure(monkeypatch, [], requests)
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *a, **k: 8192)
+
+    async def run():
+        return [chunk async for chunk in loop.stream_agent_loop(
+            "http://127.0.0.1:11434/v1", "test-model",
+            [{"role": "user", "content": "Build a complete FFmpeg GUI application and create a private GitHub repo."}],
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    request = requests[0]
+    budget = request["kwargs"]["max_tokens"]
+    assert 4096 < budget < 8192
+    assert budget + estimate_tokens(request["messages"]) <= 8192

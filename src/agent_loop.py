@@ -3661,7 +3661,7 @@ async def stream_agent_loop(
     messages: List[Dict],
     headers: Optional[Dict] = None,
     temperature: float = 0.3,
-    max_tokens: int = 4096,
+    max_tokens: int = 0,
     prompt_type: Optional[str] = None,
     max_rounds: int = MAX_AGENT_ROUNDS,
     max_tool_calls: int = 0,
@@ -4517,12 +4517,18 @@ async def stream_agent_loop(
             effective_budget = compute_input_token_budget(
                 soft_budget, candidate_context, _budget_is_explicit(soft_budget), hard_max=hard_max,
             )
+            # No-limit coding presets need room for complete file arguments.
+            # Positive caller limits remain deliberate; the final budget below
+            # still clamps output to context left after the prompt and schemas.
+            default_output_tokens = (
+                16384 if _use_coding_tools(_retrieval_query or _last_user, workspace) else 4096
+            )
             try:
-                requested_output_tokens = int(max_tokens) if max_tokens is not None else 4096
+                requested_output_tokens = int(max_tokens) if max_tokens is not None else default_output_tokens
             except (TypeError, ValueError, OverflowError):
-                requested_output_tokens = 4096
+                requested_output_tokens = default_output_tokens
             if requested_output_tokens <= 0:
-                requested_output_tokens = 4096
+                requested_output_tokens = default_output_tokens
             minimum_required_tail_tokens = _minimum_required_tail_tokens(route_messages)
             reserve_tokens = min(requested_output_tokens, 2048)
             prompt_budget = effective_budget

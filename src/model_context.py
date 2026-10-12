@@ -343,7 +343,47 @@ def _model_ctx_from_entry(m: dict) -> Optional[int]:
             val = meta.get(field)
             if val and isinstance(val, (int, float)) and val > 0:
                 return int(val)
+    # llama.cpp routers include the configured server argv under `status.args`
+    # in /v1/models, including for unloaded presets. This is the actual
+    # per-model serving limit; the router-wide /props n_ctx can be zero and
+    # /slots requires selecting a model.
+    status = m.get("status")
+    args = status.get("args") if isinstance(status, dict) else None
+    if isinstance(args, list):
+        for index, arg in enumerate(args):
+            if arg in ("-c", "--ctx-size") and index + 1 < len(args):
+                try:
+                    value = int(args[index + 1])
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if value > 0:
+                    return value
+            if isinstance(arg, str) and arg.startswith("--ctx-size="):
+                try:
+                    value = int(arg.partition("=")[2])
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if value > 0:
+                    return value
     return None
+
+
+def _model_entry_matches(m: dict, model: str) -> bool:
+    """Match a catalog entry by id or alias, including provider-prefixed ids."""
+    if not isinstance(m, dict):
+        return False
+    names = [m.get("id")]
+    aliases = m.get("aliases")
+    if isinstance(aliases, str):
+        names.append(aliases)
+    elif isinstance(aliases, list):
+        names.extend(aliases)
+    target = (model or "").split("/")[-1]
+    return any(
+        isinstance(name, str)
+        and (name == model or name.split("/")[-1] == target)
+        for name in names
+    )
 
 
 # Per-endpoint cache of the {model_id: context_length} map parsed from a
@@ -468,8 +508,7 @@ def _query_context_length(endpoint_url: str, model: str) -> Tuple[int, bool]:
             models_list = data.get("data") or []
 
             for m in models_list:
-                mid = m.get("id", "")
-                if mid == model or mid.split("/")[-1] == model.split("/")[-1]:
+                if _model_entry_matches(m, model):
                     api_ctx = _model_ctx_from_entry(m)
                     break
     except Exception as e:

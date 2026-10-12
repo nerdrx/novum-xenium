@@ -56,3 +56,33 @@ def test_model_context_queries_models_for_v1_base(monkeypatch):
         "http://127.0.0.1:8080/slots",
         "http://127.0.0.1:8080/v1/models",
     ]
+
+
+def test_model_context_reads_llama_router_preset_context_without_loading(monkeypatch):
+    monkeypatch.setattr(endpoint_resolver, "resolve_url", lambda url: url)
+    seen = []
+
+    def fake_get(url, timeout=None):
+        seen.append(url)
+        request = httpx.Request("GET", url)
+        if url.endswith("/slots"):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "model name is missing"}},
+                request=request,
+            )
+        return httpx.Response(200, json={"data": [{
+            "id": "nx-model-0",
+            "aliases": ["huihui_ai/Qwen3.8-abliterated:27b-q4_K_M"],
+            "status": {"value": "unloaded", "args": ["llama-server", "--ctx-size", "32768"]},
+        }]}, request=request)
+
+    monkeypatch.setattr(model_context.httpx, "get", fake_get)
+
+    assert model_context._query_context_length(
+        "http://127.0.0.1:8097/v1", "huihui_ai/Qwen3.8-abliterated:27b-q4_K_M",
+    ) == (32768, True)
+    assert seen == [
+        "http://127.0.0.1:8097/slots",
+        "http://127.0.0.1:8097/v1/models",
+    ]

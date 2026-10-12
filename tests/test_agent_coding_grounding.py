@@ -255,3 +255,55 @@ def test_documentation_evidence_still_waits_for_suggested_skill_view(monkeypatch
     assert 'manage_skills' in requests[1]
     assert 'write_file' in requests[3]
     assert executed == ['web_fetch', 'manage_skills', 'write_file']
+
+
+def _seed_ui_skill(monkeypatch):
+    from services.memory.skills import SkillsManager
+    monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
+        'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
+        'category': 'design', 'tags': ['gui'], 'procedure': [],
+        'when_to_use': 'Build a GUI app following a framework documentation guide.',
+    }])
+
+
+def test_read_stall_prompts_once_for_pending_skill_then_allows_write(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    url = 'https://vendor.example/docs/gui'
+    repeated_fetch = [_call('web_fetch', {'url': url}, f'fetch-{i}') for i in range(4)]
+    events, requests, histories, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [*repeated_fetch,
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented after consulting the docs and skill."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0} for _ in range(4)],
+         'manage_skills': [{'results': 'Use a compact GUI layout.', 'exit_code': 0}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    assert not any(event.get('reason') == 'repeated_tool_results' for event in events)
+    assert all(not ({'bash', 'write_file'} & requests[i]) for i in range(4))
+    assert 'manage_skills' in requests[4] and 'write_file' not in requests[4]
+    assert 'write_file' in requests[5]
+    assert any('Documentation has been read. The remaining pre-write gate' in
+               str(message.get('content') or '') for message in histories[4])
+    assert executed == ['web_fetch'] * 4 + ['manage_skills', 'write_file']
+
+
+def test_read_stall_recovery_is_one_shot(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    url = 'https://vendor.example/docs/gui'
+    fetches = [_call('web_fetch', {'url': url}, f'fetch-{i}') for i in range(7)]
+    events, requests, histories, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.', fetches,
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}
+                       for _ in range(7)]},
+    )
+
+    pauses = [event for event in events
+              if event.get('type') == 'loop_breaker_triggered'
+              and event.get('reason') == 'repeated_tool_results']
+    assert len(pauses) == 1
+    assert len(requests) == len(executed) == 7
+    assert sum('Documentation has been read. The remaining pre-write gate' in
+               str(message.get('content') or '') for message in histories[-1]) == 1

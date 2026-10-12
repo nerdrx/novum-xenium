@@ -1,7 +1,9 @@
 """Content extraction behavior for the canonical services.search.content module."""
 
 import httpx
+import json
 import pytest
+from datetime import datetime
 
 pytest.importorskip("bs4")
 
@@ -66,6 +68,95 @@ def test_content_fetcher_extracts_og_image_and_body_fallback(module, tmp_path, m
     assert "substantive body text" in result["content"]
     assert "much longer than the tiny" in result["content"]
     assert "window.secret" not in result["content"]
+
+
+def test_nested_semantic_wrappers_are_read_once_and_siblings_are_kept(tmp_path, monkeypatch):
+    html = """
+    <html><body>
+      <nav><ul><li>NavigationOnly</li></ul></nav>
+      <main class="main-content">
+        <header>HeaderNoise<nav><ul><li>NestedNavigationOnly</li></ul></nav></header>
+        <p>MainBodyKept</p>
+        <section class="content">
+          <h1>ProjectFilesOnce</h1>
+          <ul><li>src/main.js</li><li>README.md</li></ul>
+          <table><tr><td>Output format</td><td>MP4</td></tr></table>
+          <pre>ffmpeg -i input.mp4 output.mp4</pre>
+        </section>
+        <article class="article-content">
+          <p>DistinctSectionAlsoKept</p>
+        </article>
+        <footer>FooterNoise</footer>
+      </main>
+    </body></html>
+    """
+    monkeypatch.setattr(service_content, "CONTENT_CACHE_DIR", tmp_path)
+    service_content.content_cache_index.clear()
+    monkeypatch.setattr(
+        service_content, "_get_public_url",
+        lambda url, headers, timeout, **kwargs: _FakeResponse(html),
+    )
+
+    result = service_content.fetch_webpage_content("https://example.com/repository")
+
+    assert result["content"].count("ProjectFilesOnce") == 1
+    assert "DistinctSectionAlsoKept" in result["content"]
+    assert "MainBodyKept" in result["content"]
+    assert "src/main.js" in result["content"] and "README.md" in result["content"]
+    assert "NavigationOnly" not in result["content"]
+    assert "HeaderNoise" not in result["content"]
+    assert "FooterNoise" not in result["content"]
+    # Structured extraction still uses the untouched source soup.
+    assert ["src/main.js", "README.md"] in result["lists"]
+    assert ["NavigationOnly"] in result["lists"]
+    assert ["NestedNavigationOnly"] in result["lists"]
+    assert [["Output format", "MP4"]] in result["tables"]
+    assert "ffmpeg -i input.mp4 output.mp4" in result["code_blocks"]
+
+
+def test_thin_semantic_page_still_uses_cleaned_body_fallback(tmp_path, monkeypatch):
+    visible = "Hydrated visible interface. " * 40
+    html = f"""
+    <html><body>
+      <nav>NavigationNoise</nav>
+      <main><p>Tiny semantic wrapper</p></main>
+      <div class="app-shell"><p>{visible}</p></div>
+    </body></html>
+    """
+    monkeypatch.setattr(service_content, "CONTENT_CACHE_DIR", tmp_path)
+    service_content.content_cache_index.clear()
+    monkeypatch.setattr(
+        service_content, "_get_public_url",
+        lambda url, headers, timeout, **kwargs: _FakeResponse(html),
+    )
+
+    result = service_content.fetch_webpage_content("https://example.com/app")
+
+    assert "Hydrated visible interface." in result["content"]
+    assert "NavigationNoise" not in result["content"]
+
+
+def test_extraction_cache_namespace_skips_old_parser_entries(tmp_path, monkeypatch):
+    url = "https://example.com/cached-page"
+    old_key = service_content.generate_cache_key(
+        f"{url}#cap={service_content.WEB_FETCH_SOFT_MAX_BYTES}"
+    )
+    (tmp_path / f"{old_key}.cache").write_text(json.dumps({
+        "timestamp": datetime.now().isoformat(),
+        "data": {"content": "OLD OVERLAPPING EXTRACTION", "success": True},
+    }), encoding="utf-8")
+    monkeypatch.setattr(service_content, "CONTENT_CACHE_DIR", tmp_path)
+    service_content.content_cache_index.clear()
+    monkeypatch.setattr(
+        service_content, "_get_public_url",
+        lambda url, headers, timeout, **kwargs: _FakeResponse(
+            "<html><body><main><p>NEW EXTRACTION</p></main></body></html>"
+        ),
+    )
+
+    result = service_content.fetch_webpage_content(url)
+
+    assert result["content"] == "NEW EXTRACTION"
 
 
 @pytest.mark.parametrize("status_code", [403, 404])

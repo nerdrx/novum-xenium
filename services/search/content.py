@@ -138,6 +138,39 @@ def _extract_code_blocks(soup: BeautifulSoup) -> List[str]:
     return blocks
 
 
+def _top_level_matching_tags(tags):
+    """Keep non-overlapping matching roots, preserving sibling sections."""
+    matching_ids = {id(tag) for tag in tags}
+    return [
+        tag for tag in tags
+        if not any(id(parent) in matching_ids for parent in tag.parents)
+    ]
+
+
+def _content_text(soup: BeautifulSoup) -> str:
+    """Extract non-overlapping page content while retaining multi-section roots."""
+    semantic = soup.find_all(["main", "article"])
+    roots = _top_level_matching_tags(semantic)
+    if not roots:
+        classed = soup.find_all(
+            ["main", "article", "section", "div"],
+            class_=re.compile("content|main|body|article|post|entry|text", re.I),
+        )
+        roots = _top_level_matching_tags(classed)
+
+    parts = []
+    for root in roots:
+        root_copy = copy.deepcopy(root)
+        for noise in root_copy.find_all(
+            ["script", "style", "noscript", "template", "nav", "header", "footer", "aside"]
+        ):
+            noise.extract()
+        text = re.sub(r"\s+", " ", root_copy.get_text(separator=" ", strip=True)).strip()
+        if text:
+            parts.append(text)
+    return " ".join(parts)
+
+
 def _detect_js_frameworks(soup: BeautifulSoup) -> bool:
     """Very naive detection of common JS frameworks."""
     js_indicators = [
@@ -190,7 +223,9 @@ def fetch_webpage_content(url: str, timeout: int = 5, retry_attempt: int = 0,
     effective_cap = min(max_bytes or WEB_FETCH_SOFT_MAX_BYTES, WEB_FETCH_HARD_MAX_BYTES)
     # The cap is part of the cache identity: a truncated soft-cap fetch must
     # not be served to a later full-budget request for the same URL.
-    cache_key = generate_cache_key(f"{url}#cap={effective_cap}")
+    # Bump the parser namespace so cached text extracted from overlapping HTML
+    # wrappers cannot hide the corrected non-overlapping extraction.
+    cache_key = generate_cache_key(f"content-v2:{url}#cap={effective_cap}")
     cache_file = CONTENT_CACHE_DIR / f"{cache_key}.cache"
 
     # Check cache
@@ -341,17 +376,11 @@ def fetch_webpage_content(url: str, timeout: int = 5, retry_attempt: int = 0,
     js_rendered = _detect_js_frameworks(soup)
     js_message = "Page appears to be rendered by a JavaScript framework; content may be incomplete." if js_rendered else ""
 
-    # Main textual content (heuristic): prefer semantic / "content"-classed
-    # containers to skip nav/footer/boilerplate; tuned for article pages.
-    main_content = ""
-    content_areas = soup.find_all(
-        ["main", "article", "section", "div"],
-        class_=re.compile("content|main|body|article|post|entry|text", re.I),
-    )
-    if content_areas:
-        for area in content_areas[:3]:
-            main_content += area.get_text(separator=" ", strip=True) + " "
-    main_content = re.sub(r"\s+", " ", main_content).strip()
+    # Prefer one semantic content root (or non-overlapping classed roots) so
+    # nested wrappers do not repeat the same page text. The selected copy has
+    # navigation noise removed; the original soup remains intact for lists,
+    # tables, and code-block extraction below.
+    main_content = _content_text(soup)
 
     # If the heuristic finds only a tiny wrapper, fall back to body text with
     # obvious boilerplate stripped so UI/deep-research search results do not

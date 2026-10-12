@@ -66,6 +66,21 @@ def test_failed_retries_ignore_only_test_duration_noise():
     assert stall["read_repeats"] == 0
 
 
+def test_read_recovery_resets_only_read_window_not_failed_retry_counter():
+    guard = _ToolProgressGuard()
+    for _ in range(4):
+        stall = guard.observe([
+            record("bash", "same failure", "missing", 1),
+            record("web_fetch", "same URL", "same page"),
+        ])
+    assert stall["read_repeats"] == stall["failed_retries"] == 3
+
+    guard.reset_read_stall_window()
+    assert sum(bool(tools) for tools in guard.failure_rounds) == 4
+    assert sum(kind == "failure" for calls in guard.recent for _, kind in calls) == 3
+    assert not any(kind == "read" for calls in guard.recent for _, kind in calls)
+
+
 def test_different_failure_and_successful_retry_reset_stall():
     guard = _ToolProgressGuard()
     failed = record("bash", "run tests", "missing module", 1)

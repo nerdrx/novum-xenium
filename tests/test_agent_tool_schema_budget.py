@@ -874,7 +874,10 @@ def test_coding_output_budget_fits_remaining_context(monkeypatch):
 
 
 @pytest.mark.parametrize("limit,reserve", [(0, 8192), (1024, 1024)])
-def test_busy_coding_context_reserves_output_before_trimming(monkeypatch, limit, reserve):
+def test_busy_coding_context_reserves_output_before_trimming(monkeypatch, tmp_path, limit, reserve):
+    project = tmp_path / "FFmpegNexus"
+    project.mkdir()
+    (project / "package.json").write_text("{}")
     requests = []
     schemas = [s for s in loop.FUNCTION_TOOL_SCHEMAS
                if s['function']['name'] in {'write_file', 'edit_file', 'read_file'}]
@@ -896,6 +899,7 @@ def test_busy_coding_context_reserves_output_before_trimming(monkeypatch, limit,
              {'role': 'assistant', 'content': 'Previous answer. ' * 8000},
              {'role': 'user', 'content': question}] + exchange,
             relevant_tools={'write_file', 'edit_file', 'read_file'},
+            workspace=str(tmp_path),
             max_tokens=limit, max_rounds=1, _is_teacher_run=True,
         )]
 
@@ -912,3 +916,5 @@ def test_busy_coding_context_reserves_output_before_trimming(monkeypatch, limit,
     assert any(m.get('tool_call_id') == 'saved' for m in shaped)
     assert any('4000 characters' in m.get('content', '') for m in shaped)
     assert all('_protected' not in m for m in shaped)
+
+    assert any(str(project) in m.get('content', '') for m in shaped)

@@ -4612,6 +4612,9 @@ async def stream_agent_loop(
     _route_output_token_budgets = {}
     _route_input_budgets = {}
     _route_trim_info = {}
+    # Refresh filesystem orientation per model request; conversation trimming
+    # must not turn a parent workspace into an apparently empty project.
+    _workspace_orientation = ""
 
     def _trim_route_request_messages(candidate_url, candidate_model, route_messages, route_tools=None):
         """Apply the candidate route's own context budget to its request."""
@@ -4680,7 +4683,8 @@ async def stream_agent_loop(
                         "per round. Create a short initial file with write_file, then extend it "
                         "with edit_file using a unique existing ending as old_string and that "
                         "same ending plus the next section as new_string. Do not overwrite "
-                        "completed sections. Continue until the complete implementation is saved."
+                        "completed sections. Continue until the complete implementation is saved.\n"
+                        + _workspace_orientation
                     ),
                 }]
             before_trim_tokens = estimate_tokens(route_messages)
@@ -5052,6 +5056,14 @@ async def stream_agent_loop(
             return _without_protection(route_messages)
 
     async def _build_route_request_state(candidate_url, candidate_model, candidate_headers, source_messages):
+        nonlocal _workspace_orientation
+        if (_use_coding_tools(_retrieval_query or _last_user, workspace)
+                and not guide_only and not public_blocked_tools):
+            from src.agent_tools.filesystem_tools import workspace_project_context
+            try:
+                _workspace_orientation = await asyncio.to_thread(workspace_project_context, workspace)
+            except (OSError, RuntimeError, ValueError):
+                _workspace_orientation = ""
         compaction_state: Dict = {}
         compacted_source = list(source_messages)
         was_compacted = False

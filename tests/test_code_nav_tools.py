@@ -207,3 +207,30 @@ def test_read_file_plain_path_backcompat(repo):
     r = _run("read_file", os.path.join(repo, "a.py"))
     assert r["exit_code"] == 0
     assert "needle" in r["output"]
+
+
+def test_workspace_reports_existing_child_projects_without_rebinding(repo):
+    from src.tool_execution import _active_workspace, get_active_workspace
+    project = os.path.join(repo, 'FFmpegNexus')
+    os.mkdir(project)
+    with open(os.path.join(project, 'package.json'), 'w') as f:
+        f.write('{}')
+    # Never follow links or inspect dependencies as candidate projects.
+    os.symlink(project, os.path.join(repo, 'linked-project'))
+    with open(os.path.join(repo, 'node_modules', 'package.json'), 'w') as f:
+        f.write('{}')
+    token = _active_workspace.set(repo)
+    try:
+        result = _run('get_workspace', '')
+        assert project in result['output']
+        assert 'linked-project' not in result['output']
+        assert 'node_modules' not in result['output']
+        assert 'cd affects only that single shell call' in result['output']
+        assert get_active_workspace() == repo
+        missing = _run('read_file', os.path.join(repo, 'package.json'))
+        assert missing['exit_code'] == 1
+        assert project in missing['error']
+        assert 'does NOT mean the project is missing' in missing['error']
+        assert not os.path.exists(os.path.join(repo, 'package.json'))
+    finally:
+        _active_workspace.reset(token)

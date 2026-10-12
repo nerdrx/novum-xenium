@@ -4518,11 +4518,11 @@ async def stream_agent_loop(
                 soft_budget, candidate_context, _budget_is_explicit(soft_budget), hard_max=hard_max,
             )
             try:
-                requested_output_tokens = int(max_tokens) if max_tokens is not None else 1024
+                requested_output_tokens = int(max_tokens) if max_tokens is not None else 4096
             except (TypeError, ValueError, OverflowError):
-                requested_output_tokens = 1024
+                requested_output_tokens = 4096
             if requested_output_tokens <= 0:
-                requested_output_tokens = 1024
+                requested_output_tokens = 4096
             minimum_required_tail_tokens = _minimum_required_tail_tokens(route_messages)
             reserve_tokens = min(requested_output_tokens, 2048)
             prompt_budget = effective_budget
@@ -5093,6 +5093,7 @@ async def stream_agent_loop(
     # an action without emitting the tool call. Capped to prevent a model
     # that *can't* call the tool from looping forever.
     _intent_nudge_count = 0
+    _invalid_tool_rounds = 0
     _MAX_INTENT_NUDGES = 2
 
     # "I said I would, then didn't" detector. The pattern that breaks debug
@@ -5942,6 +5943,35 @@ async def stream_agent_loop(
             is_api_model=(_is_api_model and not guide_only),
             allow_fenced_for_api=_ody_doc_finetune_mode,
         )
+        # Never mistake an incomplete native call for a completed answer. Reject
+        # the entire batch before execution so retries cannot duplicate siblings.
+        if native_tool_calls and len(converted_calls) != len(native_tool_calls) and not _force_answer:
+            _invalid_tool_rounds += 1
+            if _invalid_tool_rounds <= 2:
+                notice = "\n\nA tool request was incomplete or invalid. Retrying with smaller requests.\n\n"
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Your last native tool-call batch contained invalid or incomplete arguments. "
+                        "NONE of that batch was executed. Retry using valid tool names and complete JSON. "
+                        "Keep each call small: write a short initial file, then add small sections with "
+                        "the available editing tools. Do not repeat successful calls from earlier rounds."
+                    ),
+                })
+            else:
+                notice = ("\n\nStopped because the model repeatedly returned incomplete or invalid tool "
+                          "requests. The last batch was not executed; earlier completed work is saved.\n\n")
+            yield f'data: {json.dumps({"delta": notice})}\n\n'
+            full_response += notice
+            round_texts.append(strip_tool_blocks(round_response).strip() + notice)
+            round_models.append(_round_actual_model)
+            round_endpoint_ids.append(_round_actual_endpoint_id)
+            round_endpoint_labels.append(_round_actual_endpoint_label)
+            if _invalid_tool_rounds > 2:
+                break
+            yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+            continue
+
         if _ody_doc_stream_create_mode and tool_blocks:
             create_idx = next(
                 (idx for idx, block in enumerate(tool_blocks) if block.tool_type == "create_document"),

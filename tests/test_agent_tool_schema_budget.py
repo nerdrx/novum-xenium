@@ -114,6 +114,22 @@ def _configure(monkeypatch, schemas, request_capture):
     monkeypatch.setattr(loop, "stream_llm_with_fallback", fake_stream)
 
 
+def test_unlimited_agent_output_uses_standard_4096_token_budget(monkeypatch):
+    requests = []
+    _configure(monkeypatch, [], requests)
+
+    async def run():
+        return [chunk async for chunk in loop.stream_agent_loop(
+            "http://127.0.0.1:11434/v1", "test-model",
+            [{"role": "user", "content": "Write a file."}],
+            max_tokens=0, max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+
+    assert requests[0]["kwargs"]["max_tokens"] == 4096
+
+
 @pytest.mark.parametrize("explicit_web_request", [False, True])
 def test_default_web_permission_does_not_block_workspace_tools_when_budget_is_tight(
     monkeypatch, explicit_web_request

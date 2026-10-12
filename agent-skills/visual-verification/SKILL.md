@@ -1,7 +1,7 @@
 ---
 name: visual-verification
 description: Verify GUI, UI, frontend, website, CSS, and theme changes in a real rendered interface, including behavior and accessibility.
-version: 1.0.1
+version: 1.0.2
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -13,7 +13,7 @@ source: taught
 After implementing or changing a graphical interface, and before claiming it is usable or follows a design guide.
 
 ## Procedure
-1. Discover the existing app's startup and test commands from its manifests and documentation. Use search_tools to discover available browser navigation, console, DOM, and screenshot tools rather than guessing tool names. Use those tools or a headless browser. For a native app, use a headless display or gamescope when available. Choose a free test port and stop only processes you started; do not disturb user services.
+1. Discover the existing app's startup and test commands from its manifests and documentation. Use search_tools to discover available browser navigation, console, DOM, and screenshot tools rather than guessing tool names. Use those tools or a headless browser. For a native app, use a headless display or gamescope when available. The standard Docker image provides xvfb-run for an isolated X display; check its availability and use the actual native application rather than replacing it with static HTML to avoid a display error. Choose a free test port and stop only processes you started; do not disturb user services.
 2. Check syntax/build results, then launch the actual interface. Capture page errors and failed requests. A missing script, unresolved asset, or syntax error is a failure even if HTML renders.
 3. Inspect computed background, foreground, font, spacing, borders, and control geometry. Check that CSS variables resolve, text is readable, important controls fit their containers, and the viewport has no unintended horizontal overflow.
 4. Render at the normal desktop size and a smaller supported window size. Check scrolling, titlebars, dialogs, menus, form labels, and focus outlines. Test the requested theme; do not infer it from a filename or screenshot caption.

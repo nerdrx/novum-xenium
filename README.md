@@ -74,7 +74,7 @@ Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/pre
 
 Persistent files, repository guidance, a compact repo map and managed Git worktrees. Save a project's checks, run them and see the result. Review a snapshot or restore included files when an edit goes sideways.
 
-The Docker image includes ripgrep and a browser tool that starts without downloading npm packages at runtime. Sparse checkouts keep larger repositories manageable. GitHub work uses the shell and Git tools you already know.
+The Docker image includes ripgrep and a browser tool that starts without downloading npm packages at runtime. Native GUI tests can use `xvfb-run -a` for an isolated display without opening windows on your desktop. Sparse checkouts keep larger repositories manageable. GitHub work uses the shell and Git tools you already know.
 
 Watch the browser as the agent moves between pages. A preview opens after its first browser action and updates after navigation, clicks and other page interactions. Close it when you want the space back; **Watch browser** reopens it. Search and text fetches keep their normal tool results.
 

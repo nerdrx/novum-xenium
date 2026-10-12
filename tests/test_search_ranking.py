@@ -1,4 +1,8 @@
-from services.search.ranking import rank_search_results
+from services.search.ranking import (
+    best_query_token_coverage,
+    needs_search_supplement,
+    rank_search_results,
+)
 
 
 def test_news_queries_prefer_news_sources_over_sports_and_social_results():
@@ -57,3 +61,34 @@ def test_github_cli_result_outranks_unrelated_freebsd_org_result():
     ranked = rank_search_results(query, results)
 
     assert ranked[0]["url"] == "https://cri.dev/posts/"
+
+
+def test_sparse_or_weak_batches_need_supplement():
+    query = "Electron FFmpeg GUI app"
+    strong = [
+        {"title": "Electron FFmpeg GUI app", "snippet": "Electron FFmpeg GUI app"}
+        for _ in range(3)
+    ]
+    weak = [{"title": "Gecko Diary", "snippet": "Electron framework and Blink"}]
+    full_but_unmatched = [
+        {"title": "npm package manager", "snippet": "Install a package"}
+        for _ in range(5)
+    ]
+
+    assert best_query_token_coverage(query, strong) == 1.0
+    assert best_query_token_coverage(query, weak) < 0.5
+    assert needs_search_supplement(query, weak, 5)  # undersized and weak
+    assert needs_search_supplement(query, full_but_unmatched, 5)  # full, but weak
+    assert not needs_search_supplement(query, strong, 3)
+
+
+def test_query_coverage_uses_word_boundaries():
+    assert best_query_token_coverage(
+        "app electron",
+        [{"title": "application electronics", "snippet": ""}],
+    ) == 0.0
+
+
+def test_query_coverage_ignores_malformed_rows():
+    assert best_query_token_coverage("Electron FFmpeg", [None, "bad row"]) == 0.0
+    assert needs_search_supplement("Electron FFmpeg", [None], 3)

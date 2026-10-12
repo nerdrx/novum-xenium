@@ -89,6 +89,26 @@ def _has_word(text: str, term: str) -> bool:
     return re.search(rf"\b{re.escape(term)}\b", text) is not None
 
 
+def best_query_token_coverage(query: str, results: List[dict]) -> float:
+    """Return the best fraction of query words found in a result title/snippet."""
+    terms = [term.lower() for term in re.findall(r"\b\w+\b", query)]
+    if not terms:
+        return 1.0
+    return max((
+        sum(_has_word(f"{item.get('title', '')} {item.get('snippet', '')}".lower(), term)
+            for term in terms) / len(terms)
+        for item in results if isinstance(item, dict)
+    ), default=0.0)
+
+
+def needs_search_supplement(query: str, results: List[dict], count: int) -> bool:
+    """Detect a nonempty but sparse or lexically weak result batch."""
+    return bool(results) and (
+        len(results) < min(max(count, 0), 3)
+        or best_query_token_coverage(query, results) < 0.5
+    )
+
+
 def rank_search_results(query: str, results: List[dict]) -> List[dict]:
     """Rank search results by title relevance, snippet quality, domain authority, and recency."""
     query_terms = [t.lower() for t in re.findall(r"\b\w+\b", query)]

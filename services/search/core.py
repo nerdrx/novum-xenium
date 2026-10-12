@@ -21,7 +21,7 @@ from .cache import (
     cleanup_cache,
 )
 from .query import _cache_duration_for_query
-from .ranking import rank_search_results
+from .ranking import needs_search_supplement, rank_search_results
 from .providers import (
     searxng_search_api,
     brave_search,
@@ -130,6 +130,41 @@ def _build_provider_chain(primary: str) -> List[str]:
     return chain
 
 
+def _supplement_weak_results(query, primary_results, count, time_filter, provider_chain):
+    """Try one configured fallback for a sparse/weak nonempty SearXNG batch."""
+    if (not primary_results or not provider_chain or provider_chain[0] != "searxng"
+            or len(provider_chain) < 2
+            or not needs_search_supplement(query, primary_results, count)):
+        return primary_results, None
+
+    fallback = provider_chain[1]
+    try:
+        extra = _call_provider(fallback, query, count, time_filter)
+    except Exception as exc:
+        status = f"error ({type(exc).__name__})"
+        logger.warning("Search supplement via %s failed: %s", fallback, status)
+        return primary_results, (fallback, status)
+    if not extra:
+        status = "empty"
+        logger.info("Search supplement via %s returned no results", fallback)
+        return primary_results, (fallback, status)
+
+    merged = []
+    seen_urls = set()
+    for result in [*primary_results, *extra]:
+        if not isinstance(result, dict):
+            continue
+        url = str(result.get("url") or "").strip()
+        if url and url in seen_urls:
+            continue
+        if url:
+            seen_urls.add(url)
+        merged.append(result)
+    status = f"ok ({len(extra)} returned; {len(merged)} unique)"
+    logger.info("Search supplement via %s: %s", fallback, status)
+    return merged, (fallback, status)
+
+
 # ----------------------------------------------------------------------
 # Unified search with caching and retry
 # ----------------------------------------------------------------------
@@ -142,7 +177,7 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
     if count == 10:
         count = result_count
 
-    cache_key = generate_cache_key(f"{query}|{count}|{time_filter}")
+    cache_key = generate_cache_key(f"search-v2:{query}|{count}|{time_filter}")
     cache_file = SEARCH_CACHE_DIR / f"{cache_key}.cache"
 
     # Check cache
@@ -174,12 +209,15 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
     provider_chain = _build_provider_chain(search_provider)
 
     results: List[dict] = []
+    primary_results = None
     for provider_name in provider_chain:
         for attempt in range(2):
             try:
                 logger.info(f"Attempting {provider_name} search (attempt {attempt + 1})")
                 results = _call_provider(provider_name, query, count, time_filter)
                 if results:
+                    if provider_name == provider_chain[0]:
+                        primary_results = list(results)
                     logger.info(f"{provider_name} search succeeded with {len(results)} results")
                     break
             except (NetworkError, ParseError, RateLimitError) as e:
@@ -193,7 +231,11 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
     _record_query(query, success, cache_hit=False)
 
     if success:
-        results = rank_search_results(query, results)
+        if primary_results is not None:
+            results, _supplement = _supplement_weak_results(
+                query, primary_results, count, time_filter, provider_chain,
+            )
+        results = rank_search_results(query, results)[:count]
         try:
             expiry = datetime.now() + _cache_duration_for_query(query)
             cache_data = {
@@ -231,7 +273,7 @@ def invalidate_search_cache(query: Optional[str] = None) -> None:
         # Match the key the write path stores: searxng_search_results replaces
         # the caller's default count with the configured _get_result_count()
         # (default 5), so a hardcoded "|10|None" never matched a real entry.
-        cache_key = generate_cache_key(f"{query}|{_get_result_count()}|None")
+        cache_key = generate_cache_key(f"search-v2:{query}|{_get_result_count()}|None")
         cache_file = SEARCH_CACHE_DIR / f"{cache_key}.cache"
         if cache_file.exists():
             try:
@@ -279,6 +321,7 @@ def comprehensive_web_search(
     provider_chain = _build_provider_chain(search_provider)
 
     search_results = []
+    primary_results = None
     provider_attempts = {}
     for provider_name in provider_chain:
         last_err = None
@@ -287,6 +330,8 @@ def comprehensive_web_search(
             try:
                 search_results = _call_provider(provider_name, query, fetch_count, time_filter)
                 if search_results:
+                    if provider_name == provider_chain[0]:
+                        primary_results = list(search_results)
                     provider_attempts[provider_name] = f"ok ({len(search_results)})"
                     logger.info(f"Comprehensive search: {provider_name} returned {len(search_results)} results")
                     break
@@ -315,7 +360,13 @@ def comprehensive_web_search(
         logger.warning(msg)
         return (msg, []) if return_sources else msg
 
-    search_results = rank_search_results(query, search_results)
+    if primary_results is not None:
+        search_results, supplement = _supplement_weak_results(
+            query, primary_results, fetch_count, time_filter, provider_chain,
+        )
+        if supplement:
+            provider_attempts[f"supplement:{supplement[0]}"] = supplement[1]
+    search_results = rank_search_results(query, search_results)[:fetch_count]
 
     # URL filter helper
     def url_passes_filters(url: str) -> bool:

@@ -545,7 +545,7 @@ _DOMAIN_TOOL_MAP = {
 
 _WORKSPACE_TERMINUS_TOOLS = (
     _DOMAIN_TOOL_MAP["files"]
-    | {"manage_skills", "ask_teacher", "web_search", "web_fetch", "ask_user", "update_plan"}
+    | {"manage_skills", "ask_teacher", "web_search", "web_fetch", "ask_user", "update_plan", "search_tools"}
 )
 
 def _domain_rules_for_tools(tool_names: set) -> list[str]:
@@ -561,6 +561,7 @@ def _domain_rules_for_tools(tool_names: set) -> list[str]:
 # Each tool section is keyed by tool name(s) it covers.
 # Sections with multiple tools use a tuple key.
 TOOL_SECTIONS = {
+    "search_tools": "- `search_tools` — Search the tool catalog by capability. Use it when the current tool list lacks what the task needs; selected tools appear on the next model turn. Discovery never bypasses tool permissions.",
     "bash": """\
 ```bash
 <shell command>
@@ -1435,7 +1436,7 @@ def _assistant_requested_followup(messages: List[Dict]) -> bool:
     return False
 
 
-def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, object]:
+def _classify_single_agent_request(messages: List[Dict], last_user: str) -> Dict[str, object]:
     """Classify only whether this turn deserves domain tool retrieval.
 
     Normal chat should not inherit old Cookbook/email/document context. Recent
@@ -1542,6 +1543,79 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
     }
 
 
+def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, object]:
+    """Reconstruct the active task from trusted human turns, not reply keywords.
+
+    The anchor survives arbitrary refinements and long chains of follow-ups.
+    It affects tool discovery only; it never grants permission to execute tools.
+    """
+    turns = []
+    for message in messages:
+        if message.get("role") != "user" or (message.get("metadata") or {}).get("trusted") is False:
+            continue
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+        text = str(content or "").strip()
+        if text and not text.startswith("[Tool execution results]"):
+            turns.append(text)
+    latest = str(last_user or "").strip()
+    if not turns or turns[-1] != latest:
+        turns.append(latest)
+
+    anchor = ""
+    active_domains = set()
+    result = None
+    for text in turns:
+        single = _classify_single_agent_request([{"role": "user", "content": text}], text)
+        domains = set(single["domains"])
+        explicit = _is_explicit_continuation(text)
+        boundary = bool(re.search(
+            r"^(?:stop|cancel|never mind|nevermind|forget (?:it|that|this)|"
+            r"new (?:task|topic)|unrelated|instead\b|switch (?:topics?|tasks?))\b",
+            text, re.I,
+        ))
+        # Standalone questions/new requests must not resurrect an old task.
+        independent = not explicit and bool(re.search(
+            r"^(?:what (?:is|are)|who (?:is|are|am)|when (?:is|are)|where (?:is|are)|"
+            r"explain|teach|continue learning|resume writing a new)\b", text, re.I,
+        ))
+        casual = not text or bool(_LOW_SIGNAL_RE.match(text)) or _is_casual_low_signal(text)
+        if boundary or independent:
+            anchor = ""
+            active_domains = set()
+        if casual or boundary:
+            result = single
+            continue
+        # A distinct domain starts a new task. UI/document refinements of a
+        # coding task retain its file tools, but unrelated lookups do not.
+        refinement = bool(active_domains & domains) or (
+            "files" in active_domains and domains <= {"documents", "ui"}
+        )
+        inherit = bool(anchor) and not independent and (explicit or not domains or refinement)
+        if inherit:
+            query = anchor[:4000] + "\nLatest user instruction: " + text[:2000]
+            result = {
+                "low_signal": False, "continuation": True,
+                "domains": active_domains | domains, "retrieval_query": query,
+            }
+            active_domains |= domains
+        else:
+            result = single
+            if domains:
+                anchor = text
+                active_domains = domains
+            elif independent:
+                anchor = ""
+                active_domains = set()
+            else:
+                # An unknown domain is still a task: the model can discover
+                # its tools, and later follow-ups should retain this request.
+                anchor = text
+                active_domains = set()
+    return result
+
+
 def _focus_web_lookup_tools(tool_names: Set[str], intent: dict, query: str) -> Set[str]:
     """A plain lookup must not inherit unrelated domains from vector matches."""
     if set(intent.get("domains") or ()) != {"web"}:
@@ -1550,6 +1624,86 @@ def _focus_web_lookup_tools(tool_names: Set[str], intent: dict, query: str) -> S
         return set(tool_names)
     from src.tool_index import ALWAYS_AVAILABLE
     return set(ALWAYS_AVAILABLE) | set(WEB_TOOL_NAMES) | (set(tool_names) & {"context_search", "generate_image"})
+
+
+async def _discover_tools(query: str, *, mcp_mgr, mcp_disabled_map, owner,
+                          disabled_tools, plan_mode, caller_tools=None,
+                          delegated_credential=False, needs_admin=False) -> tuple[list[str], str]:
+    """Search the catalog and return only tools this request may expose."""
+    query = str(query or "").strip()[:500]
+    if not query:
+        return [], "Give a short description of the capability you need."
+    matches = []
+    try:
+        from src.tool_index import get_tool_index
+        index = await asyncio.wait_for(asyncio.to_thread(get_tool_index), timeout=_TOOL_SELECTION_TIMEOUT_SECONDS)
+        if index:
+            if mcp_mgr:
+                await asyncio.wait_for(
+                    asyncio.to_thread(index.index_mcp_tools, mcp_mgr, mcp_disabled_map or {}),
+                    timeout=_TOOL_SELECTION_TIMEOUT_SECONDS,
+                )
+            matches = await asyncio.wait_for(
+                asyncio.to_thread(index.retrieve, query, 8),
+                timeout=_TOOL_SELECTION_TIMEOUT_SECONDS,
+            )
+    except Exception as exc:
+        logger.info("Tool discovery index unavailable; using lexical catalog search: %s", exc)
+
+    from src.tool_security import blocked_tools_for_owner, delegated_credential_blocked_tools
+    from src.tool_policy import known_tool_names
+    denied = set(disabled_tools or ()) | blocked_tools_for_owner(owner)
+    if delegated_credential:
+        denied |= delegated_credential_blocked_tools()
+    known = known_tool_names()
+    if plan_mode:
+        from src.tool_security import PLAN_MODE_READONLY_TOOLS
+        known &= set(PLAN_MODE_READONLY_TOOLS)
+    mcp_schemas = (
+        mcp_mgr.get_all_openai_schemas(mcp_disabled_map or {})
+        if mcp_mgr and not plan_mode else []
+    )
+    visible_mcp = {
+        schema.get("function", {}).get("name")
+        for schema in mcp_schemas
+        if schema.get("function", {}).get("name")
+    }
+    if not matches:
+        # No embedding service is required for basic recovery: rank available
+        # schema names/descriptions locally using the query's meaningful words.
+        terms = set(re.findall(r"[a-z0-9_]{3,}", query.lower())) - {
+            "the", "and", "for", "with", "that", "this", "from", "can", "you", "tool", "tools",
+        }
+        catalog = list(FUNCTION_TOOL_SCHEMAS) + list(mcp_schemas)
+        scored = []
+        for schema in catalog:
+            function = schema.get("function") or {}
+            name = str(function.get("name") or "")
+            searchable = f"{name} {function.get('description', '')}".lower()
+            hits = sum(bool(re.search(rf"\b{re.escape(term)}\b", searchable)) for term in terms)
+            if name and hits:
+                scored.append((hits, name))
+        matches = [name for _, name in sorted(scored, key=lambda item: (-item[0], item[1]))[:8]]
+    accepted = []
+    details = []
+    for name in matches:
+        if name == "search_tools":
+            continue
+        if name not in known and name not in visible_mcp:
+            continue
+        if caller_tools is not None and name not in caller_tools:
+            continue
+        if tool_policy_names(name) & denied:
+            continue
+        if name in _ADMIN_TOOLS and not needs_admin:
+            continue
+        accepted.append(name)
+        details.append(f"- {name}")
+        if len(accepted) >= 5:
+            break
+    if not accepted:
+        return [], "No additional permitted tools matched. Continue with the tools already available."
+    return accepted, "Matching tools (available next model turn):\n" + "\n".join(details)
 
 
 def _turn_targets_active_document(intent: Dict[str, object], last_user: str, active_document) -> bool:
@@ -3799,6 +3953,7 @@ async def stream_agent_loop(
     _prompt_active_document = active_document if _active_document_relevant else None
     _direct_low_signal = (
         _low_signal_turn
+        and (_casual_low_signal_turn or bool(_LOW_SIGNAL_RE.match(_last_user)))
         and not _existing_conversation
         and not bool(_intent.get("continuation"))
         and not plan_mode
@@ -3810,8 +3965,8 @@ async def stream_agent_loop(
         and not forced_tools
         and not relevant_tools
     )
-    # Tool retrieval uses the latest message by default. It may inherit recent
-    # user turns only for explicit continuations ("yes", "do it", "1").
+    # Retrieval uses the active task anchor plus the latest human instruction.
+    # Unfamiliar task wording must still reach model-driven tool discovery.
     _retrieval_query = str(_intent.get("retrieval_query") or _last_user)
     if _explicitly_references_missing_workspace(_retrieval_query, workspace):
         msg = (
@@ -4315,6 +4470,7 @@ async def stream_agent_loop(
     _intent_domains = set(_intent.get("domains") or set())
     _base_relevant_tools = None if _relevant_tools is None else set(_relevant_tools)
     _runtime_skill_tools: Set[str] = set()
+    _runtime_discovered_tools: Set[str] = set()
 
     def _route_finetune_modes(candidate_model: str):
         is_ody = _is_odysseus_qwen_model(candidate_model)
@@ -4439,6 +4595,12 @@ async def stream_agent_loop(
                 "[agent-intent] active document turn removed file tools=%s",
                 _removed_doc_file_tools,
             )
+
+    # Discovery is a read-only route primitive. Keep it reachable on ordinary
+    # agent routes while leaving guide-only and the dedicated Qwen finetune
+    # clamps authoritative.
+    if _relevant_tools is not None and not guide_only and not _ody_qwen_finetune_model:
+        _relevant_tools.add("search_tools")
 
     if _relevant_tools is not None:
         logger.info("[agent-intent] selected_tools=%s", sorted(_relevant_tools)[:50])
@@ -4566,7 +4728,7 @@ async def stream_agent_loop(
                 # Route-selected tools are more useful than optional discovery
                 # schemas. Let their bounded set consume otherwise-unused prompt
                 # room, while keeping the ordinary schema cap for the rest.
-                budget_priority_names = set(_runtime_skill_tools)
+                budget_priority_names = set(_runtime_skill_tools) | _runtime_discovered_tools
                 coding_requested = bool(
                     _use_coding_tools(_retrieval_query or _last_user, workspace)
                 )
@@ -4610,7 +4772,7 @@ async def stream_agent_loop(
                         function = call.get("function") if isinstance(call, dict) else None
                         if isinstance(function, dict) and function.get("name"):
                             used_names.add(function["name"])
-                priority_names = set(forced_tools or ()) | _runtime_skill_tools
+                priority_names = set(forced_tools or ()) | _runtime_skill_tools | _runtime_discovered_tools | {"search_tools"}
                 if relevant_tools and len(relevant_tools) <= 16:
                     priority_names.update(relevant_tools)
                 if any(
@@ -5526,7 +5688,7 @@ async def stream_agent_loop(
         async def _candidate_request(index, candidate_url, candidate_model, candidate_headers):
             nonlocal _last_route_request_messages, _last_route_context_length
             nonlocal _last_context_inspection
-            if index == 0:
+            if index == 0 and round_num == 1:
                 state = _active_route_state
             else:
                 candidate_source_messages = (
@@ -6519,6 +6681,27 @@ async def stream_agent_loop(
                         "Exact approval required before tool start: %s",
                         block.tool_type,
                     )
+            elif block.tool_type == "search_tools":
+                yield (
+                    f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "full_command": full_command, "round": round_num})}\n\n'
+                )
+                try:
+                    _args = json.loads(block.content or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    _args = {}
+                discovered, search_output = await _discover_tools(
+                    _args.get("query", ""),
+                    mcp_mgr=mcp_mgr,
+                    mcp_disabled_map=_mcp_disabled_map,
+                    owner=owner,
+                    disabled_tools=disabled_tools,
+                    plan_mode=plan_mode,
+                    caller_tools=_caller_relevant_tools,
+                    delegated_credential=delegated_credential,
+                    needs_admin=_needs_admin,
+                )
+                desc = "Search available tools"
+                result = {"output": search_output, "exit_code": 0, "discovered_tools": discovered}
             else:
                 yield (
                     f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "full_command": full_command, "round": round_num})}\n\n'
@@ -6578,6 +6761,13 @@ async def stream_agent_loop(
                             pass
 
             run_security.observe_tool_result(block.tool_type, result, block.content)
+
+            if block.tool_type == "search_tools" and _relevant_tools is not None:
+                _new_tools = set(result.get("discovered_tools") or ())
+                _relevant_tools.update(_new_tools)
+                _runtime_discovered_tools.update(_new_tools)
+                if _base_relevant_tools is not None:
+                    _base_relevant_tools.update(_new_tools)
 
             # A skill the model just loaded can prescribe tools that weren't
             # RAG-selected this turn (declared via requires_toolsets in its

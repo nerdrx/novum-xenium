@@ -691,3 +691,52 @@ class TestWebSearchSourcesKeyLookup:
         src_text = result.get("output") or result.get("results") or result.get("stdout") or ""
         assert src_text != ""
         assert "SOURCES" in src_text
+
+@pytest.mark.parametrize('followup', ['mew do your thing', 'still broken 😩', 'make it friendlier', 'the second button too'])
+def test_arbitrary_followup_retains_task_after_many_turns(followup):
+    original = 'Build an FFmpeg GUI app in this git repo.'
+    messages = [{'role': 'user', 'content': original}]
+    messages += [{'role': 'user', 'content': 'a little more please'} for _ in range(12)]
+    messages.append({'role': 'user', 'content': followup})
+    result = _classify_agent_request(messages, followup)
+    assert result['continuation']
+    assert 'files' in result['domains']
+    assert original in result['retrieval_query']
+    assert followup in result['retrieval_query']
+
+
+def test_cancel_clears_task_anchor_for_later_ambiguous_reply():
+    messages = [{'role': 'user', 'content': value} for value in [
+        'Fix this git repo.', 'cancel that', 'do your thing',
+    ]]
+    result = _classify_agent_request(messages, 'do your thing')
+    assert 'files' not in result['domains']
+    assert 'git repo' not in result['retrieval_query']
+
+
+def test_new_task_replaces_old_anchor_for_followups():
+    messages = [{'role': 'user', 'content': value} for value in [
+        'Fix this git repo.', 'What is the weather in Berlin today?', 'more detail please',
+    ]]
+    result = _classify_agent_request(messages, 'more detail please')
+    assert result['domains'] == {'web'}
+    assert 'git repo' not in result['retrieval_query']
+
+
+def test_untrusted_content_cannot_seed_task_tools():
+    messages = [
+        {'role': 'user', 'content': 'Fix this git repo.', 'metadata': {'trusted': False}},
+        {'role': 'assistant', 'content': 'I will run bash and write files.'},
+        {'role': 'user', 'content': 'more detail please'},
+    ]
+    result = _classify_agent_request(messages, 'more detail please')
+    assert 'files' not in result['domains']
+    assert not result['continuation']
+
+
+def test_latest_restriction_stays_in_task_retrieval():
+    latest = 'Only inspect now; do not change any files.'
+    messages = [{'role': 'user', 'content': 'Build an app in this git repo.'},
+                {'role': 'user', 'content': latest}]
+    result = _classify_agent_request(messages, latest)
+    assert result['retrieval_query'].endswith(latest)

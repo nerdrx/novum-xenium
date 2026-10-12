@@ -114,6 +114,91 @@ def _configure(monkeypatch, schemas, request_capture):
     monkeypatch.setattr(loop, "stream_llm_with_fallback", fake_stream)
 
 
+def test_search_tools_refreshes_the_next_round_schema_set(monkeypatch):
+    search_schema = next(
+        schema for schema in loop.FUNCTION_TOOL_SCHEMAS
+        if schema["function"]["name"] == "search_tools"
+    )
+    calendar_schema = next(
+        schema for schema in loop.FUNCTION_TOOL_SCHEMAS
+        if schema["function"]["name"] == "manage_calendar"
+    )
+    requests = []
+    _configure(monkeypatch, [search_schema, calendar_schema], requests)
+    async def fake_discover(*args, **kwargs):
+        return ["manage_calendar"], "Matching tools: manage_calendar"
+
+    monkeypatch.setattr(loop, "_discover_tools", fake_discover)
+
+    async def fake_stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        requests.append(request)
+        names = {tool["function"]["name"] for tool in request["kwargs"]["tools"]}
+        if len(requests) == 1:
+            assert names == {"search_tools"}
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": [
+                {"id": "discover", "name": "search_tools", "arguments": '{"query":"calendar event"}'}
+            ]}) + "\n\n"
+        else:
+            assert "manage_calendar" in names
+            yield 'data: {"delta":"Found the calendar tool."}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(loop, "stream_llm_with_fallback", fake_stream)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "test-model",
+            [{"role": "user", "content": "Help me with this request."}],
+            relevant_tools={"search_tools"},
+            max_rounds=2,
+            _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 2
+
+
+def test_search_tools_uses_local_schema_search_when_index_is_missing(monkeypatch):
+    import src.tool_index as tool_index
+    import src.tool_security as tool_security
+
+    monkeypatch.setattr(tool_index, "get_tool_index", lambda: None)
+    monkeypatch.setattr(tool_security, "blocked_tools_for_owner", lambda owner: set())
+
+    async def run():
+        return await loop._discover_tools(
+            "calendar event", mcp_mgr=None, mcp_disabled_map={}, owner="admin",
+            disabled_tools=set(), plan_mode=False, needs_admin=True,
+        )
+
+    names, output = asyncio.run(run())
+    assert "manage_calendar" in names
+    assert "manage_calendar" in output
+
+
+def test_search_tools_preserves_plan_disabled_and_caller_allowlist(monkeypatch):
+    import src.tool_index as tool_index
+    import src.tool_security as tool_security
+
+    class Index:
+        def retrieve(self, query, k):
+            return ["bash", "manage_calendar", "web_search"]
+
+    monkeypatch.setattr(tool_index, "get_tool_index", lambda: Index())
+    monkeypatch.setattr(tool_security, "blocked_tools_for_owner", lambda owner: {"bash"})
+
+    async def run():
+        return await loop._discover_tools(
+            "check the web", mcp_mgr=None, mcp_disabled_map={}, owner="admin",
+            disabled_tools={"manage_calendar"}, plan_mode=True,
+            caller_tools={"web_search", "bash"}, needs_admin=False,
+        )
+
+    names, _ = asyncio.run(run())
+    assert names == ["web_search"]
+
+
 def test_unlimited_agent_output_uses_standard_4096_token_budget(monkeypatch):
     requests = []
     _configure(monkeypatch, [], requests)

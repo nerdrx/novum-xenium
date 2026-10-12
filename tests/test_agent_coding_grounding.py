@@ -257,6 +257,110 @@ def test_documentation_evidence_still_waits_for_suggested_skill_view(monkeypatch
     assert executed == ['web_fetch', 'manage_skills', 'write_file']
 
 
+def test_documentation_ready_schema_focuses_on_pending_skill(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    url = 'https://vendor.example/docs/gui'
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented after reading both references."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'manage_skills': [{'results': 'Use a compact GUI layout.'}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    focused = requests[1]
+    assert 'manage_skills' in focused
+    assert 'ask_user' in focused
+    assert not ({'web_search', 'web_fetch', 'read_file', 'grep', 'glob', 'ls',
+                 'get_workspace', 'write_file', 'bash'} & focused)
+    assert 'write_file' in requests[2]
+    assert executed == ['web_fetch', 'manage_skills', 'write_file']
+
+
+def test_out_of_phase_fetch_is_blocked_without_spending_research_budget(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    url = 'https://vendor.example/docs/gui'
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('web_fetch', {'url': url}, 'repeat-fetch'),
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented after reading both references."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'manage_skills': [{'results': 'Use a compact GUI layout.'}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    assert 'web_fetch' not in requests[1]
+    assert 'manage_skills' in requests[1]
+    assert executed == ['web_fetch', 'manage_skills', 'write_file']
+    fetch_results = [event for event in events
+                     if event.get('type') == 'tool_output' and event.get('tool') == 'web_fetch']
+    assert len(fetch_results) == 2
+    assert 'Coding research gate' in fetch_results[1]['output']
+
+
+def test_failed_skill_views_release_only_after_bounded_attempts(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    url = 'https://vendor.example/docs/gui'
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view-1'),
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view-2'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented; the suggested procedure was unavailable."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'manage_skills': [{'error': 'not found', 'exit_code': 1},
+                           {'error': 'not found', 'exit_code': 1}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    assert all('write_file' not in requests[index] for index in range(3))
+    assert 'write_file' in requests[3]
+    assert executed == ['web_fetch', 'manage_skills', 'manage_skills', 'write_file']
+    assert any(event.get('type') == 'coding_research' and event.get('status') == 'sources_read'
+               for event in events)
+
+
+def test_missing_skill_candidate_keeps_documentation_phase_and_opens_after_lookup(monkeypatch, tmp_path):
+    _no_suggested_skills(monkeypatch)
+    url = 'https://vendor.example/docs/gui'
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented after documentation lookup."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    assert 'write_file' in requests[1]
+    assert executed == ['web_fetch', 'write_file']
+
+
+def test_disabled_skill_tool_does_not_create_a_pending_skill_phase(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    url = 'https://vendor.example/docs/gui'
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented after documentation lookup."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+        disabled_tools={'manage_skills'},
+    )
+
+    assert 'manage_skills' not in requests[1]
+    assert 'write_file' in requests[1]
+    assert executed == ['web_fetch', 'write_file']
+
+
 def _seed_ui_skill(monkeypatch):
     from services.memory.skills import SkillsManager
     monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
@@ -264,49 +368,6 @@ def _seed_ui_skill(monkeypatch):
         'category': 'design', 'tags': ['gui'], 'procedure': [],
         'when_to_use': 'Build a GUI app following a framework documentation guide.',
     }])
-
-
-def test_read_stall_prompts_once_for_pending_skill_then_allows_write(monkeypatch, tmp_path):
-    _seed_ui_skill(monkeypatch)
-    url = 'https://vendor.example/docs/gui'
-    repeated_fetch = [_call('web_fetch', {'url': url}, f'fetch-{i}') for i in range(4)]
-    events, requests, histories, executed = _run(
-        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
-        [*repeated_fetch,
-         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
-         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
-         'data: {"delta":"Implemented after consulting the docs and skill."}\n\n'],
-        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0} for _ in range(4)],
-         'manage_skills': [{'results': 'Use a compact GUI layout.', 'exit_code': 0}],
-         'write_file': [{'output': 'saved', 'exit_code': 0}]},
-    )
-
-    assert not any(event.get('reason') == 'repeated_tool_results' for event in events)
-    assert all(not ({'bash', 'write_file'} & requests[i]) for i in range(4))
-    assert 'manage_skills' in requests[4] and 'write_file' not in requests[4]
-    assert 'write_file' in requests[5]
-    assert any('Documentation has been read. The remaining pre-write gate' in
-               str(message.get('content') or '') for message in histories[4])
-    assert executed == ['web_fetch'] * 4 + ['manage_skills', 'write_file']
-
-
-def test_read_stall_recovery_is_one_shot(monkeypatch, tmp_path):
-    _seed_ui_skill(monkeypatch)
-    url = 'https://vendor.example/docs/gui'
-    fetches = [_call('web_fetch', {'url': url}, f'fetch-{i}') for i in range(7)]
-    events, requests, histories, executed = _run(
-        monkeypatch, tmp_path, f'Build a GUI app following {url}.', fetches,
-        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}
-                       for _ in range(7)]},
-    )
-
-    pauses = [event for event in events
-              if event.get('type') == 'loop_breaker_triggered'
-              and event.get('reason') == 'repeated_tool_results']
-    assert len(pauses) == 1
-    assert len(requests) == len(executed) == 7
-    assert sum('Documentation has been read. The remaining pre-write gate' in
-               str(message.get('content') or '') for message in histories[-1]) == 1
 
 
 def test_exhausted_search_allowance_reminds_about_skill_without_claiming_sources(monkeypatch, tmp_path):
@@ -337,34 +398,6 @@ def test_exhausted_search_allowance_reminds_about_skill_without_claiming_sources
     assert str(histories[7]).count(reminder) == 1  # retained, not re-injected
     assert any(event.get('type') == 'coding_research'
                and event.get('status') == 'sources_unavailable' for event in events)
-
-
-def test_exhausted_search_reminder_does_not_repeat_after_stall(monkeypatch, tmp_path):
-    _seed_ui_skill(monkeypatch)
-    initial = [
-        _call('web_search', {'query': f'Electron GUI detail {i}'}, f'search-{i}')
-        for i in range(6)
-    ]
-    repeated = [
-        _call('web_search', {'query': 'same unresolved GUI detail'}, f'repeat-{i}')
-        for i in range(5)
-    ]
-    events, requests, histories, executed = _run(
-        monkeypatch, tmp_path,
-        'Build a GUI app following https://vendor.example/docs/gui.',
-        [*initial, *repeated],
-        {'web_search': [
-            *[{'output': f'Search result snippet {i}', 'exit_code': 0} for i in range(6)],
-            *[{'output': 'Same unresolved result', 'exit_code': 0} for _ in repeated],
-        ]},
-    )
-
-    reminder = 'The bounded documentation lookup allowance is exhausted; no source was verified.'
-    assert reminder in str(histories[6])
-    assert str(histories[-1]).count(reminder) == 1  # a later stall does not re-inject it
-    assert any(event.get('reason') == 'repeated_tool_results' for event in events)
-    assert len(executed) < len(initial) + len(repeated)
-    assert all('write_file' not in schema for schema in requests)
 
 
 def test_exhausted_search_without_skill_candidate_gets_no_skill_reminder(monkeypatch, tmp_path):

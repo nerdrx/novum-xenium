@@ -5240,7 +5240,7 @@ async def stream_agent_loop(
             ).isdisjoint(disabled_tools)
             and (_coding_grounding.may_mutate or
                  (schema.get("function", {}).get("name") or schema.get("name", ""))
-                 in _coding_grounding.research_tools)
+                 in _coding_grounding.phase_tools)
         ]
 
     def _tool_schemas_for_route(route_state):

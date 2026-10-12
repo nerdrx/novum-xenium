@@ -170,6 +170,36 @@ def test_skill_view_must_match_a_suggested_candidate_and_failure_escape_is_bound
     assert "do not claim that its procedure was consulted" in gate.directive
 
 
+def test_documentation_ready_pending_skill_exposes_only_skill_phase_tools():
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["gui-workflow"])
+    assert gate.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
+    assert gate.phase_tools == {"manage_skills", "ask_user", "search_tools"}
+    assert not gate.allows_tool("web_fetch", '{"url":"https://example.test"}')
+    assert not gate.observe("web_fetch", {"error": "phase blocked", "exit_code": 1}, "https://example.test")
+    assert gate.attempts == 1 and gate.failures == 0
+
+    disabled = CodingGrounding(task(), disabled_tools={"search_tools", "manage_skills"})
+    disabled.set_skill_candidates(["gui-workflow"], available=False)
+    assert "manage_skills" not in disabled.phase_tools
+    assert disabled.may_mutate is False  # documentation gate still applies
+
+
+def test_skill_phase_directive_reports_documentation_truth_without_more_lookups():
+    verified = CodingGrounding(task())
+    verified.set_skill_candidates(["gui-workflow"])
+    assert verified.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
+    assert "documentation source was successfully verified" in verified.directive
+    assert "web_search" not in verified.directive and "web_fetch" not in verified.directive
+
+    unavailable = CodingGrounding("Build a GUI app following https://vendor.example/docs")
+    unavailable.set_skill_candidates(["gui-workflow"])
+    for i in range(unavailable.max_attempts):
+        unavailable.observe("web_search", {"output": f"Snippet {i}", "exit_code": 0}, "query")
+    assert "No documentation source was verified" in unavailable.directive
+    assert "web_search" not in unavailable.directive and "web_fetch" not in unavailable.directive
+
+
 def test_pending_approval_does_not_count_as_skill_view_or_failed_lookup():
     gate = CodingGrounding(task())
     gate.set_skill_candidates(["gui-workflow"])

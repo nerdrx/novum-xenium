@@ -54,6 +54,8 @@ Copy an image to another app, save it with a native file dialog or open it in yo
 
 Install a [desktop release](https://github.com/nerdrx/novum-xenium/releases) directly or through [NX Hub](https://github.com/nerdrx/nx-hub). The current app adopts an existing Compose checkout; it does not install Docker, WSL or Git for you.
 
+On Linux, the manager can also discover existing GGUF models and launch a separate [zVram provider](docs/desktop.md#zvram-model-providers-linux). Save a profile, start it when needed, then register the healthy endpoint. Paging is experimental and opt-in. Ollama stays available.
+
 Linux is tested locally. Windows builds run in CI; Windows runtime testing is still needed. [Desktop setup and update details](docs/desktop.md).
 
 For development:

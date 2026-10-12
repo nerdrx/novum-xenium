@@ -1,3 +1,5 @@
+import { initZvram } from './zvram.js';
+
 const invoke = window.__TAURI__?.core?.invoke;
 const $ = (selector) => document.querySelector(selector);
 const state = { busy: false, config: null, confirmedFields: null, backend: { state: 'unconfigured' }, update: null };
@@ -261,5 +263,7 @@ if (!invoke) {
     if (!state.busy && !document.hidden) refreshStatus().catch(() => {});
   });
 }
+
+initZvram(invoke);
 
 export { applyConfig, refreshStatus, renderUpdateState };

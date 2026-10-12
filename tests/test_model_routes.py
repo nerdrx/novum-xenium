@@ -2294,3 +2294,28 @@ def test_manual_refresh_timeout_keeps_cached_models_and_warns(monkeypatch):
     assert db.commits == 0
     assert response.headers["X-Model-Refresh-Status"] == "failed"
     assert "kept cached models" in response.headers["X-Model-Refresh-Warning"]
+
+
+def test_zvram_router_picker_uses_public_aliases_after_checkbox_changes():
+    ep = _make_endpoint(
+        name="zVram · Local models",
+        base_url="http://127.0.0.1:8097/v1",
+        endpoint_kind="local",
+        cached_models=json.dumps(["nx-model-0", "nx-model-1"]),
+        pinned_models=json.dumps(["qwen3.5:9b-local", "smollm2:135m-f16-local"]),
+        hidden_models=json.dumps(["qwen3.5:9b-local"]),
+    )
+    assert model_routes._cached_model_ids(ep) == ["qwen3.5:9b-local", "smollm2:135m-f16-local"]
+    models, _ = model_routes._picker_models_for_endpoint(ep, ep.base_url, ep.endpoint_kind)
+    assert models == ["smollm2:135m-f16-local"]
+    ep.name = "Unrelated local server"
+    assert model_routes._cached_model_ids(ep) == ["nx-model-0", "nx-model-1"]
+
+
+def test_router_inventory_discovery_preserves_public_aliases():
+    assert model_routes._openai_model_ids({"data": [
+        {"id": "nx-model-0", "aliases": ["qwen3.5:9b-local"]},
+        {"id": "nx-model-1:LOCAL", "aliases": ["smollm2:135m-f16-local"]},
+        {"id": "normal-model", "aliases": ["unrelated-alias"]},
+        {"id": "nx-model-2", "aliases": []},
+    ]}) == ["qwen3.5:9b-local", "smollm2:135m-f16-local", "normal-model", "nx-model-2"]

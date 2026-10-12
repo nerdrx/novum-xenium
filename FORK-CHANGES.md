@@ -483,3 +483,13 @@ The initial dashboard examples have been removed. The catalog now ships **Subage
 Module navigation opens on installed panels, with name/description search and enabled/disabled filters. Repository management is separate, and ZIP installation sits under a disclosure below the installed list.
 
 Validation covers repository checkboxes, disabled updates, ownership, sandbox messaging, safe task rendering and child-chat navigation. No model inference is invoked by these checks.
+
+
+## zVram desktop provider
+
+The Linux manager now offers typed controls for a trusted zVram installation:
+discover existing GGUF models, save a model profile, start or stop its owned
+server, inspect readiness and register the verified endpoint. Registration uses
+the signed-in desktop session. Model files, Ollama and defaults stay unchanged.
+Experimental paging requires an explicit opt-in; RAM/swap guards remain active.
+General process management stays in the separate zVram application.

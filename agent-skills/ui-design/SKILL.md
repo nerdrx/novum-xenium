@@ -18,7 +18,7 @@ Build or restyle a graphical application, website, dashboard, or form. Use along
 3. Extract a small token set: background, foreground, muted text, accent, panel, border, spacing, type scale, corners, and focus ring. Define tokens in one place, then reuse them. Match the guide's current version, including later amendments; do not rely on remembered branding.
 4. Define the page's background and foreground in CSS before JavaScript runs. Ensure variables are defined and inherit through the actual document. A script error must not turn a dark interface into white text on a white page.
 5. Use one clear primary action, consistent control heights and spacing, readable labels, and restrained emphasis. Prefer existing components and monochrome SVG icons over decorative emoji or new icon libraries.
-6. Connect controls to real operations. A progress animation or success message must reflect actual work; disable unavailable actions and explain why. Include usable empty, loading, error, disabled, hover, and keyboard-focus states.
+6. Connect controls to real operations through the actual runtime boundary. Browser and renderer code cannot launch local processes directly; use a documented backend or native bridge. Preserve file paths and argument boundaries, track the real operation for cancellation, and validate the output. A progress animation or success message must reflect actual work; disable unavailable actions and explain why. Include usable empty, loading, error, disabled, hover, and keyboard-focus states.
 7. Render a small working screen first. Exercise the main action, review it with visual-verification, then expand the interface. Keep documentation proportional to the working feature set.
 
 ## Pitfalls

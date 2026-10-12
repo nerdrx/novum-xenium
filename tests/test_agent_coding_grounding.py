@@ -18,7 +18,8 @@ def _schemas(kwargs):
     }
 
 
-def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_tools=None):
+def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_tools=None,
+         exact_approval=None):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
@@ -47,8 +48,27 @@ def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_to
         "http://x/v1", "gpt-4o", [{"role": "user", "content": task_text}],
         workspace="/workspace", approval_mode="full", max_rounds=len(replies) + 1,
         disabled_tools=disabled_tools or set(),
+        exact_approval=exact_approval,
     )))
     return events, requests, histories, executed
+
+
+def _approval(tool_name, arguments):
+    from src.tool_approval_scopes import TASK_APPROVAL_DECISION
+    from src.tool_approvals import ToolApprovalStore
+    from src.tool_capabilities import capabilities_for_action
+
+    content = json.dumps(arguments)
+    store = ToolApprovalStore()
+    pending = store.create(
+        owner=None, session_id=None, origin_run_id="run-1", tool_name=tool_name,
+        content=content, workspace="/workspace", external_untrusted_context_seen=True,
+        capabilities=capabilities_for_action(tool_name, content),
+    )
+    return store.consume(
+        pending.approval_id, decision=TASK_APPROVAL_DECISION,
+        owner=None, session_id=None,
+    )
 
 
 def test_fetching_task_docs_opens_coding_tools(monkeypatch, tmp_path):
@@ -150,3 +170,38 @@ def test_research_can_load_owned_skill_but_cannot_edit_it(monkeypatch, tmp_path)
     assert not ({'bash', 'write_file'} & requests[1])
     assert executed == ['manage_skills', 'web_fetch']
     assert any(event.get('type') == 'coding_research' and event.get('status') == 'sources_read' for event in events)
+
+
+def test_read_only_skill_approval_keeps_research_gate(monkeypatch, tmp_path):
+    from services.memory.skills import SkillsManager
+    monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
+        'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
+        'category': 'design', 'tags': ['gui'], 'procedure': [],
+    }])
+    url = 'https://vendor.example/docs/gui'
+    approved_view = {'action': 'view', 'name': 'ui-design'}
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Ready."}\n\n'],
+        {'manage_skills': [{'output': 'Read-only skill contents.', 'exit_code': 0}],
+         'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+        exact_approval=_approval('manage_skills', approved_view),
+    )
+    assert not ({'bash', 'write_file'} & requests[0])
+    assert {'bash', 'write_file'} <= requests[1]
+    assert executed == ['manage_skills', 'web_fetch', 'write_file']
+
+
+def test_approved_workspace_mutation_keeps_resume_behavior(monkeypatch, tmp_path):
+    approved_write = {'path': 'app.py', 'content': 'approved'}
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, 'Build a GUI app following https://vendor.example/docs/gui.',
+        ['data: {"delta":"Continuing the approved change."}\n\n'],
+        {'write_file': [{'output': 'saved', 'exit_code': 0}]},
+        exact_approval=_approval('write_file', approved_write),
+    )
+    assert 'write_file' in requests[0]
+    assert executed == ['write_file']

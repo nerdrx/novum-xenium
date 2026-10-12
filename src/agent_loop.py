@@ -3973,8 +3973,14 @@ async def stream_agent_loop(
     )
     if not _coding_grounding.web_allowed:
         disabled_tools.update({"web_search", "web_fetch"})
-    # The sealed approval resumes an already investigated action, not a new task.
-    if exact_approval is not None or not get_setting("agent_coding_grounding", True):
+    # Only a sealed workspace mutation/code action counts as prior investigation.
+    # Read-only approvals (such as viewing a skill) must not unlock writes.
+    approved_mutation = bool(
+        exact_approval
+        and {ToolEffect.WRITE_WORKSPACE.value, ToolEffect.EXECUTE_CODE.value}
+        & set(exact_approval.pending.effects)
+    )
+    if approved_mutation or not get_setting("agent_coding_grounding", True):
         _coding_grounding.required = False
     if _explicitly_references_missing_workspace(_retrieval_query, workspace):
         msg = (

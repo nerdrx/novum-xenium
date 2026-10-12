@@ -14,16 +14,17 @@ def test_incomplete_agent_runs_do_not_learn_skills(event_type):
     )
 
 
-def test_coding_run_needs_a_passed_verification():
+@pytest.mark.parametrize("workspace", ["/workspace", None, ""])
+def test_coding_run_needs_a_passed_verification(workspace):
     events = [{"type": "tool_start", "tool": "write_file"}]
     assert not skill_extraction_allowed(
         events, requested_agent=True, approval_continuation=False,
-        workspace="/workspace",
+        workspace=workspace,
     )
     assert skill_extraction_allowed(
         events + [{"type": "verification", "passed": True}],
         requested_agent=True, approval_continuation=False,
-        workspace="/workspace",
+        workspace=workspace,
     )
 
 

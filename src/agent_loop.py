@@ -1235,6 +1235,20 @@ def _use_coding_tools(text: str, workspace: Optional[str]) -> bool:
     ))
 
 
+_ACTION_PROMISE_START_RE = re.compile(
+    r"(?:^|\n)\s*(?:now\s+)?(?:let me\b|i['’]ll\b|i will\b)", re.IGNORECASE
+)
+
+
+def _looks_like_repeated_action_narration(text: str) -> bool:
+    sample = (text or "")[-6000:]
+    return (
+        len(text or "") > 2000
+        and "```" not in (text or "")
+        and len(_ACTION_PROMISE_START_RE.findall(sample)) >= 12
+    )
+
+
 def _looks_like_local_computer_request(text: str) -> bool:
     text = str(text or "")
     return bool(text.strip() and _LOCAL_COMPUTER_REFERENCE_RE.search(text))
@@ -5316,6 +5330,10 @@ async def stream_agent_loop(
     # that *can't* call the tool from looping forever.
     _intent_nudge_count = 0
     _invalid_tool_rounds = 0
+    _coding_narration_retry_candidate = None
+    _coding_narration_retry_route = None
+    _coding_narration_retried = False
+    _coding_turn = _use_coding_tools(_retrieval_query or _last_user, workspace)
     _MAX_INTENT_NUDGES = 2
 
     # "I said I would, then didn't" detector. The pattern that breaks debug
@@ -5715,7 +5733,12 @@ async def stream_agent_loop(
 
         # Once a fallback produces substantive output, keep that exact route
         # pinned for every later tool round instead of retrying the primary.
-        if _pinned_fallback_candidate:
+        if _coding_narration_retry_candidate:
+            _raw_candidates = [_coding_narration_retry_candidate]
+            _raw_route_descriptors = [_coding_narration_retry_route or {}]
+            _coding_narration_retry_candidate = None
+            _coding_narration_retry_route = None
+        elif _pinned_fallback_candidate:
             _raw_candidates = [_pinned_fallback_candidate]
             _raw_route_descriptors = [_pinned_fallback_route or {}]
         else:
@@ -5872,7 +5895,8 @@ async def stream_agent_loop(
             bool(all_tool_schemas),
             agent_stream_timeout,
         )
-        async for chunk in stream_llm_with_fallback(
+        _coding_narration_loop = False
+        _stream_iterator = stream_llm_with_fallback(
             _candidates,
             messages,
             temperature=temperature,
@@ -5887,7 +5911,8 @@ async def stream_agent_loop(
             fallback_on_empty=fallback_on_empty,
             candidate_request_factory=_candidate_request,
             candidate_route_descriptors=_candidate_route_descriptors,
-        ):
+        )
+        async for chunk in _stream_iterator:
             if not _round_first_event_logged:
                 _round_first_event_logged = True
                 logger.info(
@@ -6127,6 +6152,13 @@ async def stream_agent_loop(
                             round_response += _delta_text
                             full_response += _delta_text
                             data["delta"] = _delta_text
+                            if (
+                                _coding_turn
+                                and not native_tool_calls
+                                and _looks_like_repeated_action_narration(round_response)
+                            ):
+                                _coding_narration_loop = True
+                                break
                         if not _ody_qwen_finetune_model or data.get("thinking"):
                             yield f"data: {json.dumps(data)}\n\n"
                     elif data.get("error"):
@@ -6140,6 +6172,72 @@ async def stream_agent_loop(
                 # Forward error events to frontend as visible text
                 yield chunk
             # Intercept [DONE] — don't forward until all rounds finish
+
+        if _coding_narration_loop:
+            close_stream = getattr(_stream_iterator, "aclose", None)
+            if close_stream:
+                await close_stream()
+            _finalize_round_usage(include_empty=False)
+            full_response = full_response[:-len(round_response)] if round_response else full_response
+            if not _coding_narration_retried and round_num < max_rounds:
+                _coding_narration_retried = True
+                retry_index = candidate_index if isinstance(candidate_index, int) else 0
+                if retry_index >= len(_candidates):
+                    retry_index = 0
+                _coding_narration_retry_candidate = _candidates[retry_index]
+                _coding_narration_retry_route = (
+                    _candidate_route_descriptors[retry_index]
+                    if retry_index < len(_candidate_route_descriptors)
+                    else {}
+                )
+                messages.append({
+                    "role": "system",
+                    "_protected": True,
+                    "content": (
+                        "Your previous response repeated action narration without acting. "
+                        "Read the existing relevant file first, then make one concrete tool call. "
+                        "No narration; use the coding tools and report only verified outcomes."
+                    ),
+                })
+                notice = "\n\nThe model repeated action narration without using tools. Retrying once with the same model.\n\n"
+                yield f'data: {json.dumps({"delta": notice})}\n\n'
+                full_response += notice
+                round_texts.append(notice.strip())
+                round_models.append(_round_actual_model)
+                round_endpoint_ids.append(_round_actual_endpoint_id)
+                round_endpoint_labels.append(_round_actual_endpoint_label)
+                if round_num < max_rounds:
+                    yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+                continue
+
+            failure = {
+                "status": 502,
+                "message": "The model repeated action narration without taking an action.",
+                "fallback_eligible": False,
+            }
+            terminal_round = f"[Agent stopped: {failure['message']}]"
+            round_texts.append(terminal_round)
+            round_models.append(_round_actual_model)
+            round_endpoint_ids.append(_round_actual_endpoint_id)
+            round_endpoint_labels.append(_round_actual_endpoint_label)
+            terminal_metadata = {
+                "failed": True,
+                "failure": failure,
+                "model": _round_actual_model,
+                "requested_model": requested_model,
+                "endpoint_id": _round_actual_endpoint_id,
+                "endpoint_label": _round_actual_endpoint_label,
+                "requested_endpoint_id": requested_endpoint_id,
+                "requested_endpoint_label": requested_endpoint_label,
+                "tool_events": tool_events,
+                "round_texts": round_texts,
+                "round_models": round_models,
+                "round_endpoint_ids": round_endpoint_ids,
+                "round_endpoint_labels": round_endpoint_labels,
+                **_usage_bucket_summary(usage_buckets),
+            }
+            yield f'data: {json.dumps({"type": "agent_terminal", "data": terminal_metadata})}\n\n'
+            return
 
         logger.info(
             "[agent-timing] round_stream_done round=%s elapsed=%.3fs text_chars=%s tool_calls=%s first_event=%s first_token=%s",

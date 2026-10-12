@@ -1147,7 +1147,7 @@ def skill_extraction_allowed(events, *, requested_agent, approval_continuation, 
         return False
 
     code_tools = {"write_file", "edit_file", "apply_patch", "bash", "python"}
-    coding_run = bool(workspace) and any(
+    coding_run = any(
         event.get("type") == "tool_start" and event.get("tool") in code_tools
         for event in events
     )

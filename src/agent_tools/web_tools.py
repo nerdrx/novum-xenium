@@ -1,7 +1,9 @@
 import asyncio
 import inspect
 import json
+import re
 from typing import Dict, Any
+from urllib.parse import urlsplit
 
 from src.constants import MAX_OUTPUT_CHARS
 
@@ -79,6 +81,34 @@ class WebSearchTool:
         return {"output": output, "sources": sources, "exit_code": 0}
 
 class WebFetchTool:
+    @staticmethod
+    def _github_raw_doc_url(url: str) -> str | None:
+        """Map only unambiguous public GitHub blob text docs to raw URLs."""
+        try:
+            parsed = urlsplit(url)
+            if (parsed.scheme.lower() != "https" or parsed.username is not None
+                    or parsed.password is not None or parsed.port not in (None, 443)
+                    or parsed.hostname is None or parsed.hostname.lower() != "github.com"
+                    or parsed.query or parsed.fragment or "%" in parsed.path
+                    or "\\" in parsed.path):
+                return None
+        except ValueError:
+            return None
+
+        parts = parsed.path.split("/")
+        # /owner/repo/blob/ref/path; requiring a single-segment ref avoids
+        # guessing whether a slash belongs to a branch name or file path.
+        if (len(parts) < 6 or parts[0] or parts[1] in ("", ".", "..")
+                or parts[2] in ("", ".", "..") or parts[3] != "blob"
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+", parts[1])
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+", parts[2])
+                or not re.fullmatch(r"(?:main|master|develop|trunk|[0-9a-fA-F]{7,40}|v?\d+\.\d+(?:\.\d+)?(?:[-+][A-Za-z0-9.-]+)?)", parts[4])
+                or any(part in ("", ".", "..") for part in parts[5:])):
+            return None
+        if not parts[-1].lower().endswith((".md", ".markdown", ".txt", ".rst")):
+            return None
+        return "https://raw.githubusercontent.com/" + "/".join(parts[1:3] + [parts[4]] + parts[5:])
+
     async def execute(self, content: str, ctx: dict) -> dict:
         from src.search.content import fetch_webpage_content
         from src.constants import WEB_FETCH_HARD_MAX_BYTES
@@ -109,9 +139,12 @@ class WebFetchTool:
             return {"error": f"web_fetch: unsupported URL scheme (only http/https): {url[:80]}", "exit_code": 1}
         if not low.startswith(("http://", "https://")):
             url = "https://" + url
+        raw_url = self._github_raw_doc_url(url)
+        fetch_url = raw_url or url
         loop = asyncio.get_running_loop()
+        deadline = loop.time() + 30
         try:
-            def _fetch():
+            def _fetch(target_url):
                 kwargs = {"timeout": 10}
                 try:
                     sig = inspect.signature(fetch_webpage_content)
@@ -121,12 +154,36 @@ class WebFetchTool:
                     # Some deployed/test shims may not expose a signature.
                     # Prefer compatibility over failing the whole fetch.
                     pass
-                return fetch_webpage_content(url, **kwargs)
+                return fetch_webpage_content(target_url, **kwargs)
 
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, _fetch),
-                timeout=30,
-            )
+            result = None
+            if raw_url:
+                try:
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(None, _fetch, raw_url),
+                        timeout=30,
+                    )
+                except asyncio.TimeoutError:
+                    # The overall fetch deadline is authoritative; do not
+                    # start another request after it expires.
+                    raise
+                except Exception:
+                    # A failed raw request is only an optimization failure.
+                    result = None
+                if isinstance(result, dict) and not result.get("error") and (result.get("content") or "").strip():
+                    fetch_url = raw_url
+                else:
+                    result = None
+
+            if result is None:
+                # Retry through the original safe fetcher. The raw endpoint is
+                # an optimization only; its failure must not hide the page.
+                fetch_url = url
+                remaining = max(0, deadline - loop.time())
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(None, _fetch, url),
+                    timeout=remaining,
+                )
         except asyncio.TimeoutError:
             return {"error": f"web_fetch: timed out fetching {url}", "exit_code": 1}
         except Exception as e:
@@ -172,7 +229,10 @@ class WebFetchTool:
         # notice first and cap the title as a second guard.
         if len(title) > 300:
             title = title[:300] + "..."
-        header = (f"# {title}\n" if title else "") + f"Source: {url}\n\n"
+        header = (f"# {title}\n" if title else "") + f"Source: {url}\n"
+        if fetch_url != url:
+            header += f"Fetched: {fetch_url}\n"
+        header += "\n"
         # Keep the bounded downloaded text intact until the session archive
         # stores it. The UI and agent context layer produce their own previews;
         # trimming here would make later API sections impossible to search.

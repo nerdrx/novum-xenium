@@ -307,3 +307,84 @@ def test_read_stall_recovery_is_one_shot(monkeypatch, tmp_path):
     assert len(requests) == len(executed) == 7
     assert sum('Documentation has been read. The remaining pre-write gate' in
                str(message.get('content') or '') for message in histories[-1]) == 1
+
+
+def test_exhausted_search_allowance_reminds_about_skill_without_claiming_sources(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    searches = [
+        _call('web_search', {'query': f'Electron GUI detail {i}'}, f'search-{i}')
+        for i in range(6)
+    ]
+    events, requests, histories, executed = _run(
+        monkeypatch, tmp_path,
+        'Build a GUI app following https://vendor.example/docs/gui.',
+        [*searches,
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented with documentation uncertainty noted."}\n\n'],
+        {'web_search': [{'output': f'Search result snippet {i}', 'exit_code': 0}
+                        for i in range(6)],
+         'manage_skills': [{'results': 'Use a compact GUI layout.', 'exit_code': 0}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    reminder = 'The bounded documentation lookup allowance is exhausted; no source was verified.'
+    assert reminder in str(histories[6])
+    assert 'Documentation has been read' not in str(histories[6])
+    assert all('write_file' not in requests[i] for i in range(7))
+    assert 'write_file' in requests[7]
+    assert executed == ['web_search'] * 6 + ['manage_skills', 'write_file']
+    assert str(histories[7]).count(reminder) == 1  # retained, not re-injected
+    assert any(event.get('type') == 'coding_research'
+               and event.get('status') == 'sources_unavailable' for event in events)
+
+
+def test_exhausted_search_reminder_does_not_repeat_after_stall(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    initial = [
+        _call('web_search', {'query': f'Electron GUI detail {i}'}, f'search-{i}')
+        for i in range(6)
+    ]
+    repeated = [
+        _call('web_search', {'query': 'same unresolved GUI detail'}, f'repeat-{i}')
+        for i in range(5)
+    ]
+    events, requests, histories, executed = _run(
+        monkeypatch, tmp_path,
+        'Build a GUI app following https://vendor.example/docs/gui.',
+        [*initial, *repeated],
+        {'web_search': [
+            *[{'output': f'Search result snippet {i}', 'exit_code': 0} for i in range(6)],
+            *[{'output': 'Same unresolved result', 'exit_code': 0} for _ in repeated],
+        ]},
+    )
+
+    reminder = 'The bounded documentation lookup allowance is exhausted; no source was verified.'
+    assert reminder in str(histories[6])
+    assert str(histories[-1]).count(reminder) == 1  # a later stall does not re-inject it
+    assert any(event.get('reason') == 'repeated_tool_results' for event in events)
+    assert len(executed) < len(initial) + len(repeated)
+    assert all('write_file' not in schema for schema in requests)
+
+
+def test_exhausted_search_without_skill_candidate_gets_no_skill_reminder(monkeypatch, tmp_path):
+    _no_suggested_skills(monkeypatch)
+    searches = [
+        _call('web_search', {'query': f'Electron GUI detail {i}'}, f'search-{i}')
+        for i in range(6)
+    ]
+    events, requests, histories, executed = _run(
+        monkeypatch, tmp_path,
+        'Build a GUI app following https://vendor.example/docs/gui.',
+        [*searches,
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented with uncertainty noted."}\n\n'],
+        {'web_search': [{'output': f'Search result snippet {i}', 'exit_code': 0}
+                        for i in range(6)],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    assert all('The bounded documentation lookup allowance is exhausted'
+               not in str(history) for history in histories)
+    assert 'write_file' in requests[6]
+    assert executed == ['web_search'] * 6 + ['write_file']

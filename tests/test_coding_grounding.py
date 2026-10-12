@@ -116,3 +116,12 @@ def test_explicit_without_browsing_stays_local():
     gate = CodingGrounding("Build a GUI without browsing")
     assert not gate.web_allowed
     assert "web_fetch" not in gate.research_tools
+
+
+def test_directive_points_to_requested_documentation_before_search():
+    url = "https://vendor.example/docs/gui"
+    gate = CodingGrounding(f"Build a GUI app using {url}")
+    assert url in gate.directive
+    assert "next documentation lookup should be web_fetch" in gate.directive
+    offline = CodingGrounding(f"Build a GUI app offline using local docs; source: {url}")
+    assert "next documentation lookup should be web_fetch" not in offline.directive

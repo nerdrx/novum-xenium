@@ -98,8 +98,10 @@ class CodingGrounding:
             if self.web_allowed else "Use local project documentation only; web lookup is disabled. "
         )
         url_rule = (
-            "Fetch any URL supplied in the task before relying on generic local manifests. "
-            if self.preferred_urls else ""
+            "Your next documentation lookup should be web_fetch for a URL supplied by the user: "
+            + ", ".join(sorted(self.preferred_urls))[:1500]
+            + ". Read it before searching for alternatives or relying on generic local manifests. "
+            if self.preferred_urls and self.web_allowed else ""
         )
         return (
             "## Coding research gate\n"

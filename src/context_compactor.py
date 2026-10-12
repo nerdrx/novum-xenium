@@ -37,7 +37,114 @@ def _content_as_text(content: Any) -> str:
     return ""
 
 
+def _task_anchor_from_messages(messages: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """Read a server-carried anchor or copy the first trusted human request.
+
+    Generated summary text is never used as an anchor source.
+    """
+    for message in reversed(messages):
+        metadata = message.get("metadata") or {}
+        if (message.get("role") == "system"
+                and str(message.get("content") or "").startswith("[Conversation summary")
+                and _TASK_ANCHOR_METADATA in metadata):
+            anchor = metadata[_TASK_ANCHOR_METADATA]
+            if (isinstance(anchor, dict) and anchor.get("trusted") is True
+                    and isinstance(anchor.get("content"), str)
+                    and anchor["content"].strip()):
+                return {"content": anchor["content"], "trusted": True}
+            # An explicit empty marker supersedes anchors in older summaries.
+            return None
+    for message in messages:
+        if (message.get("role") != "user"
+                or (message.get("metadata") or {}).get("trusted") is False
+                or message.get("_agent_injected") in {"context", "task_anchor"}):
+            continue
+        content = _content_as_text(message.get("content")).strip()
+        if content and not content.startswith("[Tool execution results]"):
+            return {
+                "content": _truncate_text_to_token_budget(content, _TASK_ANCHOR_TOKEN_BUDGET),
+                "trusted": True,
+            }
+    return None
+
+
+def _has_task_anchor_marker(messages: List[Dict[str, Any]]) -> bool:
+    return any(
+        message.get("role") == "system"
+        and str(message.get("content") or "").startswith("[Conversation summary")
+        and _TASK_ANCHOR_METADATA in (message.get("metadata") or {})
+        for message in messages
+    )
+
+
+def _task_anchor_message(anchor: Optional[Dict[str, str]]) -> Optional[Dict[str, Any]]:
+    if not anchor:
+        return None
+    return {
+        "role": "user",
+        "content": "[Original user task retained for continuity]\n" + anchor["content"],
+        "metadata": {"trusted": True, "agent_task_anchor": True},
+        "_agent_injected": "task_anchor",
+    }
+
+
+def _ensure_task_anchor(messages: List[Dict[str, Any]], anchor: Optional[Dict[str, str]]):
+    """Place one bounded task copy after system context and before conversation."""
+    if not anchor or any(m.get("_agent_injected") == "task_anchor" for m in messages):
+        return messages
+    insert_at = next(
+        (i for i, message in enumerate(messages) if message.get("role") != "system"),
+        len(messages),
+    )
+    messages.insert(insert_at, _task_anchor_message(anchor))
+    return messages
+
+
+def _reconcile_task_anchor(anchor: Optional[Dict[str, str]], older: List[Dict[str, Any]]):
+    """Advance or clear the saved anchor using only trusted human turns."""
+    turns = [
+        message for message in older
+        if message.get("role") == "user"
+        and (message.get("metadata") or {}).get("trusted") is not False
+        and message.get("_agent_injected") not in {"context", "task_anchor"}
+        and _content_as_text(message.get("content")).strip()
+        and not _content_as_text(message.get("content")).strip().startswith("[Tool execution results]")
+    ]
+    if not turns:
+        return anchor
+
+    latest = _content_as_text(turns[-1].get("content")).strip()
+    if re.match(r"^(?:stop|cancel|never mind|nevermind|forget (?:it|that|this))\b", latest, re.I):
+        return None
+
+    history = []
+    if anchor:
+        history.append({"role": "user", "content": anchor["content"]})
+    history.extend(
+        turn for turn in turns
+        if _content_as_text(turn.get("content")).strip() != (anchor or {}).get("content")
+    )
+    try:
+        # Reuse the tool-discovery task classifier so task boundaries and
+        # follow-ups match the same rules used by the live agent path.
+        from src.agent_loop import _classify_agent_request
+
+        intent = _classify_agent_request(history, latest)
+    except Exception:
+        logger.debug("Could not reconcile compaction task anchor", exc_info=True)
+        return None
+    query = str(intent.get("retrieval_query") or "").strip()
+    if not query:
+        return None
+    return {
+        "content": _truncate_text_to_token_budget(query, _TASK_ANCHOR_TOKEN_BUDGET),
+        "trusted": True,
+    }
+
+
 COMPACT_THRESHOLD = 0.85  # Trigger compaction at 85% of context window
+_TASK_ANCHOR_METADATA = "agent_task_anchor"
+_TASK_ANCHOR_TOKEN_BUDGET = 512
 SUMMARY_MAX_TOKENS = 1024
 SMALL_CONTEXT_LIMIT = 8192  # Models with context <= this get aggressive trimming
 
@@ -436,6 +543,10 @@ async def maybe_compact(
 
     Returns (messages, context_length, was_compacted).
     """
+    messages = list(messages)
+    carried_anchor = _task_anchor_from_messages(messages)
+    if carried_anchor:
+        messages = _ensure_task_anchor(messages, carried_anchor)
     context_length = get_context_length(endpoint_url, model)
     used = estimate_tokens(messages)
     pct = (used / context_length) * 100 if context_length else 0
@@ -453,7 +564,9 @@ async def maybe_compact(
     for msg in messages:
         if msg.get("role") == "system":
             system_msgs.append(msg)
-        else:
+        elif msg.get("_agent_injected") != "task_anchor":
+            # Prompt-only copy has no matching session-history row; excluding
+            # it keeps split_point aligned when compaction is persisted.
             convo_msgs.append(msg)
 
     if len(convo_msgs) < 4:
@@ -463,6 +576,10 @@ async def maybe_compact(
     split_point = len(convo_msgs) // 2
     older = convo_msgs[:split_point]
     recent = convo_msgs[split_point:]
+    anchor_seed = carried_anchor
+    if anchor_seed is None and not _has_task_anchor_marker(messages):
+        anchor_seed = _task_anchor_from_messages(older)
+    task_anchor = _reconcile_task_anchor(anchor_seed, older)
 
     # Build the text to summarize
     convo_text = "\n".join(
@@ -513,9 +630,13 @@ async def maybe_compact(
     summary_msg = {
         "role": "system",
         "content": f"[Conversation summary — earlier messages were compacted]\n{summary}",
+        # Newest summary is canonical. None explicitly clears anchors retained
+        # by older system summaries in the same history.
+        "metadata": {_TASK_ANCHOR_METADATA: task_anchor},
     }
 
     compacted = system_msgs + [summary_msg] + recent
+    compacted = _ensure_task_anchor(compacted, task_anchor)
 
     # Update session history to match. Pass len(system_msgs) so the
     # recent_history slice in _update_session_history uses the correct
@@ -527,10 +648,14 @@ async def maybe_compact(
             "split_point": split_point,
             "summary": summary,
             "system_msg_count": len(system_msgs),
+            "task_anchor": task_anchor,
             "applied": False,
         })
     if persist:
-        _update_session_history(session, split_point, summary, system_msg_count=len(system_msgs))
+        _update_session_history(
+            session, split_point, summary, system_msg_count=len(system_msgs),
+            task_anchor=task_anchor,
+        )
         if compaction_state is not None:
             compaction_state["applied"] = True
 
@@ -558,6 +683,7 @@ def apply_compaction_state(session, compaction_state: Optional[Dict[str, Any]]) 
     summary = state.get("summary")
     split_point = state.get("split_point")
     system_msg_count = state.get("system_msg_count", 0)
+    task_anchor = state.get("task_anchor")
     if not isinstance(summary, str) or not isinstance(split_point, int):
         return False
     _update_session_history(
@@ -565,6 +691,7 @@ def apply_compaction_state(session, compaction_state: Optional[Dict[str, Any]]) 
         split_point,
         summary,
         system_msg_count=system_msg_count if isinstance(system_msg_count, int) else 0,
+        task_anchor=task_anchor if isinstance(task_anchor, dict) else None,
     )
     state["applied"] = True
     return True
@@ -589,7 +716,8 @@ def apply_compaction_state_for_session(
 
 
 def _update_session_history(session, split_point: int, summary: str,
-                            system_msg_count: int = 0):
+                            system_msg_count: int = 0,
+                            task_anchor: Optional[Dict[str, str]] = None):
     """Update the in-memory session history after compaction.
 
     `split_point` is the index in `convo_msgs` (system-stripped). The
@@ -614,7 +742,11 @@ def _update_session_history(session, split_point: int, summary: str,
     summary_msg = ChatMessage(
         role="system",
         content=f"[Conversation summary]\n{summary}",
-        metadata={"compacted": True, "summarized_count": split_point},
+        metadata={
+            "compacted": True,
+            "summarized_count": split_point,
+            _TASK_ANCHOR_METADATA: task_anchor,
+        },
     )
     new_history = system_prefix + [summary_msg] + recent_history
     try:

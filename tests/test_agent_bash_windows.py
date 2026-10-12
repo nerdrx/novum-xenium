@@ -1,5 +1,9 @@
 """Windows execution contract for the agent Bash tool."""
 
+import os
+import shutil
+import uuid
+
 import pytest
 
 from src.agent_tools import subprocess_tools
@@ -33,7 +37,7 @@ async def test_windows_bash_uses_git_bash_with_structural_cwd(monkeypatch):
     )
 
     assert result is process
-    assert captured["argv"] == (bash, "-c", "pwd; cat package.json")
+    assert captured["argv"] == (bash, "-o", "pipefail", "-c", "pwd; cat package.json")
     assert captured["kwargs"]["cwd"] == workspace
 
 
@@ -105,24 +109,59 @@ async def test_windows_bash_does_not_use_a_stray_tmux_executable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_posix_bash_keeps_existing_shell_path(monkeypatch):
+async def test_posix_bash_uses_bash_with_pipefail(monkeypatch):
     captured = {}
     process = object()
+    bash = "/usr/bin/bash"
 
     monkeypatch.setattr(subprocess_tools, "IS_WINDOWS", False)
+    monkeypatch.setattr(subprocess_tools, "find_bash", lambda: bash)
 
-    async def fake_shell(command, **kwargs):
-        captured["command"] = command
+    async def fake_exec(*argv, **kwargs):
+        captured["argv"] = argv
         captured["kwargs"] = kwargs
         return process
 
-    async def fail_exec(*_args, **_kwargs):
-        pytest.fail("POSIX behavior must continue through create_subprocess_shell")
+    async def fail_shell(*_args, **_kwargs):
+        pytest.fail("Bash tool must use Bash with pipefail on POSIX too")
 
-    monkeypatch.setattr(subprocess_tools.asyncio, "create_subprocess_shell", fake_shell)
-    monkeypatch.setattr(subprocess_tools.asyncio, "create_subprocess_exec", fail_exec)
+    monkeypatch.setattr(subprocess_tools.asyncio, "create_subprocess_shell", fail_shell)
+    monkeypatch.setattr(subprocess_tools.asyncio, "create_subprocess_exec", fake_exec)
 
     result = await subprocess_tools._create_bash_subprocess("pwd", cwd="/tmp/work")
 
     assert result is process
-    assert captured == {"command": "pwd", "kwargs": {"cwd": "/tmp/work"}}
+    assert captured == {
+        "argv": (bash, "-o", "pipefail", "-c", "pwd"),
+        "kwargs": {"cwd": "/tmp/work"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_real_bash_pipeline_returns_failure_status():
+    process = await subprocess_tools._create_bash_subprocess(
+        "false | cat",
+        stdout=subprocess_tools.asyncio.subprocess.PIPE,
+        stderr=subprocess_tools.asyncio.subprocess.PIPE,
+    )
+    await process.communicate()
+    assert process.returncode != 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix" or not shutil.which("tmux"), reason="requires POSIX tmux")
+async def test_tmux_bash_pipeline_returns_failure_status(tmp_path):
+    session_id = f"pipefail-{uuid.uuid4().hex[:10]}"
+    result = None
+    try:
+        result = await subprocess_tools._run_tmux_bash(
+            "false | cat", session_id=session_id, cwd=str(tmp_path),
+            env=os.environ.copy(), timeout=10,
+        )
+        assert result[2] != 0
+        assert not result[3]
+    finally:
+        await subprocess_tools._run_exec(
+            "tmux", "kill-session", "-t", subprocess_tools._tmux_session_name(session_id),
+            timeout=3,
+        )

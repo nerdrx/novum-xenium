@@ -103,15 +103,17 @@ async def _create_bash_subprocess(command: str, **kwargs):
     argument; Git Bash inherits that native Windows directory and exposes it
     using its normal ``/c/...`` representation.
     """
-    if IS_WINDOWS:
-        bash = find_bash()
-        if not bash:
+    bash = find_bash()
+    if not bash:
+        if IS_WINDOWS:
             raise RuntimeError(
                 "Git Bash is required for the Bash tool on Windows; "
                 "install Git for Windows and restart Odysseus"
             )
-        return await asyncio.create_subprocess_exec(bash, "-c", command, **kwargs)
-    return await asyncio.create_subprocess_shell(command, **kwargs)
+        raise RuntimeError("Bash is required for the Bash tool; install Bash and restart Odysseus")
+    return await asyncio.create_subprocess_exec(
+        bash, "-o", "pipefail", "-c", command, **kwargs
+    )
 
 
 def _tmux_session_name(session_id: Optional[str]) -> str:
@@ -317,8 +319,11 @@ async def _run_tmux_bash(
         # activated environments while leaving descendants trackable.
         wrapped = (
             f"printf '\\n{start_marker}\\n'\n"
+            "__ody_pipefail_state=$(set +o pipefail)\n"
+            "set -o pipefail\n"
             f"eval {shlex.quote(content)}\n"
             f"__ody_rc=$?\n"
+            'eval "$__ody_pipefail_state"\n'
             f"printf '\\n{end_prefix}%s\\n' \"$__ody_rc\"\n"
         )
         command = (name, pane_pid, baseline, set())

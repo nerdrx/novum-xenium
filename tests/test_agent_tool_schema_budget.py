@@ -918,3 +918,23 @@ def test_busy_coding_context_reserves_output_before_trimming(monkeypatch, tmp_pa
     assert all('_protected' not in m for m in shaped)
 
     assert any(str(project) in m.get('content', '') for m in shaped)
+
+
+def test_coding_github_setup_does_not_restore_unrelated_admin_schemas(monkeypatch):
+    requests = []
+    schemas = list(loop.FUNCTION_TOOL_SCHEMAS)
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *a, **k: 32768)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "http://local/v1", "test-model",
+            [{"role": "user", "content": "Build an FFmpeg GUI and set up a private GitHub repo for it."}],
+            relevant_tools={"write_file", "edit_file", "bash", "search_tools"},
+            workspace="/tmp", max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    names = {s["function"]["name"] for s in requests[0]["kwargs"]["tools"]}
+    assert {"write_file", "bash", "search_tools"} <= names
+    assert not names & {"manage_documents", "create_session", "manage_settings", "manage_tokens"}

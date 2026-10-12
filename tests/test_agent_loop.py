@@ -705,6 +705,64 @@ def test_arbitrary_followup_retains_task_after_many_turns(followup):
     assert followup in result['retrieval_query']
 
 
+def _compacted_task_summary(task):
+    return {
+        'role': 'system',
+        'content': '[Conversation summary]\nUser Goal: compacted prose',
+        'metadata': {'compacted': True, 'agent_task_anchor': {
+            'content': task, 'trusted': True,
+        }},
+    }
+
+
+def test_persisted_compaction_anchor_restores_task_for_short_followup():
+    original = 'Build an FFmpeg GUI app in this git repo.'
+    followup = 'keep going'
+    result = _classify_agent_request(
+        [_compacted_task_summary(original), {'role': 'user', 'content': followup}],
+        followup,
+    )
+    assert result['continuation']
+    assert 'files' in result['domains']
+    assert original in result['retrieval_query']
+    assert followup in result['retrieval_query']
+
+
+def test_persisted_compaction_anchor_respects_cancel_and_new_task():
+    original = 'Fix this git repo.'
+    summary = _compacted_task_summary(original)
+    cancelled = _classify_agent_request(
+        [summary, {'role': 'user', 'content': 'cancel that'},
+         {'role': 'user', 'content': 'do your thing'}],
+        'do your thing',
+    )
+    assert 'files' not in cancelled['domains']
+    assert 'git repo' not in cancelled['retrieval_query']
+
+    switched = _classify_agent_request(
+        [summary, {'role': 'user', 'content': 'What is the weather in Berlin today?'},
+         {'role': 'user', 'content': 'more detail please'}],
+        'more detail please',
+    )
+    assert switched['domains'] == {'web'}
+    assert 'git repo' not in switched['retrieval_query']
+
+
+def test_newest_persisted_summary_clear_supersedes_old_anchor():
+    original = 'Fix this git repo.'
+    old = _compacted_task_summary(original)
+    cleared = {
+        'role': 'system', 'content': '[Conversation summary]\nNo active task.',
+        'metadata': {'compacted': True, 'agent_task_anchor': None},
+    }
+    result = _classify_agent_request(
+        [old, cleared, {'role': 'user', 'content': 'do your thing'}],
+        'do your thing',
+    )
+    assert 'files' not in result['domains']
+    assert 'git repo' not in result['retrieval_query']
+
+
 def test_cancel_clears_task_anchor_for_later_ambiguous_reply():
     messages = [{'role': 'user', 'content': value} for value in [
         'Fix this git repo.', 'cancel that', 'do your thing',

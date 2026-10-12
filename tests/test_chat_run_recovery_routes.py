@@ -126,7 +126,7 @@ def _recovery_post_client(monkeypatch, *, checkpoint_store, workspace, model="mo
     monkeypatch.setattr(chat_routes, "estimate_tokens", lambda _messages: 10)
     monkeypatch.setattr(chat_routes, "accumulate_token_usage", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(chat_routes, "save_assistant_response", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(chat_routes, "run_post_response_tasks", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(chat_routes, "run_post_response_tasks", lambda *_args, **kwargs: captured.setdefault("post_tasks", []).append(kwargs))
     monkeypatch.setattr(chat_routes, "clean_thinking_for_save", lambda reply, metadata: (reply, metadata))
     monkeypatch.setattr(chat_routes, "stream_agent_loop", _fake_agent_loop(captured))
 
@@ -288,6 +288,41 @@ def test_chat_stream_continue_claims_once_and_preserves_saved_read_only_mode(tmp
     again = _continue(client, workspace=workspace)
     assert again.status_code == 409
     assert captured["loop_kwargs"]["plan_mode"] is True
+
+
+@pytest.mark.parametrize(("outcome_events", "expected"), [
+    ([{"type": "rounds_exhausted"}], False),
+    ([{"type": "tool_start", "tool": "write_file"},
+      {"type": "tool_start", "tool": "bash"},
+      {"type": "verification", "passed": False}], False),
+    ([{"type": "tool_start", "tool": "write_file"},
+      {"type": "tool_start", "tool": "bash"},
+      {"type": "tool_output", "error": "recoverable first attempt"},
+      {"type": "verification", "passed": True}], True),
+])
+def test_chat_stream_learns_only_after_a_complete_verified_coding_run(
+    tmp_path, monkeypatch, outcome_events, expected,
+):
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    store = _interrupted_store(
+        tmp_path / "skill-gate.sqlite", workspace=workspace, plan_mode=False,
+    )
+    client, captured = _recovery_post_client(
+        monkeypatch, checkpoint_store=store, workspace=workspace,
+    )
+
+    async def outcome_loop(*_args, **_kwargs):
+        for event in outcome_events:
+            yield "data: " + json.dumps(event) + "\n\n"
+        yield 'data: {"delta":"The work is complete."}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(chat_routes, "stream_agent_loop", outcome_loop)
+    response = _continue(client, workspace=workspace)
+
+    assert response.status_code == 200, response.text[:500]
+    assert captured["post_tasks"][-1]["extract_skills"] is expected
 
 
 def test_chat_stream_recovery_preserves_deep_valid_workspace_path(tmp_path, monkeypatch):

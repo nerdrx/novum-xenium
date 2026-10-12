@@ -22,7 +22,11 @@ from src.llm_core import (
     stream_llm,
     stream_llm_with_fallback,
 )
-from src.agent_loop import stream_agent_loop, _archive_result_until_worker_finishes
+from src.agent_loop import (
+    stream_agent_loop,
+    _archive_result_until_worker_finishes,
+    _use_coding_tools,
+)
 from src.stream_errors import describe_sse_failure, describe_stream_failure
 from src import agent_runs, run_checkpoints
 from src.model_context import estimate_tokens
@@ -64,6 +68,7 @@ from routes.chat_helpers import (
     build_chat_context,
     save_assistant_response,
     run_post_response_tasks,
+    skill_extraction_allowed,
     accumulate_token_usage,
     clean_thinking_for_save,
     _allowed_models_for_request,
@@ -82,6 +87,12 @@ from src.tool_approval_scopes import stamp_chat_session_grant
 from src.tool_security import delegated_credential_blocked_tools
 
 logger = logging.getLogger(__name__)
+
+
+def _is_pure_web_intent(message, workspace, explicit_web_intent):
+    """Keep the web-only tool clamp off coding requests that mention web terms."""
+    return bool(explicit_web_intent and not _use_coding_tools(message, workspace))
+
 
 # Track active streams for partial-save safety net
 _active_streams: Dict[str, dict] = {}
@@ -1745,7 +1756,7 @@ def setup_chat_routes(
         _explicit_web_intent = _explicit_web_intent or bool(_tool_intent and _tool_intent.category == "web")
         if is_web_search_explicitly_denied(allow_web_search) or not _search_enabled:
             disabled_tools.update(WEB_TOOL_NAMES)
-        if _explicit_web_intent:
+        if _is_pure_web_intent(message, workspace, _explicit_web_intent):
             # A direct lookup/search request should not drift into personal
             # tools or shell fallbacks. It can only use web_search/web_fetch
             # when the request's explicit web setting enabled them.
@@ -2603,6 +2614,7 @@ def setup_chat_routes(
                 # ── Agent mode: full agent loop with tools ──
                 _agent_rounds = 0
                 _agent_tool_calls = 0
+                _skill_events = []
                 _answered_by = None  # set if the selected model failed and a fallback answered
                 _requested_model = sess.model
                 _actual_model = None
@@ -2697,6 +2709,17 @@ def setup_chat_routes(
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
                                 data = json.loads(chunk[6:])
+                                _skill_event_type = data.get("type")
+                                if _skill_event_type in {
+                                    "ask_user", "agent_terminal", "budget_exceeded",
+                                    "error", "intent_nudge_exhausted",
+                                    "loop_breaker_triggered", "rounds_exhausted",
+                                    "verification",
+                                }:
+                                    _skill_events.append(data)
+                                elif (_skill_event_type == "tool_start"
+                                      and data.get("tool") in {"write_file", "edit_file", "apply_patch", "bash", "python"}):
+                                    _skill_events.append(data)
                                 if "delta" in data:
                                     # Reasoning tokens arrive flagged thinking:true.
                                     # Forward them for the live indicator, but keep
@@ -2827,6 +2850,8 @@ def setup_chat_routes(
                             except json.JSONDecodeError:
                                 yield chunk
                         elif chunk.startswith("event: "):
+                            if chunk.startswith("event: error"):
+                                _skill_events.append({"type": "error"})
                             yield chunk
                         elif chunk == "data: [DONE]\n\n":
                             _has_tool_events = bool((last_metrics or {}).get("tool_events"))
@@ -2855,8 +2880,12 @@ def setup_chat_routes(
                                     skills_manager=skills_manager,
                                     owner=_user,
                                     extract_skills=(
-                                        user_requested_agent
-                                        and not tool_approval_continuation
+                                        skill_extraction_allowed(
+                                            _skill_events,
+                                            requested_agent=user_requested_agent,
+                                            approval_continuation=tool_approval_continuation,
+                                            workspace=workspace,
+                                        )
                                     ),
                                     allow_background_extraction=(
                                         not tool_policy.block_all_tool_calls

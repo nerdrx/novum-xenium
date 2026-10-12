@@ -3,6 +3,7 @@ Uses mock imports to avoid loading the full app stack."""
 
 import asyncio
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -365,6 +366,154 @@ class TestMaybeCompactFourthMessage:
             m.get("role") == "system" and "compact summary text" in (m.get("content") or "")
             for m in compacted_messages
         )
+
+    def test_compaction_carries_trusted_task_into_current_and_later_prompts(self):
+        messages = self._four_turn_history_with_tool_call()
+        original = "Build the app in this git repository and verify it."
+        messages[1] = {"role": "user", "content": original,
+                       "metadata": {"trusted": True}}
+
+        compacted, _, was_compacted = self._run(messages)
+
+        assert was_compacted
+        anchor = next(m for m in compacted if m.get("_agent_injected") == "task_anchor")
+        assert anchor["role"] == "user"
+        assert original in anchor["content"]
+        summary = next(m for m in compacted if m.get("role") == "system"
+                       and "compact summary text" in (m.get("content") or ""))
+        assert summary["metadata"]["agent_task_anchor"] == {
+            "content": original, "trusted": True,
+        }
+
+        # A later turn below the compaction threshold still gets the persisted
+        # original request in its actual model context.
+        later, _, was_compacted_again = self._run(compacted, context_length=100000)
+        assert not was_compacted_again
+        assert sum(m.get("_agent_injected") == "task_anchor" for m in later) == 1
+        assert original in next(m["content"] for m in later
+                                if m.get("_agent_injected") == "task_anchor")
+
+    def test_generated_summary_and_untrusted_turn_cannot_seed_task_anchor(self):
+        messages = [
+            {"role": "system", "content": "Summary says: build app in git repo."},
+            {"role": "user", "content": "Build app in git repo.",
+             "metadata": {"trusted": False}},
+        ]
+
+        assert cc._task_anchor_from_messages(messages) is None
+
+    def test_compacted_cancel_clears_saved_task_anchor(self):
+        messages = [
+            {"role": "system", "content": "Long prompt. " * 300},
+            {"role": "system", "content": "[Conversation summary] old task",
+             "metadata": {"agent_task_anchor": {
+                 "content": "Fix this git repo.", "trusted": True,
+             }}},
+            {"role": "user", "content": "cancel that"},
+            {"role": "assistant", "content": "Okay."},
+            {"role": "user", "content": "What should I do now?"},
+            {"role": "assistant", "content": "I can help."},
+        ]
+
+        compacted, _, was_compacted = self._run(messages)
+
+        assert was_compacted
+        summary = next(m for m in compacted if m.get("role") == "system"
+                       and "compact summary text" in (m.get("content") or ""))
+        assert summary["metadata"]["agent_task_anchor"] is None
+        assert not any(m.get("_agent_injected") == "task_anchor" for m in compacted)
+
+        changed = [
+            messages[0],
+            messages[1],
+            {"role": "user", "content": "What is the weather in Berlin today?"},
+            {"role": "assistant", "content": "It is sunny."},
+            {"role": "user", "content": "more detail please"},
+            {"role": "assistant", "content": "A little more."},
+            {"role": "user", "content": "and tomorrow?"},
+            {"role": "assistant", "content": "Checking."},
+        ]
+        compacted, _, was_compacted = self._run(changed)
+        assert was_compacted
+        summary = next(m for m in compacted if m.get("role") == "system"
+                       and "compact summary text" in (m.get("content") or ""))
+        anchor = summary["metadata"]["agent_task_anchor"]["content"]
+        assert "weather in Berlin" in anchor
+        assert "git repo" not in anchor
+
+    def test_three_compactions_keep_latest_explicit_anchor_clear(self):
+        messages = self._four_turn_history_with_tool_call()
+        messages[1] = {"role": "user", "content": "Build this app in my git repo.",
+                       "metadata": {"trusted": True}}
+        first, _, compacted = self._run(messages)
+        assert compacted
+        first_summary = [m for m in first if m.get("role") == "system"
+                         and "[Conversation summary" in m.get("content", "")][-1]
+        assert first_summary["metadata"]["agent_task_anchor"]["trusted"] is True
+
+        second_input = first + [
+            {"role": "user", "content": "cancel that"},
+            {"role": "assistant", "content": "Okay."},
+            {"role": "user", "content": "What should I do now?"},
+            {"role": "assistant", "content": "I can help."},
+            {"role": "user", "content": "tell me more"},
+            {"role": "assistant", "content": "More detail."},
+            {"role": "user", "content": "and then?"},
+            {"role": "assistant", "content": "Then this."},
+            {"role": "user", "content": "keep going"},
+        ]
+        second, _, compacted = self._run(second_input)
+        assert compacted
+        second_summary = [m for m in second if m.get("role") == "system"
+                          and "[Conversation summary" in m.get("content", "")][-1]
+        assert second_summary["metadata"]["agent_task_anchor"] is None
+
+        third_input = second + [
+            {"role": "user", "content": "do your thing"},
+            {"role": "assistant", "content": "Sure."},
+            {"role": "user", "content": "continue"},
+            {"role": "assistant", "content": "Continuing."},
+        ]
+        third, _, compacted = self._run(third_input)
+        assert compacted
+        summaries = [m for m in third if m.get("role") == "system"
+                     and "[Conversation summary" in m.get("content", "")]
+        assert len(summaries) >= 3
+        latest_anchor = summaries[-1]["metadata"]["agent_task_anchor"]
+        assert not latest_anchor or "git repo" not in latest_anchor["content"]
+
+    def test_repeated_compaction_keeps_history_indexes_aligned(self, monkeypatch):
+        messages = self._four_turn_history_with_tool_call()
+        messages[1] = {"role": "user", "content": "Build this app in my git repo.",
+                       "metadata": {"trusted": True}}
+        session = SimpleNamespace(history=list(messages), id=None)
+        monkeypatch.setattr(cc, "get_context_length", lambda *args: 500)
+        monkeypatch.setattr(cc, "resolve_endpoint", lambda *args, **kwargs: (None, None, None))
+        monkeypatch.setattr(cc, "llm_call_async", lambda *args, **kwargs: None)
+        monkeypatch.setattr(cc, "ChatMessage", lambda **kwargs: kwargs)
+        monkeypatch.setattr(sys.modules["core.models"], "get_session_manager_instance",
+                            lambda: None, raising=False)
+
+        async def compact(messages_to_compact):
+            async def summary(*args, **kwargs):
+                return "compact summary text"
+            monkeypatch.setattr(cc, "llm_call_async", summary)
+            return await cc.maybe_compact(
+                session, "http://local/v1", "local", messages_to_compact,
+            )
+
+        compacted, _, first = asyncio.run(compact(messages))
+        assert first
+        assert session.history[-1]["content"] == "turn 4 — previously broke here"
+        assert not any(m.get("_agent_injected") == "task_anchor" for m in session.history)
+
+        compacted_again, _, second = asyncio.run(compact(compacted))
+        assert second
+        assert session.history[-1]["content"] == "turn 4 — previously broke here"
+        assert not any(m.get("_agent_injected") == "task_anchor" for m in session.history)
+        summary = next(m for m in session.history if m.get("role") == "system"
+                       and "[Conversation summary]" in m.get("content", ""))
+        assert summary["metadata"]["agent_task_anchor"]["trusted"] is True
 
     def test_handles_multimodal_list_content(self):
         messages = self._four_turn_history_with_tool_call()

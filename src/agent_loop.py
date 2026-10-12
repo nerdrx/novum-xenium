@@ -1550,6 +1550,25 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
     It affects tool discovery only; it never grants permission to execute tools.
     """
     turns = []
+    has_prompt_anchor = any(
+        message.get("role") == "user"
+        and message.get("_agent_injected") == "task_anchor"
+        for message in messages
+    )
+    if not has_prompt_anchor:
+        for message in reversed(messages):
+            metadata = message.get("metadata") or {}
+            if (message.get("role") == "system"
+                    and str(message.get("content") or "").startswith("[Conversation summary")
+                    and "agent_task_anchor" in metadata):
+                carried = metadata["agent_task_anchor"]
+                if (isinstance(carried, dict)
+                        and carried.get("trusted") is True
+                        and isinstance(carried.get("content"), str)
+                        and carried["content"].strip()):
+                    turns.append(carried["content"].strip())
+                # The newest marked summary also represents an explicit clear.
+                break
     for message in messages:
         if message.get("role") != "user" or (message.get("metadata") or {}).get("trusted") is False:
             continue
@@ -4683,7 +4702,11 @@ async def stream_agent_loop(
                         "per round. Create a short initial file with write_file, then extend it "
                         "with edit_file using a unique existing ending as old_string and that "
                         "same ending plus the next section as new_string. Do not overwrite "
-                        "completed sections. Continue until the complete implementation is saved.\n"
+                        "completed sections. Continue until the complete implementation is saved. "
+                        "A functional app must connect its controls to real operations, not simulated "
+                        "success, timers, or placeholder handlers. Before claiming completion, run "
+                        "syntax/build checks and exercise the main user action with a small real "
+                        "input. Verify the resulting output. Report any untested behavior explicitly.\n"
                         + _workspace_orientation
                     ),
                 }]
@@ -5189,8 +5212,9 @@ async def stream_agent_loop(
         if route_state["is_api_model"]:
             if route_relevant_tools:
                 schema_names = set(route_relevant_tools)
-                if _needs_admin:
-                    schema_names |= _ADMIN_TOOLS
+                # Capability selection and permissions are separate. An admin
+                # intent must not reintroduce unrelated management tools into
+                # an already narrowed coding/discovery toolset.
                 base_schemas = [
                     schema for schema in FUNCTION_TOOL_SCHEMAS
                     if schema.get("function", {}).get("name") in schema_names

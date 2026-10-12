@@ -1131,6 +1131,33 @@ async def _run_extraction_jobs_sequentially(session_id: str, jobs: list, max_wai
             logger.warning("[bg-extract] %s extraction job failed for session %s", name, session_id, exc_info=True)
 
 
+def skill_extraction_allowed(events, *, requested_agent, approval_continuation, workspace):
+    """Allow learning only from completed runs, with verification for code work."""
+    if not requested_agent or approval_continuation:
+        return False
+
+    incomplete = {
+        "ask_user", "agent_terminal", "budget_exceeded", "error",
+        "intent_nudge_exhausted", "loop_breaker_triggered", "rounds_exhausted",
+    }
+    if any(event.get("type") in incomplete for event in events):
+        return False
+    if any(event.get("type") == "verification" and event.get("passed") is not True
+           for event in events):
+        return False
+
+    code_tools = {"write_file", "edit_file", "apply_patch", "bash", "python"}
+    coding_run = bool(workspace) and any(
+        event.get("type") == "tool_start" and event.get("tool") in code_tools
+        for event in events
+    )
+    verified = any(
+        event.get("type") == "verification" and event.get("passed") is True
+        for event in events
+    )
+    return not coding_run or verified
+
+
 def run_post_response_tasks(
     sess,
     session_manager,

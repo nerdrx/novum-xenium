@@ -251,7 +251,7 @@ FUNCTION_TOOL_SCHEMAS = [
                 "properties": {
                     "patch_text": {
                         "type": "string",
-                        "description": "Patch text beginning with *** Begin Patch and ending with *** End Patch"
+                        "description": "Exact patch syntax: *** Begin Patch\n*** Add File: path/to/file\n+first line\n+second line\n*** End Patch. Add File lines must start with +. Update File: path uses @@ followed by context lines prefixed with a space, removed lines with -, and added lines with +. Do not use File:/Content: wrappers."
                     }
                 },
                 "required": ["patch_text"]

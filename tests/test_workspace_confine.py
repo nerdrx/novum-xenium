@@ -780,6 +780,25 @@ async def test_get_workspace_tool(ws, admin):
     assert r["exit_code"] == 0 and "No workspace" in r["output"]
 
 
+def test_workspace_project_context_shows_root_entries_without_candidates(tmp_path):
+    from src.agent_tools.filesystem_tools import workspace_project_context
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "README.md").write_text("existing workspace", encoding="utf-8")
+    outside = tmp_path / ".outside"
+    outside.mkdir()
+    (outside / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "linked-project").symlink_to(outside, target_is_directory=True)
+
+    context = workspace_project_context(str(tmp_path))
+
+    assert 'Workspace root entries' in context
+    assert '"README.md"' in context and '"src"' in context and '"docs"' in context
+    assert 'An empty candidate list does NOT mean this workspace is empty.' in context
+    assert 'Immediate child project candidates' in context and '[]' in context
+
+
 # ── no leak across calls ────────────────────────────────────────────────
 
 @pytest.mark.asyncio

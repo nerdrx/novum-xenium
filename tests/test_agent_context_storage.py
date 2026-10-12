@@ -19,9 +19,9 @@ def test_bulk_output_is_indexed_and_retrieved_in_real_agent_loop(monkeypatch, tm
     monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
     monkeypatch.setattr(loop, "_build_system_prompt", lambda messages, *args, **kwargs: (list(messages), []))
     requests = []
-    needle = "EXACT_IMPORTANT_DETAIL"
+    needle = "EXACTIMPORTANTDETAIL"
     opening_detail = "Opening hours Monday-Friday 08:00-18:00, Saturday 08:00-12:30."
-    raw = "Site navigation. " * 60 + opening_detail + " Start of page. " * 1000 + needle + " End of page. " * 1000
+    raw = "Site navigation. " * 60 + opening_detail + " Start of page. " * 1000 + "\n" + needle + "\n" + " End of page. " * 1000
 
     async def execute(block, **kwargs):
         if block.tool_type == "web_fetch":

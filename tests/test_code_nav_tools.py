@@ -202,6 +202,9 @@ def test_read_file_offset_limit(repo):
     assert r["exit_code"] == 0
     assert r["output"].startswith("line3\nline4\n")
     assert "more lines available; continue with offset=5" in r["output"]
+    assert r["read_metadata"] == {
+        "start_line": 3, "reached_eof": False, "next_offset": 5,
+    }
 
 
 def test_read_file_offset_limit_at_eof_has_no_pagination_notice(repo):
@@ -211,6 +214,11 @@ def test_read_file_offset_limit_at_eof_has_no_pagination_notice(repo):
     r = _run("read_file", f'{{"path": "{p}", "offset": 3, "limit": 2}}')
     assert r["exit_code"] == 0
     assert r["output"] == "three\nfour\n"
+    assert r["read_metadata"] == {"start_line": 3, "reached_eof": True}
+
+    beyond = _run("read_file", f'{{"path": "{p}", "offset": 99, "limit": 2}}')
+    assert beyond["output"] == ""
+    assert beyond["read_metadata"] == {"start_line": 99, "reached_eof": True}
 
 
 def test_read_file_char_cap_reports_next_offset(repo, monkeypatch):
@@ -223,6 +231,18 @@ def test_read_file_char_cap_reports_next_offset(repo, monkeypatch):
     r = _run("read_file", f'{{"path": "{p}", "offset": 1, "limit": 10}}')
     assert r["exit_code"] == 0
     assert "truncated at 5 chars; continue with offset=3" in r["output"]
+    assert r["read_metadata"] == {
+        "start_line": 1, "reached_eof": False, "next_offset": 3,
+    }
+
+    plain = _run("read_file", p)
+    assert plain["output"] == "aa\nbb\n... [truncated at 5 chars]"
+    assert plain["read_metadata"] == {
+        "start_line": 1, "reached_eof": False, "next_offset": 2,
+    }
+    from src.tool_execution import format_tool_result
+    formatted = format_tool_result("read file", plain)
+    assert '"read_metadata"' in formatted and '"next_offset": 2' in formatted
 
 
 def test_read_file_plain_path_backcompat(repo):

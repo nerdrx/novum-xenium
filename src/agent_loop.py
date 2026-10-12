@@ -5402,6 +5402,10 @@ async def stream_agent_loop(
              if key not in {"images", "screenshot", "image_base64", "image_data", "browser_preview"}},
             ensure_ascii=False, default=str,
         )
+        if tool_name == "web_fetch" and isinstance(result.get("output"), str):
+            # JSON-escaped newlines join their 'n' to the next word in FTS.
+            # Archive page text verbatim so section names remain searchable.
+            raw_context = result["output"]
         # The fixed size guard avoids stuffing clearly bulk output into normal
         # turns. Small explicit input budgets need an earlier guard: the
         # formatted result can otherwise be truncated by the next request's

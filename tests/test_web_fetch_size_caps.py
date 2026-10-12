@@ -260,3 +260,31 @@ def test_tool_layer_emits_partial_notice_and_parses_full(monkeypatch):
         json.dumps({"url": "https://example.com/big.txt", "full": True}), ctx={}
     ))
     assert calls["max_bytes"] == WEB_FETCH_HARD_MAX_BYTES
+
+
+def test_late_page_section_survives_fetch_and_session_archive(monkeypatch, tmp_path):
+    import asyncio
+    from src.agent_tools.web_tools import WebFetchTool
+    from src.constants import MAX_OUTPUT_CHARS
+    from src import tool_result_store as store
+    from src.tool_utils import _truncate
+    import src.search.content as alias_mod
+
+    body = "intro " * (MAX_OUTPUT_CHARS // 3) + "\nlateapiargumentsemantics\n"
+    monkeypatch.setattr(alias_mod, "fetch_webpage_content", lambda *a, **k: {
+        "content": body, "title": "API reference", "truncated": False,
+    })
+    result = asyncio.run(WebFetchTool().execute("https://example.com/api", ctx={}))
+    assert result["exit_code"] == 0
+    assert result["output"].endswith("lateapiargumentsemantics")
+    # The visible bubble stays small, while context_search retains later text.
+    assert "lateapiargumentsemantics" not in _truncate(result["output"])
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    result_id = store.archive_result("alice", "coding-run", "web_fetch",
+                                     result["output"])
+    assert "lateapiargumentsemantics" in store.search_results(
+        "alice", "coding-run", "lateapiargumentsemantics", result_id,
+    )
+    assert "No matching" in store.search_results(
+        "bob", "coding-run", "lateapiargumentsemantics", result_id,
+    )

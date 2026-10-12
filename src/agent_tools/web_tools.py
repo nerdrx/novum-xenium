@@ -173,7 +173,8 @@ class WebFetchTool:
         if len(title) > 300:
             title = title[:300] + "..."
         header = (f"# {title}\n" if title else "") + f"Source: {url}\n\n"
+        # Keep the bounded downloaded text intact until the session archive
+        # stores it. The UI and agent context layer produce their own previews;
+        # trimming here would make later API sections impossible to search.
         output = size_note + header + text
-        if len(output) > MAX_OUTPUT_CHARS:
-            output = output[:MAX_OUTPUT_CHARS] + "\n\n[...truncated]"
         return {"output": output, "exit_code": 0}

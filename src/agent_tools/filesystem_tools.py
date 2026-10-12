@@ -542,11 +542,13 @@ class ReadFileTool:
                     start = max(offset, 1)
                     out, n, budget = [], 0, MAX_READ_CHARS
                     next_offset = start
+                    reached_eof = True
                     with open(path, "r", encoding="utf-8", errors="replace") as f:
                         for i, line in enumerate(f, 1):
                             if i < start:
                                 continue
                             if limit > 0 and n >= limit:
+                                reached_eof = False
                                 out.append(
                                     f"\n... [more lines available; continue with offset={next_offset}]"
                                 )
@@ -558,6 +560,7 @@ class ReadFileTool:
                             if budget <= 0:
                                 has_more = bool(f.read(1))
                                 if has_more:
+                                    reached_eof = False
                                     out.append(
                                         f"\n... [truncated at {MAX_READ_CHARS} chars; "
                                         f"continue with offset={next_offset}]"
@@ -565,10 +568,22 @@ class ReadFileTool:
                                 else:
                                     out.append(f"\n... [truncated at {MAX_READ_CHARS} chars]")
                                 break
-                    return "".join(out)
+                    return "".join(out), {
+                        "start_line": start,
+                        "reached_eof": reached_eof,
+                        **({"next_offset": next_offset} if not reached_eof else {}),
+                    }
                 with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    return f.read(MAX_READ_CHARS + 1)
-            data = await asyncio.to_thread(_read)
+                    data = f.read(MAX_READ_CHARS + 1)
+                    return data, {
+                        "start_line": 1,
+                        "reached_eof": len(data) <= MAX_READ_CHARS,
+                        **(
+                            {"next_offset": data[:MAX_READ_CHARS].count("\n") + 1}
+                            if len(data) > MAX_READ_CHARS else {}
+                        ),
+                    }
+            data, read_metadata = await asyncio.to_thread(_read)
         except FileNotFoundError:
             hint = "Inspect the parent folder with ls/glob before creating a replacement."
             if os.path.basename(path) in _PROJECT_MARKERS:
@@ -582,7 +597,7 @@ class ReadFileTool:
             return {"error": f"read_file: {path}: {e}", "exit_code": 1}
         if not (offset > 0 or limit > 0) and len(data) > MAX_READ_CHARS:
             data = data[:MAX_READ_CHARS] + f"\n... [truncated at {MAX_READ_CHARS} chars]"
-        return {"output": data, "exit_code": 0}
+        return {"output": data, "exit_code": 0, "read_metadata": read_metadata}
 
 class WriteFileTool:
     async def execute(self, content: str, ctx: dict) -> dict:

@@ -23,6 +23,14 @@ def test_python_syntax_error_reports_line():
     assert "Python at line 2" in warning
 
 
+def test_python_compile_rejects_module_scope_return_and_await():
+    for source in ("return 1\n", "await task()\n"):
+        warning = syntax_feedback("module.py", source)
+        assert warning is not None
+        assert "Python at line 1" in warning
+        assert "outside function" in warning
+
+
 def test_syntax_checks_never_execute_python_or_javascript(tmp_path):
     marker = tmp_path / "must-not-exist"
     py_source = f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"

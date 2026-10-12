@@ -3589,7 +3589,9 @@ async def _run_verifier_subagent(
         raw = await llm_call_async(
             url=endpoint_url, model=model,
             messages=[{"role": "user", "content": prompt}],
-            headers=headers, temperature=0.0, max_tokens=600, timeout=60,
+            # The same-model replay needed 1111 tokens to finish its verdict;
+            # 600 truncated both control reviews before a final line.
+            headers=headers, temperature=0.0, max_tokens=2048, timeout=60,
         )
     except Exception as e:
         logger.warning(f"[agent] verifier subagent failed: {e}")

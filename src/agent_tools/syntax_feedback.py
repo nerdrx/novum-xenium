@@ -1,6 +1,5 @@
 """Non-executing syntax feedback for small source-file edits."""
 
-import ast
 import os
 import re
 import shutil
@@ -25,7 +24,10 @@ def syntax_feedback(path: str, source: str) -> str | None:
 
     if suffix == ".py":
         try:
-            ast.parse(source, filename=os.path.basename(path) or "<source>")
+            compile(
+                source, os.path.basename(path) or "<source>", "exec",
+                dont_inherit=True,
+            )
         except SyntaxError as exc:
             detail = str(exc.msg or "invalid syntax").splitlines()[0][:240]
             return _warning("Python", exc.lineno, detail)

@@ -251,42 +251,6 @@ def setup_session_routes(
     @router.get("/sessions")
     def list_sessions(request: Request):
         user = effective_user(request)
-        active_incognito_id = str(request.query_params.get("active_incognito_id") or "").strip()
-        # Lazy purge: incognito sessions are ephemeral by design — wipe leftovers
-        # from the DB and session_manager so they vanish on the next page refresh.
-        # BUT: skip sessions that were created within the last 10 minutes.
-        # Without that guard, the purge nukes the active "Nobody" session on the
-        # very first /api/sessions call after creation, killing the in-flight
-        # chat. The frontend's own _cleanupIncognitoSessions handler knows which
-        # session is current and won't delete the live one — this server-side
-        # purge exists only to catch ghosts the frontend missed (tab close,
-        # crash). Only clean up rows old enough to be definitely orphaned.
-        try:
-            from datetime import timedelta as _td
-            _cutoff = utcnow_naive() - _td(minutes=10)
-            _purge_db = SessionLocal()
-            try:
-                from core.database import ChatMessage as _DbMsg
-                _ghosts = _purge_db.query(DbSession).filter(
-                    DbSession.name.in_(("Nobody", "Incognito")),
-                    DbSession.created_at < _cutoff,
-                ).all()
-                for _g in _ghosts:
-                    if active_incognito_id and _g.id == active_incognito_id:
-                        continue
-                    _purge_db.query(_DbMsg).filter(_DbMsg.session_id == _g.id).delete()
-                    _purge_db.delete(_g)
-                    if hasattr(session_manager, "delete_session"):
-                        try:
-                            session_manager.delete_session(_g.id)
-                        except Exception:
-                            pass
-                if _ghosts:
-                    _purge_db.commit()
-            finally:
-                _purge_db.close()
-        except Exception:
-            pass
         user_sessions = session_manager.get_sessions_for_user(user)
         from src.session_titles import display_title, first_user_message, needs_auto_name
         title_ids = [sid for sid, item in user_sessions.items()

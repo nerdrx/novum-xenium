@@ -76,6 +76,54 @@ def test_list_sessions_excludes_other_users_sessions(monkeypatch):
     assert bob_id not in returned_ids
 
 
+def test_list_sessions_never_purges_old_incognito_sessions(monkeypatch):
+    import routes.session_routes as sr
+    from unittest.mock import MagicMock
+
+    _stub_multipart_if_missing(monkeypatch)
+    monkeypatch.setattr(sr, "SessionLocal", _TS)
+    monkeypatch.setattr(sr, "effective_user", lambda request: "alice")
+    stop_run = MagicMock()
+
+    alice_id, bob_id = str(uuid.uuid4()), str(uuid.uuid4())
+    old = cdb.utcnow_naive() - timedelta(hours=1)
+    db = _TS()
+    try:
+        db.query(DbMessage).delete()
+        db.query(DbSession).delete()
+        for sid, owner in ((alice_id, "alice"), (bob_id, "bob")):
+            db.add(DbSession(
+                id=sid, owner=owner, name="Nobody", endpoint_url="http://localhost",
+                model="gpt-4", archived=False, created_at=old,
+            ))
+            db.add(DbMessage(
+                id=f"{sid}-message", session_id=sid, role="user",
+                content=f"private {owner} message",
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+    sm = MagicMock()
+    sm.get_sessions_for_user.return_value = {}
+    sm.delete_session.side_effect = lambda sid: stop_run(sid, "active-run")
+    router = sr.setup_session_routes(sm, {})
+    endpoint = [r.endpoint for r in router.routes
+                if getattr(r, "path", "") == "/api/sessions"
+                and "GET" in getattr(r, "methods", set())][-1]
+
+    assert endpoint(request=MagicMock()) == []
+    sm.delete_session.assert_not_called()
+    stop_run.assert_not_called()
+
+    db = _TS()
+    try:
+        assert {row.id for row in db.query(DbSession).all()} == {alice_id, bob_id}
+        assert {row.session_id for row in db.query(DbMessage).all()} == {alice_id, bob_id}
+    finally:
+        db.close()
+
+
 def test_list_sessions_derives_only_owned_legacy_placeholder_titles(monkeypatch):
     import routes.session_routes as sr
     from unittest.mock import MagicMock

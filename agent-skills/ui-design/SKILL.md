@@ -1,7 +1,7 @@
 ---
 name: ui-design
 description: Design and build usable GUI, app, frontend, website, and CSS interfaces from the user's actual brand reference.
-version: 1.0.2
+version: 1.0.3
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -22,6 +22,16 @@ Build or restyle a graphical application, website, dashboard, or form. Use along
 7. Before writing the full interface, sketch the screen's reading order in a few lines: main action, required inputs, options, result, and secondary settings. Choose one layout that fits that workflow; do not add a card for every field. Start with a working vertical slice and render it before expanding the feature set.
 8. Review the rendered screen with visual-verification. Ask what draws the eye in the first two seconds, whether that is the user's main task, and whether the next action is obvious. Check hierarchy, density, consistency, and accessibility against the reference. Name each concrete issue, its effect on the user, and the smallest correction. Fix the highest-impact issue and render again.
 9. Keep documentation proportional to the working feature set. Promotional images and mockups are optional presentation assets, never substitutes for a screenshot of the running application. Finish and verify the requested workflow before spending time on promotional material.
+
+## Runtime Boundary Check
+For desktop or native features, first inspect the actual framework, version, entry points, and runtime security settings; consult that version's official docs before choosing APIs.
+In Electron, renderer code follows web rules; with `nodeIntegration: false`, do not call `require`, `child_process`, or filesystem APIs there. Never fall back to renderer Node APIs when isolation blocks them.
+If the app needs a native operation, verify a narrow existing preload bridge; otherwise add a minimal `contextBridge` API and validated IPC handler in the main process, then test that bridge before building the full UI.
+For process launch, use the supported main-process API with executable and argument array kept separate; preserve cancellation, errors, and completion status.
+For a new output destination, use the native save dialog and write to its returned path; use an open dialog only when the user must choose an existing input.
+For other frameworks, follow their documented equivalent boundary and file-dialog APIs; if the required bridge is unavailable, report the blocker instead of inventing a renderer workaround.
+
+References: [Electron process model](https://www.electronjs.org/docs/latest/tutorial/process-model), [Electron IPC](https://www.electronjs.org/docs/latest/tutorial/ipc), [Electron context isolation](https://www.electronjs.org/docs/latest/tutorial/context-isolation), [Electron dialog](https://www.electronjs.org/docs/latest/api/dialog), [Node.js child_process.spawn](https://nodejs.org/download/release/latest-jod/docs/api/child_process.html#child_processspawncommand-args-options).
 
 ## Pitfalls
 - Copying an attractive color palette without checking the actual background, contrast, layout, and control states.

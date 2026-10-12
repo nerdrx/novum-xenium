@@ -5,7 +5,7 @@ a = Analysis(
     ['launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[('static', 'static'), ('scripts', 'scripts'), ('mcp_servers', 'mcp_servers'), ('services/hwfit/data', 'services/hwfit/data'), ('config', 'config'), ('.env.example', '.env.example')],
+    datas=[('agent-skills', 'agent-skills'), ('static', 'static'), ('scripts', 'scripts'), ('mcp_servers', 'mcp_servers'), ('services/hwfit/data', 'services/hwfit/data'), ('config', 'config'), ('.env.example', '.env.example')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

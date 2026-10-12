@@ -20,14 +20,19 @@ loads while a user migrates them to disk.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
+import threading
 import time
 from typing import Dict, Iterable, List, Optional
 
 from .skill_format import Skill, slugify
 
 logger = logging.getLogger(__name__)
+
+_BUNDLED_DESIGN_SKILLS = ("ui-design", "visual-verification")
+_BUNDLED_SKILLS_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +307,11 @@ class SkillsManager:
         return out
 
     def load(self, owner: Optional[str] = None) -> List[Dict]:
+        try:
+            self._install_bundled_design_skills(owner)
+        except OSError:
+            # Optional defaults must not prevent reading an existing library.
+            logger.debug("Bundled design skills unavailable", exc_info=True)
         entries = self.load_all()
         if owner is None:
             return entries
@@ -311,6 +321,98 @@ class SkillsManager:
         # Hide them now; the owner needs to be backfilled on disk if those
         # skills should be visible to a specific user.
         return [s for s in entries if s.get("owner") == owner]
+
+    def _install_bundled_design_skills(self, owner: Optional[str]) -> None:
+        """Install the two packaged design procedures once per exact owner."""
+        if owner is None:
+            return
+        try:
+            from routes.prefs_routes import _load_for_user
+            if (_load_for_user(owner) or {}).get("skills_enabled", True) is False:
+                return
+        except Exception:
+            pass
+
+        owner_key = hashlib.sha256(str(owner).encode("utf-8")).hexdigest()
+        marker = os.path.join(self.skills_root, f".bundled-design-v1-{owner_key}")
+        if os.path.exists(marker):
+            return
+        with _BUNDLED_SKILLS_LOCK:
+            # Names share one global directory across owners, so all owners
+            # must serialize suffix selection and installation together.
+            lock_path = os.path.join(self.skills_root, ".bundled-design-v1.lock")
+            with open(lock_path, "a", encoding="utf-8") as lock_file:
+                lock_backend = None
+                try:
+                    import fcntl
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                    lock_backend = fcntl
+                except ImportError:  # Windows frozen builds
+                    try:
+                        import msvcrt
+                        lock_file.seek(0, os.SEEK_END)
+                        if lock_file.tell() == 0:
+                            lock_file.write("0")
+                            lock_file.flush()
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                        lock_backend = msvcrt
+                    except ImportError:
+                        return
+                except OSError:
+                    logger.debug("Bundled design skill lock unavailable", exc_info=True)
+                    return
+                try:
+                    if os.path.exists(marker):
+                        return
+                    try:
+                        from src.runtime_paths import get_app_root
+                        from core.atomic_io import atomic_write_text
+
+                        bundle_root = os.path.join(get_app_root(), "agent-skills")
+                        bundles = {}
+                        for name in _BUNDLED_DESIGN_SKILLS:
+                            path = os.path.join(bundle_root, name, "SKILL.md")
+                            with open(path, encoding="utf-8") as source:
+                                markdown = source.read()
+                            parsed = Skill.from_markdown(markdown)
+                            if parsed.name != name:
+                                return
+                            bundles[name] = (markdown, parsed)
+
+                        existing = self.load_all()
+                        owned = [skill for skill in existing if skill.get("owner") == owner]
+                        owned_names = {skill.get("name") for skill in owned}
+                        for name, (markdown, bundled) in bundles.items():
+                            imported_before = any(
+                                skill.get("source") == "imported"
+                                and skill.get("category") == "design"
+                                and skill.get("description") == bundled.description
+                                and skill.get("tags") == bundled.tags
+                                for skill in owned
+                            )
+                            if name in owned_names or imported_before:
+                                continue
+                            imported = self.import_bundle_from_files(
+                                {"SKILL.md": markdown}, owner=owner, category="design",
+                            )
+                            if not isinstance(imported, dict) or not imported.get("name"):
+                                return
+                            owned_names.add(imported["name"])
+                            owned.append(imported)
+                        atomic_write_text(marker, "installed\n")
+                    except FileNotFoundError:
+                        # Older/source-light builds may not carry the optional bundle.
+                        return
+                    except Exception:
+                        logger.debug("Bundled design skills were not installed", exc_info=True)
+                finally:
+                    if lock_backend is not None:
+                        if hasattr(lock_backend, "flock"):
+                            lock_backend.flock(lock_file.fileno(), lock_backend.LOCK_UN)
+                        else:
+                            lock_file.seek(0)
+                            lock_backend.locking(lock_file.fileno(), lock_backend.LK_UNLCK, 1)
 
     # ----------------------------------------------------------------------
     # CRUD — disk-backed

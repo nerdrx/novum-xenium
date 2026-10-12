@@ -55,6 +55,7 @@ Write-Step "Building portable exe bundle"
 Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
 
 $dataArgs = @(
+    "--add-data", "agent-skills;agent-skills",
     "--add-data", "static;static",
     "--add-data", "scripts;scripts",
     "--add-data", "mcp_servers;mcp_servers",

@@ -16,7 +16,10 @@ def test_design_skill_templates_import_match_gui_task_and_preserve_ownership(tmp
              'give it the modern nx design language')
     matched = manager.get_relevant_skills(query, skills=manager.load(owner='alice'), threshold=0.25)
     assert {skill['name'] for skill in matched} == {'ui-design', 'visual-verification'}
-    assert not manager.load(owner='bob')
+    bob_skills = manager.load(owner='bob')
+    assert bob_skills
+    assert all(skill['owner'] == 'bob' for skill in bob_skills)
+    assert manager.read_skill_md('ui-design', owner='bob') is None
     assert all(skill['procedure'] and skill['verification'] for skill in matched)
     # A collision cannot replace an existing procedure.
     original = manager.load(owner='alice')

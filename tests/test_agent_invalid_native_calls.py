@@ -7,6 +7,7 @@ from test_agent_rounds_exhausted import _patch_common, _collect, _types
 
 def _run(monkeypatch, recover):
     _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
     executed = []
     requests = []
 
@@ -16,7 +17,13 @@ def _run(monkeypatch, recover):
 
     async def stream(candidates, messages, **kwargs):
         requests.append(list(messages))
-        if recover and len(requests) > 1:
+        if recover and len(requests) == 2:
+            yield 'data: ' + json.dumps({"type": "tool_calls", "calls": [
+                {"id": "small", "name": "write_file", "arguments": json.dumps({
+                    "path": "style.css", "content": "body { margin: 0; }"
+                })},
+            ]}) + '\n\n'
+        elif recover and len(requests) > 2:
             yield 'data: {"delta":"Recovered."}\n\n'
         else:
             yield 'data: ' + json.dumps({"type": "tool_calls", "calls": [
@@ -36,8 +43,8 @@ def _run(monkeypatch, recover):
 
 def test_invalid_batch_retries_without_executing_valid_siblings(monkeypatch):
     events, requests, executed = _run(monkeypatch, True)
-    assert len(requests) == 2
-    assert executed == []
+    assert len(requests) == 3
+    assert executed == ['write_file'], events
     assert any('NONE of that batch was executed' in m.get('content', '') for m in requests[1])
     assert any(e.get('delta') == 'Recovered.' for e in events)
 
@@ -47,3 +54,5 @@ def test_invalid_calls_stop_with_explanation_after_two_retries(monkeypatch):
     assert len(requests) == 3
     assert executed == []
     assert any('Stopped because the model' in e.get('delta', '') for e in events)
+    assert any('at most 2000' in m.get('content', '') for m in requests[1])
+    assert any('at most 1000' in m.get('content', '') for m in requests[2])

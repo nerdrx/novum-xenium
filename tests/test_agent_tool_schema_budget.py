@@ -871,3 +871,44 @@ def test_coding_output_budget_fits_remaining_context(monkeypatch):
     budget = request["kwargs"]["max_tokens"]
     assert 4096 < budget < 8192
     assert budget + estimate_tokens(request["messages"]) <= 8192
+
+
+@pytest.mark.parametrize("limit,reserve", [(0, 8192), (1024, 1024)])
+def test_busy_coding_context_reserves_output_before_trimming(monkeypatch, limit, reserve):
+    requests = []
+    schemas = [s for s in loop.FUNCTION_TOOL_SCHEMAS
+               if s['function']['name'] in {'write_file', 'edit_file', 'read_file'}]
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.setattr('src.model_context.budget_context_for_model', lambda *a, **k: 32768)
+    question = 'Build a complete FFmpeg GUI application.'
+    exchange = [
+        {'role': 'assistant', 'content': '', 'tool_calls': [{
+            'id': 'saved', 'type': 'function', 'function': {
+                'name': 'write_file', 'arguments': json.dumps({'path': 'index.html', 'content': 'markup ' * 500})}}]},
+        {'role': 'tool', 'tool_call_id': 'saved', 'content': 'File saved.'},
+    ]
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            'http://local/v1', 'test-model',
+            [{'role': 'system', 'content': 'Help with coding.'},
+             {'role': 'user', 'content': 'Previous request. ' * 8000},
+             {'role': 'assistant', 'content': 'Previous answer. ' * 8000},
+             {'role': 'user', 'content': question}] + exchange,
+            relevant_tools={'write_file', 'edit_file', 'read_file'},
+            max_tokens=limit, max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    request = requests[0]
+    shaped = request['messages']
+    output = request['kwargs']['max_tokens']
+    assert output >= reserve
+    if limit:
+        assert output == limit
+    assert estimate_tokens(shaped) + estimate_tool_schema_tokens(request['kwargs']['tools']) + output <= 32768
+    assert any(m.get('content') == question for m in shaped)
+    assert exchange[0] in shaped
+    assert any(m.get('tool_call_id') == 'saved' for m in shaped)
+    assert any('4000 characters' in m.get('content', '') for m in shaped)
+    assert all('_protected' not in m for m in shaped)

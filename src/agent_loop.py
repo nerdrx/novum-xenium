@@ -4669,6 +4669,20 @@ async def stream_agent_loop(
             _route_context_lengths[(candidate_url, candidate_model)] = candidate_context
             window_description = f"{candidate_context}-token window" if candidate_context else "unknown context window"
             soft_budget = int(get_setting("agent_input_token_budget", DEFAULT_BUDGET) or 0)
+            coding_requested = bool(_use_coding_tools(_retrieval_query or _last_user, workspace))
+            if coding_requested:
+                route_messages = list(route_messages) + [{
+                    "role": "system",
+                    "_protected": True,
+                    "content": (
+                        "Write code in incremental, complete tool calls. Keep each file-writing "
+                        "call below 4000 characters of new content and emit only one such call "
+                        "per round. Create a short initial file with write_file, then extend it "
+                        "with edit_file using a unique existing ending as old_string and that "
+                        "same ending plus the next section as new_string. Do not overwrite "
+                        "completed sections. Continue until the complete implementation is saved."
+                    ),
+                }]
             before_trim_tokens = estimate_tokens(route_messages)
             try:
                 hard_max = int(get_setting("agent_input_token_hard_max", DEFAULT_HARD_MAX) or DEFAULT_HARD_MAX)
@@ -4692,7 +4706,14 @@ async def stream_agent_loop(
             if requested_output_tokens <= 0:
                 requested_output_tokens = default_output_tokens
             minimum_required_tail_tokens = _minimum_required_tail_tokens(route_messages)
-            reserve_tokens = min(requested_output_tokens, 2048)
+            # Reserve output before trimming history, not merely after it.
+            # Otherwise the 85% input allowance leaves only ~5K on a 32K
+            # coding route, even when the caller requests 16K output.
+            output_floor = (
+                max(2048, min(8192, (candidate_context or 8192) // 4))
+                if coding_requested else 2048
+            )
+            reserve_tokens = min(requested_output_tokens, output_floor)
             prompt_budget = effective_budget
             trim_reserve_tokens = reserve_tokens
             if candidate_context:
@@ -4729,9 +4750,6 @@ async def stream_agent_loop(
                 # schemas. Let their bounded set consume otherwise-unused prompt
                 # room, while keeping the ordinary schema cap for the rest.
                 budget_priority_names = set(_runtime_skill_tools) | _runtime_discovered_tools
-                coding_requested = bool(
-                    _use_coding_tools(_retrieval_query or _last_user, workspace)
-                )
                 if _caller_relevant_tools and len(_caller_relevant_tools) == 1:
                     selected_relevant = set(_caller_relevant_tools) - WEB_TOOL_NAMES
                     budget_priority_names.update(selected_relevant)
@@ -6120,11 +6138,16 @@ async def stream_agent_loop(
                 notice = "\n\nA tool request was incomplete or invalid. Retrying with smaller requests.\n\n"
                 messages.append({
                     "role": "system",
+                    "_protected": True,
                     "content": (
                         "Your last native tool-call batch contained invalid or incomplete arguments. "
                         "NONE of that batch was executed. Retry using valid tool names and complete JSON. "
-                        "Keep each call small: write a short initial file, then add small sections with "
-                        "the available editing tools. Do not repeat successful calls from earlier rounds."
+                        f"Emit exactly ONE tool call next, with at most {2000 // _invalid_tool_rounds} "
+                        "characters of new file content. Do not regenerate the whole file. "
+                        "For a new file, write only its first section with write_file. Then use "
+                        "edit_file to replace a unique existing ending with that ending plus the "
+                        "next section. Close the JSON completely before stopping. "
+                        "Do not repeat successful calls from earlier rounds."
                     ),
                 })
             else:

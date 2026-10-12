@@ -200,7 +200,29 @@ def test_read_file_offset_limit(repo):
         f.write("\n".join(f"line{i}" for i in range(1, 11)) + "\n")
     r = _run("read_file", f'{{"path": "{p}", "offset": 3, "limit": 2}}')
     assert r["exit_code"] == 0
-    assert r["output"] == "line3\nline4\n"
+    assert r["output"].startswith("line3\nline4\n")
+    assert "more lines available; continue with offset=5" in r["output"]
+
+
+def test_read_file_offset_limit_at_eof_has_no_pagination_notice(repo):
+    p = os.path.join(repo, "short.txt")
+    with open(p, "w") as f:
+        f.write("one\ntwo\nthree\nfour\n")
+    r = _run("read_file", f'{{"path": "{p}", "offset": 3, "limit": 2}}')
+    assert r["exit_code"] == 0
+    assert r["output"] == "three\nfour\n"
+
+
+def test_read_file_char_cap_reports_next_offset(repo, monkeypatch):
+    from src.agent_tools import filesystem_tools
+
+    p = os.path.join(repo, "large.txt")
+    with open(p, "w") as f:
+        f.write("aa\nbb\ncc\ndd\n")
+    monkeypatch.setattr(filesystem_tools, "MAX_READ_CHARS", 5)
+    r = _run("read_file", f'{{"path": "{p}", "offset": 1, "limit": 10}}')
+    assert r["exit_code"] == 0
+    assert "truncated at 5 chars; continue with offset=3" in r["output"]
 
 
 def test_read_file_plain_path_backcompat(repo):
@@ -223,8 +245,10 @@ def test_workspace_reports_existing_child_projects_without_rebinding(repo):
     try:
         result = _run('get_workspace', '')
         assert project in result['output']
-        assert 'linked-project' not in result['output']
-        assert 'node_modules' not in result['output']
+        candidates = result['output'].split('Immediate child project candidates', 1)[1]
+        assert project in candidates
+        assert 'linked-project' not in candidates
+        assert 'node_modules' not in candidates
         assert 'cd affects only that single shell call' in result['output']
         assert get_active_workspace() == repo
         missing = _run('read_file', os.path.join(repo, 'package.json'))

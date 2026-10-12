@@ -486,17 +486,29 @@ class ReadFileTool:
                 if offset > 0 or limit > 0:
                     start = max(offset, 1)
                     out, n, budget = [], 0, MAX_READ_CHARS
+                    next_offset = start
                     with open(path, "r", encoding="utf-8", errors="replace") as f:
                         for i, line in enumerate(f, 1):
                             if i < start:
                                 continue
                             if limit > 0 and n >= limit:
+                                out.append(
+                                    f"\n... [more lines available; continue with offset={next_offset}]"
+                                )
                                 break
                             out.append(line)
                             n += 1
+                            next_offset = i + 1
                             budget -= len(line)
                             if budget <= 0:
-                                out.append(f"\n... [truncated at {MAX_READ_CHARS} chars]")
+                                has_more = bool(f.read(1))
+                                if has_more:
+                                    out.append(
+                                        f"\n... [truncated at {MAX_READ_CHARS} chars; "
+                                        f"continue with offset={next_offset}]"
+                                    )
+                                else:
+                                    out.append(f"\n... [truncated at {MAX_READ_CHARS} chars]")
                                 break
                     return "".join(out)
                 with open(path, "r", encoding="utf-8", errors="replace") as f:

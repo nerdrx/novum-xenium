@@ -178,3 +178,21 @@ def test_real_loop_allows_pagination_and_changed_output(monkeypatch, options):
     events, calls = run_reads(monkeypatch, **options)
     assert len(calls) == 8
     assert not any(event.get("type") == "loop_breaker_triggered" for event in events)
+
+
+def test_different_invalid_actions_do_not_evade_failure_limit():
+    guard = _ToolProgressGuard()
+    for i in range(5):
+        assert guard.observe([record("edit_file", f"missing-{i}", code=1, error="File not found")]) is None
+    stall = guard.observe([record("manage_documents", '{"action":"invented"}', code=1, error="Unknown action")])
+    assert stall["failure_limit"] is True
+    assert stall["failed_retries"] == 6
+
+
+def test_successful_change_clears_varied_failure_limit():
+    guard = _ToolProgressGuard()
+    for i in range(5):
+        assert guard.observe([record("edit_file", str(i), code=1)]) is None
+    assert guard.observe([record("write_file", "new.py", "Written")]) is None
+    for i in range(5):
+        assert guard.observe([record("edit_file", str(i + 10), code=1)]) is None

@@ -96,6 +96,23 @@ def _endpoint_pinned_models(ep) -> list:
     return models if isinstance(models, list) else []
 
 
+def model_ids_from_response(data) -> list:
+    """Extract usable OpenAI-style model names, preferring advertised aliases."""
+    items = data if isinstance(data, list) else (data.get("data") if isinstance(data, dict) else None)
+    result = []
+    for row in items or []:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        model_id = row["id"]
+        aliases = row.get("aliases")
+        if (model_id.startswith("nx-model-") and isinstance(aliases, list)
+                and len(aliases) == 1 and isinstance(aliases[0], str) and aliases[0].strip()):
+            model_id = aliases[0].strip()
+        if model_id and model_id not in result:
+            result.append(model_id)
+    return result
+
+
 def _is_mlx_deepseek_v4_repo_id(model_id: str) -> bool:
     return "mlx-community/deepseek-v4" in str(model_id or "").lower()
 

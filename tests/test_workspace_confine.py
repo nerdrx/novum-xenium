@@ -102,6 +102,53 @@ def test_no_binding_uses_default_roots():
         _resolve_tool_path("/etc/hosts")
 
 
+def test_no_binding_resolves_relative_paths_from_default_workspace(tmp_path, monkeypatch):
+    from src import constants, tool_execution
+
+    data_dir = tmp_path / "data"
+    workspace = data_dir / "agent_workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "nx-ffmpeg").mkdir()
+    monkeypatch.setattr(constants, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(tool_execution, "AGENT_WORKSPACE_DIR", str(workspace))
+
+    target = workspace / "nx-ffmpeg" / "index.html"
+    assert _resolve_tool_path("nx-ffmpeg/index.html") == str(target)
+    assert _resolve_search_root("nx-ffmpeg") == str(target.parent)
+    with pytest.raises(ValueError, match="outside the workspace"):
+        _resolve_tool_path("../../outside.txt")
+
+
+@pytest.mark.asyncio
+async def test_default_workspace_is_reported_and_relative_edit_ls_work(tmp_path, monkeypatch, admin):
+    from src import constants, tool_execution
+
+    data_dir = tmp_path / "data"
+    workspace = data_dir / "agent_workspace"
+    project = workspace / "nx-ffmpeg"
+    project.mkdir(parents=True)
+    (project / "index.html").write_text("before", encoding="utf-8")
+    monkeypatch.setattr(constants, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(tool_execution, "AGENT_WORKSPACE_DIR", str(workspace))
+
+    from src.agent_tools.filesystem_tools import GetWorkspaceTool
+    info = await GetWorkspaceTool().execute("", {})
+    assert str(workspace) in info["output"]
+    assert "Relative file-tool paths" in info["output"]
+
+    _, listed = await execute_tool_block(_block("ls", "nx-ffmpeg"), owner="a")
+    assert listed["exit_code"] == 0 and "index.html" in listed["output"]
+    _, edited = await execute_tool_block(
+        _block("edit_file", json.dumps({
+            "path": "nx-ffmpeg/index.html",
+            "old_string": "before",
+            "new_string": "after",
+        })), owner="a",
+    )
+    assert edited["exit_code"] == 0
+    assert (project / "index.html").read_text(encoding="utf-8") == "after"
+
+
 # ── end-to-end via execute_tool_block (sets + resets the binding) ───────
 
 @pytest.mark.asyncio

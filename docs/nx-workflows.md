@@ -12,6 +12,14 @@ The standard Docker workspace is `/workspace` inside the container and `data/age
 
 The ChatGPT subscription connection authenticates model inference. Git authentication must be configured separately for private repositories or publishing. The [NX Warp coding test](https://github.com/nerdrx/nx-warp/pull/74) used the production agent loop for editing, testing and committing, with host-side review, push and PR creation. It does not establish private authentication or publishing through the normal chat UI.
 
+For GitHub CLI access from the backend, run this once after the stack starts:
+
+```sh
+docker compose exec odysseus gh auth login --hostname github.com --git-protocol https --web
+```
+
+Complete the one-time device flow in your browser using the code printed by the command. Login runs inside the backend container and saves credentials under the persistent `data/gh` app-data directory; it does not copy or reuse a host `gh` login. Keep that app-data directory private. **Check capabilities** reports whether `gh` is installed and authenticated, without returning CLI output or credentials. Re-run the login command if you replace the app-data volume or revoke the GitHub authorization.
+
 Open the composer’s **More tools** menu and choose **Plan mode** for read-only investigation before editing. Choose it again, or use the visible Plan indicator, to turn it off. Tab moves between controls normally; it does not change this mode.
 
 ## Group conversations
@@ -31,12 +39,12 @@ Tool windows raise when opened or clicked. Popup menus follow the live window st
 The shield button beside Agent/Chat selects approval behavior for your account's next agent turn, including group participants:
 
 - **Ask for approval**: approve each agent write, shell command, or internet call. Reads in the workspace remain available. Automatic URL/transcript and web-search prefetch are deferred to agent tools.
-- **Approve for me** (default): automatically read canonical public YouTube/GitHub/DeviantArt profiles and exact HTTPS links supplied by you or returned by search. For uncertain public page reads, a separate tool-free review uses the current model and only your latest trusted request plus the proposed action. An explicit `allow` authorizes only that exact action for the current run; `ask`, invalid output, or timeout shows an approval card. Public-address checks, DNS pinning, and redirect checks remain enforced by the fetcher.
+- **Approve for me** (default): automatically read canonical public YouTube/GitHub/DeviantArt profiles, exact HTTPS links supplied by you or returned by search, and app endpoint metadata. When untrusted content makes another action require review, the bounded tool-free review considers up to four recent trusted user requests plus the proposed action; newer requests can narrow or cancel earlier work. An explicit `allow` authorizes only that exact action for the current run; `ask`, invalid output, or timeout shows an approval card. Public-address checks, DNS pinning, and redirect checks remain enforced by the fetcher.
 - **Full access**: skip automatic tool approval prompts within the current workspace/container.
 
 These modes do not add host-folder access or override disabled tools, account privileges, plan mode, or filesystem restrictions. Running turns keep their original mode. Only an interactive user can save a mode; API tokens and internal tool calls cannot grant themselves full access. Other user interactions, such as a tool asking for missing information, still appear in Full access.
 
-The lightweight judge adds no model download, service, or dependency. It runs only when the normal Auto rules would ask: at most six distinct candidates per run, one attempt each, eight seconds maximum, and 128 output tokens. It does not receive personas, fetched page content, tool results, or the conversation history. Eligible coding actions are small `write_file` / `edit_file` source or text changes inside the selected workspace, with a required pre-write snapshot; the inspection exception accepts only plain `pwd` and constrained `ls`. Query-bearing or encoded/action-like URLs, arbitrary shell execution, deletions, secret/hidden files, private reads, unknown tools, Ask mode, plan mode and delegated API-token runs cannot use this exception. Edits in incognito do not use the judge because no persistent snapshot is created. Decisions are cached only within the run and their short reasons remain visible after refresh. Classification is a model judgment, not a guarantee that every public GET is harmless.
+The lightweight judge adds no model download, service, or dependency. It runs only when the normal Auto rules would ask: at most 32 distinct candidates per run, one attempt each, eight seconds maximum, and 128 output tokens. It does not receive personas, fetched page content, tool results, or assistant/tool history. Eligible coding actions are small `write_file` / `edit_file` source or text changes inside a validated workspace, including the default agent workspace when none is selected, with a required pre-write snapshot. The inspection exception accepts only plain `pwd` and constrained `ls`. Query-bearing or encoded/action-like URLs, arbitrary shell execution, deletions, secret/hidden files, private app data reads, unknown tools, Ask mode, plan mode and delegated API-token runs cannot use this exception. Edits in incognito do not use the judge because no persistent snapshot is created. Decisions are cached only within the run and their short reasons remain visible after refresh. Classification is a model judgment, not a guarantee that every public GET is harmless.
 
 ## When an agent goes in circles
 

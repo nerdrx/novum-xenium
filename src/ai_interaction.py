@@ -83,7 +83,8 @@ def _image_dimensions(image_bytes: bytes) -> Optional[str]:
 # Model resolution
 # ---------------------------------------------------------------------------
 
-from src.endpoint_resolver import build_chat_url, build_headers, build_models_url, resolve_endpoint_runtime
+from src.endpoint_resolver import (build_chat_url, build_headers, build_models_url,
+                                   model_ids_from_response, resolve_endpoint_runtime)
 from src.image_model_ids import is_gpt_image_model, looks_like_image_generation_model, model_id_leaf
 
 
@@ -171,8 +172,7 @@ def _resolve_model(spec: str, owner: Optional[str] = None, model_type: Optional[
                         r.raise_for_status()
                         endpoint_reachable = True
                         data = r.json()
-                        items = data if isinstance(data, list) else (data.get("data") or [])
-                        model_ids = [m.get("id") for m in items if isinstance(m, dict) and m.get("id")]
+                        model_ids = model_ids_from_response(data)
                         if not model_ids:
                             model_ids = [
                                 m.get("name") or m.get("model")
@@ -184,6 +184,11 @@ def _resolve_model(spec: str, owner: Optional[str] = None, model_type: Optional[
                         model_ids = json.loads(ep.cached_models or "[]")
                 except Exception:
                     model_ids = []
+
+                if getattr(ep, "name", "") in {"Local models", "zVram · Local models"}:
+                    public_models = _json_list(getattr(ep, "pinned_models", None))
+                    if public_models:
+                        model_ids = public_models
 
                 # Manual/local image endpoints are often registered with pinned
                 # model ids, while /models may return a runtime alias or only the

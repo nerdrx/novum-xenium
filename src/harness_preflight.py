@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 
 from src import model_capabilities as mc
 from src.auth_helpers import owner_filter
@@ -93,6 +95,30 @@ def _search_readiness():
                 "reason": "Search service URL is not configured"}
     return {"status": "configured_unverified", "provider": provider, "source": "search_provider_configuration",
             "reason": "Per-turn toggle and provider reachability were not checked"}
+
+
+def _github_cli_readiness():
+    """Report GitHub CLI availability without exposing CLI output or credentials."""
+    executable = shutil.which("gh")
+    if not executable:
+        return {"status": "not_installed", "installed": False, "authenticated": False,
+                "source": "github_cli", "reason": "GitHub CLI is not installed in the backend container"}
+    try:
+        result = subprocess.run(
+            [executable, "auth", "status"], capture_output=True, text=True,
+            timeout=3, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "timed_out", "installed": True, "authenticated": None,
+                "source": "github_cli", "reason": "GitHub CLI status check exceeded 3 seconds"}
+    except OSError:
+        return {"status": "unavailable", "installed": True, "authenticated": None,
+                "source": "github_cli", "reason": "GitHub CLI could not be started"}
+    if result.returncode == 0:
+        return {"status": "ready", "installed": True, "authenticated": True,
+                "source": "github_cli", "reason": "GitHub CLI is authenticated in this backend container"}
+    return {"status": "not_authenticated", "installed": True, "authenticated": False,
+            "source": "github_cli", "reason": "Run gh auth login --web inside the backend container"}
 
 
 def build_preflight(session, owner: str, workspace: str | None = None, *, details=None):
@@ -196,6 +222,7 @@ def build_preflight(session, owner: str, workspace: str | None = None, *, detail
                      "probe": {"status": "not_run", "reason": "Preflight is offline"}},
         "backends": {
             "search": search,
+            "github_cli": _github_cli_readiness(),
             "browser": {"status": browser_status, "source": "live_mcp_inventory",
                         "reason": "No connected browser tool" if browser_status == "unavailable" else ""},
             "image_generation": {"status": image_status, "source": "user_setting_and_mcp",

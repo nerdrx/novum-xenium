@@ -355,6 +355,14 @@ def _tool_path_roots() -> list[str]:
     return out
 
 
+def _default_agent_workspace() -> str:
+    """Return the persistent workspace only when it remains an allowed root."""
+    default_root = os.path.realpath(AGENT_WORKSPACE_DIR)
+    if default_root not in _tool_path_roots() or _is_denied_tool_path(default_root):
+        raise ValueError("default agent workspace is not a safe readable data subdirectory")
+    return default_root
+
+
 def _resolve_tool_path(raw_path: str) -> str:
     """Resolve and confine a model-supplied path.
 
@@ -376,6 +384,8 @@ def _resolve_tool_path(raw_path: str) -> str:
     if raw_path is None or not str(raw_path).strip():
         raise ValueError("path is required")
     expanded = os.path.expanduser(str(raw_path).strip())
+    if not os.path.isabs(expanded):
+        return _resolve_tool_path_in_workspace(_default_agent_workspace(), expanded)
     resolved = os.path.realpath(expanded)
 
     if _is_sensitive_path(resolved):
@@ -498,10 +508,10 @@ def agent_cwd() -> str:
     workspace = get_active_workspace()
     if workspace:
         return workspace
-    resolved = os.path.realpath(_AGENT_WORKDIR)
-    if resolved not in _agent_readable_data_subdirs():
-        raise RuntimeError("agent workspace is not a safe real directory")
-    return resolved
+    try:
+        return _default_agent_workspace()
+    except ValueError as exc:
+        raise RuntimeError("agent workspace is not a safe real directory") from exc
 
 
 def get_mcp_manager():
@@ -527,11 +537,7 @@ def _resolve_search_root(raw_path: str) -> str:
         # bare ls listed whatever the workspace was bound to.
         return _resolve_tool_path_in_workspace(ws, raw or ws)
     if not raw:
-        roots = _tool_path_roots()
-        default_root = os.path.realpath(AGENT_WORKSPACE_DIR)
-        if default_root in roots and not _is_denied_tool_path(default_root):
-            return default_root
-        raise ValueError("default agent workspace is not a safe readable data subdirectory")
+        return _default_agent_workspace()
     return _resolve_tool_path(raw)
 
 logger = logging.getLogger(__name__)
@@ -1081,8 +1087,9 @@ async def execute_tool_block(
             try:
                 from src.workspace_snapshots import ensure_snapshot, validate_session_scope
                 from src.owner_identity import effective_storage_owner
+                snapshot_workspace = workspace or agent_cwd()
                 snapshot = await asyncio.to_thread(
-                    ensure_snapshot, workspace, effective_storage_owner(owner), session_id,
+                    ensure_snapshot, snapshot_workspace, effective_storage_owner(owner), session_id,
                     security_context.run_id,
                     validate_scope=lambda: validate_session_scope(effective_storage_owner(owner), session_id),
                 )

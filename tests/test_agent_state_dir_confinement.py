@@ -85,12 +85,10 @@ def test_blocks_listing_the_data_directory_itself():
         _resolve_tool_path(DATA_DIR)
 
 
-def test_blocks_app_state_reached_by_relative_path(monkeypatch):
-    """The data directory is a relative hop from the checkout root, so
-    confinement cannot depend on the model supplying an absolute path."""
-    monkeypatch.chdir(os.path.dirname(DATA_DIR))
+def test_blocks_app_state_reached_by_relative_path():
+    """A parent hop from the default workspace cannot reach state files."""
     with pytest.raises(ValueError, match="application state"):
-        _resolve_tool_path(os.path.join(os.path.basename(DATA_DIR), "sessions.json"))
+        _resolve_tool_path("../sessions.json")
 
 
 def test_blocks_app_state_reached_through_a_symlink(tmp_path):
@@ -103,6 +101,26 @@ def test_blocks_app_state_reached_through_a_symlink(tmp_path):
         pytest.skip("cannot create symlink")
     with pytest.raises(ValueError, match="application state"):
         _resolve_tool_path(str(link / "sessions.json"))
+
+
+def test_blocks_app_state_reached_through_default_workspace_symlink(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    readable = _configure_test_data_tree(monkeypatch, data_dir)
+    workspace = readable["AGENT_WORKSPACE_DIR"]
+    workspace.mkdir()
+    (data_dir / "sessions.json").write_text("SECRET", encoding="utf-8")
+    try:
+        (workspace / "state").symlink_to(data_dir, target_is_directory=True)
+    except OSError:
+        pytest.skip("cannot create symlink")
+
+    token = _active_workspace.set(None)
+    try:
+        with pytest.raises(ValueError, match="application state"):
+            _resolve_tool_path("state/sessions.json")
+    finally:
+        _active_workspace.reset(token)
 
 
 def test_native_file_tools_hide_control_plane_hardlink_alias(tmp_path, monkeypatch):

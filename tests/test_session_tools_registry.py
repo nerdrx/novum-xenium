@@ -79,6 +79,32 @@ def test_create_session_reaches_uuid_and_creates(monkeypatch):
     assert created.get("name") == "My Chat"  # the uuid-minted id reached the manager
 
 
+def test_create_session_missing_model_is_a_failed_tool_with_guidance(monkeypatch):
+    class FakeMgr:
+        def create_session(self, **kw):
+            raise AssertionError("must not create a session for an unknown model")
+
+    monkeypatch.setattr(ai_interaction, "_session_manager", FakeMgr())
+    monkeypatch.setattr(st, "_resolve_model", lambda *_a, **_k: (_ for _ in ()).throw(ValueError("Model 'claude-sonnet-4' not found")))
+    result = asyncio.run(st.create_session("New chat\nclaude-sonnet-4", owner="alice"))
+    assert result["exit_code"] == 1
+    assert "claude-sonnet-4" in result["error"]
+    assert "list_models" in result["error"]
+
+
+def test_manage_session_unknown_action_is_a_failed_tool_with_choices(monkeypatch):
+    class FakeDb:
+        def close(self): pass
+
+    monkeypatch.setattr(database, "Session", object, raising=False)
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeDb(), raising=False)
+    monkeypatch.setattr(ai_interaction, "_session_manager", object())
+    result = asyncio.run(st.manage_session("create\ncurrent", session_id="active"))
+    assert result["exit_code"] == 1
+    assert "Unknown action 'create'" in result["error"]
+    assert "list" in result["error"] and "rename" in result["error"]
+
+
 def test_manage_session_fork_reaches_uuid(monkeypatch):
     # Regression for the missing `import uuid`: the fork action also mints a new
     # session id and must not NameError. Mocks the DB query layer so the fork

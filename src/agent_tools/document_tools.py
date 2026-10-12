@@ -886,7 +886,14 @@ class ManageDocumentTool:
                 return {"response": result, "exit_code": 0}
 
             else:
-                return {"error": f"Unknown action: {action}", "exit_code": 1}
+                return {
+                    "error": (
+                        f"Unknown action '{action}'. manage_documents supports list, read, delete, and tidy. "
+                        "Use create_document to create an editor document, edit_document to change it, "
+                        "or write_file to create a file on disk and edit_file to modify an existing file."
+                    ),
+                    "exit_code": 1,
+                }
         except Exception as e:
             logger.error(f"manage_documents error: {e}")
             return {"error": str(e), "exit_code": 1}

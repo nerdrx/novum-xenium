@@ -1298,7 +1298,7 @@ class GetWorkspaceTool:
     """Report the active workspace folder (no args). File tools are confined to
     it; the shell starts there (cwd) but is NOT sandboxed."""
     async def execute(self, content: str, ctx: dict) -> dict:
-        from src.tool_execution import get_active_workspace
+        from src.tool_execution import agent_cwd, get_active_workspace
         ws = get_active_workspace()
         if ws:
             return {
@@ -1306,8 +1306,13 @@ class GetWorkspaceTool:
                           f"here but is not sandboxed and can reach outside it.)",
                 "exit_code": 0,
             }
+        try:
+            default_workspace = agent_cwd()
+        except RuntimeError as e:
+            return {"error": str(e), "exit_code": 1}
         return {
-            "output": "No workspace is set. File tools use the default allowed roots; "
-                      "resolve paths from the user or use absolute paths.",
+            "output": f"No workspace is selected. The default workspace is {default_workspace}. "
+                      "Relative file-tool paths and the shell working directory use this folder. "
+                      "Absolute file paths can also use other configured safe roots.",
             "exit_code": 0,
         }

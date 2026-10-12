@@ -396,6 +396,27 @@ _ACTION_DEFAULTS: Mapping[str, str] = MappingProxyType(
     }
 )
 
+def is_app_api_endpoint_discovery(content: Any) -> bool:
+    """Recognize app_api's metadata-only endpoint listing action."""
+    if isinstance(content, Mapping):
+        args = dict(content)
+    elif isinstance(content, str):
+        try:
+            args = json.loads(content)
+        except (TypeError, ValueError):
+            return False
+    else:
+        return False
+    if not isinstance(args, dict):
+        return False
+    action = args.get("action", "call")
+    return (
+        action == "endpoints"
+        and set(args) <= {"action", "filter"}
+        and isinstance(args.get("filter", ""), str)
+        and len(args.get("filter", "")) <= 100
+    )
+
 _ACTION_ALIASES: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         "manage_calendar": MappingProxyType(
@@ -474,6 +495,11 @@ def capabilities_for_action(tool_name: Any, content: Any) -> ToolCapabilities:
         return base
 
     action = _action_from_content(tool_name, content)
+    if tool_name == "app_api" and is_app_api_endpoint_discovery(content):
+        return _capabilities(
+            ToolEffect.READ_CONTEXT,
+            result_integrity=ResultIntegrity.EXTERNAL_UNTRUSTED,
+        )
     if tool_name == "delegate_subagent":
         if action in {"status", "wait"}:
             return _capabilities(ToolEffect.READ_PRIVATE, result_integrity=ResultIntegrity.EXTERNAL_UNTRUSTED)

@@ -118,6 +118,18 @@ def test_manage_documents_read_filters_to_calling_owner(monkeypatch):
     assert ("owner", "eq", "alice") in query.filters
 
 
+def test_manage_documents_unknown_action_is_failed_and_guides_tool_choice(monkeypatch):
+    _install_database_stub(monkeypatch, "core.database", _Query())
+    result = asyncio.run(
+        TOOL_HANDLERS["manage_documents"]('{"action":"create"}', {"owner": "alice"})
+    )
+    assert result["exit_code"] == 1
+    assert "list, read, delete, and tidy" in result["error"]
+    assert "create_document" in result["error"]
+    assert "write_file to create a file" in result["error"]
+    assert "edit_file to modify an existing file" in result["error"]
+
+
 def test_update_document_active_id_filters_to_calling_owner(monkeypatch):
     query = _Query()
     _install_database_stub(monkeypatch, "src.database", query)

@@ -17,7 +17,7 @@ def test_terminal_provider_errors_preserve_text_and_never_auto_retry():
         pytest.skip("node is not installed")
 
     script = f"""
-      import {{ createTerminalStreamError, isRecoverableStreamError }} from {json.dumps(_MODULE)};
+      import {{ createTerminalStreamError, isRecoverableStreamError, isUnsupportedToolCapabilityError }} from {json.dumps(_MODULE)};
       const stringError = createTerminalStreamError({{ status: 401, error: 'invalid key' }});
       const objectError = createTerminalStreamError({{ status: 404, error: {{ message: 'model missing' }} }});
       const explained = createTerminalStreamError({{ status: 504, error: 'Read timeout', hint: 'No data arrived. Check the model service and retry.' }});
@@ -29,6 +29,12 @@ def test_terminal_provider_errors_preserve_text_and_never_auto_retry():
         terminalRecoverable: isRecoverableStreamError(stringError),
         eofRecoverable: isRecoverableStreamError(new Error('Stream closed before completion')),
         networkRecoverable: isRecoverableStreamError(new TypeError('fetch failed')),
+        unsupported400: isUnsupportedToolCapabilityError(400, 'The model does not support tools'),
+        unsupported422: isUnsupportedToolCapabilityError(422, 'Function calling is not supported'),
+        toolExecutionError: isUnsupportedToolCapabilityError(500, 'Tool execution failed; automatic retry stopped'),
+        unrelatedToolMention: isUnsupportedToolCapabilityError(400, 'Tool budget exceeded'),
+        malformedCall: isUnsupportedToolCapabilityError(400, 'Invalid tool call arguments: expected a JSON object'),
+        invalidSchema: isUnsupportedToolCapabilityError(422, 'Invalid tool schema: required field has no matching property'),
       }}));
     """
     result = subprocess.run(
@@ -49,4 +55,10 @@ def test_terminal_provider_errors_preserve_text_and_never_auto_retry():
         "terminalRecoverable": False,
         "eofRecoverable": True,
         "networkRecoverable": True,
+        "unsupported400": True,
+        "unsupported422": True,
+        "toolExecutionError": False,
+        "unrelatedToolMention": False,
+        "malformedCall": False,
+        "invalidSchema": False,
     }

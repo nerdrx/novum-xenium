@@ -727,3 +727,10 @@ def test_optional_browser_discovery_does_not_starve_forced_web_tool(monkeypatch)
     tools = requests[0]["kwargs"]["tools"]
     assert "web_fetch" in {s["function"]["name"] for s in tools}
     assert model_context.estimate_tool_schema_tokens(tools) <= 1500
+
+
+def test_new_application_uses_coding_tools_without_selected_workspace():
+    assert loop._use_coding_tools("build me a ffmpeg wrapper gui with all bells and whistles", None)
+    assert not loop._use_coding_tools("Open the project page and click Save.", None)
+    assert not loop._use_coding_tools("We are going to rename the app.", None)
+    assert loop._use_coding_tools("Fix main.py", "/workspace")

@@ -35,7 +35,7 @@ import {
   inheritModelRouteState,
   selectModelRouteForSend,
 } from './chatModelProvenance.js';
-import { createTerminalStreamError, isRecoverableStreamError } from './chatStreamErrors.js';
+import { createTerminalStreamError, isRecoverableStreamError, isUnsupportedToolCapabilityError } from './chatStreamErrors.js';
 import { loadPanel } from './panels.js';
 import { appendSubagentCard } from './subagentCard.js';
 import { updateBrowserPreview } from './browserPreview.js';
@@ -2317,8 +2317,8 @@ import { updateBrowserPreview } from './browserPreview.js';
           if (m) errText = m[1].replace(/\\"/g, '"');
           else if (errBody.length < 200) errText = errBody;
         } catch {}
-        // Auto-switch to chat mode for tool-related errors
-        if (errText.includes('tool') || errText.includes('auto')) {
+        // Change mode only when the provider explicitly rejects tool calling.
+        if (isUnsupportedToolCapabilityError(res.status, errText)) {
           errText = 'This model doesn\'t support agent tools — switched to Chat mode. Try again.';
           const _ab = document.getElementById('mode-agent-btn');
           const _cb = document.getElementById('mode-chat-btn');

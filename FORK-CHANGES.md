@@ -4,6 +4,14 @@ Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https:/
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Local agent reliability (October 12, 2026)
+
+- Shell and file tools use the same default workspace. Auto review supports reversible edits there with rollback snapshots, retains recent user instructions across short follow-ups, and reviews up to 32 actions before falling back to manual approval.
+- Endpoint discovery lists metadata without an approval interruption. Private reads, arbitrary shell execution, disabled tools and sensitive actions retain their existing gates.
+- Provider errors no longer switch Agent mode off just because they mention tools. Model discovery exposes local model names consistently; invalid tool actions return actionable errors rather than successful status.
+- New-app requests receive coding tools even without a selected folder. The agent receives environment and recovery guidance; varied failures without progress are bounded.
+- The backend image includes GitHub CLI with persistent, separate login storage. Capability checks report its connection status without exposing credentials. One-time GitHub authorization is still required.
+
 ## Watch browser activity
 
 - Browser actions automatically capture a viewport preview. The chat opens a themed viewer with the latest page, address and action; closing it leaves a Watch browser button.

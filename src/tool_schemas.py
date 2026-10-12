@@ -387,12 +387,12 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "create_session",
-            "description": "Create a new chat for ongoing conversations with a specific model. (The UI calls these 'chats'; 'session' is the internal term.)",
+            "description": "Create a new chat for ongoing conversations with a specific model. Call list_models first and use an exact listed public model name. (The UI calls these 'chats'; 'session' is the internal term.)",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Name for the new chat"},
-                    "model": {"type": "string", "description": "Model name or model@endpoint_name"}
+                    "model": {"type": "string", "description": "Exact model name from list_models, optionally model@endpoint_name"}
                 },
                 "required": ["name", "model"]
             }
@@ -475,11 +475,11 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "manage_session",
-            "description": "Manage a chat: rename, archive, unarchive, delete, mark important, truncate history, or fork it. (The UI calls these 'chats'; 'session' is the internal term.) For destructive actions like delete, call list_sessions first and pass the exact id returned there; never invent ids.",
+            "description": "Manage a chat: list, switch, rename, archive, unarchive, delete, mark important, truncate history, or fork it. (The UI calls these 'chats'; 'session' is the internal term.) For destructive actions like delete, call list_sessions first and pass the exact id returned there; never invent ids.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["rename", "archive", "unarchive", "delete", "important", "unimportant", "truncate", "fork"],
+                    "action": {"type": "string", "enum": ["list", "switch", "rename", "archive", "unarchive", "delete", "important", "unimportant", "truncate", "fork"],
                                "description": "The action to perform"},
                     "session_id": {"type": "string", "description": "Exact target chat id from list_sessions, or 'current' for the active chat where supported"},
                     "value": {"type": "string", "description": "Action parameter: new name (rename), keep_count (truncate/fork)"}
@@ -862,12 +862,12 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "manage_documents",
-            "description": "Manage documents: list all documents (with optional search/language filter), delete documents, or run tidy cleanup.",
+            "description": "Manage documents: list, read, or delete documents, or run tidy cleanup. Use create_document/edit_document for editor documents and write_file/edit_file for files on disk.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["list", "delete", "tidy"]},
-                    "document_id": {"type": "string", "description": "Document ID (for delete)"},
+                    "action": {"type": "string", "enum": ["list", "read", "delete", "tidy"]},
+                    "document_id": {"type": "string", "description": "Document ID (for read or delete)"},
                     "search": {"type": "string", "description": "Search query (for list)"},
                     "language": {"type": "string", "description": "Filter by language (for list)"},
                     "limit": {"type": "integer", "description": "Max results (for list, default 50)"}

@@ -14,6 +14,13 @@ export function createTerminalStreamError(payload = {}) {
   return error;
 }
 
+/** Only explicit client-side provider rejections should change Agent mode. */
+export function isUnsupportedToolCapabilityError(status, message = '') {
+  if (status !== 400 && status !== 422) return false;
+  const text = String(message).toLowerCase();
+  return /(?:model|endpoint|provider|server).{0,60}(?:does not support|doesn.t support|unsupported).{0,30}(?:tools?|function calling|tool calling)|(?:tools?|function calling|tool calling).{0,40}(?:not supported|unsupported)/i.test(text);
+}
+
 /** Only connection-class stream failures are safe to resubmit automatically. */
 export function isRecoverableStreamError(error) {
   if (!error || error.terminalStreamError || error.name === 'TerminalStreamError') return false;

@@ -1221,6 +1221,19 @@ def _looks_like_workspace_coding_request(text: str) -> bool:
     return bool(_WORKSPACE_CODE_ACTION_RE.search(text) and _WORKSPACE_CODE_TARGET_RE.search(text))
 
 
+def _use_coding_tools(text: str, workspace: Optional[str]) -> bool:
+    if not _looks_like_workspace_coding_request(text):
+        return False
+    if workspace:
+        return True
+    # A new application can start in the default workspace. Generic page
+    # edits and conversational follow-ups must retain their selected tools.
+    return bool(re.search(
+        r"\b(?:build|create|implement|develop|code)\b.{0,100}\b(?:app|application|gui|program|script|website|cli|software)\b",
+        str(text or ""), re.I | re.S,
+    ))
+
+
 def _looks_like_local_computer_request(text: str) -> bool:
     text = str(text or "")
     return bool(text.strip() and _LOCAL_COMPUTER_REFERENCE_RE.search(text))
@@ -2696,6 +2709,19 @@ def _build_system_prompt(
     ):
         agent_prompt += _local_computer_rules()
 
+    if (not suppress_local_context and relevant_tools
+            and set(relevant_tools) & _WORKSPACE_TERMINUS_TOOLS):
+        agent_prompt += (
+            "\n\n## Coding recovery and environment\n"
+            "- Shell commands run where the backend or configured executor runs. A Docker backend is not the user's host PC; host files and GitHub login are not automatically shared.\n"
+            "- For GitHub work, check `command -v gh` and, only if installed, `gh auth status` before claiming access. Never print tokens or read credential files. A missing app_api model endpoint says nothing about GitHub CLI access.\n"
+            "- If GitHub access is missing, continue authorized local implementation and clearly name the one-time connection needed for publishing. Do not replace implementation with a design document.\n"
+            "- Use write_file for new files; it creates missing parent folders, so do not run mkdir just to scaffold files. edit_file requires an existing file and an exact matching old string.\n"
+            "- After a tool error, read the reported allowed actions and correct the arguments. Never invent tools, action names or model IDs; use the available schemas and list_models.\n"
+            "- If a tool is disabled, do not imitate it with another tool. Explain the blocker and continue only independent allowed work.\n"
+            "- Do not repeat previous progress paragraphs. Describe only new findings or completed work."
+        )
+
     # When creating email documents, instruct the AI on the format
     if relevant_tools and not suppress_local_context and (_EMAIL_TOOL_HINTS & set(relevant_tools)):
         agent_prompt += (
@@ -3529,6 +3555,7 @@ class _ToolProgressGuard:
         self.seen = collections.OrderedDict()
         self.last_outputs = collections.OrderedDict()
         self.recent = collections.deque(maxlen=8)
+        self.failure_rounds = collections.deque(maxlen=8)
 
     @staticmethod
     def _remember(mapping, key, value):
@@ -3539,6 +3566,7 @@ class _ToolProgressGuard:
 
     def observe(self, records):
         repeats, monitored = [], False
+        failed_tools = set()
         for record in records:
             tool, content, result = record["tool_name"], record["content"], record["result"]
             if (tool in self.polls or tool == "ask_user" or result.get("blocked")
@@ -3551,9 +3579,13 @@ class _ToolProgressGuard:
                 ToolEffect.EXTERNAL_SIDE_EFFECT, ToolEffect.ADMIN_CHANGE,
             }:
                 self.recent.clear()
+                self.failure_rounds.clear()
+                failed_tools.clear()
                 self.last_outputs.clear()
                 repeats, monitored = [], False
                 continue
+            if not successful:
+                failed_tools.add(tool)
             exact = _tool_call_signature(tool, content)
             outcome = {key: result.get(key) for key in ("output", "error", "exit_code", "success")}
             if not successful and isinstance(outcome["output"], str):
@@ -3566,6 +3598,8 @@ class _ToolProgressGuard:
                 repeats = []
             self._remember(self.last_outputs, exact, digest)
             if successful and tool not in self.reads:
+                self.failure_rounds.clear()
+                failed_tools.clear()
                 continue
             monitored = True
             if tool == "read_file":
@@ -3589,6 +3623,12 @@ class _ToolProgressGuard:
             self._remember(self.seen, signature, None)
         if monitored:
             self.recent.append(repeats)
+            self.failure_rounds.append(failed_tools)
+        failures = [tools for tools in self.failure_rounds if tools]
+        if len(failures) >= 6:
+            return {"tools": sorted(set().union(*failures)), "read_repeats": 0,
+                    "failed_retries": len(failures), "repeated_rounds": len(failures),
+                    "failure_limit": True}
         repeated_rounds = [items for items in self.recent if items]
         if len(repeated_rounds) < 3:
             return None
@@ -3666,6 +3706,13 @@ async def stream_agent_loop(
 
     from src.owner_identity import effective_storage_owner
     snapshot_owner = effective_storage_owner(owner)
+    snapshot_workspace = workspace
+    if not snapshot_workspace and approval_mode == "auto" and not incognito:
+        from src.tool_execution import agent_cwd, vet_workspace
+        try:
+            snapshot_workspace = vet_workspace(agent_cwd())
+        except (ValueError, RuntimeError, OSError):
+            snapshot_workspace = None
     run_security = ToolRunSecurityContext(
         external_untrusted_context_seen=(
             bool(external_untrusted_context_seen)
@@ -3680,7 +3727,7 @@ async def stream_agent_loop(
         ),
         delegated_credential=bool(delegated_credential),
         approval_mode=approval_mode,
-        workspace_snapshots_enabled=bool(workspace and snapshot_owner and session_id and not incognito),
+        workspace_snapshots_enabled=bool(snapshot_workspace and snapshot_owner and session_id and not incognito),
     )
     run_security.observe_public_sources(public_read_sources or ())
     approval_judge_reviews = {}
@@ -4186,8 +4233,7 @@ async def stream_agent_loop(
         if (
             (
                 (
-                    workspace
-                    and _looks_like_workspace_coding_request(_retrieval_query or _last_user)
+                    _use_coding_tools(_retrieval_query or _last_user, workspace)
                 )
                 or _looks_like_local_computer_request(_retrieval_query or _last_user)
             )
@@ -4516,7 +4562,7 @@ async def stream_agent_loop(
                 # room, while keeping the ordinary schema cap for the rest.
                 budget_priority_names = set(_runtime_skill_tools)
                 coding_requested = bool(
-                    workspace and _looks_like_workspace_coding_request(_retrieval_query or _last_user)
+                    _use_coding_tools(_retrieval_query or _last_user, workspace)
                 )
                 if _caller_relevant_tools and len(_caller_relevant_tools) == 1:
                     selected_relevant = set(_caller_relevant_tools) - WEB_TOOL_NAMES
@@ -6282,6 +6328,7 @@ async def stream_agent_loop(
                 disabled_tools and not policy_names.isdisjoint(disabled_tools)
             )
             judge_review = None
+            action = None
             if (not security_decision.allowed and not blocked_by_tool_policy
                     and not blocked_by_disabled_tools and not plan_mode
                     and approval_mode == "auto" and not delegated_credential):
@@ -6299,7 +6346,7 @@ async def stream_agent_loop(
                         if judge_review["decision"] == "allow" and action["kind"] == "workspace_edit":
                             try:
                                 from src.workspace_snapshots import ensure_snapshot
-                                await asyncio.to_thread(ensure_snapshot, workspace, snapshot_owner, session_id, run_security.run_id)
+                                await asyncio.to_thread(ensure_snapshot, action.get("workspace") or snapshot_workspace, snapshot_owner, session_id, run_security.run_id)
                             except Exception:
                                 judge_review = {"decision": "ask", "reason": "A workspace rollback snapshot could not be created."}
                         approval_judge_reviews[review_key] = judge_review
@@ -6387,7 +6434,7 @@ async def stream_agent_loop(
                         origin_run_id=run_security.run_id,
                         tool_name=block.tool_type,
                         content=block.content,
-                        workspace=workspace,
+                        workspace=(action.get("workspace") if action and action["kind"] == "workspace_edit" else workspace),
                         document_id=getattr(approval_document, "id", None),
                         document_version=getattr(
                             approval_document,
@@ -6972,8 +7019,11 @@ async def stream_agent_loop(
                 f"{stall['repeated_rounds']} recent rounds "
                 f"({', '.join(stall['tools'])})."
             )
+            if stall.get("failure_limit"):
+                detail = (f"Tools failed in {stall['failed_retries']} of the last 8 rounds "
+                          f"without a successful change ({', '.join(stall['tools'])}).")
             message = (
-                "Paused because the agent is repeating tool results without progress: "
+                "Paused because the agent is not making progress: "
                 + detail + " No more tools were run after this pause. Review the latest "
                 "tool output and give a different next step before retrying. "
                 "Existing changes have not been rolled back."

@@ -119,3 +119,48 @@ def test_worker_mapping_uses_vetted_supplied_workspace(monkeypatch):
     result = preflight.build_preflight(session, "alice", "/host/project")
     assert result["workspace"]["worker_mapped"] is False
     assert result["execution"]["status"] == "misconfigured"
+
+
+def test_github_cli_readiness_reports_missing_cli(monkeypatch):
+    monkeypatch.setattr(preflight.shutil, "which", lambda _: None)
+    result = preflight._github_cli_readiness()
+    assert result["status"] == "not_installed"
+    assert result["installed"] is False
+    assert result["authenticated"] is False
+
+
+def test_github_cli_readiness_reports_not_authenticated_without_output(monkeypatch):
+    monkeypatch.setattr(preflight.shutil, "which", lambda _: "/usr/bin/gh")
+    monkeypatch.setattr(preflight.subprocess, "run", lambda *a, **k: type("Result", (), {
+        "returncode": 1, "stdout": "token ghp_secret", "stderr": "secret-token"
+    })())
+    result = preflight._github_cli_readiness()
+    assert result["status"] == "not_authenticated"
+    assert result["authenticated"] is False
+    assert "ghp_secret" not in str(result) and "secret-token" not in str(result)
+
+
+def test_github_cli_readiness_reports_authenticated_without_output(monkeypatch):
+    monkeypatch.setattr(preflight.shutil, "which", lambda _: "/usr/bin/gh")
+    monkeypatch.setattr(preflight.subprocess, "run", lambda *a, **k: type("Result", (), {
+        "returncode": 0, "stdout": "token ghp_secret", "stderr": ""
+    })())
+    result = preflight._github_cli_readiness()
+    assert result["status"] == "ready"
+    assert result["authenticated"] is True
+    assert "ghp_secret" not in str(result)
+
+
+def test_github_cli_readiness_bounds_status_check(monkeypatch):
+    monkeypatch.setattr(preflight.shutil, "which", lambda _: "/usr/bin/gh")
+    calls = []
+
+    def timeout(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise preflight.subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(preflight.subprocess, "run", timeout)
+    result = preflight._github_cli_readiness()
+    assert result["status"] == "timed_out"
+    assert result["authenticated"] is None
+    assert calls[0][1]["timeout"] == 3

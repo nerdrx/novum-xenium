@@ -17,6 +17,10 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 
+def _tool_error(message: str, **details) -> Dict:
+    return {"error": message, "exit_code": 1, **details}
+
+
 _TEACHER_SYSTEM_PROMPT = (
     "You are a senior AI mentor. A less capable model is stuck on a problem and asking for help. "
     "Provide clear, actionable guidance:\n"
@@ -39,17 +43,17 @@ async def chat_with_model(content: str, session_id: Optional[str] = None, owner:
 
     lines = content.strip().split("\n", 1)
     if not lines or not lines[0].strip():
-        return {"error": "First line must be the model name"}
+        return _tool_error("First line must be the model name")
 
     model_spec = lines[0].strip()
     message = lines[1].strip() if len(lines) > 1 else ""
     if not message:
-        return {"error": "No message provided (line 2+ is the message)"}
+        return _tool_error("No message provided (line 2+ is the message)")
 
     try:
         url, model, headers = await asyncio.to_thread(_resolve_model, model_spec, owner=owner)
     except ValueError as e:
-        return {"error": str(e)}
+        return _tool_error(f"{e}. Use list_models to see available model names and retry with an exact listed name.")
 
     try:
         response = await llm_call_async(
@@ -66,6 +70,7 @@ async def chat_with_model(content: str, session_id: Optional[str] = None, owner:
         logger.error(f"chat_with_model failed: {e}")
         return {
             "error": f"Failed to get response from {model_spec}: {e}",
+            "exit_code": 1,
             "untrusted_content": True,
         }
 
@@ -86,17 +91,17 @@ async def ask_teacher(content: str, session_id: Optional[str] = None, owner: Opt
     problem = lines[1].strip() if len(lines) > 1 else ""
 
     if not problem:
-        return {"error": "No problem description provided"}
+        return _tool_error("No problem description provided")
 
     if model_spec.lower() in ("auto", ""):
         model_spec = get_setting("teacher_model", "")
         if not model_spec:
-            return {"error": "No teacher model configured. Specify a model name or set teacher_model in settings."}
+            return _tool_error("No teacher model configured. Specify a model name or set teacher_model in settings.")
 
     try:
         url, model, headers = await asyncio.to_thread(_resolve_model, model_spec, owner=owner)
     except ValueError as e:
-        return {"error": str(e)}
+        return _tool_error(f"{e}. Use list_models to see available model names and retry with an exact listed name.")
 
     try:
         response = await llm_call_async(
@@ -115,6 +120,7 @@ async def ask_teacher(content: str, session_id: Optional[str] = None, owner: Opt
         logger.error(f"ask_teacher failed: {e}")
         return {
             "error": f"Teacher call failed ({model_spec}): {e}",
+            "exit_code": 1,
             "untrusted_content": True,
         }
 
@@ -129,7 +135,8 @@ async def list_models(content: str, session_id: Optional[str] = None, owner: Opt
     from src.database import SessionLocal, ModelEndpoint
     from src.llm_core import _detect_provider, ANTHROPIC_MODELS
     from src.auth_helpers import owner_filter
-    from src.endpoint_resolver import resolve_endpoint_runtime, build_headers, build_models_url
+    from src.endpoint_resolver import (resolve_endpoint_runtime, build_headers,
+                                       build_models_url, model_ids_from_response)
 
     keyword = content.strip().lower() if content.strip() else None
 
@@ -163,7 +170,7 @@ async def list_models(content: str, session_id: Optional[str] = None, owner: Opt
                         r = httpx.get(models_url, headers=headers, timeout=5)
                         r.raise_for_status()
                         data = r.json()
-                        model_ids = [m.get("id") for m in (data.get("data") or []) if m.get("id")]
+                        model_ids = model_ids_from_response(data)
                         if not model_ids:
                             model_ids = [
                                 m.get("name") or m.get("model")
@@ -174,6 +181,14 @@ async def list_models(content: str, session_id: Optional[str] = None, owner: Opt
                         model_ids = json.loads(ep.cached_models or "[]")
                 except Exception:
                     model_ids = ["(endpoint offline)"]
+
+            if getattr(ep, "name", "") in {"Local models", "zVram · Local models"}:
+                try:
+                    public_models = json.loads(ep.pinned_models or "[]")
+                except Exception:
+                    public_models = []
+                if isinstance(public_models, list) and public_models:
+                    model_ids = [m for m in public_models if isinstance(m, str) and m]
 
             if keyword:
                 model_ids = [m for m in model_ids if keyword in m.lower() or keyword in (ep.name or "").lower()]
@@ -191,7 +206,7 @@ async def list_models(content: str, session_id: Optional[str] = None, owner: Opt
         return {"results": header + "\n".join(result_lines)}
     except Exception as e:
         logger.error(f"list_models failed: {e}")
-        return {"error": str(e)}
+        return _tool_error(str(e))
     finally:
         db.close()
 

@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     curl \
     git \
+    gh \
     nodejs \
     npm \
     chromium \
@@ -70,6 +71,11 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && rm -rf /tmp/docker /tmp/docker.tgz
 
 WORKDIR /app
+
+# Keep GitHub CLI credentials in persistent app data, isolated from host login
+# state and outside the paths exposed to agent file tools.
+ENV GH_CONFIG_DIR=/app/data/gh
+RUN git config --system credential.https://github.com.helper "!gh auth git-credential"
 
 # Install Python deps first (layer cache). Optional extras (PyMuPDF AGPL, etc.)
 # remain opt-in; see requirements-optional.txt.

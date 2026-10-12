@@ -464,15 +464,5 @@ def comprehensive_web_search(
     output_parts.append("END OF WEB SEARCH RESULTS")
     output_parts.append("=" * 70)
 
-    instructions = (
-        "\n\nIMPORTANT INSTRUCTIONS:\n"
-        "1. Use the above web search results and fetched content to answer the user's question\n"
-        "2. Prioritize information from the FETCHED PAGE CONTENT section as it contains actual page data\n"
-        "3. Cross-reference multiple sources when possible\n"
-        "4. If the information is time-sensitive, pay attention to the age of the results\n"
-        "5. Be explicit if the search results don't contain sufficient information to fully answer the question"
-    )
-    output_parts.append(instructions)
-
     result = "\n".join(output_parts)
     return (result, _source_list) if return_sources else result

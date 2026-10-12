@@ -59,3 +59,20 @@ def test_redirected_fetch_keeps_its_source_index(core, monkeypatch):
     monkeypatch.setattr(core, "fetch_webpage_content", fetch)
     out = core.comprehensive_web_search("test query", max_pages=2, max_workers=2)
     assert "[CONTENT 2] From: http://final.example/landing" in out
+
+
+def test_search_output_keeps_sources_and_content_as_reference_data(core, monkeypatch):
+    monkeypatch.setattr(core, "fetch_webpage_content", _fake_fetch_delaying_first)
+    out, sources = core.comprehensive_web_search(
+        "test query", max_pages=2, max_workers=2, return_sources=True,
+    )
+
+    assert sources == [
+        {"url": "http://one.example/a", "title": "One"},
+        {"url": "http://two.example/b", "title": "Two"},
+    ]
+    assert "```sources\n[1] One\n    http://one.example/a" in out
+    assert "SEARCH RESULTS SUMMARY:" in out
+    assert "[CONTENT 1] From: http://one.example/a" in out
+    assert "Content for http://one.example/a" in out
+    assert "IMPORTANT INSTRUCTIONS:" not in out

@@ -327,7 +327,12 @@ def search_results(
         return "No matching archived results."
     output = []
     used = 0
-    output.append(f"Archived chunks at offset {offset}; ")
+    read_hint = (
+        'Search matches are snippets, not full sections. Read a matched chunk with '
+        'query="", result_id=<match ID>, offset=<match chunk number>.\n'
+        if searching else ""
+    )
+    output.append(read_hint + f"Archived chunks at offset {offset}; ")
     used += len(output[0]) + 40  # reserve room for next_offset/end metadata
     added = 0
     for row in rows:

@@ -47,12 +47,15 @@ def test_chunk_search_finds_tail_and_empty_query_paginates(tmp_path, monkeypatch
     found = store.search_results("alice", "run", "tailneedle", result_id)
     assert f"[{result_id} | terminal | chunk 6]" in found
     assert "tailneedle" in found
+    assert 'Search matches are snippets, not full sections.' in found
+    assert 'query="", result_id=<match ID>, offset=<match chunk number>' in found
     assert len(found) <= store._OUTPUT_LIMIT
 
     page = store.search_results("alice", "run", "", result_id, offset=0)
     tail_page = store.search_results("alice", "run", "", result_id, offset=6)
     assert "next_offset=2" in page
     assert "chunk 6" in tail_page and "end." in tail_page
+    assert 'Search matches are snippets' not in tail_page
 
 
 def test_query_operators_are_data_and_output_is_bounded(tmp_path, monkeypatch):

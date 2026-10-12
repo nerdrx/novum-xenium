@@ -1641,6 +1641,8 @@ async function initAgentSettings() {
   var toolsInput = el('set-agentMaxTools');
   var roundsInput = el('set-agentMaxRounds');
   var supInput = el('set-agentSupervisorLadder');
+  var groundingInput = el('set-agentCodingGrounding');
+  var verifierInput = el('set-agentVerifierSubagent');
   var msg = el('set-agentMsg');
   if (!toolsInput) return;
 
@@ -1650,6 +1652,8 @@ async function initAgentSettings() {
     if (settings.agent_max_tool_calls) toolsInput.value = settings.agent_max_tool_calls;
     if (roundsInput && settings.agent_max_rounds) roundsInput.value = settings.agent_max_rounds;
     if (supInput) supInput.checked = !!settings.agent_supervisor_ladder;
+    if (groundingInput) groundingInput.checked = settings.agent_coding_grounding !== false;
+    if (verifierInput) verifierInput.checked = !!settings.agent_verifier_subagent;
   } catch (e) {}
 
   // Clamp + coerce a raw input to an int in [lo, hi]; falls back to `dflt`
@@ -1668,11 +1672,15 @@ async function initAgentSettings() {
     var payload = { agent_max_tool_calls: tools };
     if (rounds != null) payload.agent_max_rounds = rounds;
     if (supInput) payload.agent_supervisor_ladder = !!supInput.checked;
+    if (groundingInput) payload.agent_coding_grounding = !!groundingInput.checked;
+    if (verifierInput) payload.agent_verifier_subagent = !!verifierInput.checked;
     try {
       await _postSettings(payload);
       msg.textContent = (tools > 0 ? 'Limit: ' + tools + ' tool calls' : 'Unlimited tool calls') +
         (rounds != null ? ' · ' + rounds + ' steps/message' : '') +
-        (supInput && supInput.checked ? ' · supervisor on' : '');
+        (supInput && supInput.checked ? ' · supervisor on' : '') +
+        (groundingInput ? ' · docs ' + (groundingInput.checked ? 'on' : 'off') : '') +
+        (verifierInput ? ' · review ' + (verifierInput.checked ? 'on' : 'off') : '');
       msg.style.color = 'var(--fg)';
     } catch (e) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
   }
@@ -1680,11 +1688,15 @@ async function initAgentSettings() {
   toolsInput.addEventListener('change', save);
   if (roundsInput) roundsInput.addEventListener('change', save);
   if (supInput) supInput.addEventListener('change', save);
+  if (groundingInput) groundingInput.addEventListener('change', save);
+  if (verifierInput) verifierInput.addEventListener('change', save);
   var cur = parseInt(toolsInput.value, 10) || 0;
   var curR = roundsInput ? (parseInt(roundsInput.value, 10) || 20) : null;
   msg.textContent = (cur > 0 ? 'Limit: ' + cur + ' tool calls' : 'Unlimited tool calls') +
     (curR != null ? ' · ' + curR + ' steps/message' : '') +
-    (supInput && supInput.checked ? ' · supervisor on' : '');
+    (supInput && supInput.checked ? ' · supervisor on' : '') +
+    (groundingInput ? ' · docs ' + (groundingInput.checked ? 'on' : 'off') : '') +
+    (verifierInput ? ' · review ' + (verifierInput.checked ? 'on' : 'off') : '');
 
 }
 

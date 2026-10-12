@@ -84,6 +84,12 @@ Tool definitions count against the model's context, so skills and procedures loa
 
 The context inspector shows where the space went. Retrieval helps use the context you have; it does not turn a small model window into an unlimited one.
 
+### Coding with evidence
+
+Substantial coding tasks start with a short documentation lookup before workspace edits. The agent reads referenced pages or relevant project documentation; search snippets alone do not count. Disabled web tools stay disabled. If sources cannot be reached, the agent can proceed after a bounded attempt with uncertainty stated explicitly.
+
+Enable **Review task completion** in Settings for an independent check using the same selected model. It checks requested outcomes against recorded tool results, including functional checks and external actions. Missing or malformed review results remain unverified. This adds work and can still miss mistakes; it does not train the model or guarantee a working app. Only verified runs are eligible for learned success recipes.
+
 ### Know what it's doing
 
 Clear waiting and streaming states. Explanations when a run stops. Saved progress for interrupted runs, chat-specific queues and a pause when repeated reads or failed retries go nowhere.

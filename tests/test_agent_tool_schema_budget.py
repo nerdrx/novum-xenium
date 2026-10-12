@@ -936,5 +936,6 @@ def test_coding_github_setup_does_not_restore_unrelated_admin_schemas(monkeypatc
 
     asyncio.run(run())
     names = {s["function"]["name"] for s in requests[0]["kwargs"]["tools"]}
-    assert {"write_file", "bash", "search_tools"} <= names
+    assert {"web_fetch", "read_file", "search_tools"} <= names
+    assert not names & {"write_file", "bash"}  # investigate before implementation
     assert not names & {"manage_documents", "create_session", "manage_settings", "manage_tokens"}

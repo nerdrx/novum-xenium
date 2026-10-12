@@ -113,6 +113,8 @@ DEFAULT_SETTINGS = {
     # Tune via Settings or by editing data/settings.json.
     "research_run_timeout_seconds": 1800,
     "agent_max_tool_calls": 0,
+    "agent_coding_grounding": True,  # read sources before substantial coding changes
+    "agent_verifier_subagent": False,  # bounded independent same-model completion review
     "agent_max_rounds": 20,  # per-message agent step cap (clamped 1..200)
     # Soft input-token budget for the agent loop. The DEFAULT value (6000) is the
     # "auto" sentinel: it means "scale the budget to the model's context window"

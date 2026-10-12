@@ -2407,6 +2407,26 @@
                 <label class="settings-label">Max steps per message</label>
                 <input id="set-agentMaxRounds" type="text" inputmode="numeric" placeholder="20" class="settings-select" style="width:120px;">
               </div>
+              <div class="settings-row" style="align-items:flex-start;">
+                <div style="flex:1;min-width:0;">
+                  <label class="settings-label" for="set-agentCodingGrounding">Research coding documentation</label>
+                  <div class="admin-toggle-sub">For substantial app and library work, read project guidance and relevant API docs before editing. Uses web lookup only when enabled.</div>
+                </div>
+                <label class="admin-switch agent-coding-settings-switch" aria-label="Research coding documentation" style="flex-shrink:0;margin-left:auto;">
+                  <input id="set-agentCodingGrounding" type="checkbox" checked>
+                  <span class="admin-slider"></span>
+                </label>
+              </div>
+              <div class="settings-row" style="align-items:flex-start;">
+                <div style="flex:1;min-width:0;">
+                  <label class="settings-label" for="set-agentVerifierSubagent">Review task completion</label>
+                  <div class="admin-toggle-sub">A fresh review can spot missing outputs and prompt more work. It uses extra model time and can still miss things.</div>
+                </div>
+                <label class="admin-switch agent-coding-settings-switch" aria-label="Review task completion" style="flex-shrink:0;margin-left:auto;">
+                  <input id="set-agentVerifierSubagent" type="checkbox">
+                  <span class="admin-slider"></span>
+                </label>
+              </div>
               <div id="set-agentMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
             </div>
           </div>

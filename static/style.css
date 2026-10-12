@@ -15126,6 +15126,10 @@ body:has(.doc-version-panel:not(.hidden)) .hamburger-btn {
 .admin-switch input:checked + .admin-slider::before {
   transform: translateX(14px);
 }
+.agent-coding-settings-switch input:focus-visible + .admin-slider {
+  outline: 2px solid var(--fg);
+  outline-offset: 3px;
+}
 
 /* User rows */
 .admin-user-row {

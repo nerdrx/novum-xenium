@@ -1327,7 +1327,7 @@ _CASUAL_BLOCKLIST_RE = re.compile(
     re.IGNORECASE,
 )
 _EXPLICIT_CONTINUATION_RE = re.compile(
-    r"^\s*(?:"
+    r"^\s*(?:(?:um+|uh+|uhm+)[, ]+)?(?:"
     r"yes|y|yeah|yep|ok|okay|sure|do it|go ahead|continue|carry on|"
     r"run it|launch it|start it|use that|that one|same|the same|"
     r"first|second|third|the first one|the second one|the third one|"
@@ -5105,11 +5105,12 @@ async def stream_agent_loop(
     # know what you think".
     _INTENT_RE = re.compile(
         r"(?:^|\n)\s*(?:let me|i'?ll|i will|i need to|we need to|need to|"
-        r"i should|we should|i must|we must|going to|let's)\s+"
+        r"i should|we should|i must|we must|going to|let's)\s+(?:(?:first|now|next)\s+)?"
         r"(?:tail|check|investigate|look at|see|tail|read|fetch|inspect|"
         r"verify|diagnose|examine|debug|capture|grab|pull|view|run|call|"
         r"trigger|launch|start|kick off|stop|kill|restart|adopt|serve|"
-        r"register|adopt|list|search|find|query|hit|ping|test|use|perform|do)"
+        r"register|adopt|list|search|find|query|hit|ping|test|use|perform|do|"
+        r"create|write|edit|build|implement|complete|continue|finish)"
         r"\b[^.\n]{0,140}",
         re.IGNORECASE,
     )
@@ -6204,14 +6205,17 @@ async def stream_agent_loop(
             # tool doesn't pin us in a forever loop.
             _intent_text = _strip_think_blocks(cleaned_round).strip()
             _intent_match = _INTENT_RE.search(_intent_text) if _intent_text else None
-            # Only nudge when the round REALLY looks like an unfinished
-            # promise: short response (<400 chars), no fenced code/answer,
-            # and an action-intent phrase was matched. Long answers that
-            # happen to contain "let me know" are not stalls.
+            # A multi-paragraph preamble can exceed 400 characters. Inspect
+            # its final paragraph too, without nudging completed long answers.
+            _last_paragraph = _intent_text.rsplit("\n\n", 1)[-1]
             _looks_like_promise = (
                 not guide_only
                 and _intent_match is not None
-                and len(_intent_text) < 400
+                and (len(_intent_text) < 400 or (
+                    len(_intent_text) < 1200
+                    and len(_last_paragraph) < 400
+                    and _INTENT_RE.match(_last_paragraph) is not None
+                ))
                 and "```" not in _intent_text
             )
             if _looks_like_promise and _intent_nudge_count < _MAX_INTENT_NUDGES:

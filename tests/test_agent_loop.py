@@ -156,6 +156,24 @@ def test_natural_explicit_continuation_retains_original_coding_request():
     assert original in intent["retrieval_query"]
 
 
+def test_filler_prefixed_continue_retains_original_coding_request():
+    from src.agent_loop import _use_coding_tools
+    original = "Build me a ffmpeg wrapper gui with all bells and whistles. Use the NX design language and create a private GitHub repo."
+    latest = "uhm, continue"
+    messages = [
+        {"role": "user", "content": original},
+        {"role": "assistant", "content": "I can continue when ready."},
+        {"role": "user", "content": latest},
+    ]
+
+    intent = _classify_agent_request(messages, latest)
+
+    assert intent["continuation"] is True
+    assert intent["low_signal"] is False
+    assert original in intent["retrieval_query"]
+    assert _use_coding_tools(intent["retrieval_query"], None)
+
+
 def test_natural_continuation_does_not_inherit_new_topics_or_greetings():
     messages = [
         {"role": "user", "content": "Fix the project files and run its tests."},

@@ -99,3 +99,22 @@ def test_emits_loop_breaker_triggered_when_loop_breaker_trips(monkeypatch):
     guard = next((e for e in events if e.get("type") == "loop_breaker_triggered"), None)
     assert guard is not None, events
     assert guard["reason"] == "repeated_tool_results"
+
+
+def test_long_coding_promise_does_not_silently_finish(monkeypatch):
+    _patch_common(monkeypatch)
+    promise = (
+        "I'll create a complete FFmpeg GUI with NX Design Language styling and set up the private GitHub repository for it.\n\n"
+        "Let me first create the basic structure for the FFmpeg GUI with the NX Design Language implementation.\n\n"
+        "I'll continue with the actual implementation of the FFmpeg GUI with NX Design Language. Let me create a complete, working solution by generating the full HTML file with embedded CSS and JavaScript functionality."
+    )
+    assert len(promise) > 400
+    events = _run_loop(monkeypatch, promise, max_rounds=5)
+    assert any(e.get("type") == "intent_nudge_exhausted" for e in events)
+
+
+def test_finished_answer_after_preamble_is_not_nudged(monkeypatch):
+    _patch_common(monkeypatch)
+    answer = "I'll create the file.\n\n" + "The file is saved and validation passed. " * 15
+    events = _run_loop(monkeypatch, answer, max_rounds=5)
+    assert not any(e.get("type") in {"intent_nudge_exhausted", "rounds_exhausted"} for e in events)

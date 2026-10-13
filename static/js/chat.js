@@ -1413,8 +1413,8 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
         stoppedIndicator.appendChild(stoppedLabel);
         const continueBtn = document.createElement('button');
         continueBtn.className = 'continue-btn';
-        continueBtn.title = 'Continue';
-        continueBtn.textContent = '\u25B8';
+        continueBtn.title = 'Send a new request using this partial response; saved run state is not resumed';
+        continueBtn.textContent = 'Continue text';
         const _stoppedHolder = _stoppedViewHolder; // capture before globals are cleared
         continueBtn.addEventListener('click', () => {
           stoppedIndicator.remove();
@@ -4751,8 +4751,8 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
             stoppedIndicator.appendChild(stoppedLabel);
             const continueBtn = document.createElement('button');
             continueBtn.className = 'continue-btn';
-            continueBtn.title = 'Continue';
-            continueBtn.textContent = '\u25B8';
+            continueBtn.title = 'Send a new request using this partial response; saved run state is not resumed';
+            continueBtn.textContent = 'Continue text';
             continueBtn.addEventListener('click', () => {
               stoppedIndicator.remove();
               _hideUserBubble = true;
@@ -5686,7 +5686,7 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'recovery-run-continue';
-        button.textContent = 'Continue';
+        button.textContent = 'Resume saved run';
         button.addEventListener('click', () => {
           if (sessionModule.getCurrentSessionId() !== sessionId) return;
           if (isStreaming || _sendInFlight) return;

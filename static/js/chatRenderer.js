@@ -3019,8 +3019,8 @@ export function addMessage(role, content, modelName, metadata) {
       if (!metadata.cancelled) {
         const continueBtn = document.createElement('button');
         continueBtn.className = 'continue-btn';
-        continueBtn.title = 'Continue';
-        continueBtn.textContent = '\u25B8';
+        continueBtn.title = 'Send a new request using this partial response; saved run state is not resumed';
+        continueBtn.textContent = 'Continue text';
         continueBtn.addEventListener('click', () => {
           stoppedIndicator.remove();
           if (window.chatModule) {

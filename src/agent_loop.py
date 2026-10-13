@@ -4533,7 +4533,6 @@ async def stream_agent_loop(
         and workspace and not plan_mode and not guide_only
         and not incognito and not delegated_credential and not approved_plan
         and "todowrite" not in disabled_tools
-        and (relevant_tools is None or "todowrite" in relevant_tools)
     ))
     _coding_work_nudges = 0
     _coding_packet_boundary = None

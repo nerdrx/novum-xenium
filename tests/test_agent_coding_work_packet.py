@@ -251,7 +251,7 @@ def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_con
          {"role": "user", "content": "Implement the auth module refresh behavior in src/auth.py in two small changes and verify each"}],
         workspace=str(tmp_path), owner="alice", session_id="coding-slices-test",
         approval_mode="auto", exact_approval=grant, server_run_id="slice-resume",
-        relevant_tools={"todowrite", "bash", "write_file"}, max_rounds=20,
+        relevant_tools={"bash", "write_file"}, max_rounds=20,
     )))
 
     packet_events = [event for event in events if event.get("type") == "coding_work_packet"]

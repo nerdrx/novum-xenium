@@ -30,6 +30,15 @@ _IMPORT_REWRITES = {
     "import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722ctxheader1';": (
         "import { initModelPicker, updateModelPicker } from './modelPicker.mjs';"
     ),
+    "import { installSessionHistory, setSessionHistory } from './sessionHistory.js';": (
+        "import { installSessionHistory, setSessionHistory } from './sessionHistory.mjs';"
+    ),
+    "import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';": (
+        "import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.mjs';"
+    ),
+    "import { resetBrowserPreview } from './browserPreview.js';": (
+        "import { resetBrowserPreview } from './browserPreview.mjs';"
+    ),
     "import themeModule from './theme.js';": "import themeModule from './theme.mjs';",
     "import spinnerModule from './spinner.js';": "import spinnerModule from './spinner.mjs';",
 }
@@ -69,6 +78,11 @@ export default ui;
     ),
     "theme.mjs": "export default {};\n",
     "spinner.mjs": "export default {};\n",
+    "subagentInspector.mjs": (
+        "export const applySubagentInspector = () => {};\n"
+        "export const clearSubagentInspector = () => {};\n"
+    ),
+    "browserPreview.mjs": "export const resetBrowserPreview = () => {};\n",
 }
 
 _HARNESS = r"""
@@ -316,6 +330,10 @@ def results(tmp_path_factory):
     sessions_module.write_text(source, encoding="utf-8")
     for name, stub in _STUBS.items():
         (module_dir / name).write_text(stub, encoding="utf-8")
+    (module_dir / "sessionHistory.mjs").write_text(
+        (_REPO / "static" / "js" / "sessionHistory.js").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
 
     harness = _HARNESS.replace("SESSIONS_PATH", sessions_module.as_uri()).replace(
         "SHELL_PATH", _SHELL_URL

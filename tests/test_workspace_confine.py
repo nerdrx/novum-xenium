@@ -834,9 +834,10 @@ def _sent_tool_names(monkeypatch, *, workspace, message="look at the local proje
     captured = []
 
     async def _fake_stream(_candidates, messages, **kwargs):
-        captured.append(kwargs.get("tools"))
+        request = await kwargs["candidate_request_factory"](0, *_candidates[0])
+        captured.append(request["kwargs"].get("tools"))
         if captured_messages is not None:
-            captured_messages.extend(messages)
+            captured_messages.extend(request["messages"])
         yield "data: " + json.dumps({"delta": "ok"}) + "\n\n"
         yield "data: [DONE]\n\n"
 
@@ -868,7 +869,7 @@ def test_low_signal_with_workspace_surfaces_readonly_file_tools(monkeypatch):
     assert "python" not in names
 
 
-def test_workspace_coding_request_surfaces_edit_and_verify_tools(monkeypatch):
+def test_workspace_frontend_repair_starts_with_research_tools(monkeypatch):
     prompt_messages = []
     names = _sent_tool_names(
         monkeypatch,
@@ -877,16 +878,16 @@ def test_workspace_coding_request_surfaces_edit_and_verify_tools(monkeypatch):
         force_keyword_fallback=True,
         captured_messages=prompt_messages,
     )
-    # The route budget trims schemas; the current essential coding path is
-    # inspect, search, edit, and verify. The active path also orients the model
-    # when get_workspace itself does not fit.
+    # A substantive GUI repair must inspect guidance before mutation. Simple
+    # file repairs and post-research writes are covered by separate tests.
     assert "read_file" in names
     assert "grep" in names
-    assert "edit_file" in names
-    assert "write_file" in names
-    assert "bash" in names
-    assert any("Active workspace: `/tmp`" in str(message.get("content", ""))
+    assert not {"edit_file", "write_file", "bash"} & names
+    assert any("Coding research gate" in str(message.get("content", ""))
                for message in prompt_messages)
+    assert "get_workspace" in names or any(
+        "Active workspace: `/tmp`" in str(message.get("content", ""))
+        for message in prompt_messages)
 
 
 def test_code_filename_with_fix_and_verify_surfaces_edit_and_shell_tools(monkeypatch):

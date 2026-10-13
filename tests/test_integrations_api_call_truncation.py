@@ -11,38 +11,35 @@ import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests.helpers.import_state import clear_module, preserve_import_state
 
 # ---------------------------------------------------------------------------
-# Minimal stubs so src.integrations can be imported without heavy deps
+# Import against temporary stubs without leaking them into the test session.
 # ---------------------------------------------------------------------------
-
-for mod_name in ("core", "core.atomic_io", "core.platform_compat"):
-    if mod_name not in sys.modules:
-        sys.modules[mod_name] = types.ModuleType(mod_name)
-
-core_atomic = sys.modules["core.atomic_io"]
-if not hasattr(core_atomic, "atomic_write_json"):
-    core_atomic.atomic_write_json = lambda *a, **kw: None  # type: ignore
-
-core_compat = sys.modules["core.platform_compat"]
-if not hasattr(core_compat, "safe_chmod"):
-    core_compat.safe_chmod = lambda *a, **kw: None  # type: ignore
-
-if "src.secret_storage" not in sys.modules:
-    stub = types.ModuleType("src.secret_storage")
-    stub.encrypt = lambda s: s  # type: ignore
-    stub.decrypt = lambda s: s  # type: ignore
-    stub.is_encrypted = lambda s: False  # type: ignore
-    sys.modules["src.secret_storage"] = stub
-
-if "src.constants" not in sys.modules:
-    stub_c = types.ModuleType("src.constants")
-    stub_c.DATA_DIR = "/tmp"  # type: ignore
-    stub_c.INTEGRATIONS_FILE = "/tmp/integrations_test.json"  # type: ignore
-    stub_c.SETTINGS_FILE = "/tmp/settings_test.json"  # type: ignore
-    sys.modules["src.constants"] = stub_c
-
-from src import integrations  # noqa: E402
+with preserve_import_state(
+    "core", "core.atomic_io", "core.platform_compat", "src",
+    "src.constants", "src.secret_storage", "src.integrations",
+):
+    atomic = types.ModuleType("core.atomic_io")
+    atomic.atomic_write_json = lambda *a, **kw: None  # type: ignore
+    platform_compat = types.ModuleType("core.platform_compat")
+    platform_compat.safe_chmod = lambda *a, **kw: None  # type: ignore
+    secret_storage = types.ModuleType("src.secret_storage")
+    secret_storage.encrypt = lambda s: s  # type: ignore
+    secret_storage.decrypt = lambda s: s  # type: ignore
+    secret_storage.is_encrypted = lambda s: False  # type: ignore
+    constants = types.ModuleType("src.constants")
+    constants.DATA_DIR = "/tmp"  # type: ignore
+    constants.INTEGRATIONS_FILE = "/tmp/integrations_test.json"  # type: ignore
+    constants.SETTINGS_FILE = "/tmp/settings_test.json"  # type: ignore
+    sys.modules.update({
+        "core.atomic_io": atomic,
+        "core.platform_compat": platform_compat,
+        "src.secret_storage": secret_storage,
+        "src.constants": constants,
+    })
+    clear_module("src.integrations")
+    from src import integrations  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

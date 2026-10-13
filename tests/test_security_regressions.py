@@ -133,8 +133,10 @@ def test_readme_native_quickstart_uses_loopback():
 
 def test_readme_warns_auth_enabled_for_network_access():
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "Keep `AUTH_ENABLED=true` for any network-accessible deployment." in readme
-    assert "Keep `LOCALHOST_BYPASS=false` outside local development." in readme
+    assert (
+        "Keep `AUTH_ENABLED=true` for a network-accessible deployment, and "
+        "`LOCALHOST_BYPASS=false` outside local development."
+    ) in readme
 
 
 def test_ollama_cookbook_runner_does_not_force_public_bind():

@@ -15,8 +15,8 @@ def _fenced_segments(text: str):
 
 
 def test_readme_opens_with_fork_title():
-    first_line = README.read_text(encoding="utf-8").splitlines()[0]
-    assert first_line == "# Novum Xenium"
+    text = README.read_text(encoding="utf-8")
+    assert '<h1 align="center">Novum Xenium</h1>' in text
 
 
 def test_reintroduced_ascii_banner_stays_fenced():

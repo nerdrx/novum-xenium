@@ -17,7 +17,7 @@ _MANIFEST = (_ROOT / "static/manifest.json").read_text(encoding="utf-8")
 def test_default_brand_and_theme_keep_internal_storage_key():
     assert "const DEFAULT_THEME = 'novum-xenium';" in _THEME
     assert "const LS_KEY = 'odysseus-theme';" in _THEME
-    assert "'novum-xenium': 'none'" in _THEME
+    assert "'novum-xenium': 'orbits'" in _THEME
     assert "const DEFAULT_FONT = 'sans';" in _THEME
     assert "const LEGACY_DEFAULT_FONT = 'mono';" in _THEME
     assert "opts.font !== _defaultFontForTheme(name)" in _THEME

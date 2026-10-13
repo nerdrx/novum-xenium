@@ -33,6 +33,8 @@ class _FakeRequest:
         self.url = _FakeURL(path)
         self.headers = {}
         self.state = SimpleNamespace()
+        self.method = "GET"
+        self.scope = {"type": "http", "path": path, "root_path": ""}
 
 
 class _FakeResponse:

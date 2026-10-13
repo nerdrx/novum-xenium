@@ -268,6 +268,32 @@ def test_group_approval_stream_saves_reloadable_gate_before_runner_returns(tmp_p
     assert reopened["metadata"]["tool_events"][-1]["ask_user"]["approval_id"] == "approval-1"
 
 
+def test_chat_stream_forwards_coding_work_packet_events(tmp_path, monkeypatch):
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    store = _interrupted_store(
+        tmp_path / "packet-events.sqlite", workspace=workspace, plan_mode=False,
+    )
+    client, _captured = _recovery_post_client(
+        monkeypatch, checkpoint_store=store, workspace=workspace,
+    )
+    event = {
+        "type": "coding_work_packet", "round": 2, "stage": "done",
+        "test_status": "passed", "review_status": "passed",
+        "packet": {"objective": "Fix refresh behavior"},
+    }
+
+    async def packet_loop(*_args, **_kwargs):
+        yield "data: " + json.dumps(event) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(chat_routes, "stream_agent_loop", packet_loop)
+    response = _continue(client, workspace=workspace)
+
+    assert response.status_code == 200, response.text[:500]
+    assert "data: " + json.dumps(event) + "\n\n" in response.text
+
+
 def test_chat_stream_continue_claims_once_and_preserves_saved_read_only_mode(tmp_path, monkeypatch):
     workspace = str(tmp_path / "workspace")
     (tmp_path / "workspace").mkdir()

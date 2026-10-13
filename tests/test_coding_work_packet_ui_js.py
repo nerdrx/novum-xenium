@@ -45,13 +45,23 @@ assert.equal(card.children[1].children[1].children[1].textContent, 'Not verified
 assert.equal(card.children[1].children[2].children[1].textContent, 'Not reviewed');
 const updated = renderCodingWorkPacketStatus({
   type: 'coding_work_packet', stage: 'done', test_status: 'passed',
-  review_status: 'not_reviewed', packet: { objective: 'Safe update' },
+  review_status: 'passed', packet: { objective: 'Safe update' },
 }, anchor);
 assert.equal(updated, card);
 assert.equal(parent.children.length, 2);
 assert.equal(card.dataset.stage, 'done');
 assert.equal(card.children[1].children[0].children[1].textContent, 'Slice checked');
 assert.equal(card.children[1].children[1].children[1].textContent, 'Passed');
+assert.equal(card.children[1].children[2].children[1].textContent, 'Passed');
+assert.equal(card.children[1].children[2].children[1].dataset.reviewStatus, 'passed');
+for (const [review_status, label] of [['failed', 'Failed'], ['unverified', 'Unverified']]) {
+  renderCodingWorkPacketStatus({
+    type: 'coding_work_packet', stage: 'done', test_status: 'passed', review_status,
+    packet: { objective: 'Safe update' },
+  }, anchor);
+  assert.equal(card.children[1].children[2].children[1].textContent, label);
+  assert.equal(card.children[1].children[2].children[1].dataset.reviewStatus, review_status);
+}
 console.log('ok');
 """
     result = subprocess.run(
@@ -67,4 +77,3 @@ def test_live_and_reconnect_streams_handle_packet_events_without_claiming_histor
     assert "import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';" in source
     assert source.count("json.type === 'coding_work_packet'") >= 2
     assert "packet evidence is not part of persisted chat history" in source
-

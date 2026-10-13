@@ -4,6 +4,8 @@ const STAGES = Object.freeze({
   verify: 'Verifying',
   done: 'Slice checked',
 });
+const REVIEWS = Object.freeze({ passed: 'Passed', failed: 'Failed', unverified: 'Unverified' });
+const REVIEW_LABELS = Object.freeze({ ...REVIEWS, not_reviewed: 'Not reviewed' });
 
 function _status(value, labels, fallback) {
   return Object.prototype.hasOwnProperty.call(labels, value) ? labels[value] : fallback;
@@ -16,7 +18,7 @@ export function renderCodingWorkPacketStatus(event, anchor) {
   const objective = typeof packet.objective === 'string' ? packet.objective.slice(0, 1000) : 'Coding work';
   const stage = _status(event.stage, STAGES, 'In progress');
   const test = _status(event.test_status, { passed: 'Passed', not_verified: 'Not verified' }, 'Not verified');
-  const review = _status(event.review_status, { reviewed: 'Reviewed', not_reviewed: 'Not reviewed' }, 'Not reviewed');
+  const review = _status(event.review_status, REVIEW_LABELS, 'Not reviewed');
 
   let card = anchor._codingWorkPacketStatus;
   if (!card) {
@@ -45,7 +47,8 @@ export function renderCodingWorkPacketStatus(event, anchor) {
     const state = document.createElement('strong');
     state.textContent = value;
     if (label === 'Test') state.dataset.testStatus = event.test_status === 'passed' ? 'passed' : 'not_verified';
-    if (label === 'Review') state.dataset.reviewStatus = event.review_status === 'reviewed' ? 'reviewed' : 'not_reviewed';
+    if (label === 'Review') state.dataset.reviewStatus = Object.prototype.hasOwnProperty.call(REVIEWS, event.review_status)
+      ? event.review_status : 'not_reviewed';
     row.append(name, state);
     details.appendChild(row);
   }

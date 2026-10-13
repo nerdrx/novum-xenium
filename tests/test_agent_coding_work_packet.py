@@ -31,11 +31,17 @@ def _todos():
     ]
 
 
-def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0):
+def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=None):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
-    monkeypatch.setattr(al, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: (
+        True if verifier_issues is not None and key == "agent_verifier_subagent" else default
+    ))
+    if verifier_issues is not None:
+        async def verify(*_args, **_kwargs):
+            return list(verifier_issues)
+        monkeypatch.setattr(al, "_run_verifier_subagent", verify)
 
     class GroundedCodingTask(CodingGrounding):
         def __init__(self, *args, **kwargs):
@@ -132,6 +138,21 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
     assert [tool for tool, _content in executed] == ["todowrite", "todowrite", "bash", "write_file", "bash"]
     assert "Everything is complete." in " ".join(event.get("delta", "") for event in events)
     assert "write_file" in requested[1]
+
+
+@pytest.mark.parametrize(("issues", "status"), [
+    ([], "passed"),
+    (["Failed: acceptance condition was not met"], "failed"),
+    (["Unverified: the reviewer lacked evidence"], "unverified"),
+])
+def test_packet_reports_actual_independent_review_result(monkeypatch, tmp_path, issues, status):
+    events, _executed, _requested = _run_packet(
+        monkeypatch, tmp_path, verifier_issues=issues,
+    )
+
+    packet_events = [event for event in events if event.get("type") == "coding_work_packet"]
+    done_events = [event for event in packet_events if event["stage"] == "done"]
+    assert [event["review_status"] for event in done_events] == ["not_reviewed", status]
 
 
 def test_failed_acceptance_cannot_mark_packet_done_or_finish_as_verified(monkeypatch, tmp_path):

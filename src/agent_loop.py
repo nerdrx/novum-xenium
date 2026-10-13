@@ -3937,6 +3937,13 @@ def _build_actions_snapshot(tool_events: list, limit: int = 8000) -> str:
     return compact_action_evidence(tool_events, limit=limit)
 
 
+def _coding_review_status(issues: list[str]) -> str:
+    """Map the independent review result to the packet UI's bounded status."""
+    if not issues:
+        return "passed"
+    return "failed" if all(issue.startswith("Failed:") for issue in issues) else "unverified"
+
+
 
 async def _run_verifier_subagent(
     instruction: str, actions_snapshot: str,
@@ -4536,6 +4543,7 @@ async def stream_agent_loop(
     ))
     _coding_work_nudges = 0
     _coding_packet_boundary = None
+    _coding_review_status_value = "not_reviewed"
     from src.milestone_checkpoint import MilestoneCheckpoint
     _milestone_checkpoint = MilestoneCheckpoint(bool(
         _coding_grounding.required and workspace and owner and session_id and not _coding_work.enabled
@@ -6446,6 +6454,9 @@ async def stream_agent_loop(
         _milestone_checkpoint.observe(approved.tool_name, approved_result)
         if _coding_work.observe(approved.tool_name, approved.content, approved_result):
             packet_event = _coding_work.event(0)
+            if packet_event["stage"] != "done":
+                _coding_review_status_value = "not_reviewed"
+            packet_event["review_status"] = _coding_review_status_value
             yield f'data: {json.dumps(packet_event)}\n\n'
             packet_message = untrusted_context_message(
                 "current coding work packet", json.dumps(packet_event), arm_tool_gate=False,
@@ -7553,6 +7564,11 @@ async def stream_agent_loop(
                     endpoint_url=endpoint_url, model=model, headers=headers,
                     reasoning_mode=reasoning_mode,
                 )
+                if _coding_work.state and _coding_work.state.stage == "done":
+                    _coding_review_status_value = _coding_review_status(_vfail)
+                    packet_event = _coding_work.event(round_num)
+                    packet_event["review_status"] = _coding_review_status_value
+                    yield f'data: {json.dumps(packet_event)}\n\n'
                 _verification_issues = _vfail
                 if _vfail:
                     _verifier_rounds += 1
@@ -8096,6 +8112,9 @@ async def stream_agent_loop(
             if _coding_work.observe(block.tool_type, block.content, result):
                 _coding_work_nudges = 0
                 packet_event = _coding_work.event(round_num)
+                if packet_event["stage"] != "done":
+                    _coding_review_status_value = "not_reviewed"
+                packet_event["review_status"] = _coding_review_status_value
                 yield f'data: {json.dumps(packet_event)}\n\n'
                 packet_message = untrusted_context_message(
                     "current coding work packet", json.dumps(packet_event), arm_tool_gate=False,

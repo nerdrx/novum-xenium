@@ -36,7 +36,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 attempt_shell_edit=False, registered_checks=False, disabled_bash=False,
                 malformed_check=False, no_packet_start=False,
                 stall_before_packet=False, fail_stall_reads=False, omit_acceptance=False,
-                acceptance_blocked=False):
+                acceptance_blocked=False, verify_existing=False, repair_failed_check=False,
+                max_tool_calls=0, baseline_blocked=False, max_rounds=10):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -76,8 +77,11 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
     monkeypatch.setattr("src.coding_grounding.CodingGrounding", GroundedCodingTask)
     monkeypatch.setattr(coding_tools, "read_todos", lambda _ctx: [])
     todos = _todos() if todos is None else todos
+    packet = _packet()
+    if verify_existing:
+        packet["mode"] = "verify_existing"
     actions = [
-        ("todowrite", {"todos": todos, "work_packet": _packet()}),
+        ("todowrite", {"todos": todos, "work_packet": packet}),
         # Must be rejected by the packet guard before the executor sees it.
         ("write_file", {"path": "src/auth.py", "content": "too soon"}),
         ("bash", {"command": _packet()["reproduce_command"]}),
@@ -97,6 +101,17 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         actions[2] = ("run_coding_check", {"command": "echo injected"})
     if omit_acceptance:
         actions.pop()
+    if checked_workflow and not disabled_bash:
+        # The server owns checks at stage boundaries; the model only edits.
+        actions = [action for action in actions
+                   if action[0] not in {"bash", "run_coding_check", "write_file"}
+                   or (action[0] == "write_file" and action[1]["content"] == "fixed")
+                   or (action[0] == "bash" and "sed -i" in action[1]["command"])
+                   or (malformed_check and action[0] == "run_coding_check")]
+    if verify_existing:
+        actions = [action for action in actions if action[0] != "write_file"]
+    if repair_failed_check:
+        actions.append(("write_file", {"path": "src/auth.py", "content": "fixed again"}))
     requested = []
     executed = []
     initial_todowrite = json.dumps(actions[0][1])
@@ -126,12 +141,16 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         if block.tool_type == "bash":
             command = block.content
             if command == _packet()["reproduce_command"]:
-                return block.tool_type, {"exit_code": 1, "output": "expected baseline failure"}
+                if baseline_blocked:
+                    return "bash", {"exit_code": 1, "blocked": True, "error": "Check not authorized"}
+                return block.tool_type, {"exit_code": 0 if verify_existing else 1, "output": "baseline result"}
             assert command == _packet()["acceptance_command"]
             if acceptance_blocked:
                 return block.tool_type, {"exit_code": 1, "blocked": True,
                                          "error": "Check is not authorized"}
-            return block.tool_type, {"exit_code": acceptance_exit, "output": "acceptance result"}
+            check_count = sum(tool == "bash" and content == command for tool, content in executed)
+            code = (1 if check_count == 1 else 0) if repair_failed_check else acceptance_exit
+            return block.tool_type, {"exit_code": code, "output": "acceptance result"}
         if block.tool_type == "write_file":
             path = block.content.split("\n", 1)[0]
             return block.tool_type, {"exit_code": 0, "output": f"saved {path}"}
@@ -148,6 +167,14 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
     async def stream(candidates, messages, **kwargs):
         nonlocal turn
         turn += 1
+        if checked_workflow and not disabled_bash and not no_packet_start and max_tool_calls != 1:
+            assert ("bash", packet["reproduce_command"]) in executed
+            server_results = [message for message in messages
+                              if message.get("metadata", {}).get("source") == "server-scheduled coding check results"]
+            if turn == 1:
+                assert server_results
+                assert all(message.get("metadata", {}).get("trusted") is False for message in server_results)
+                assert all("tool_call_id" not in message for message in server_results)
         if no_packet_start and not stall_before_packet:
             request = await kwargs["candidate_request_factory"](0, *candidates[0])
             requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
@@ -177,7 +204,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
         relevant_tools={"todowrite", "bash", "write_file", "edit_file", "apply_patch",
-                        "python", "read_file", "grep", "glob", "ls", "ask_user"}, max_rounds=10,
+                        "python", "read_file", "grep", "glob", "ls", "ask_user"}, max_rounds=max_rounds,
+        max_tool_calls=max_tool_calls,
         disabled_tools={"bash"} if disabled_bash else set(),
     ))
     return _types(chunks), executed, requested
@@ -230,12 +258,10 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
     assert all("update_plan" not in tools for tools in requested)
     # The task-scoped grant executes the sealed TodoWrite once before the
     # model's repeated checklist call; the duplicate packet must not reset it.
-    assert [tool for tool, _content in executed] == ["todowrite", "todowrite", "bash", "write_file", "bash"]
+    assert [tool for tool, _content in executed] == ["todowrite", "bash", "todowrite", "write_file", "bash"]
     assert "Everything is complete." in " ".join(event.get("delta", "") for event in events)
-    reproduce_tools = requested[1]
-    assert {"read_file", "grep", "glob", "ls"} <= reproduce_tools
-    assert not ({"bash", "python", "write_file", "edit_file", "apply_patch"}
-                & reproduce_tools)
+    assert "write_file" in requested[0]  # Baseline ran before the first model call.
+
 
 
 @pytest.mark.parametrize("exit_code,blocked", [(0, False), (1, False), (1, True)])
@@ -261,13 +287,12 @@ def test_registered_checks_use_packet_commands_through_bash(monkeypatch, tmp_pat
     )
 
     assert [tool for tool, _content in executed] == [
-        "todowrite", "todowrite", "bash", "write_file", "bash",
+        "todowrite", "bash", "todowrite", "write_file", "bash",
     ]
-    assert executed[2][1] == _packet()["reproduce_command"]
+    assert executed[1][1] == _packet()["reproduce_command"]
     assert executed[-1][1] == _packet()["acceptance_command"]
-    assert any("run_coding_check" in tools for tools in requested)
-    assert "bash" not in requested[1]
-    assert "run_coding_check" in requested[1]
+    assert "write_file" in requested[0]
+    assert "bash" not in requested[0]
     assert any(event.get("stage") == "done" for event in events)
 
 
@@ -318,11 +343,11 @@ def test_checked_edit_stage_hides_and_rejects_shell_writes_with_actionable_error
 
     # Turn four proposes the shell edit; its following model request receives
     # the blocker. Shell tools remain available again for acceptance in verify.
-    assert not ({"bash", "python"} & requested[3])
-    assert not ({"bash", "python"} & requested[4])
+    assert not ({"bash", "python"} & requested[1])
+    assert not ({"bash", "python"} & requested[2])
     assert "Bash and Python are unavailable during the edit stage" in json.dumps(events)
     assert "sed -i" not in json.dumps(executed)
-    assert "bash" in requested[-1]
+    assert executed[-1] == ("bash", _packet()["acceptance_command"])
 
 
 def test_reviewed_completed_packet_emits_success_terminal(monkeypatch, tmp_path):
@@ -456,7 +481,7 @@ def test_exactly_approved_write_uses_restored_reproduction_evidence(monkeypatch,
     async def execute(block, *args, **kwargs):
         executed.append(block.tool_type)
         if block.tool_type == "bash":
-            assert block.content == _packet()["acceptance_command"]
+            assert block.content == _packet()["acceptance_command" if valid_reproduction else "reproduce_command"]
         return block.tool_type, {"exit_code": 0, "output": "saved"}
 
     monkeypatch.setattr(al, "execute_tool_block", execute)
@@ -478,7 +503,7 @@ def test_exactly_approved_write_uses_restored_reproduction_evidence(monkeypatch,
     packets = [event for event in events if event.get("type") == "coding_work_packet"]
     assert packets[0]["stage"] == ("edit" if valid_reproduction else "reproduce")
     expected = ["write_file"] if valid_reproduction else []
-    if valid_reproduction and not disabled_bash:
+    if not disabled_bash:
         expected.append("bash")
     assert executed == expected
     if not valid_reproduction:
@@ -539,6 +564,8 @@ def test_missing_work_packet_todowrite_gets_actionable_model_visible_error(monke
 
     async def execute(block, *args, **kwargs):
         executed.append(block.tool_type)
+        if block.tool_type == "bash":
+            return "bash", {"exit_code": 1, "output": "baseline failure"}
         data = json.loads(block.content)
         result = {"exit_code": 0, "output": "saved", "todos": data["todos"]}
         if "work_packet" in data:
@@ -576,7 +603,7 @@ def test_missing_work_packet_todowrite_gets_actionable_model_visible_error(monke
     events = _types(chunks)
     assert any(event.get("policy") == "coding_work_packet" for event in events)
     assert any(event.get("type") == "coding_work_packet" for event in events)
-    assert executed == ["todowrite"]
+    assert executed == ["todowrite", "bash"]
 
 
 def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_context(monkeypatch, tmp_path):
@@ -706,3 +733,70 @@ def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_con
     assert "obsolete implementation chatter" not in request_text
     assert packet_a["acceptance_condition"] not in request_text
     assert "first slice baseline failure" not in request_text
+
+
+def test_server_checks_verify_existing_without_model_check_calls(monkeypatch, tmp_path):
+    events, executed, _ = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, verify_existing=True,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+    )
+    assert [command for tool, command in executed if tool == "bash"] == [
+        _packet()["reproduce_command"], _packet()["acceptance_command"],
+    ]
+    assert not any(tool == "write_file" for tool, _ in executed)
+    assert any(event.get("stage") == "done" for event in events)
+
+
+def test_server_check_retries_after_real_edit_not_failed_acceptance_alone(monkeypatch, tmp_path):
+    events, executed, _ = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, repair_failed_check=True,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+    )
+    assert [tool for tool, _ in executed] == [
+        "todowrite", "bash", "todowrite", "write_file", "bash", "write_file", "bash",
+    ]
+    assert any(event.get("stage") == "done" for event in events)
+
+
+def test_server_check_respects_tool_budget(monkeypatch, tmp_path):
+    events, executed, _ = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, max_tool_calls=1,
+    )
+    assert not any(tool == "bash" for tool, _ in executed)
+    assert any(event.get("type") == "budget_exceeded" for event in events)
+
+
+def test_server_baseline_not_repeated_after_blocked_attempt(monkeypatch, tmp_path):
+    events, executed, _ = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, baseline_blocked=True,
+    )
+    assert [tool for tool, _ in executed].count("bash") == 1
+    assert not any(tool == "write_file" for tool, _ in executed)
+    assert not any(event.get("stage") == "done" for event in events)
+
+
+def test_server_check_does_not_spend_model_round(monkeypatch, tmp_path):
+    events, executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, max_rounds=1,
+    )
+    assert [tool for tool, _ in executed] == ["todowrite", "bash", "todowrite"]
+    assert len(requested) == 1
+    assert any(event.get("type") == "rounds_exhausted" for event in events)
+
+
+def test_server_result_preserves_prior_native_pair_and_reasoning():
+    messages = [
+        {"role": "assistant", "content": None, "reasoning_content": "existing provider reasoning",
+         "tool_calls": [{"id": "edit-1", "type": "function", "function": {"name": "write_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "edit-1", "content": "saved"},
+    ]
+    al._append_tool_results(
+        messages, "", [], ["check output"], ["check output"], False, 2,
+        tool_result_records=[{"tool_name": "bash", "content": "pytest", "result": {"exit_code": 0}}],
+        server_scheduled=True,
+    )
+    assert messages[0]["reasoning_content"] == "existing provider reasoning"
+    assert messages[1]["tool_call_id"] == messages[0]["tool_calls"][0]["id"]
+    assert len(messages) == 3
+    assert messages[-1]["metadata"]["trusted"] is False
+    assert "tool_call_id" not in messages[-1]

@@ -35,12 +35,14 @@ In checked mode, `run_coding_check {}` runs the registered command for the curre
 reproduction or verification stage. It accepts no replacement command and is
 exposed only when Bash is available. The resolved command passes through the
 normal Bash security, approval, and execution path.
-If the model tries to finish with prose while a registered acceptance check is
-still unrun, checked mode schedules that check once through the same dispatcher.
-This fallback applies only in the verification stage while the check tool is
-available. It does not replace a failed check, bypass disabled tools or approvals,
-invent execution evidence, or resume a forced stop. A failed or blocked check
-keeps the slice unfinished.
+Checked mode schedules the registered baseline before the next model action,
+and schedules acceptance after a successful edit or a passing `verify_existing`
+baseline. These are server-owned checks through the same dispatcher, not model
+calls. Their results remain untrusted tool evidence. They consume execution
+budgets but do not consume model turns or invent model token usage.
+A failed acceptance check returns control to the model for repair. A blocked
+check is not automatically repeated; disabled tools, approvals, and forced stops
+remain effective. Failed or blocked checks keep the slice unfinished.
 
 The stream emits `coding_work_packet` events with packet, stage, `test_status`,
 and `review_status`. A passing command reports `test_status: passed` and

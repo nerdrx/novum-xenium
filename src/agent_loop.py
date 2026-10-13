@@ -3537,6 +3537,7 @@ def _append_tool_results(
     round_num: int,
     round_reasoning: str = "",
     tool_result_records: Optional[list] = None,
+    server_scheduled: bool = False,
 ):
     """Append tool execution results back into the message history for the next LLM round.
 
@@ -3556,7 +3557,7 @@ def _append_tool_results(
     tool_result_records = tool_result_records or []
     # Strip reasoning_content from earlier assistant turns; only the newest keeps it.
     for _m in messages:
-        if _m.get("role") == "assistant":
+        if not server_scheduled and _m.get("role") == "assistant":
             _m.pop("reasoning_content", None)
     if used_native and native_tool_calls:
         assistant_msg = {"role": "assistant"}
@@ -4583,6 +4584,7 @@ async def stream_agent_loop(
         from src.run_checkpoints import record_coding_work
         record_coding_work(server_run_id, session_id, owner, _coding_work.checkpoint_data())
     _coding_work_nudges = 0
+    _scheduled_coding_check = None
     _coding_packet_boundary = None
     if _coding_work.state and _coding_work_restore in {"restored", "reset"}:
         _save_coding_work_checkpoint()
@@ -6822,8 +6824,8 @@ async def stream_agent_loop(
             messages.append(approved_skill_reference)
         _approved_result_injected = True
 
-    round_numbers = count(1) if max_rounds == 0 else range(1, max_rounds + 1)
-    for round_num in round_numbers:
+    _model_rounds = 0
+    for round_num in count(1):
         round_response = ""
         round_reasoning = ""  # reasoning_content deltas (DeepSeek-thinking, vLLM --reasoning-parser)
         # Delay completion prose until review passes. After a failed review,
@@ -6859,6 +6861,33 @@ async def stream_agent_loop(
         all_tool_schemas = _checked_coding_tool_schemas(_tool_schemas_for_route(_active_route_state))
         if round_num == 1 and not _approved_result_injected:
             _active_route_state["request_messages"] = _initial_route_request_messages
+        # Run registered checks before asking the model for another action.
+        # Retained references distinguish new edits with identical result text.
+        _server_coding_check = False
+        _check_state = _coding_work.state
+        if (not _force_answer and _coding_work.enabled and _check_state
+                and _check_state.stage in {"reproduce", "verify"}
+                and (_check_state.reproduction_result is None if _check_state.stage == "reproduce"
+                     else _check_state.acceptance_result is None)
+                and any(schema.get("function", {}).get("name") == "run_coding_check"
+                        for schema in all_tool_schemas or [])):
+            _check_command, _check_error = _coding_work.check_command("{}")
+            if _check_command and not (
+                _scheduled_coding_check
+                and _scheduled_coding_check[0] is _check_state
+                and _scheduled_coding_check[1:3] == (_check_state.stage, _check_command)
+                and _scheduled_coding_check[3] is _check_state.edit_result
+            ):
+                _server_coding_check = True
+                _scheduled_coding_check = (
+                    _check_state, _check_state.stage, _check_command, _check_state.edit_result,
+                )
+
+        if not _server_coding_check:
+            if max_rounds > 0 and _model_rounds >= max_rounds:
+                _exhausted_rounds = True
+                break
+            _model_rounds += 1
         agent_stream_timeout = int(get_setting("agent_stream_timeout_seconds", 300) or 300)
 
         _tool_names_sent = [t.get("function", {}).get("name") for t in (all_tool_schemas or []) if t.get("function")]
@@ -7036,23 +7065,29 @@ async def stream_agent_loop(
             agent_stream_timeout,
         )
         _coding_narration_loop = False
-        _stream_iterator = stream_llm_with_fallback(
-            _candidates,
-            messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            reasoning_mode=reasoning_mode,
-            prompt_type=prompt_type if round_num == 1 else None,
-            tools=all_tool_schemas if all_tool_schemas else None,
-            tool_choice_none=_ody_doc_finetune_mode,
-            timeout=agent_stream_timeout,
-            session_id=session_id,
-            workload=workload,
-            fallback_statuses=fallback_statuses,
-            fallback_on_empty=fallback_on_empty,
-            candidate_request_factory=_candidate_request,
-            candidate_route_descriptors=_candidate_route_descriptors,
-        )
+        if _server_coding_check:
+            async def _empty_check_stream():
+                if False:
+                    yield ""
+            _stream_iterator = _empty_check_stream()
+        else:
+            _stream_iterator = stream_llm_with_fallback(
+                _candidates,
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                reasoning_mode=reasoning_mode,
+                prompt_type=prompt_type if round_num == 1 else None,
+                tools=all_tool_schemas if all_tool_schemas else None,
+                tool_choice_none=_ody_doc_finetune_mode,
+                timeout=agent_stream_timeout,
+                session_id=session_id,
+                workload=workload,
+                fallback_statuses=fallback_statuses,
+                fallback_on_empty=fallback_on_empty,
+                candidate_request_factory=_candidate_request,
+                candidate_route_descriptors=_candidate_route_descriptors,
+            )
         async for chunk in _stream_iterator:
             if not _round_first_event_logged:
                 _round_first_event_logged = True
@@ -7324,7 +7359,7 @@ async def stream_agent_loop(
                 await close_stream()
             _finalize_round_usage(include_empty=False)
             full_response = full_response[:-len(round_response)] if round_response else full_response
-            if not _coding_narration_retried and (max_rounds == 0 or round_num < max_rounds):
+            if not _coding_narration_retried and (max_rounds == 0 or _model_rounds < max_rounds):
                 _coding_narration_retried = True
                 retry_index = candidate_index if isinstance(candidate_index, int) else 0
                 if retry_index >= len(_candidates):
@@ -7351,7 +7386,7 @@ async def stream_agent_loop(
                 round_models.append(_round_actual_model)
                 round_endpoint_ids.append(_round_actual_endpoint_id)
                 round_endpoint_labels.append(_round_actual_endpoint_label)
-                if max_rounds == 0 or round_num < max_rounds:
+                if max_rounds == 0 or _model_rounds < max_rounds:
                     yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
                 continue
 
@@ -7393,7 +7428,8 @@ async def stream_agent_loop(
             _round_first_event_logged,
             _round_first_token_logged,
         )
-        _finalize_round_usage()
+        if not _server_coding_check:
+            _finalize_round_usage()
         _normalized_doc_round = (
             _normalize_stream_document_fences(
                 round_response,
@@ -7409,6 +7445,10 @@ async def stream_agent_loop(
             is_api_model=(_is_api_model and not guide_only),
             allow_fenced_for_api=_ody_doc_finetune_mode,
         )
+        if _server_coding_check:
+            tool_blocks = [ToolBlock("run_coding_check", "{}")]
+            # Use untrusted non-native tool evidence, never invent a model call ID.
+            used_native, converted_calls = False, []
         # Never mistake an incomplete native call for a completed answer. Reject
         # the entire batch before execution so retries cannot duplicate siblings.
         if native_tool_calls and len(converted_calls) != len(native_tool_calls) and not _force_answer:
@@ -7635,18 +7675,6 @@ async def stream_agent_loop(
         round_endpoint_labels.append(_round_actual_endpoint_label)
         if _ody_qwen_finetune_model and not tool_blocks and cleaned_round and not hold_round_text:
             yield f'data: {json.dumps({"delta": cleaned_round})}\n\n'
-
-        # A prose-only finish cannot replace the registered acceptance check.
-        # Schedule it once through the ordinary dispatcher, including security,
-        # approvals and budgets; never synthesize a successful result.
-        if (not tool_blocks and not _force_answer and _coding_work.enabled
-                and _coding_work_nudges == 0 and _coding_work.state
-                and _coding_work.state.stage == "verify"
-                and _coding_work.state.acceptance_result is None
-                and any(schema.get("function", {}).get("name") == "run_coding_check"
-                        for schema in all_tool_schemas or [])):
-            _coding_work_nudges += 1
-            tool_blocks = [ToolBlock("run_coding_check", "{}")]
 
         if not tool_blocks:
             if _coding_work.pending:
@@ -7935,6 +7963,8 @@ async def stream_agent_loop(
                 _native_tool_provenance(converted_calls, i, block.tool_type)
                 if used_native else {}
             )
+            if _server_coding_check:
+                native_tool_fields["server_scheduled_check"] = True
             # --- Tool budget check ---
             if max_tool_calls > 0 and total_tool_calls >= max_tool_calls:
                 yield f'data: {json.dumps({"type": "budget_exceeded", "limit": max_tool_calls, "used": total_tool_calls})}\n\n'
@@ -8943,7 +8973,10 @@ async def stream_agent_loop(
         _append_tool_results(messages, round_response, converted_calls,
                              tool_results, tool_result_texts, used_native, round_num,
                              round_reasoning=round_reasoning,
-                             tool_result_records=tool_result_records)
+                             tool_result_records=tool_result_records,
+                             server_scheduled=_server_coding_check)
+        if _server_coding_check and messages:
+            messages[-1].setdefault("metadata", {})["source"] = "server-scheduled coding check results"
         messages.extend(skill_reference_messages)
 
         stall = _progress_guard.observe(tool_result_records)
@@ -9028,14 +9061,6 @@ async def stream_agent_loop(
 
         # Separator in accumulated response
         full_response += "\n\n"
-    else:
-        # The for-loop completed every allowed round WITHOUT an early `break`
-        # (a `break` fires on "done", budget, or error). Reaching this `else`
-        # means the agent kept working until it ran out of rounds — so offer
-        # Continue instead of stopping silently. This catches ALL exhaustion
-        # paths, including a verifier `continue` on the final round (the old
-        # bottom-of-loop flag missed those).
-        _exhausted_rounds = True
 
     # If the loop hit the round cap while still working, tell the client so it
     # can show a "Continue" affordance instead of the turn just stopping.

@@ -19,6 +19,14 @@ for both sides when comparing coding behavior without outside research.
 
 ## Latest measured result (2026-10-13)
 
+After phase tool-schema alignment (`6d59181`), one fresh Aider-first trial
+completed both Novum milestones, test and review gates, and external acceptance.
+Both adapters exited 0. Novum took 112.072 seconds; Aider took 6.525 seconds.
+This supports the completion path in this trial, not a speed improvement or
+consistent success rate. See [phase-schema trial](evaluations/coding-phase-schemas-20261013.json).
+The focused regression suite passed 72 tests. Deployment followed two all-idle
+checks covering 103 chats; runtime files were backed up and edited in place.
+
 After registered check scheduling and approval research recovery (Python runtime
 `325a1b6`), both agents passed the fixed two-file acceptance check in both run
 orders using `qwen3.5:9b`. Novum completed its internal workflow in one run;

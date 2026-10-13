@@ -303,7 +303,7 @@ class CheckpointStore:
             status = "corrupt"
         return {
             "run_id": row["run_id"], "status": status, "updated": row["updated"],
-            **payload, "can_continue": status == "interrupted", "replay_tools": False,
+            **payload, "can_continue": status in {"interrupted", "stopped"}, "replay_tools": False,
             "uncertain_tool_outcome": bool(payload.get("pending_tool")) and status in {"interrupted", "stopped", "error"},
         }
 
@@ -341,7 +341,7 @@ class CheckpointStore:
                 "WHERE run_id=? AND session_id=? AND owner=?",
                 (run_id, session_id, str(owner or "")),
             ).fetchone()
-            if row is None or row["status"] != "interrupted":
+            if row is None or row["status"] not in {"interrupted", "stopped"}:
                 return None
             try:
                 payload = json.loads(row["payload"])
@@ -352,7 +352,7 @@ class CheckpointStore:
             now = time.time()
             updated = db.execute(
                 "UPDATE agent_run_checkpoints SET status='continued', updated=? "
-                "WHERE run_id=? AND session_id=? AND owner=? AND status='interrupted'",
+                "WHERE run_id=? AND session_id=? AND owner=? AND status IN ('interrupted', 'stopped')",
                 (now, run_id, session_id, str(owner or "")),
             )
             if updated.rowcount != 1:

@@ -209,3 +209,11 @@ did not exercise the retry-stop branch. The external GUI check still failed.
 The focused automated tests establish the boundary; this trial does not establish
 autonomous repair success. Original settings were restored and protected hashes
 matched. No generated application source was manually repaired.
+
+### Explicit stopped-run continuation and live retry boundary
+
+Stopped runs now support the existing explicit checkpoint Continue path. Recovery remains owner/session scoped, one-shot, and never automatically replays tools or approvals. The UI describes saved progress rather than implying every recoverable run crashed. All 53 checkpoint and recovery-route tests pass, including preserved counters of one and two failed checks.
+
+The stopped qwen3.5:9b GUI evaluation was continued in the same session/workspace. Its saved counter of one survived recovery and a fresh task-scoped approval. The model reran the registered check; it failed with `Start must recover after completion`, raising the counter to two. The run emitted `coding_acceptance_retry_limit` and stopped. The independent headless GUI check also failed; protected checker, wrapper, and fixture hashes were unchanged. No operator app edits or additional diagnostic coaching occurred. This validates the live retry boundary, not model repair success. Repeated checks count even without an intervening edit.
+
+Evidence: `docs/evaluations/coding-stopped-resume-20261013.json`.

@@ -1,0 +1,117 @@
+{
+  "purpose": "Explicit stopped-checkpoint continuation and live acceptance retry limit verification",
+  "model": "qwen3.5:9b",
+  "prior_run_id": "6c1469b1b8d44dd08c40bd5248e3df2c",
+  "session_id": "027ae874-000b-40a8-9e10-d071d622af3e",
+  "result": {
+    "actual_route": {
+      "endpoint_id": "6865006e",
+      "model": "qwen3.5:9b",
+      "requested_model": "qwen3.5:9b"
+    },
+    "allow_web_search": false,
+    "approval_count": 1,
+    "endpoint_id": "6865006e",
+    "evidence": [
+      {
+        "enabled": true,
+        "requested": true,
+        "type": "coding_workflow"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 0,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "input_tokens": 3771,
+        "model": "qwen3.5:9b",
+        "output_tokens": 7,
+        "requested_model": "qwen3.5:9b",
+        "total_tokens": 3778,
+        "type": "metrics"
+      },
+      {
+        "decision": "approve_task",
+        "type": "approval_decision"
+      },
+      {
+        "enabled": true,
+        "requested": true,
+        "type": "coding_workflow"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 0,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 0,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "reason": "coding_acceptance_retry_limit",
+        "status": "failed",
+        "type": "agent_terminal"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "input_tokens": 3743,
+        "model": "qwen3.5:9b",
+        "output_tokens": 26,
+        "requested_model": "qwen3.5:9b",
+        "total_tokens": 3769,
+        "type": "metrics"
+      }
+    ],
+    "model": "qwen3.5:9b",
+    "output_saved": false,
+    "preset_id": null,
+    "run_id": "3c467f033744406baf2846c3d5394f26",
+    "seconds": 5.852,
+    "session_id": "027ae874-000b-40a8-9e10-d071d622af3e",
+    "source_files": [
+      "dist/main/index.js",
+      "dist/main/preload.js",
+      "dist/renderer/renderer.js",
+      "dist/renderer/index.html",
+      "package.json"
+    ],
+    "status": "failed",
+    "stream_ended": true,
+    "terminal": {
+      "reason": "coding_acceptance_retry_limit",
+      "status": "failed",
+      "type": "agent_terminal"
+    },
+    "verification_passed": null
+  },
+  "external_exit": 1,
+  "protected_files_unchanged": {
+    "qa_check.py": true,
+    ".odysseus-preview/qa-conversion-flow.mjs": true,
+    "test_input.mp4": true
+  },
+  "failed_acceptance_checks_before": 1,
+  "failed_acceptance_checks_after": 2,
+  "external_assertion": "Start must recover after completion",
+  "operator_app_edits": 0,
+  "operator_diagnostic_coaching": 0,
+  "operator_actions": [
+    "Explicitly resumed saved checkpoint",
+    "Approved one exact task-scoped tool card"
+  ],
+  "limits": [
+    "Same failed GUI case, not a new successful repair.",
+    "Continuation reran the registered check without another app edit; the counter counts failed checks, not distinct repair edits.",
+    "External checker still fails. Final protected-file hashes do not exclude temporary changes."
+  ]
+}

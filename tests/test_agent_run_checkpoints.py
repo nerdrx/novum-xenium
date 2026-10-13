@@ -220,7 +220,7 @@ async def test_cancellation_before_shutdown_hook_keeps_checkpoint_recoverable(tm
 
 
 @pytest.mark.asyncio
-async def test_started_explicit_stop_remains_nonrecoverable(tmp_path, monkeypatch):
+async def test_started_explicit_stop_can_only_resume_on_explicit_claim(tmp_path, monkeypatch):
     store = run_checkpoints.CheckpointStore(str(tmp_path / "explicit-stop.db"))
     monkeypatch.setattr(run_checkpoints, "_STORE", store)
     session_id = "started-explicit-stop"
@@ -238,7 +238,12 @@ async def test_started_explicit_stop_remains_nonrecoverable(tmp_path, monkeypatc
     assert run.status == "stopped"
     checkpoint = store.get(session_id, "alice")
     assert checkpoint["status"] == "stopped"
-    assert checkpoint["can_continue"] is False
+    assert checkpoint["can_continue"] is True
+    assert store.claim_recovery(session_id, "bob", run.run_id) is None
+    assert store.claim_recovery("other-session", "alice", run.run_id) is None
+    claimed = store.claim_recovery(session_id, "alice", run.run_id)
+    assert claimed["replay_tools"] is False
+    assert store.claim_recovery(session_id, "alice", run.run_id) is None
     assert await agent_runs.interrupt_active_runs(timeout=0) == 0
 
     if run.evict_task:

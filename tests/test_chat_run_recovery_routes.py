@@ -210,7 +210,9 @@ def recovery_client(tmp_path, monkeypatch):
     return TestClient(app)
 
 
-def test_checkpoint_endpoint_is_owner_scoped_and_browser_only(recovery_client):
+@pytest.mark.parametrize("status", ["interrupted", "stopped"])
+def test_checkpoint_endpoint_is_owner_scoped_and_browser_only(recovery_client, status):
+    run_checkpoints._STORE.finish("run-a", status)
     client = recovery_client
     alice = client.get("/api/chat/checkpoint/session-a", headers={"x-test-user": "alice"})
     assert alice.status_code == 200
@@ -435,7 +437,9 @@ def test_ordinary_workspace_intent_still_auto_enables_bash(tmp_path, monkeypatch
     assert "bash" not in (captured["loop_kwargs"]["disabled_tools"] or [])
 
 
-def test_interrupted_recovery_passes_scoped_packet_checkpoint_to_agent(tmp_path, monkeypatch):
+@pytest.mark.parametrize("status", ["interrupted", "stopped"])
+@pytest.mark.parametrize("failures", [1, 2])
+def test_recovery_passes_scoped_packet_checkpoint_to_agent(tmp_path, monkeypatch, status, failures):
     from src.coding_work_packet import CodingWorkPacket
 
     workspace = str(tmp_path / "workspace")
@@ -450,8 +454,10 @@ def test_interrupted_recovery_passes_scoped_packet_checkpoint_to_agent(tmp_path,
         "reproduction_exit_code": 1, "edit_tool": None, "acceptance_exit_code": None,
         "milestones": ["Fix refresh"], "completed": [],
         "current_milestone": "Fix refresh", "review_status": "not_reviewed",
+        "failed_acceptance_checks": failures,
     }
     assert store.record_coding_work("run-a", "session-a", "alice", state)
+    store.finish("run-a", status)
     client, captured = _recovery_post_client(
         monkeypatch, checkpoint_store=store, workspace=workspace,
     )

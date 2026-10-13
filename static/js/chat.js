@@ -5676,7 +5676,7 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
         card.className = 'recovery-run-card';
         card.dataset.recoverySession = String(sessionId);
         const title = document.createElement('strong');
-        title.textContent = 'An interrupted run can be continued';
+        title.textContent = 'Saved progress is available to continue';
         const note = document.createElement('p');
         note.className = 'recovery-run-note';
         const partial = document.createElement('pre');

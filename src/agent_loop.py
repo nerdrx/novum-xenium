@@ -4250,6 +4250,18 @@ class _ToolProgressGuard:
         )
 
 
+def _coding_work_stage_advanced(previous_packet, previous_stage, current_state):
+    """Whether observed packet state crossed a forward evidence milestone."""
+    if not current_state:
+        return False
+    if previous_packet != current_state.packet:
+        return current_state.stage == "reproduce"
+    return (previous_stage, current_state.stage) in {
+        ("reproduce", "edit"), ("reproduce", "verify"),
+        ("edit", "verify"), ("verify", "done"),
+    }
+
+
 async def _archive_result_until_worker_finishes(archive_result, *args):
     """Keep a canceled run alive until its non-cancelable archive thread ends."""
     task = asyncio.create_task(asyncio.to_thread(archive_result, *args))
@@ -6552,7 +6564,13 @@ async def stream_agent_loop(
         # mutation gate active for separate calls.
         _coding_grounding.observe(approved.tool_name, approved_result, approved.content)
         _milestone_checkpoint.observe(approved.tool_name, approved_result)
+        _previous_packet = _coding_work.state.packet if _coding_work.state else None
+        _previous_packet_stage = _coding_work.state.stage if _coding_work.state else None
         if _coding_work.observe(approved.tool_name, approved.content, approved_result):
+            if _coding_work_stage_advanced(
+                _previous_packet, _previous_packet_stage, _coding_work.state,
+            ):
+                _progress_guard.reset_read_stall_window()
             _save_coding_work_checkpoint()
             packet_event = _coding_work.event(0)
             yield f'data: {json.dumps(packet_event)}\n\n'
@@ -8223,7 +8241,13 @@ async def stream_agent_loop(
                             pass
 
             _milestone_checkpoint.observe(block.tool_type, result)
+            _previous_packet = _coding_work.state.packet if _coding_work.state else None
+            _previous_packet_stage = _coding_work.state.stage if _coding_work.state else None
             if _coding_work.observe(block.tool_type, block.content, result):
+                if _coding_work_stage_advanced(
+                    _previous_packet, _previous_packet_stage, _coding_work.state,
+                ):
+                    _progress_guard.reset_read_stall_window()
                 _save_coding_work_checkpoint()
                 _coding_work_nudges = 0
                 packet_event = _coding_work.event(round_num)

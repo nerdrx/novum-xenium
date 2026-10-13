@@ -1,11 +1,16 @@
 """Outcome-based loop protection: progress, retries and saved pause reasons."""
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
 import src.agent_loop as al
-from src.agent_loop import _ToolProgressGuard, _tool_call_signature
+from src.agent_loop import (
+    _ToolProgressGuard,
+    _coding_work_stage_advanced,
+    _tool_call_signature,
+)
 from tests.test_agent_rounds_exhausted import _patch_common, _types
 
 
@@ -79,6 +84,27 @@ def test_read_recovery_resets_only_read_window_not_failed_retry_counter():
     assert sum(bool(tools) for tools in guard.failure_rounds) == 4
     assert sum(kind == "failure" for calls in guard.recent for _, kind in calls) == 3
     assert not any(kind == "read" for calls in guard.recent for _, kind in calls)
+
+
+def test_forward_coding_evidence_resets_old_reads_but_new_stalls_still_pause():
+    guard = _ToolProgressGuard()
+    for _ in range(3):
+        assert guard.observe([record()]) is None
+
+    before = SimpleNamespace(packet="packet-1", stage="reproduce")
+    after = SimpleNamespace(packet="packet-1", stage="edit")
+    assert _coding_work_stage_advanced(before.packet, before.stage, after)
+    guard.reset_read_stall_window()
+    assert not any(kind == "read" for calls in guard.recent for _, kind in calls)
+
+    for _ in range(2):
+        assert guard.observe([record()]) is None
+    stall = guard.observe([record()])
+    assert stall["read_repeats"] == 3
+
+    assert not _coding_work_stage_advanced(
+        "packet-1", "done", SimpleNamespace(packet="packet-1", stage="verify"),
+    )
 
 
 def test_different_failure_and_successful_retry_reset_stall():

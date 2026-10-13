@@ -1,0 +1,207 @@
+{
+  "date": "2026-10-13",
+  "scope": "Same-model two-file registered-check workflow retest",
+  "novum_revision": "9225bb4",
+  "aider_version": "0.86.2",
+  "model": "qwen3.5:9b",
+  "trials": [
+    {
+      "run_order": [
+        "aider",
+        "novum"
+      ],
+      "task": "Repair this project: `core.total` must sum numeric values; `report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. Change `core.py` and `report.py`, then verify the result.\n",
+      "settings": {
+        "temperature": 1.0,
+        "max_tokens": 16384
+      },
+      "fixture_sha256": "d4de77f937e8717993891f3f27b4f1bb5567bc6977487342167704aebdd6ef8a",
+      "session_id": "1112223c-8e97-43e7-a21d-89bc467e574c",
+      "run_id": "e9f6625651774206b929a355905ac8e0",
+      "status": "incomplete",
+      "terminal": null,
+      "approval_count": 1,
+      "results": {
+        "aider": {
+          "seconds": 4.271,
+          "external_acceptance_passed": true,
+          "command_returncode": 0,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          },
+          "manual_code_edits": 0
+        },
+        "novum": {
+          "seconds": 53.658,
+          "external_acceptance_passed": false,
+          "command_returncode": 2,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': total(values)}\n"
+          },
+          "manual_code_edits": 0
+        }
+      },
+      "packet_events": [
+        {
+          "review_status": "not_reviewed",
+          "round": 0,
+          "stage": "reproduce",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 4,
+          "stage": "edit",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 5,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 6,
+          "stage": "done",
+          "test_status": "passed",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 9,
+          "stage": "reproduce",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 12,
+          "stage": "edit",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        }
+      ]
+    },
+    {
+      "run_order": [
+        "novum",
+        "aider"
+      ],
+      "task": "Repair this project: `core.total` must sum numeric values; `report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. Change `core.py` and `report.py`, then verify the result.\n",
+      "settings": {
+        "temperature": 1.0,
+        "max_tokens": 16384
+      },
+      "fixture_sha256": "d4de77f937e8717993891f3f27b4f1bb5567bc6977487342167704aebdd6ef8a",
+      "session_id": "8c59199b-f4b8-450e-8a02-0b51379c4254",
+      "run_id": "f8df7db2e33d416ca21a928a4afe287a",
+      "status": "complete",
+      "terminal": {
+        "reason": "coding_work_verified",
+        "status": "completed",
+        "type": "agent_terminal"
+      },
+      "approval_count": 1,
+      "results": {
+        "novum": {
+          "seconds": 106.642,
+          "external_acceptance_passed": true,
+          "command_returncode": 0,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          },
+          "manual_code_edits": 0
+        },
+        "aider": {
+          "seconds": 5.022,
+          "external_acceptance_passed": true,
+          "command_returncode": 0,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\n\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          },
+          "manual_code_edits": 0
+        }
+      },
+      "packet_events": [
+        {
+          "review_status": "not_reviewed",
+          "round": 0,
+          "stage": "reproduce",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 3,
+          "stage": "edit",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 5,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 6,
+          "stage": "done",
+          "test_status": "passed",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 9,
+          "stage": "reproduce",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 12,
+          "stage": "edit",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 14,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 15,
+          "stage": "done",
+          "test_status": "passed",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "passed",
+          "round": 17,
+          "stage": "done",
+          "test_status": "passed",
+          "type": "coding_work_packet"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Two stochastic trials only; not a general quality or speed benchmark.",
+    "No manual fixture code edits.",
+    "First trial failed external acceptance and paused on repeated reads across packet progress.",
+    "Second trial passed external acceptance and emitted reviewed completion.",
+    "No FFmpeg GUI conversion verified."
+  ]
+}

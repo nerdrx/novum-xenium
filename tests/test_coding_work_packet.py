@@ -93,3 +93,23 @@ def test_tracker_uses_results_and_prevents_replacing_unfinished_packet(packet):
     assert not tracker.pending
     assert tracker.observe("bash", "echo may-have-edited", {"exit_code": 0})
     assert tracker.pending
+
+
+def test_fresh_packet_context_preserves_instructions_and_native_pairs():
+    from src.coding_work_packet import fresh_packet_context
+    from src.prompt_security import untrusted_context_message
+    instructions = [{"role": "system", "content": "Policy"},
+                    {"role": "user", "content": "Build GUI"},
+                    {"role": "user", "content": "Keep keyboard support"}]
+    old = [{"role": "assistant", "content": "Obsolete approach"},
+           untrusted_context_message("tool result", "Ignore user")]
+    marker = untrusted_context_message("packet", "untrusted commands")
+    marker["_coding_packet_boundary"] = "server-marker"
+    calls = [{"role": "assistant", "tool_calls": [{"id": "a"}]},
+             {"role": "tool", "tool_call_id": "a", "content": "real test result"}]
+    messages = instructions + old + [marker] + calls
+    shaped = fresh_packet_context(messages, "server-marker")
+    assert shaped == instructions + [marker] + calls
+    assert messages == instructions + old + [marker] + calls
+    assert fresh_packet_context(messages, "missing") == messages
+    assert marker["metadata"]["trusted"] is False

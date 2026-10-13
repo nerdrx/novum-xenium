@@ -2718,6 +2718,7 @@ def _build_system_prompt(
     workspace: Optional[str] = None,
     coding_grounding=None,
     skill_view_available: bool = True,
+    compact_coding_context: bool = False,
 ) -> List[Dict]:
     """Build agent system prompt, inject MCP/document context, merge consecutive system msgs."""
     global _cached_base_prompt, _cached_base_prompt_key
@@ -3203,6 +3204,11 @@ def _build_system_prompt(
                 # Also include the skill INDEX (one-line-per-skill catalogue
                 # from _build_base_prompt) — its name + description fields
                 # are equally user-editable.
+                if compact_coding_context:
+                    _skill_index_block = (
+                        "Other procedures are available on demand through manage_skills action=list. "
+                        "Load only a procedure needed for the current coding slice."
+                    )
                 if relevant_skills or _skill_index_block:
                     _skills_text = "\n".join(lines)
                     if _skill_index_block:
@@ -4520,9 +4526,10 @@ async def stream_agent_loop(
         (_retrieval_query + "\n" + _last_user) if _use_coding_tools(_retrieval_query, workspace) else "",
         disabled_tools=disabled_tools, plan_mode=plan_mode, guide_mode=guide_only,
     )
-    from src.coding_work_packet import CodingWorkTracker
+    from src.coding_work_packet import CodingWorkTracker, fresh_packet_context
     _coding_work = CodingWorkTracker()
     _coding_work_nudges = 0
+    _coding_packet_boundary = None
     from src.milestone_checkpoint import MilestoneCheckpoint
     _milestone_checkpoint = MilestoneCheckpoint(bool(
         _coding_grounding.required and workspace and owner and session_id
@@ -5749,7 +5756,7 @@ async def stream_agent_loop(
             except (OSError, RuntimeError, ValueError):
                 _workspace_orientation = ""
         compaction_state: Dict = {}
-        compacted_source = list(source_messages)
+        compacted_source = fresh_packet_context(source_messages, _coding_packet_boundary)
         was_compacted = False
         if defer_context_shaping or fallbacks:
             compacted_source, _candidate_context, was_compacted = await maybe_compact(
@@ -5788,6 +5795,7 @@ async def stream_agent_loop(
             compact=is_api or is_native_ollama or is_ollama_compat,
             owner=owner,
             suppress_local_context=guide_only,
+            compact_coding_context=_coding_work.state is not None,
             suppress_skills=_low_signal_turn,
             active_email=active_email,
             workspace=workspace,
@@ -6429,9 +6437,13 @@ async def stream_agent_loop(
         if _coding_work.observe(approved.tool_name, approved.content, approved_result):
             packet_event = _coding_work.event(0)
             yield f'data: {json.dumps(packet_event)}\n\n'
-            messages.append(untrusted_context_message(
+            packet_message = untrusted_context_message(
                 "current coding work packet", json.dumps(packet_event), arm_tool_gate=False,
-            ))
+            )
+            if _coding_work.state.stage == "reproduce":
+                _coding_packet_boundary = uuid.uuid4().hex
+                packet_message["_coding_packet_boundary"] = _coding_packet_boundary
+            messages.append(packet_message)
 
         if tool_result_is_successful(approved_result):
             for doc_event in _document_stream_events(approved_block):
@@ -6716,11 +6728,11 @@ async def stream_agent_loop(
         async def _candidate_request(index, candidate_url, candidate_model, candidate_headers):
             nonlocal _last_route_request_messages, _last_route_context_length
             nonlocal _last_context_inspection
-            if index == 0 and round_num == 1:
+            if index == 0 and round_num == 1 and not _coding_packet_boundary:
                 state = _active_route_state
             else:
                 candidate_source_messages = (
-                    _initial_route_source_messages if round_num == 1 else messages
+                    _initial_route_source_messages if round_num == 1 and not _coding_packet_boundary else messages
                 )
                 state = await _build_route_request_state(
                     candidate_url,
@@ -8074,9 +8086,13 @@ async def stream_agent_loop(
             if _coding_work.observe(block.tool_type, block.content, result):
                 packet_event = _coding_work.event(round_num)
                 yield f'data: {json.dumps(packet_event)}\n\n'
-                messages.append(untrusted_context_message(
+                packet_message = untrusted_context_message(
                     "current coding work packet", json.dumps(packet_event), arm_tool_gate=False,
-                ))
+                )
+                if _coding_work.state.stage == "reproduce":
+                    _coding_packet_boundary = uuid.uuid4().hex
+                    packet_message["_coding_packet_boundary"] = _coding_packet_boundary
+                messages.append(packet_message)
             run_security.observe_tool_result(block.tool_type, result, block.content)
             if (
                 hold_round_text

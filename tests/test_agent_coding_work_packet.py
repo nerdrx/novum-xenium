@@ -96,6 +96,9 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0):
         if turn <= len(actions):
             tool, args = actions[turn - 1]
             request = await kwargs["candidate_request_factory"](0, *candidates[0])
+            sent = json.dumps(request)
+            assert "obsolete implementation chatter" not in sent
+            assert "Preserve keyboard support" in sent
             requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
             call = {"id": f"packet-{turn}", "name": tool, "arguments": json.dumps(args)}
             yield "data: " + json.dumps({"type": "tool_calls", "calls": [call]}) + "\n\n"
@@ -106,7 +109,9 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0):
     monkeypatch.setattr(al, "stream_llm_with_fallback", stream)
     chunks = _collect(al.stream_agent_loop(
         "http://x/v1", "gpt-4o",
-        [{"role": "user", "content": "Fix the auth refresh bug in this workspace and run tests"}],
+        [{"role": "user", "content": "Preserve keyboard support"},
+         {"role": "assistant", "content": "obsolete implementation chatter"},
+         {"role": "user", "content": "Fix the auth refresh bug in this workspace and run tests"}],
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
         relevant_tools={"todowrite", "bash", "write_file"}, max_rounds=10,

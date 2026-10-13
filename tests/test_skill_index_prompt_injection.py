@@ -412,3 +412,16 @@ def test_skill_prompt_index_is_bounded_and_searchable():
     assert "skill-0" in text
     assert "skill-99" not in text
     assert format_skill_index([]) == ""
+
+
+def test_packet_context_discloses_skills_on_demand(tmp_path, monkeypatch):
+    data_dir = _seed_index_skill(tmp_path)
+    _patch_prefs(monkeypatch, data_dir)
+    from src.agent_loop import _build_system_prompt
+    out, _ = _build_system_prompt(
+        [{"role": "user", "content": "Fix a Python parser"}], "test-model", None, None,
+        compact_coding_context=True,
+    )
+    text = "\n".join(str(message.get("content", "")) for message in out)
+    assert MALICIOUS_INDEX_DESC not in text
+    assert "manage_skills action=list" in text

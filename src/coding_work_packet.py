@@ -263,3 +263,32 @@ class CodingWorkTracker:
             "test_status": "passed" if self.state.stage == "done" else "not_verified",
             "review_status": "not_reviewed",
         }
+
+
+
+def fresh_packet_context(messages, boundary):
+    """Shape model input only; never mutate or delete saved conversation history.
+
+    Keep every human instruction and trusted system message before the live
+    boundary. Keep the whole suffix so native tool calls/results stay paired.
+    The boundary is an opaque server-generated marker, never packet content.
+    """
+    if not boundary:
+        return list(messages)
+    index = next((i for i, message in enumerate(messages)
+                  if message.get("_coding_packet_boundary") == boundary), None)
+    if index is None:
+        return list(messages)  # Compaction must not invent a new boundary.
+    kept = []
+    for message in messages[:index]:
+        metadata = message.get("metadata") or {}
+        if metadata.get("trusted") is False:
+            continue
+        if message.get("role") == "system":
+            kept.append(message)
+        elif message.get("role") == "user" and not message.get("_agent_injected"):
+            content = message.get("content")
+            if isinstance(content, str) and content.startswith("[Tool execution results]"):
+                continue
+            kept.append(message)
+    return kept + list(messages[index:])

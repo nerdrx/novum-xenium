@@ -9841,6 +9841,36 @@ body.fullwidth-chat .chat-history {
 .agent-thread-node + .agent-thread-node {
   margin-top: 2px;
 }
+.coding-work-packet-status {
+  margin: 6px 28px 10px;
+  padding: 9px 12px;
+  max-width: min(620px, calc(100% - 56px));
+  border: 1px solid color-mix(in srgb, var(--accent, #c08a3e) 28%, transparent);
+  border-left: 3px solid var(--accent, #c08a3e);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg, #171717) 90%, var(--accent, #c08a3e));
+  color: var(--fg, #eee);
+  font-size: 0.85rem;
+}
+.coding-work-packet-title {
+  display: block;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.coding-work-packet-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  color: var(--muted, #aaa);
+}
+.coding-work-packet-row {
+  display: inline-flex;
+  gap: 5px;
+}
+.coding-work-packet-row strong {
+  color: var(--fg, #eee);
+  font-weight: 600;
+}
 /* Supervisor ladder cards — same chrome as tool cards but tinted so the
    user can tell at a glance "this is the agent recovering" vs "this is
    the agent doing work". Stop rung gets the red accent. */

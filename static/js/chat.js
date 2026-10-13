@@ -39,6 +39,7 @@ import { createTerminalStreamError, isRecoverableStreamError, isUnsupportedToolC
 import { loadPanel } from './panels.js';
 import { appendSubagentCard } from './subagentCard.js';
 import { updateBrowserPreview } from './browserPreview.js';
+import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
 
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -3076,7 +3077,7 @@ import { updateBrowserPreview } from './browserPreview.js';
                 if (spinner && spinner.element) spinner.destroy();
                 break;
               }
-              if (json.delta || json.type === 'agent_prep' || json.type === 'tool_approval_resolved' || json.type === 'generated_image' || json.type === 'tool_start' || json.type === 'tool_output' || json.type === 'tool_progress' || json.type === 'agent_step' || json.type === 'loop_breaker_triggered' || json.type === 'intent_nudge_exhausted' || json.type === 'doc_stream_open' || json.type === 'doc_stream_delta' || json.type === 'research_progress') {
+              if (json.delta || json.type === 'agent_prep' || json.type === 'tool_approval_resolved' || json.type === 'generated_image' || json.type === 'tool_start' || json.type === 'tool_output' || json.type === 'tool_progress' || json.type === 'agent_step' || json.type === 'coding_work_packet' || json.type === 'loop_breaker_triggered' || json.type === 'intent_nudge_exhausted' || json.type === 'doc_stream_open' || json.type === 'doc_stream_delta' || json.type === 'research_progress') {
                 clearResponseTimeout();
                 clearProcessingProbe();
                 clearFirstTokenWaitTimers();
@@ -3091,6 +3092,10 @@ import { updateBrowserPreview } from './browserPreview.js';
                   _cancelThinkingTimer();
                   _replaceThinkingSpinner('Preparing agent');
                 }
+                continue;
+              }
+              if (json.type === 'coding_work_packet') {
+                if (!_isBg) renderCodingWorkPacketStatus(json, holder);
                 continue;
               }
               if (json.type === 'tool_approval_resolved') {
@@ -5461,6 +5466,11 @@ import { updateBrowserPreview } from './browserPreview.js';
                 },
               );
             }
+          } else if (json.type === 'coding_work_packet') {
+            // This run-scoped card replays while the detached stream is live;
+            // packet evidence is not part of persisted chat history.
+            rich = true;
+            renderCodingWorkPacketStatus(json, holder);
           } else if (json.type === 'agent_terminal' || json.type === 'chat_terminal') {
             // The server has already persisted canonical partial content plus
             // a sanitized failure note and actual route provenance.  Do not

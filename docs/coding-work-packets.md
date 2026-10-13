@@ -22,5 +22,13 @@ runs independently when enabled.
 
 Evidence is currently local to one agent run. Checklist storage deliberately
 does not persist executable commands or restore prior test passes. The packet
-mechanism is not yet a fresh-context milestone scheduler, and its events still
-need a dedicated user-interface view. Those remain implementation work.
+mechanism starts a fresh model context at each accepted packet: it retains human
+instructions and trusted system constraints, drops earlier assistant/tool chatter,
+and preserves complete new tool-call/result pairs. Saved conversation history is
+unchanged. Compacted-away boundaries fail open to the original context rather
+than guessing which history to discard. Relevant skill metadata remains available;
+the full skill catalog is replaced by on-demand discovery in packet context.
+
+A run-scoped status card shows the objective, stage, test status, and review status.
+Reconnect replay can restore this card; saved history does not yet persist it.
+Automatic milestone scheduling and cross-run packet continuation remain work.

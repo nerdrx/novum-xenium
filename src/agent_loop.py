@@ -7636,6 +7636,18 @@ async def stream_agent_loop(
         if _ody_qwen_finetune_model and not tool_blocks and cleaned_round and not hold_round_text:
             yield f'data: {json.dumps({"delta": cleaned_round})}\n\n'
 
+        # A prose-only finish cannot replace the registered acceptance check.
+        # Schedule it once through the ordinary dispatcher, including security,
+        # approvals and budgets; never synthesize a successful result.
+        if (not tool_blocks and not _force_answer and _coding_work.enabled
+                and _coding_work_nudges == 0 and _coding_work.state
+                and _coding_work.state.stage == "verify"
+                and _coding_work.state.acceptance_result is None
+                and any(schema.get("function", {}).get("name") == "run_coding_check"
+                        for schema in all_tool_schemas or [])):
+            _coding_work_nudges += 1
+            tool_blocks = [ToolBlock("run_coding_check", "{}")]
+
         if not tool_blocks:
             if _coding_work.pending:
                 if _coding_work_nudges >= 2 or _force_answer:

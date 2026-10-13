@@ -35,7 +35,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 pause_after_acceptance=False, teacher_event=None, checked_workflow=False,
                 attempt_shell_edit=False, registered_checks=False, disabled_bash=False,
                 malformed_check=False, no_packet_start=False,
-                stall_before_packet=False, fail_stall_reads=False):
+                stall_before_packet=False, fail_stall_reads=False, omit_acceptance=False,
+                acceptance_blocked=False):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -94,6 +95,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         actions[-1] = ("run_coding_check", {})
     if malformed_check:
         actions[2] = ("run_coding_check", {"command": "echo injected"})
+    if omit_acceptance:
+        actions.pop()
     requested = []
     executed = []
     initial_todowrite = json.dumps(actions[0][1])
@@ -125,6 +128,9 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
             if command == _packet()["reproduce_command"]:
                 return block.tool_type, {"exit_code": 1, "output": "expected baseline failure"}
             assert command == _packet()["acceptance_command"]
+            if acceptance_blocked:
+                return block.tool_type, {"exit_code": 1, "blocked": True,
+                                         "error": "Check is not authorized"}
             return block.tool_type, {"exit_code": acceptance_exit, "output": "acceptance result"}
         if block.tool_type == "write_file":
             path = block.content.split("\n", 1)[0]
@@ -230,6 +236,23 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
     assert {"read_file", "grep", "glob", "ls"} <= reproduce_tools
     assert not ({"bash", "python", "write_file", "edit_file", "apply_patch"}
                 & reproduce_tools)
+
+
+@pytest.mark.parametrize("exit_code,blocked", [(0, False), (1, False), (1, True)])
+def test_prose_finish_runs_registered_acceptance_without_inventing_evidence(monkeypatch, tmp_path,
+                                                                         exit_code, blocked):
+    events, executed, _ = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, omit_acceptance=True,
+        acceptance_exit=exit_code, acceptance_blocked=blocked,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+    )
+    checks = [command for tool, command in executed if tool == "bash"]
+    assert checks == [_packet()["reproduce_command"], _packet()["acceptance_command"]]
+    packets = [event for event in events if event.get("type") == "coding_work_packet"]
+    assert (packets[-1]["stage"] == "done") == (exit_code == 0 and not blocked)
+    if exit_code or blocked:
+        assert not any(event.get("type") == "agent_terminal" and event.get("status") == "completed"
+                       for event in events)
 
 
 def test_registered_checks_use_packet_commands_through_bash(monkeypatch, tmp_path):
@@ -391,7 +414,9 @@ def test_failed_acceptance_cannot_mark_packet_done_or_finish_as_verified(monkeyp
 
 
 @pytest.mark.parametrize("valid_reproduction", [True, False])
-def test_exactly_approved_write_uses_restored_reproduction_evidence(monkeypatch, tmp_path, valid_reproduction):
+@pytest.mark.parametrize("disabled_bash", [True, False])
+def test_exactly_approved_write_uses_restored_reproduction_evidence(monkeypatch, tmp_path, valid_reproduction,
+                                                                  disabled_bash):
     from src.coding_work_packet import CodingWorkTracker
 
     _patch_common(monkeypatch)
@@ -430,6 +455,8 @@ def test_exactly_approved_write_uses_restored_reproduction_evidence(monkeypatch,
     executed = []
     async def execute(block, *args, **kwargs):
         executed.append(block.tool_type)
+        if block.tool_type == "bash":
+            assert block.content == _packet()["acceptance_command"]
         return block.tool_type, {"exit_code": 0, "output": "saved"}
 
     monkeypatch.setattr(al, "execute_tool_block", execute)
@@ -445,11 +472,15 @@ def test_exactly_approved_write_uses_restored_reproduction_evidence(monkeypatch,
         workspace=str(tmp_path), owner="alice", session_id="approved-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="approved-resume",
         coding_work_checkpoint=checkpoint, max_rounds=2,
+        disabled_tools={"bash"} if disabled_bash else set(),
     ))
     events = _types(chunks)
     packets = [event for event in events if event.get("type") == "coding_work_packet"]
     assert packets[0]["stage"] == ("edit" if valid_reproduction else "reproduce")
-    assert executed == (["write_file"] if valid_reproduction else [])
+    expected = ["write_file"] if valid_reproduction else []
+    if valid_reproduction and not disabled_bash:
+        expected.append("bash")
+    assert executed == expected
     if not valid_reproduction:
         assert any(event.get("policy") == "coding_work_packet" for event in events)
 

@@ -212,7 +212,10 @@ def test_failed_reads_do_not_activate_packet_stall_recovery(monkeypatch, tmp_pat
 
 
 def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monkeypatch, tmp_path):
-    events, executed, requested = _run_packet(monkeypatch, tmp_path)
+    events, executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+    )
 
     packet_events = [event for event in events if event.get("type") == "coding_work_packet"]
     assert [event["stage"] for event in packet_events] == ["reproduce", "edit", "verify", "done"], (packet_events, executed)
@@ -222,7 +225,10 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
     # model's repeated checklist call; the duplicate packet must not reset it.
     assert [tool for tool, _content in executed] == ["todowrite", "todowrite", "bash", "write_file", "bash"]
     assert "Everything is complete." in " ".join(event.get("delta", "") for event in events)
-    assert "write_file" in requested[1]
+    reproduce_tools = requested[1]
+    assert {"read_file", "grep", "glob", "ls"} <= reproduce_tools
+    assert not ({"bash", "python", "write_file", "edit_file", "apply_patch"}
+                & reproduce_tools)
 
 
 def test_registered_checks_use_packet_commands_through_bash(monkeypatch, tmp_path):
@@ -236,6 +242,8 @@ def test_registered_checks_use_packet_commands_through_bash(monkeypatch, tmp_pat
     assert executed[2][1] == _packet()["reproduce_command"]
     assert executed[-1][1] == _packet()["acceptance_command"]
     assert any("run_coding_check" in tools for tools in requested)
+    assert "bash" not in requested[1]
+    assert "run_coding_check" in requested[1]
     assert any(event.get("stage") == "done" for event in events)
 
 

@@ -6058,6 +6058,11 @@ async def stream_agent_loop(
                 "bash", "python", "write_file", "edit_file", "apply_patch",
             }):
                 continue
+            if (_coding_work.state and _coding_work.state.stage == "reproduce"
+                    and tool_name in {
+                        "bash", "python", "write_file", "edit_file", "apply_patch",
+                    }):
+                continue
             if (_coding_work.state and _coding_work.state.stage == "edit"
                     and tool_name in {"bash", "python"}):
                 continue

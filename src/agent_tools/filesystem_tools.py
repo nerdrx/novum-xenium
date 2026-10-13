@@ -19,6 +19,7 @@ _CODENAV_SKIP_DIRS = frozenset({
     ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
     ".next", ".cache", "site-packages", ".idea", ".tox",
 })
+_CODENAV_EXPLICIT_OUTPUT_DIRS = frozenset({"dist", "build", ".next"})
 _CODENAV_MAX_HITS = 200
 _CODENAV_MAX_LINE = 400
 _GREP_TIMEOUT_SECONDS = 20
@@ -1002,6 +1003,12 @@ class GlobTool:
                 # e.g. "foo.py" still matches at any depth (like rglob).
             # Compile glob to regex: * stays within one segment, **/ spans dirs.
             regex = _glob_to_regex(norm_pat)
+            # Generated output stays pruned from broad scans, but an explicit
+            # root-level output prefix is a deliberate, bounded request for it.
+            output_prefix, separator, _ = norm_pat.partition("/")
+            scan_root_output = (
+                bool(separator) and output_prefix in _CODENAV_EXPLICIT_OUTPUT_DIRS
+            )
             matched = []
             cap = _CODENAV_MAX_HITS * 5
             try:
@@ -1015,7 +1022,9 @@ class GlobTool:
                     # never enumerates the keys/tokens inside them.
                     dns[:] = [
                         d for d in dns
-                        if d not in _CODENAV_SKIP_DIRS
+                        if (d not in _CODENAV_SKIP_DIRS
+                            or (scan_root_output and dp == base
+                                and d == output_prefix))
                         and d not in _SENSITIVE_BASENAMES
                         and _can_traverse_tool_path(os.path.realpath(os.path.join(dp, d)))
                     ]

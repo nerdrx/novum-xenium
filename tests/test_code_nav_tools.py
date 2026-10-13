@@ -176,6 +176,40 @@ def test_glob_double_star_matches_deep(repo):
     assert "c.py" in r["output"]
 
 
+def test_glob_explicit_generated_prefix_searches_output_safely(repo):
+    generated_files = {
+        "dist": os.path.join(repo, "dist", "main", "index.js"),
+        "build": os.path.join(repo, "build", "app.js"),
+        ".next": os.path.join(repo, ".next", "server.js"),
+    }
+    for path in generated_files.values():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("generated output\n")
+    os.makedirs(os.path.join(repo, "dist", "node_modules"))
+    with open(os.path.join(repo, "dist", "node_modules", "ignored.js"), "w") as f:
+        f.write("dependency\n")
+    os.makedirs(os.path.join(repo, "dist", ".ssh"))
+    with open(os.path.join(repo, "dist", ".ssh", "id_rsa"), "w") as f:
+        f.write("secret\n")
+    with open(os.path.join(repo, "dist", ".env"), "w") as f:
+        f.write("secret\n")
+
+    broad = _run("glob", f'{{"pattern": "**/*.js", "path": "{repo}"}}')
+    for generated in generated_files.values():
+        assert generated not in broad["output"]
+
+    explicit_outputs = {}
+    for output_dir, generated in generated_files.items():
+        explicit = _run("glob", f'{{"pattern": "{output_dir}/**/*", "path": "{repo}"}}')
+        assert explicit["exit_code"] == 0
+        assert generated in explicit["output"]
+        explicit_outputs[output_dir] = explicit["output"]
+    assert "ignored.js" not in explicit_outputs["dist"]
+    assert ".ssh" not in explicit_outputs["dist"]
+    assert ".env" not in explicit_outputs["dist"]
+
+
 # ── ls ────────────────────────────────────────────────────────────────────
 
 def test_ls_lists_entries(repo):

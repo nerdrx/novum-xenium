@@ -141,6 +141,193 @@ def test_large_result_that_exceeds_remaining_input_budget_is_archived(monkeypatc
     assert any("Recovered exact detail." in event for event in events)
 
 
+def test_source_archive_preserves_literal_newlines_and_quotes_for_exact_chunks(monkeypatch, tmp_path):
+    import src.tool_result_store as store
+
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
+    monkeypatch.setattr(loop, "_build_system_prompt", lambda messages, *args, **kwargs: (list(messages), []))
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *args, **kwargs: 20000)
+    source = "start\n" + ("padding words here. " * 65) + 'const exact = "quoted";\nnextLine();\n' + ("end words. " * 650)
+    exact = 'const exact = "quoted";\nnextLine();'
+    requests = []
+
+    async def execute(block, **kwargs):
+        if block.tool_type == "context_search":
+            return "search", await ContextSearchTool().execute(block.content, kwargs)
+        return "read", {"output": source, "exit_code": 0}
+
+    async def stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        requests.append(request["messages"])
+        if len(requests) == 1:
+            calls = [{"id": "read", "name": "read_file", "arguments": '{"path":"app.js"}'}]
+        elif len(requests) == 2:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            assert "stored as" in tool["content"]
+            assert "const exact" not in tool["content"]
+            result_id = re.search(r"stored as ([\w-]+)", tool["content"]).group(1)
+            calls = [{"id": "find", "name": "context_search", "arguments": json.dumps({"query": "const exact", "result_id": result_id})}]
+        elif len(requests) == 3:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            chunk = re.search(r"\[(\S+) \| read_file \| chunk (\d+)\]", tool["content"])
+            assert chunk, tool["content"]
+            calls = [{"id": "chunk", "name": "context_search", "arguments": json.dumps({"query": "", "result_id": chunk.group(1), "offset": int(chunk.group(2))})}]
+        else:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            assert exact in tool["content"]
+            assert r'\\n' not in tool["content"]
+            assert tool["metadata"]["trusted"] is False
+            yield 'data: {"delta":"Recovered exact source."}\n\n'
+            yield "data: [DONE]\n\n"
+            return
+        yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(loop, "execute_tool_block", execute)
+    monkeypatch.setattr(loop, "stream_llm_with_fallback", stream)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Inspect the source."}],
+            owner="alice", session_id="chat-source-exact", relevant_tools={"read_file"},
+            max_tokens=512, max_rounds=4, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 4
+
+
+def test_subprocess_failure_archive_keeps_error_and_both_streams(monkeypatch, tmp_path):
+    import src.tool_result_store as store
+
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: 1400 if key == "agent_input_token_budget" else default)
+    monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
+    monkeypatch.setattr(loop, "_build_system_prompt", lambda messages, *args, **kwargs: (list(messages), []))
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *args, **kwargs: 20000)
+    failure = {
+        "error": "python: timed out after 30s — process killed",
+        "exit_code": 124,
+        "stdout": "partial stdout\n" + ("stdout padding. " * 250),
+        "stderr": "traceback line\n" + ("stderr padding. " * 250),
+    }
+    requests = []
+    result_id_holder = []
+
+    async def execute(block, **kwargs):
+        if block.tool_type == "context_search":
+            return "search", await ContextSearchTool().execute(block.content, kwargs)
+        return "python", failure
+
+    async def stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        requests.append(request["messages"])
+        if len(requests) == 1:
+            calls = [{"id": "python", "name": "python", "arguments": '{"code":"print(1)"}'}]
+        elif len(requests) == 2:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            assert "stored as" in tool["content"]
+            result_id = re.search(r"stored as ([\w-]+)", tool["content"]).group(1)
+            result_id_holder.append(result_id)
+            calls = [{"id": "search-error", "name": "context_search", "arguments": json.dumps({"query": "timed out", "result_id": result_id})}]
+        elif len(requests) == 3:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            chunk = re.search(r"\[(\S+) \| python \| chunk (\d+)\]", tool["content"])
+            assert chunk
+            calls = [{"id": "read-error", "name": "context_search", "arguments": json.dumps({"query": "", "result_id": chunk.group(1), "offset": int(chunk.group(2))})}]
+        elif len(requests) == 4:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            for evidence in (failure["error"], "[stdout]", "partial stdout", "exit_code=124"):
+                assert evidence in tool["content"]
+            calls = [{"id": "search-stderr", "name": "context_search", "arguments": json.dumps({"query": "traceback", "result_id": result_id_holder[0]})}]
+        elif len(requests) == 5:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            chunk = re.search(r"\[(\S+) \| python \| chunk (\d+)\]", tool["content"])
+            assert chunk
+            calls = [{"id": "read-stderr", "name": "context_search", "arguments": json.dumps({"query": "", "result_id": chunk.group(1), "offset": int(chunk.group(2))})}]
+        else:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            for evidence in ("[stderr]", "traceback line"):
+                assert evidence in tool["content"]
+            yield 'data: {"delta":"Failure evidence retained."}\n\n'
+            yield "data: [DONE]\n\n"
+            return
+        yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(loop, "execute_tool_block", execute)
+    monkeypatch.setattr(loop, "stream_llm_with_fallback", stream)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Inspect the timed out run."}],
+            owner="alice", session_id="chat-python-failure", relevant_tools={"python"},
+            max_tokens=512, max_rounds=6, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 6
+
+
+@pytest.mark.parametrize("low_budget", [False, True])
+def test_skill_view_keeps_procedure_middle_when_fits_and_archives_when_budget_low(monkeypatch, tmp_path, low_budget):
+    import src.tool_result_store as store
+
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: (3000 if low_budget else default) if key == "agent_input_token_budget" else default)
+    monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
+    monkeypatch.setattr(loop, "_build_system_prompt", lambda messages, *args, **kwargs: (list(messages), []))
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *args, **kwargs: 20000)
+    middle = "MIDDLE_PROCEDURE_STEP_MUST_SURVIVE"
+    skill = "# Procedure\n" + ("opening guidance. " * 280) + middle + "\n" + ("closing guidance. " * 280)
+    requests = []
+
+    async def execute(block, **kwargs):
+        return "view", {"results": skill}
+
+    async def stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        requests.append(request["messages"])
+        if len(requests) == 1:
+            calls = [{"id": "skill", "name": "manage_skills", "arguments": '{"action":"view","name":"ui-design"}'}]
+        else:
+            tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            if low_budget:
+                assert "stored as" in tool["content"]
+                assert middle not in tool["content"]
+                assert tool["metadata"]["trusted"] is False
+            else:
+                assert middle in tool["content"]
+                assert "stored as" not in tool["content"]
+                assert tool["metadata"]["trusted"] is False
+            yield 'data: {"delta":"Procedure received."}\n\n'
+            yield "data: [DONE]\n\n"
+            return
+        yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(loop, "execute_tool_block", execute)
+    monkeypatch.setattr(loop, "stream_llm_with_fallback", stream)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Read the UI design procedure."}],
+            owner="alice", session_id=f"chat-skill-{low_budget}", relevant_tools={"manage_skills"},
+            max_tokens=512, max_rounds=2, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 2
+
+
 def test_same_round_tool_results_share_remaining_archive_budget(monkeypatch, tmp_path):
     import src.tool_result_store as store
 

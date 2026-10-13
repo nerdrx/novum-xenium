@@ -5643,6 +5643,51 @@ async def stream_agent_loop(
             return _account_preview(formatted, exchange_tokens)
         # Keep bulk data searchable outside the model window. Preserve the
         # original result for integrity checks and the UI bubble.
+        command_args = event.get("command")
+        if isinstance(command_args, str):
+            try:
+                command_args = json.loads(command_args)
+            except (TypeError, ValueError):
+                command_args = {}
+        if not isinstance(command_args, dict):
+            command_args = {}
+        selected_skill_view = (
+            tool_name == "manage_skills"
+            and str(command_args.get("action", "")).strip().lower() == "view"
+            and isinstance(result.get("results"), str)
+        )
+
+        # Archive source-bearing text as text, not JSON: escaping literal
+        # newlines makes exact source chunks hard to read and search.
+        def _plain_source_archive():
+            if selected_skill_view:
+                return result["results"]
+            if tool_name in {"read_file", "bash", "python"}:
+                stdout, stderr = result.get("stdout"), result.get("stderr")
+                if isinstance(stdout, str) or isinstance(stderr, str):
+                    pieces = [f"[exit_code={result.get('exit_code', 'unknown')}]\n"]
+                    error = result.get("error")
+                    if isinstance(error, str) and error:
+                        pieces.extend(("[error]\n", error, "\n"))
+                    if isinstance(stdout, str):
+                        pieces.extend(("[stdout]\n", stdout))
+                    if isinstance(stderr, str):
+                        pieces.extend(("\n[stderr]\n", stderr))
+                    return "".join(pieces)
+                output = result.get("output")
+                if isinstance(output, str):
+                    status = f"[exit_code={result.get('exit_code', 'unknown')}]\n"
+                    metadata = result.get("read_metadata")
+                    if isinstance(metadata, dict):
+                        fields = "; ".join(
+                            f"{key}={metadata[key]}" for key in
+                            ("start_line", "reached_eof", "next_offset") if key in metadata
+                        )
+                        if fields:
+                            status = status.rstrip("\n") + f"; {fields}\n"
+                    return status + output
+            return None
+
         raw_context = json.dumps(
             {key: value for key, value in result.items()
              if key not in {"images", "screenshot", "image_base64", "image_data", "browser_preview"}},
@@ -5652,6 +5697,10 @@ async def stream_agent_loop(
             # JSON-escaped newlines join their 'n' to the next word in FTS.
             # Archive page text verbatim so section names remain searchable.
             raw_context = result["output"]
+        else:
+            plain_source = _plain_source_archive()
+            if plain_source is not None:
+                raw_context = plain_source
         # The fixed size guard avoids stuffing clearly bulk output into normal
         # turns. Small explicit input budgets need an earlier guard: the
         # formatted result can otherwise be truncated by the next request's
@@ -5672,6 +5721,8 @@ async def stream_agent_loop(
             remaining_tokens is not None
             and estimate_tokens([{"role": "tool", "content": formatted}]) > remaining_tokens
         )
+        if selected_skill_view and len(formatted) <= 12000 and not exceeds_remaining_budget:
+            return _account_preview(formatted, exchange_tokens)
         if len(raw_context) <= 6000 and not exceeds_remaining_budget:
             return _account_preview(formatted, exchange_tokens)
         try:

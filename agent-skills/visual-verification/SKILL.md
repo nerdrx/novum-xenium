@@ -1,7 +1,7 @@
 ---
 name: visual-verification
 description: Verify GUI, UI, frontend, website, CSS, and theme changes in a real rendered interface, including behavior and accessibility.
-version: 1.0.3
+version: 1.0.4
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -27,6 +27,16 @@ After implementing or changing a graphical interface, and before claiming it is 
 - Turning syntax or file-existence checks into a claim of functional correctness.
 - Assuming a screenshot proves keyboard access, cancellation, or responsive layout.
 - Calling a disabled feature complete because instructions for enabling it were written.
+
+## Native Launch Evidence
+
+Read the manifest before selecting a startup command. An Electron executable is a native binary, not a JavaScript file to pass to `node`; use the installed project-local executable or its actual npm script. Check a headless display is available before launch.
+
+Keep container testing separate from production app configuration. Do not weaken sandboxing, context isolation, Node integration, or enable webviews to work around a test launch failure. Electron documents `--no-sandbox` as testing-only: if an isolated container requires it, pass it only to that test process, with a fresh profile and private display. Do not add it to shipped source or startup defaults, and do not change system ownership or setuid permissions just to run the test.
+
+Record the real launch stderr and verify the owned process has a rendered window or a working automation target. A printed `App started`, an exit code hidden by `|| true`, or an unsuccessful background launch is not evidence. Keep failure output intact, consult the matching framework documentation, and retest the same path after a repair. Preserve existing IPC handlers when changing one native operation; run the previously working checks again after replacing a main-process file.
+
+Reference: [Electron command-line switches](https://www.electronjs.org/docs/latest/api/command-line-switches).
 
 ## Verification
 - No blocking parse, page, startup, or request errors remain in the tested flow.

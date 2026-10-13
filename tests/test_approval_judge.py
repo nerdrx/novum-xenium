@@ -95,6 +95,8 @@ def test_judge_request_retains_latest_cancellation_and_bounds_history():
     ('sure allow', "ask"), ('{"decision":"allow"}', "ask"),
     ('{"decision":"allow","reason":"yes","tools":["bash"]}', "ask"),
     ('{"decision":true,"reason":"yes"}', "ask"),
+    ('{"decision":[],"reason":"yes"}', "ask"),
+    ('{"decision":{},"reason":"yes"}', "ask"),
     ('{"decision":"allow","reason":""}', "ask"),
 ])
 async def test_strict_verdict_and_tool_free_current_route(monkeypatch, raw, decision):
@@ -114,6 +116,16 @@ async def test_strict_verdict_and_tool_free_current_route(monkeypatch, raw, deci
     assert "tools" not in call and len(call["messages"]) == 2
     assert json.loads(call["messages"][1]["content"]) == {
         "request": "find coding docs", "action": {"kind": "public_read", "url": "https://docs.example/guide"}}
+
+
+def test_verdict_parser_fails_closed_on_recursion_error(monkeypatch):
+    from src import approval_judge
+
+    def deeply_nested(_raw):
+        raise RecursionError("nested response")
+
+    monkeypatch.setattr(approval_judge.json, "loads", deeply_nested)
+    assert approval_judge._parse_verdict("{}") == (None, "malformed_json")
 
 
 @pytest.mark.asyncio
@@ -177,15 +189,85 @@ async def test_review_without_trusted_request_is_classified_without_call(monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("decision", ["allow", "ask"])
+async def test_length_truncation_retries_once_at_512_and_accepts_strict_verdict(monkeypatch, decision):
+    calls = []
+    async def completion(**kwargs):
+        calls.append(kwargs)
+        diagnostics = kwargs["response_diagnostics"]
+        if len(calls) == 1:
+            diagnostics.update({"finish_reason": "length", "completion_tokens": 128})
+            return '{"decision":"'
+        diagnostics.update({"finish_reason": "stop", "completion_tokens": 92})
+        return json.dumps({"decision": decision, "reason": "Relevant documentation."})
+
+    monkeypatch.setattr("src.llm_core.llm_call_async", completion)
+    result = await review_public_read("https://docs.example/guide", "find docs",
+                                     endpoint_url="http://local.test/v1", model="test", headers=None)
+    assert result["decision"] == decision
+    assert [call["max_tokens"] for call in calls] == [128, 512]
+    assert calls[0]["messages"] == calls[1]["messages"]
+    assert all(call["model"] == "test" and call["max_retries"] == 1 for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_second_length_truncation_still_fails_closed(monkeypatch):
+    calls = []
+    async def completion(**kwargs):
+        calls.append(kwargs)
+        kwargs["response_diagnostics"].update({"finish_reason": "length", "completion_tokens": kwargs["max_tokens"]})
+        return '{"decision":"'
+
+    monkeypatch.setattr("src.llm_core.llm_call_async", completion)
+    result = await review_public_read("https://docs.example/guide", "find docs",
+                                     endpoint_url="http://local.test/v1", model="test", headers=None)
+    assert result["decision"] == "ask"
+    assert [call["max_tokens"] for call in calls] == [128, 512]
+
+
+@pytest.mark.asyncio
+async def test_malformed_nonlength_response_does_not_retry(monkeypatch):
+    calls = []
+    async def completion(**kwargs):
+        calls.append(kwargs)
+        kwargs["response_diagnostics"].update({"finish_reason": "stop", "completion_tokens": 31})
+        return "not json"
+
+    monkeypatch.setattr("src.llm_core.llm_call_async", completion)
+    result = await review_public_read("https://docs.example/guide", "find docs",
+                                     endpoint_url="http://local.test/v1", model="test", headers=None)
+    assert result["decision"] == "ask"
+    assert [call["max_tokens"] for call in calls] == [128]
+
+
+@pytest.mark.asyncio
+async def test_valid_ask_after_length_finish_is_not_retried(monkeypatch):
+    calls = []
+    async def completion(**kwargs):
+        calls.append(kwargs)
+        kwargs["response_diagnostics"].update({"finish_reason": "length", "completion_tokens": 120})
+        return '{"decision":"ask","reason":"Unrelated destination."}'
+
+    monkeypatch.setattr("src.llm_core.llm_call_async", completion)
+    result = await review_public_read("https://docs.example/guide", "find docs",
+                                     endpoint_url="http://local.test/v1", model="test", headers=None)
+    assert result == {"decision": "ask", "reason": "Unrelated destination."}
+    assert [call["max_tokens"] for call in calls] == [128]
+
+
+@pytest.mark.asyncio
 async def test_timeout_falls_back_to_approval(monkeypatch):
     from src import approval_judge
     monkeypatch.setattr(approval_judge, "_TIMEOUT_SECONDS", 0.01)
+    calls = []
     async def hang(**kwargs):
+        calls.append(kwargs)
         await asyncio.sleep(10)
     monkeypatch.setattr("src.llm_core.llm_call_async", hang)
     verdict = await review_public_read("https://docs.example/guide", "find docs",
                                       endpoint_url="http://local.test/v1", model="test", headers=None)
     assert verdict["decision"] == "ask"
+    assert [call["max_tokens"] for call in calls] == [128]
 
 
 @pytest.mark.parametrize("mode,disabled,delegated,verdict,executes,reviews", [

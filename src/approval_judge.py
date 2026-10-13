@@ -214,34 +214,47 @@ async def _review(action, request, *, endpoint_url, model, headers):
         )},
         {"role": "user", "content": json.dumps({"request": request, "action": action})},
     ]
-    diagnostics = {}
-    try:
-        raw = await asyncio.wait_for(llm_call_async(
-            url=endpoint_url, model=model, headers=headers, messages=messages,
-            temperature=0.0, max_tokens=128, timeout=_TIMEOUT_SECONDS, max_retries=1,
-            response_diagnostics=diagnostics,
-        ), timeout=_TIMEOUT_SECONDS)
-        if not isinstance(raw, str) or len(raw) > 1200:
-            _log_review_fallback("response_not_text_or_oversized", diagnostics)
-            return ask
+    for attempt, budget in enumerate((128, 512)):
+        diagnostics = {}
         try:
-            verdict = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            _log_review_fallback("malformed_json", diagnostics)
+            raw = await asyncio.wait_for(llm_call_async(
+                url=endpoint_url, model=model, headers=headers, messages=messages,
+                temperature=0.0, max_tokens=budget, timeout=_TIMEOUT_SECONDS, max_retries=1,
+                response_diagnostics=diagnostics,
+            ), timeout=_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            _log_review_fallback("timeout", diagnostics)
             return ask
-        if (not isinstance(verdict, dict) or set(verdict) != {"decision", "reason"}
-                or verdict["decision"] not in {"allow", "ask"}
-                or not isinstance(verdict["reason"], str)
-                or not 0 < len(verdict["reason"].strip()) <= 240):
-            _log_review_fallback("invalid_verdict_schema", diagnostics)
+        except Exception:
+            _log_review_fallback("provider_or_response_error", diagnostics)
             return ask
-        return {"decision": verdict["decision"], "reason": verdict["reason"].strip()}
-    except asyncio.TimeoutError:
-        _log_review_fallback("timeout", diagnostics)
+
+        verdict, category = _parse_verdict(raw)
+        if verdict is not None:
+            return verdict
+        if attempt == 0 and diagnostics.get("finish_reason") == "length" and category in {
+                "malformed_json", "invalid_verdict_schema"}:
+            logger.info("[approval_judge] retry=length cap_tokens=512")
+            continue
+        _log_review_fallback(category, diagnostics)
         return ask
-    except Exception:
-        _log_review_fallback("provider_or_response_error", diagnostics)
-        return ask
+    return ask
+
+
+def _parse_verdict(raw):
+    if not isinstance(raw, str) or len(raw) > 1200:
+        return None, "response_not_text_or_oversized"
+    try:
+        verdict = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, RecursionError):
+        return None, "malformed_json"
+    if (not isinstance(verdict, dict) or set(verdict) != {"decision", "reason"}
+            or not isinstance(verdict["decision"], str)
+            or verdict["decision"] not in {"allow", "ask"}
+            or not isinstance(verdict["reason"], str)
+            or not 0 < len(verdict["reason"].strip()) <= 240):
+        return None, "invalid_verdict_schema"
+    return {"decision": verdict["decision"], "reason": verdict["reason"].strip()}, None
 
 
 def _log_review_fallback(category, diagnostics):

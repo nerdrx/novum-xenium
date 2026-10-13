@@ -197,7 +197,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "glob",
-            "description": "Find files by glob pattern (recursive), newest first. e.g. '**/*.py'. PREFER this over `bash find/ls` for locating files — confined to the allowed roots.",
+            "description": "Find files by glob pattern (recursive), newest first. Supports *, **, and ? (not brace expansion; call once per pattern). Generated directories such as dist/build are skipped by default; if a no-match result lists skipped directories, set path to one and retry with a pattern relative to it. PREFER this over `bash find/ls` for locating files — confined to the allowed roots.",
             "parameters": {
                 "type": "object",
                 "properties": {

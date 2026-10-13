@@ -975,6 +975,14 @@ class GlobTool:
         pattern = str(args.get("pattern", "")).strip()
         if not pattern:
             return {"error": "glob: pattern is required", "exit_code": 1}
+        if re.search(r"\{[^{}]*,[^{}]*\}", pattern):
+            return {
+                "error": (
+                    "glob: brace expansion is not supported; call once per pattern "
+                    "(for example, **/*.js and **/*.html)"
+                ),
+                "exit_code": 1,
+            }
         try:
             root = _resolve_search_root(str(args.get("path", "")))
         except ValueError as e:
@@ -983,7 +991,7 @@ class GlobTool:
         def _glob():
             base = os.path.abspath(root)
             if not os.path.isdir(base):
-                return None, f"glob: {root}: not a directory"
+                return None, f"glob: {root}: not a directory", []
             rbase = os.path.realpath(base)
             norm_pat = pattern.replace("\\", "/")
             # Fast path: literal pattern (no wildcards) → direct path lookup.
@@ -1008,7 +1016,7 @@ class GlobTool:
                 # otherwise glob would surface secret paths that read_file /
                 # grep already refuse to touch.
                 if inside and os.path.exists(cand) and not _is_denied_tool_path(cand):
-                    return [cand], None
+                    return [cand], None, []
                 # Literal not at exact path — fall through to walk so
                 # e.g. "foo.py" still matches at any depth (like rglob).
             # Compile glob to regex: * stays within one segment, **/ spans dirs.
@@ -1020,6 +1028,7 @@ class GlobTool:
                 bool(separator) and output_prefix in _CODENAV_EXPLICIT_OUTPUT_DIRS
             )
             matched = []
+            skipped_output_dirs = []
             cap = _CODENAV_MAX_HITS * 5
             try:
                 for dp, dns, fns in os.walk(base):
@@ -1030,6 +1039,12 @@ class GlobTool:
                     # descends first then filters — fatal on large node_modules).
                     # Sensitive dirs (.ssh, .gnupg, …) are pruned too so glob
                     # never enumerates the keys/tokens inside them.
+                    for d in dns:
+                        if (d in _CODENAV_EXPLICIT_OUTPUT_DIRS
+                                and not (scan_root_output and dp == base and d == output_prefix)):
+                            relative = os.path.relpath(os.path.join(dp, d), base).replace(os.sep, "/")
+                            if relative not in skipped_output_dirs and len(skipped_output_dirs) < 5:
+                                skipped_output_dirs.append(relative)
                     dns[:] = [
                         d for d in dns
                         if (d not in _CODENAV_SKIP_DIRS
@@ -1054,15 +1069,22 @@ class GlobTool:
                     if len(matched) > cap:
                         break
             except OSError as _e:
-                return None, f"glob: {_e}"
+                return None, f"glob: {_e}", skipped_output_dirs
             matched.sort(key=lambda t: t[0], reverse=True)
-            return [pth for _, pth in matched[:_CODENAV_MAX_HITS]], None
+            return [pth for _, pth in matched[:_CODENAV_MAX_HITS]], None, skipped_output_dirs
 
-        paths, err = await asyncio.to_thread(_glob)
+        paths, err, skipped_output_dirs = await asyncio.to_thread(_glob)
         if err:
             return {"error": err, "exit_code": 1}
         if not paths:
-            return {"output": f"No files matching {pattern!r} under {root}", "exit_code": 0}
+            output = f"No files matching {pattern!r} under {root}"
+            if skipped_output_dirs:
+                output += (
+                    ". Generated directories were skipped: "
+                    + ", ".join(skipped_output_dirs)
+                    + ". To search one, set path to that directory and retry with a pattern relative to it."
+                )
+            return {"output": output, "exit_code": 0}
         out = "\n".join(paths)
         if len(paths) >= _CODENAV_MAX_HITS:
             out += f"\n... [capped at {_CODENAV_MAX_HITS} files]"

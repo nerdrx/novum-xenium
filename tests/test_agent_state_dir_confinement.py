@@ -478,6 +478,42 @@ def test_recursive_glob_and_grep_hide_state_but_keep_readable_descendants(
     assert "settings.json" not in grep_result["output"]
 
 
+def test_glob_reports_generated_directories_skipped_by_default(tmp_path):
+    generated = tmp_path / "nflix" / "dist" / "renderer"
+    generated.mkdir(parents=True)
+    (generated / "renderer.js").write_text("source", encoding="utf-8")
+
+    with current_workspace_at(tmp_path):
+        result = asyncio.run(GlobTool().execute(
+            '{"pattern": "nflix/**/renderer.js", "path": ""}', {}
+        ))
+        retry = asyncio.run(GlobTool().execute(
+            json.dumps({
+                "pattern": "**/renderer.js",
+                "path": str(tmp_path / "nflix" / "dist"),
+            }), {}
+        ))
+
+    assert result["exit_code"] == 0
+    assert "No files matching" in result["output"]
+    assert "nflix/dist" in result["output"]
+    assert "set path to that directory and retry with a pattern relative to it" in result["output"]
+    assert str(generated / "renderer.js") not in result["output"]
+    assert retry["exit_code"] == 0
+    assert str(generated / "renderer.js") in retry["output"]
+
+
+def test_glob_returns_actionable_error_for_unsupported_brace_expansion(tmp_path):
+    with current_workspace_at(tmp_path):
+        result = asyncio.run(GlobTool().execute(
+            '{"pattern": "nflix/**/*.{js,mjs,html}", "path": ""}', {}
+        ))
+
+    assert result["exit_code"] == 1
+    assert "brace expansion is not supported" in result["error"]
+    assert "No files matching" not in result.get("output", "")
+
+
 def test_recursive_glob_and_grep_hide_state_from_extra_root(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir()

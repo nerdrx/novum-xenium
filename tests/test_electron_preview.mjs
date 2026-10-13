@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { ELECTRON_WORKER_SOURCE, resolveWorkspaceProject, runOwnedCommand } from '../scripts/electron_preview.mjs';
+import { ELECTRON_WORKER_SOURCE, ensureOutputIgnore, resolveWorkspaceProject, runOwnedCommand } from '../scripts/electron_preview.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const node = process.execPath;
@@ -39,6 +39,42 @@ test('resolves only the local Electron manifest entry, executable, and test modu
   assert.equal(project.entryPath, path.join(root, 'src/main.js'));
   assert.equal(project.electronPath, path.join(root, 'node_modules/electron/dist/electron'));
   assert.equal(project.testScript, path.join(root, 'smoke.mjs'));
+});
+
+test('preview output is locally ignored without replacing an existing user ignore file', async t => {
+  const root = await fixture(t);
+  const gitInit = spawnSync('git', ['init', '-q', root]);
+  assert.equal(gitInit.status, 0);
+  const output = path.join(root, '.odysseus-preview');
+  await mkdir(output);
+  ensureOutputIgnore(await import('node:fs'), output);
+  assert.equal(await readFile(path.join(output, '.gitignore'), 'utf8'), '*\n');
+  await mkdir(path.join(output, 'run'));
+  await writeFile(path.join(output, 'run/report.json'), '{}');
+  assert.equal(spawnSync('git', ['-C', root, 'check-ignore', '-q', '.odysseus-preview/run/report.json']).status, 0);
+  await writeFile(path.join(output, '.gitignore'), 'keep-me\n');
+  ensureOutputIgnore(await import('node:fs'), output);
+  assert.equal(await readFile(path.join(output, '.gitignore'), 'utf8'), 'keep-me\n');
+});
+
+test('workspace-bound mode rejects a resolved project outside the active workspace', async t => {
+  const root = await fixture(t);
+  const helper = path.join(repo, 'scripts/electron_preview.mjs');
+  const outside = path.join(path.dirname(root), 'outside-electron-project');
+  await mkdir(outside, { recursive: true });
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  const result = spawnSync(node, [helper, '--workspace-bound', '--workspace', '../outside-electron-project', '--timeout', '15'], {
+    cwd: root, encoding: 'utf8',
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /must resolve inside the active workspace/);
+  const outsideLink = path.join(root, 'outside-link');
+  await symlink(outside, outsideLink);
+  const linked = spawnSync(node, [helper, '--workspace-bound', '--workspace', 'outside-link', '--timeout', '15'], {
+    cwd: root, encoding: 'utf8',
+  });
+  assert.equal(linked.status, 2);
+  assert.match(linked.stderr, /must resolve inside the active workspace/);
 });
 
 test('rejects manifest, test-script, and Electron symlink escapes', async t => {
@@ -183,6 +219,7 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   assert.ok(owned, 'actual helper path should start its local Electron executable');
+  assert.equal(await readFile(path.join(outputDir, '.gitignore'), 'utf8'), '*\n');
   try { process.kill(-runner.pid, 'SIGKILL'); } catch {}
   await new Promise(resolve => runner.once('close', resolve));
   for (const pid of [runner.pid, owned.electron, owned.child]) {

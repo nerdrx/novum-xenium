@@ -12,6 +12,14 @@ const MAX_TIMEOUT_S = 45;
 const OUTPUT_DIR_NAME = '.odysseus-preview';
 const require = createRequire(import.meta.url);
 
+export function ensureOutputIgnore(fsApi, outputDir) {
+  try {
+    fsApi.writeFileSync(path.join(outputDir, '.gitignore'), '*\n', { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+}
+
 function inside(root, target) {
   const rel = path.relative(root, target);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
@@ -77,7 +85,7 @@ function resolvePlaywright(workspace) {
 }
 
 function parseArgs(argv) {
-  const out = { workspace: process.cwd(), testScript: '', timeout: 35, noSandbox: false };
+  const out = { workspace: process.cwd(), testScript: '', timeout: 35, noSandbox: false, workspaceBound: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--workspace' || arg === '--test-script' || arg === '--timeout') {
@@ -88,6 +96,8 @@ function parseArgs(argv) {
       else out.timeout = Number(value);
     } else if (arg === '--no-sandbox') {
       out.noSandbox = true;
+    } else if (arg === '--workspace-bound') {
+      out.workspaceBound = true;
     } else if (arg === '--help' || arg === '-h') {
       out.help = true;
     } else {
@@ -101,6 +111,7 @@ function parseArgs(argv) {
 }
 
 export const ELECTRON_WORKER_SOURCE = String.raw`
+const ensureOutputIgnore = ${ensureOutputIgnore.toString()};
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as fs from 'node:fs';
@@ -478,7 +489,7 @@ export async function runOwnedCommand(command, args, { timeoutMs, env, stdio = '
 }
 
 function usage() {
-  console.log(`Usage: node /app/scripts/electron_preview.mjs [--workspace DIR] [--test-script RELATIVE.mjs] [--timeout 15..45] [--no-sandbox]\n\nLaunches the workspace-local Electron app under Xvfb, captures rendered DOM/styles/screenshots at 1280x800 and 800x600, and optionally runs a workspace test module. Outputs are kept in .odysseus-preview/. --no-sandbox affects only this isolated test run.`);
+  console.log(`Usage: node /app/scripts/electron_preview.mjs [--workspace DIR] [--workspace-bound] [--test-script RELATIVE.mjs] [--timeout 15..45] [--no-sandbox]\n\nLaunches the workspace-local Electron app under Xvfb, captures rendered DOM/styles/screenshots at 1280x800 and 800x600, and optionally runs a workspace test module. --workspace-bound requires --workspace to resolve inside the current directory. Outputs are kept in .odysseus-preview/. --no-sandbox affects only this isolated test run.`);
 }
 
 async function main() {
@@ -491,6 +502,19 @@ async function main() {
     process.exitCode = 2; return;
   }
   let project;
+  if (options.workspaceBound) {
+    try {
+      const activeWorkspace = fs.realpathSync(process.cwd());
+      const requestedWorkspace = fs.realpathSync(options.workspace);
+      if (!inside(activeWorkspace, requestedWorkspace)) {
+        console.error('PREVIEW_ERROR: project_path must resolve inside the active workspace');
+        process.exitCode = 2; return;
+      }
+    } catch (error) {
+      console.error(`PREVIEW_ERROR: project_path is not an existing workspace directory: ${error.message}`);
+      process.exitCode = 2; return;
+    }
+  }
   try { project = resolveWorkspaceProject(options.workspace, options.testScript); }
   catch (error) { console.error(`PREVIEW_ERROR: ${error.message}`); process.exitCode = 2; return; }
   const stat = fs.statSync(project.workspace);
@@ -548,6 +572,7 @@ if (process.argv[2] === '--worker') {
   }
   const st = fs.lstatSync(config.outputDir);
   if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid()) throw new Error('unsafe preview output directory');
+  ensureOutputIgnore(fs, config.outputDir);
   const workspace = fs.realpathSync(config.workspace);
   const outputDir = fs.realpathSync(config.outputDir);
   const outputRel = path.relative(workspace, outputDir);

@@ -151,6 +151,69 @@ def test_agent_loop_forced_web_tools_filtered_by_disabled_tools(monkeypatch):
     assert WEB_TOOL_NAMES.isdisjoint(_schema_names(sent_tools[0]))
 
 
+def test_native_preview_route_schemas_follow_bash_permission_and_executor(monkeypatch):
+    _patch_loop_basics(monkeypatch)
+    sent_tools = []
+
+    async def _fake_stream(_candidates, messages, **kwargs):
+        sent_tools.append(kwargs.get("tools"))
+        yield _delta_chunk("ready")
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+    monkeypatch.setattr(
+        al, "blocked_tools_for_owner",
+        lambda owner: {"bash"} if owner == "public-preview-user" else set(),
+        raising=False,
+    )
+
+    def capture(*, owner=None, disabled_tools=()):
+        return _collect(al.stream_agent_loop(
+            "https://api.openai.com/v1", "gpt-test",
+            [{"role": "user", "content": "Run a native preview."}],
+            max_rounds=1, relevant_tools={"native_preview"},
+            owner=owner, disabled_tools=set(disabled_tools),
+        ))
+
+    monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
+    capture()
+    assert "native_preview" in _schema_names(sent_tools[-1])
+
+    capture(disabled_tools={"bash"})
+    assert "native_preview" not in _schema_names(sent_tools[-1])
+
+    capture(owner="public-preview-user")
+    assert "native_preview" not in _schema_names(sent_tools[-1])
+
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", "http://worker.invalid")
+    capture()
+    assert "native_preview" not in _schema_names(sent_tools[-1])
+
+
+def test_native_preview_discovery_honors_bash_and_executor_gates(monkeypatch):
+    index = SimpleNamespace(retrieve=lambda query, limit: ["native_preview"])
+    monkeypatch.setattr("src.tool_index.get_tool_index", lambda: index)
+    monkeypatch.setattr("src.tool_security.blocked_tools_for_owner", lambda owner: set())
+
+    async def discover(disabled_tools=()):
+        return await al._discover_tools(
+            "render Electron desktop preview", mcp_mgr=None, mcp_disabled_map={},
+            owner=None, disabled_tools=set(disabled_tools), plan_mode=False,
+            needs_admin=True,
+        )
+
+    monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
+    accepted, _ = asyncio.run(discover())
+    assert "native_preview" in accepted
+
+    accepted, _ = asyncio.run(discover({"bash"}))
+    assert "native_preview" not in accepted
+
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", "http://worker.invalid")
+    accepted, _ = asyncio.run(discover())
+    assert "native_preview" not in accepted
+
+
 def test_agent_loop_policy_blocks_disabled_web_tool_call_before_execution(monkeypatch):
     _patch_loop_basics(monkeypatch)
     called = False

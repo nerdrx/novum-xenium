@@ -10,6 +10,9 @@ tool parsing / execution logic.
 
 import json
 import logging
+import os
+import shlex
+from pathlib import PurePosixPath
 from typing import Optional
 
 from src.tool_types import ToolBlock, TOOL_TAGS
@@ -33,6 +36,24 @@ _REQUIRED_NATIVE_TOOL_ARGS = {
 # OpenAI-compatible function tool schemas
 # ---------------------------------------------------------------------------
 FUNCTION_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "native_preview",
+            "description": "Render and inspect the actual workspace-local Electron desktop app under a private Xvfb display. Optionally run an existing workspace test module. Uses the same authorized workspace Bash execution, timeout, cancellation, and sandbox; unavailable when a separate executor is configured.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_path": {"type": "string", "description": "Project directory relative to the active workspace; use '.' for the workspace root"},
+                    "test_script": {"type": "string", "description": "Optional existing test module path relative to the project directory"},
+                    "timeout": {"type": "integer", "minimum": 15, "maximum": 45, "description": "Maximum preview runtime in seconds (default 35)"},
+                    "no_sandbox": {"type": "boolean", "description": "Retry this isolated test launch without Chromium sandboxing when required; never changes app defaults"},
+                },
+                "required": ["project_path"],
+                "additionalProperties": False,
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -1459,11 +1480,46 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
     # Uses the shared BUILTIN_EMAIL_TOOLS (single source of truth) so the
     # fail-closed set can't drift from the dispatch/blocklist sets.
     if not isinstance(args, dict):
+        if name == "native_preview":
+            logger.warning("Rejecting non-object native_preview arguments")
+            return None
         if tool_type.startswith("mcp__email__") or name in BUILTIN_EMAIL_TOOLS:
             logger.warning(f"Non-object email function call arguments for {name}: {args!r}; rejecting")
             return None
         logger.warning(f"Non-object function call arguments for {name}: {args!r}; treating as empty")
         args = {}
+
+    if name == "native_preview":
+        # Do not send this helper through the separate worker: it is baked into
+        # the app container and the worker image does not carry its display stack.
+        if os.getenv("ODYSSEUS_EXECUTOR_URL", "").strip():
+            logger.warning("native_preview is unavailable with separate execution configured")
+            return None
+        allowed = {"project_path", "test_script", "timeout", "no_sandbox"}
+        if set(args) - allowed:
+            return None
+        def relative_path(value, *, optional=False):
+            if optional and value == "":
+                return True
+            if not isinstance(value, str) or not value or "\x00" in value:
+                return False
+            path = PurePosixPath(value)
+            return not path.is_absolute() and ".." not in path.parts
+        project = args.get("project_path")
+        test_script = args.get("test_script", "")
+        timeout = args.get("timeout", 35)
+        no_sandbox = args.get("no_sandbox", False)
+        if (not relative_path(project) or not relative_path(test_script, optional=True)
+                or isinstance(timeout, bool) or not isinstance(timeout, int) or not 15 <= timeout <= 45
+                or not isinstance(no_sandbox, bool)):
+            return None
+        command = ["node", "/app/scripts/electron_preview.mjs", "--workspace-bound",
+                   "--workspace", project, "--timeout", str(timeout)]
+        if test_script:
+            command.extend(("--test-script", test_script))
+        if no_sandbox:
+            command.append("--no-sandbox")
+        return ToolBlock("bash", " ".join(shlex.quote(part) for part in command))
 
     required_args = _REQUIRED_NATIVE_TOOL_ARGS.get(tool_type)
     if required_args and not any(str(args.get(key) or "").strip() for key in required_args):

@@ -1761,6 +1761,8 @@ async def _discover_tools(query: str, *, mcp_mgr, mcp_disabled_map, owner,
     from src.tool_security import blocked_tools_for_owner, delegated_credential_blocked_tools
     from src.tool_policy import known_tool_names
     denied = set(disabled_tools or ()) | blocked_tools_for_owner(owner)
+    if os.getenv("ODYSSEUS_EXECUTOR_URL", "").strip():
+        denied.add("native_preview")
     if delegated_credential:
         denied |= delegated_credential_blocked_tools()
     known = known_tool_names()
@@ -5433,6 +5435,8 @@ async def stream_agent_loop(
         filtered = []
         for schema in schemas:
             tool_name = schema.get("function", {}).get("name") or schema.get("name", "")
+            if tool_name == "native_preview" and os.getenv("ODYSSEUS_EXECUTOR_URL", "").strip():
+                continue
             if (not tool_policy_names(tool_name).isdisjoint(disabled_tools)
                     or not (_coding_grounding.may_mutate
                             or tool_name in _coding_grounding.phase_tools)):

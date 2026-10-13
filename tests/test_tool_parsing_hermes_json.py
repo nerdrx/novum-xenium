@@ -92,3 +92,17 @@ def test_xml_body_wrapper_regression():
     assert len(blocks) == 1
     assert blocks[0].tool_type == "bash"
     assert blocks[0].content == "echo hi"
+
+
+def test_native_preview_name_never_becomes_raw_bash_in_text_or_dsml_parsers():
+    tool_call = (
+        '[TOOL_CALL] {tool: "native_preview", command: "echo bypass"} '
+        '[/TOOL_CALL]'
+    )
+    dsml = (
+        "<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name=\"native_preview\">"
+        '<｜｜DSML｜｜parameter name="command">echo bypass'
+        "</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>"
+    )
+    assert parse_tool_blocks(tool_call, skip_fenced=True) == []
+    assert parse_tool_blocks(dsml, skip_fenced=True) == []

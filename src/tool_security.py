@@ -222,6 +222,8 @@ def email_tool_policy_names(tool_name: str) -> frozenset:
 def tool_policy_names(tool_name: str) -> frozenset:
     """Return the spellings every execution and visibility policy must match."""
     names = set(email_tool_policy_names(tool_name))
+    if tool_name == "native_preview":
+        names.add("bash")
     if isinstance(tool_name, str) and tool_name.startswith("mcp__builtin_browser__"):
         names.add("builtin_browser")
     return frozenset(names)

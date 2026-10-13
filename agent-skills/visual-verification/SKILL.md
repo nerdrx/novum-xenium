@@ -1,7 +1,7 @@
 ---
 name: visual-verification
 description: Verify GUI, UI, frontend, website, CSS, and theme changes in a real rendered interface, including behavior and accessibility.
-version: 1.0.6
+version: 1.0.7
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -38,12 +38,20 @@ Record the real launch stderr and verify the owned process has a rendered window
 
 Reference: [Electron command-line switches](https://www.electronjs.org/docs/latest/api/command-line-switches).
 
-For a Linux Electron workspace in this container, use the workspace-bound helper:
-`node /app/scripts/electron_preview.mjs --workspace "$PWD"`. It requires a
+For a Linux Electron workspace, first discover `native_preview` and use it when
+available; it runs through the active workspace's authorized Bash execution,
+with the same cancellation, timeout, and sandbox. Pass `project_path` relative
+to the active workspace (use `.` for its root), and optionally pass an existing
+project-relative `test_script`, `timeout` (15–45 seconds), and `no_sandbox`
+(only when isolated launch errors require it). If the typed tool is unavailable
+in direct-container mode, the equivalent workspace-bound helper is:
+`node /app/scripts/electron_preview.mjs --workspace-bound --workspace "$PWD"`.
+The helper requires a
 workspace-local `node_modules/electron`, runs the real manifest entry under a
 private Xvfb display and fresh profile, and saves desktop/compact screenshots,
 DOM/style measurements, and runtime diagnostics in a unique run directory under
-`.odysseus-preview/`. Its fresh browser profile lives in a private OS temporary
+.odysseus-preview/`, which it creates a local Git ignore rule for without
+overwriting an existing rule. Its fresh browser profile lives in a private OS temporary
 directory and is removed after a normal run.
 The two sizes use renderer viewport emulation; actual native BrowserWindow bounds
 remain unverified.

@@ -351,5 +351,5 @@
   "manual_app_edits": 0,
   "manual_model_interventions": 0,
   "external_check_procedure": "After adapter returned, created a distinct sibling checker from pre-run preserved bytes; ran workspace-bound headless preview and checked its hash again. Model did not receive or author this final checker.",
-  "conclusion": "Incomplete after 419.094 seconds and 33 reported rounds. Model changed main-process fs import but output path still addresses a directory; fixed external GUI check failed with handler exitCode 234. No GUI success or independent review pass."
+  "conclusion": "Incomplete after 419.094 seconds and 33 reported rounds. Model repaired the main-process fs import and renderer Start-button identifier, but output path still addresses a directory; fixed external GUI check failed with handler exitCode 234. No GUI success or independent review pass."
 }

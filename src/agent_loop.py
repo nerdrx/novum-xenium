@@ -61,6 +61,7 @@ from src.tool_capabilities import (
     messages_contain_external_untrusted_context,
     tool_result_is_successful,
     tool_result_should_arm_gate,
+    web_fetch_preflight_error,
 )
 from src.tool_approvals import (
     ExactToolApproval,
@@ -7488,6 +7489,10 @@ async def stream_agent_loop(
             else:
                 cmd_display = full_command
 
+            web_fetch_input_error = (
+                web_fetch_preflight_error(block.content)
+                if block.tool_type == "web_fetch" else None
+            )
             security_decision = run_security.decision_for(
                 block.tool_type,
                 block.content,
@@ -7521,7 +7526,7 @@ async def stream_agent_loop(
             )
             judge_review = None
             action = None
-            if (not security_decision.allowed and not blocked_by_tool_policy
+            if (not web_fetch_input_error and not security_decision.allowed and not blocked_by_tool_policy
                     and not blocked_by_disabled_tools and not task_alignment_reason
                     and not workspace_deletion_reason
                     and not plan_mode
@@ -7557,7 +7562,7 @@ async def stream_agent_loop(
                         security_decision = type(security_decision)(
                             False, "Auto review: " + judge_review["reason"],
                         )
-            if task_alignment_reason or workspace_deletion_reason or (
+            if web_fetch_input_error or task_alignment_reason or workspace_deletion_reason or (
                 (blocked_by_tool_policy or blocked_by_disabled_tools)
                 and not _ody_clamped_tool_allowed
             ):
@@ -7573,12 +7578,17 @@ async def stream_agent_loop(
                     )
                     reason = tool_policy.reason_for(blocked_name)
                     block_policy = "current_tool_policy"
-                else:
+                elif blocked_by_disabled_tools and not _ody_clamped_tool_allowed:
                     reason = (
                         f"Tool '{block.tool_type}' is disabled by the current "
                         "request policy."
                     )
                     block_policy = "current_tool_policy"
+                else:
+                    reason = (
+                        web_fetch_input_error
+                    )
+                    block_policy = "invalid_tool_input"
                 desc = f"{block.tool_type}: BLOCKED"
                 result = {
                     "error": reason,

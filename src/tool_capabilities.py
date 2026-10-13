@@ -7,6 +7,7 @@ run-local integrity gates before dispatch.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import uuid
@@ -16,6 +17,7 @@ from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
+from src.outbound_fetch import _is_private_address
 from src.tool_approval_scopes import CHAT_SESSION_APPROVAL_CONTEXT_MARKER
 from src.tool_security import BUILTIN_EMAIL_TOOLS, is_public_blocked_tool
 
@@ -698,6 +700,61 @@ def _web_fetch_read_url(content: Any) -> str | None:
     if "://" not in raw:
         raw = "https://" + raw
     return _public_read_url(raw)
+
+
+def web_fetch_preflight_error(content: Any) -> str | None:
+    """Reject malformed/local paths before a web_fetch approval can be requested."""
+    if not isinstance(content, str):
+        return "web_fetch needs one HTTP(S) URL or domain; use read_file for local files."
+    raw = content.strip()
+    if raw.startswith("{"):
+        try:
+            args = json.loads(raw)
+        except (ValueError, TypeError):
+            return "web_fetch needs valid URL arguments; use read_file for local files."
+        if not isinstance(args, dict) or set(args) - {"url", "full", "max_bytes"}:
+            return "web_fetch accepts a URL, not local file arguments; use read_file for workspace files."
+        raw = args.get("url")
+    elif "\n" in raw or "\r" in raw:
+        return "web_fetch accepts one URL at a time; use read_file for local files."
+    if not isinstance(raw, str) or not raw.strip():
+        return "web_fetch needs one HTTP(S) URL or domain; use read_file for local files."
+    raw = raw.strip()
+    if (raw.startswith(("/", "\\\\"))
+            or re.match(r"^[A-Za-z]:[\\\\/]", raw)
+            or raw.lower().startswith("file:")):
+        return "That is a local file path. Use read_file to inspect workspace files."
+    if any(char.isspace() or ord(char) < 33 for char in raw) or "\\" in raw:
+        return "web_fetch needs a valid HTTP(S) URL or domain; use read_file for local files."
+    candidate = raw if "://" in raw else "https://" + raw
+    try:
+        parsed = urlsplit(candidate)
+        host = parsed.hostname
+        _ = parsed.port  # validate malformed/out-of-range port syntax
+    except ValueError:
+        return "web_fetch needs a valid HTTP(S) URL or domain; use read_file for local files."
+    if (parsed.scheme.lower() not in {"http", "https"} or not host
+            or parsed.username is not None or parsed.password is not None):
+        return "web_fetch needs a valid HTTP(S) URL or domain; use read_file for local files."
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            ascii_host = host.rstrip(".").encode("idna").decode("ascii")
+        except UnicodeError:
+            ascii_host = ""
+        if (not ascii_host or len(ascii_host) > 253
+                or any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                       for label in ascii_host.split("."))):
+            return "web_fetch needs a valid HTTP(S) URL or domain; use read_file for local files."
+        normalized_host = ascii_host.lower()
+        if (normalized_host in {"localhost", "metadata", "metadata.google.internal"}
+                or normalized_host.endswith((".local", ".localhost", ".internal", ".lan", ".intranet"))):
+            return "web_fetch only accepts public internet hosts; use read_file for local files."
+    else:
+        if _is_private_address(address):
+            return "web_fetch only accepts public internet hosts; use read_file for local files."
+    return None
 
 
 def _is_public_profile_url(url: str) -> bool:

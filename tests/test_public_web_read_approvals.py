@@ -3,11 +3,50 @@ import json
 
 import pytest
 
-from src.tool_capabilities import ToolRunSecurityContext
+from src.tool_capabilities import ToolRunSecurityContext, web_fetch_preflight_error
 
 
 def context(mode="auto", **kwargs):
     return ToolRunSecurityContext(approval_mode=mode, external_untrusted_context_seen=True, **kwargs)
+
+
+@pytest.mark.parametrize("content", [
+    "/workspace/.nx-evaluations/project/scripts/test-nflix.mjs",
+    "file:///workspace/project/scripts/test-nflix.mjs",
+    "https://bad..example/path",
+    "https://[invalid",
+])
+def test_web_fetch_preflight_rejects_local_paths_and_invalid_hosts(content):
+    error = web_fetch_preflight_error(content)
+    assert error
+    if content.startswith(("/", "file:")):
+        assert "read_file" in error
+
+
+@pytest.mark.parametrize("content", [
+    "https://example.com/page",
+    "https://8.8.8.8/dns-query",
+    "https://[2606:4700:4700::1111]/dns-query",
+    "example.com/page",
+])
+def test_web_fetch_preflight_accepts_valid_web_destinations(content):
+    assert web_fetch_preflight_error(content) is None
+
+
+@pytest.mark.parametrize("content", [
+    "http://localhost:3000/page",
+    "http://service.local/page",
+    "http://metadata.google.internal/computeMetadata/v1/",
+    "https://127.0.0.1/page",
+    "http://10.0.0.8/page",
+    "http://192.168.1.4/page",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://[::1]/page",
+    "http://[fd00::1]/page",
+])
+def test_web_fetch_preflight_rejects_transport_blocked_local_hosts(content):
+    error = web_fetch_preflight_error(content)
+    assert error and "public internet" in error
 
 
 @pytest.mark.parametrize("url", [
@@ -138,3 +177,21 @@ def test_search_then_fetch_in_real_loop_binds_exact_destination(monkeypatch, app
     ))
     assert executed == (["web_search"] if append_payload else ["web_search", "web_fetch"])
     assert any(event.get("ask_user", {}).get("kind") == "tool_approval" for event in events) is append_payload
+
+
+def test_local_path_after_untrusted_search_is_rejected_before_approval(monkeypatch):
+    from tests.test_external_context_tool_gate import _patch_agent_loop, _collect_agent_events
+
+    executed = []
+    loop = _patch_agent_loop(monkeypatch, [
+        "```web_search\nNode module docs\n```",
+        "```web_fetch\n/workspace/.nx-evaluations/project/scripts/test-nflix.mjs\n```",
+    ], executed)
+    events = _collect_agent_events(loop.stream_agent_loop(
+        "http://local.test/v1", "model", [{"role": "user", "content": "inspect this file"}],
+        max_rounds=2, relevant_tools={"web_search", "web_fetch"},
+    ))
+
+    assert executed == ["web_search"]
+    assert not any(event.get("ask_user", {}).get("kind") == "tool_approval" for event in events)
+    assert any("Use read_file" in json.dumps(event) for event in events)

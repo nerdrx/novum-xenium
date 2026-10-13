@@ -1573,7 +1573,7 @@ _FORMATTER_HANDLED_KEYS = {
     "stdout", "stderr", "exit_code", "content", "size",
     "response", "results", "session_id", "name", "model", "session_name",
     "success", "path", "action", "title", "doc_id", "version", "applied",
-    "error", "output", "browser_preview",
+    "error", "output", "browser_preview", "read_metadata",
 }
 
 
@@ -1607,6 +1607,18 @@ def format_tool_result(description: str, result: Dict) -> str:
         # bash / python canonical result shape: {"output": ..., "exit_code": ...}
         parts.append(f"```\n{result['output']}\n```")
         append_exit_code(result.get("exit_code"))
+        metadata = result.get("read_metadata")
+        if isinstance(metadata, dict) and isinstance(metadata.get("reached_eof"), bool):
+            start = metadata.get("start_line")
+            start_text = f" from line {start}" if isinstance(start, int) and not isinstance(start, bool) else ""
+            next_offset = metadata.get("next_offset")
+            if metadata["reached_eof"]:
+                status = f"Read status: end of file reached{start_text}."
+            else:
+                status = f"Read status: more file content remains{start_text}."
+                if isinstance(next_offset, int) and not isinstance(next_offset, bool):
+                    status += f" Continue with offset={next_offset}."
+            parts.append(status)
     elif "content" in result:
         parts.append(f"**content ({result.get('size', '?')} chars):**\n```\n{result['content']}\n```")
     elif "response" in result:

@@ -302,7 +302,8 @@ def test_read_file_char_cap_reports_next_offset(repo, monkeypatch):
     }
     from src.tool_execution import format_tool_result
     formatted = format_tool_result("read file", plain)
-    assert '"read_metadata"' in formatted and '"next_offset": 2' in formatted
+    assert "Read status: more file content remains from line 1." in formatted
+    assert "Continue with offset=2." in formatted
 
 
 def test_read_file_plain_path_backcompat(repo):

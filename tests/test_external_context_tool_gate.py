@@ -1,8 +1,8 @@
-import re
 """Regression coverage for indirect prompt-injection tool gating."""
 
 import asyncio
 import json
+import re
 from collections import namedtuple
 from pathlib import Path
 
@@ -79,6 +79,138 @@ def _patch_agent_loop(monkeypatch, round_responses, executed):
     return agent_loop
 
 
+def _run_required_skill_view_case(
+    monkeypatch, tmp_path, *, skill_name="ui-design", approval_mode="auto",
+    skill_action="view", disabled_tools=None, delegated_credential=False,
+    incognito=False,
+):
+    import src.agent_loop as agent_loop
+    from services.memory.skills import SkillsManager
+
+    monkeypatch.setattr(agent_loop, "get_setting", lambda key, default=None: default, raising=False)
+    monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
+    monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda owner: set(), raising=False)
+    monkeypatch.setattr(agent_loop, "_agent_route_tool_mode", lambda *args, **kwargs: (False, False, False))
+    original_build_system_prompt = agent_loop._build_system_prompt
+
+    def build_system_prompt(*args, **kwargs):
+        kwargs["skill_view_available"] = True
+        return original_build_system_prompt(*args, **kwargs)
+
+    monkeypatch.setattr(agent_loop, "_build_system_prompt", build_system_prompt)
+    monkeypatch.setattr(
+        "routes.prefs_routes._load_for_user",
+        lambda owner: {"skills_enabled": True, "auto_approve_skills": True},
+    )
+
+    candidates = [
+        {"name": "ui-design", "description": "UI procedure", "requires_toolsets": []},
+        {"name": "visual-verification", "description": "UI test procedure", "requires_toolsets": []},
+    ]
+    manager_owners = []
+
+    def load(self, owner=None):
+        manager_owners.append(owner)
+        return candidates
+
+    monkeypatch.setattr(SkillsManager, "load", load)
+    monkeypatch.setattr(SkillsManager, "get_relevant_skills", lambda self, query, **kwargs: candidates)
+    monkeypatch.setattr(SkillsManager, "index_for", lambda self, **kwargs: [])
+    responses = iter([
+        "```read_file\nREADME.md\n```",
+        "```manage_skills\n" + json.dumps({"action": skill_action, "name": skill_name}) + "\n```",
+        "Done.",
+    ])
+
+    async def fake_stream(*args, **kwargs):
+        yield "data: " + json.dumps({"delta": next(responses, "Done.")}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    executed = []
+    executor_owners = []
+    security_contexts = []
+
+    async def fake_execute(block, *args, **kwargs):
+        executed.append((block.tool_type, block.content))
+        executor_owners.append(kwargs.get("owner"))
+        security_contexts.append(kwargs.get("security_context"))
+        if block.tool_type == "read_file":
+            return "read_file", {"output": "Framework installation documentation", "exit_code": 0}
+        if block.tool_type == "manage_skills":
+            return "manage_skills", {"results": "Use a native UI and verify it.", "exit_code": 0}
+        raise AssertionError(f"unexpected tool execution: {block.tool_type}")
+
+    monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_stream)
+    monkeypatch.setattr(agent_loop, "execute_tool_block", fake_execute)
+    events = _collect_agent_events(agent_loop.stream_agent_loop(
+        "http://local.test/v1", "small-local-model",
+        [{"role": "user", "content": "Build a Python GUI app using a framework."}],
+        workspace=str(tmp_path), owner="alice", session_id="required-skill-view",
+        max_rounds=3, relevant_tools={"read_file", "manage_skills"},
+        disabled_tools=set(disabled_tools or ()), approval_mode=approval_mode,
+        delegated_credential=delegated_credential, incognito=incognito,
+    ))
+    return events, executed, manager_owners, executor_owners, security_contexts
+
+
+@pytest.mark.parametrize("skill_name", ["ui-design", "visual-verification"])
+def test_auto_allows_only_exact_server_required_skill_view_after_untrusted_read(
+    monkeypatch, tmp_path, skill_name,
+):
+    events, executed, manager_owners, executor_owners, security_contexts = (
+        _run_required_skill_view_case(monkeypatch, tmp_path, skill_name=skill_name)
+    )
+    assert [tool for tool, _ in executed] == ["read_file", "manage_skills"], [
+        (event.get("type"), event.get("tool"), str(event.get("delta", ""))[:180],
+         event.get("policy"), event.get("ask_user", {}).get("kind"))
+        for event in events
+    ]
+    assert json.loads(executed[-1][1]) == {"action": "view", "name": skill_name}
+    assert manager_owners and set(manager_owners) == {"alice"}
+    assert executor_owners == ["alice", "alice"]
+    assert not any(event.get("ask_user", {}).get("kind") == "tool_approval" for event in events)
+    assert security_contexts[-1].external_untrusted_context_seen is True
+    assert not security_contexts[-1].decision_for("write_file", '{"path":"app.js"}', workspace=str(tmp_path)).allowed
+
+
+@pytest.mark.parametrize("skill_name,skill_action", [("unrelated", "view"), ("ui-design", "delete")])
+def test_required_skill_view_exception_does_not_apply_to_other_names_or_actions(
+    monkeypatch, tmp_path, skill_name, skill_action,
+):
+    _, executed, *_ = _run_required_skill_view_case(
+        monkeypatch, tmp_path, skill_name=skill_name, skill_action=skill_action,
+    )
+    assert [tool for tool, _ in executed] == ["read_file"]
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"approval_mode": "ask"},
+    {"disabled_tools": {"manage_skills"}},
+    {"delegated_credential": True},
+    {"incognito": True},
+])
+def test_required_skill_view_exception_preserves_ask_disabled_delegated_and_incognito_gates(
+    monkeypatch, tmp_path, kwargs,
+):
+    events, executed, *_ = _run_required_skill_view_case(monkeypatch, tmp_path, **kwargs)
+
+    assert all(tool != "manage_skills" for tool, _ in executed)
+    if kwargs.get("approval_mode") == "ask":
+        approvals = [
+            event["ask_user"] for event in events
+            if event.get("ask_user", {}).get("kind") == "tool_approval"
+        ]
+        assert approvals
+        import src.agent_loop as agent_loop
+        pending = agent_loop.tool_approval_store.peek(approvals[0]["approval_id"])
+        if pending is not None:
+            agent_loop.tool_approval_store.consume(
+                pending.approval_id, decision="deny", owner="alice",
+                session_id="required-skill-view",
+            )
+
+
 def test_all_fence_tools_have_explicit_capabilities():
     from src.agent_tools import TOOL_TAGS
 
@@ -94,6 +226,18 @@ def test_all_native_schema_tools_have_explicit_capabilities():
     }
     schema_names.discard(None)
     assert schema_names <= KNOWN_CAPABILITY_TOOLS
+
+
+def test_native_preview_has_workspace_scoped_execution_capability():
+    capability = capabilities_for_tool("native_preview")
+
+    assert capability.known
+    assert capability.effects == frozenset({
+        ToolEffect.READ_WORKSPACE,
+        ToolEffect.WRITE_WORKSPACE,
+        ToolEffect.EXECUTE_CODE,
+    })
+    assert capability.result_integrity is ResultIntegrity.WORKSPACE_UNTRUSTED
 
 
 def test_external_web_result_blocks_later_code_execution():

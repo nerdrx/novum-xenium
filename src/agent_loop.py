@@ -5218,8 +5218,13 @@ async def stream_agent_loop(
                     set(_runtime_skill_tools) | _runtime_discovered_tools
                     | _explicit_requested_tools
                 )
-                if _relevant_tools and len(_relevant_tools) == 1:
-                    selected_relevant = set(_relevant_tools) - WEB_TOOL_NAMES
+                # Caller-provided relevance may be a single explicit action,
+                # while route setup adds always-available discovery tools
+                # (notably search_tools). Use the original caller bound here
+                # so those helpers do not suppress the selected action's
+                # schema-budget preference.
+                if _caller_relevant_tools and len(_caller_relevant_tools) == 1:
+                    selected_relevant = set(_caller_relevant_tools) - WEB_TOOL_NAMES
                     budget_priority_names.update(selected_relevant)
                 tool_names = {
                     schema.get("function", {}).get("name", "")
@@ -7510,6 +7515,27 @@ async def stream_agent_loop(
             blocked_by_disabled_tools = bool(
                 disabled_tools and not policy_names.isdisjoint(disabled_tools)
             )
+            required_skill_view_allowed = (
+                not security_decision.allowed
+                and run_security.external_untrusted_context_seen
+                and approval_mode == "auto"
+                and not delegated_credential
+                and not incognito
+                and not plan_mode
+                and block.tool_type == "manage_skills"
+                and _coding_grounding.skill_preparation_required
+                and _coding_grounding.allows_tool(block.tool_type, block.content)
+                and capabilities_for_action(block.tool_type, block.content).effects
+                == frozenset({ToolEffect.READ_PRIVATE})
+                and not blocked_by_tool_policy
+                and not blocked_by_disabled_tools
+            )
+            if required_skill_view_allowed:
+                # This exact owner-scoped read was selected by the server as a
+                # mandatory pre-mutation procedure. Keep its result untrusted;
+                # this one Auto-mode dispatch must not unblock later private or
+                # mutating actions after external context has armed the gate.
+                security_decision = type(security_decision)(True)
             task_alignment_reason = github_visibility_conflict(
                 block.tool_type,
                 block.content,

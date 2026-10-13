@@ -142,6 +142,13 @@ _register(
     result_integrity=ResultIntegrity.WORKSPACE_UNTRUSTED,
 )
 _register(
+    {"native_preview"},
+    ToolEffect.READ_WORKSPACE,
+    ToolEffect.WRITE_WORKSPACE,
+    ToolEffect.EXECUTE_CODE,
+    result_integrity=ResultIntegrity.WORKSPACE_UNTRUSTED,
+)
+_register(
     {"apply_patch", "edit_file", "write_file"},
     ToolEffect.WRITE_WORKSPACE,
     # Successful writes include unified diffs that can echo arbitrary existing

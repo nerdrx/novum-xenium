@@ -1,5 +1,8 @@
 from unittest.mock import MagicMock
 from types import SimpleNamespace
+
+import pytest
+
 from src.chat_processor import ChatProcessor
 
 def test_build_context_preface_web_search_success(monkeypatch):
@@ -93,3 +96,52 @@ def test_build_context_preface_web_search_query_sanitization(monkeypatch):
     called_query = mock_web_search.call_args[0][0]
     assert len(called_query) <= 150
     assert "  " not in called_query
+
+
+@pytest.mark.parametrize("reasoning", [
+    "Thinking Process: Analyze the request step by step, then search dictionaries.",
+    "Analysis: I should reason about this before producing the query.",
+])
+def test_build_context_preface_falls_back_on_reasoning_scaffolding(monkeypatch, reasoning):
+    monkeypatch.setattr("src.llm_core.llm_call", MagicMock(return_value=reasoning))
+    mock_web_search = MagicMock(return_value=("Search Results", []))
+    monkeypatch.setattr("src.chat_processor.comprehensive_web_search", mock_web_search)
+
+    processor = ChatProcessor(memory_manager=MagicMock(), personal_docs_manager=MagicMock())
+    session = SimpleNamespace(endpoint_url="http://local", model="test", headers={})
+    processor.build_context_preface(
+        message="How to configure Qwen3.5:9B?\nMore context.",
+        session=session,
+        use_web=True,
+        use_rag=False,
+        use_memory=False,
+        use_skills=False,
+    )
+
+    mock_web_search.assert_called_with(
+        "How to configure Qwen3.5:9B?", time_filter=None, return_sources=True
+    )
+
+
+def test_build_context_preface_strips_think_wrapper_from_generated_query(monkeypatch):
+    monkeypatch.setattr(
+        "src.llm_core.llm_call",
+        MagicMock(return_value="<think>Need concise query.</think>Qwen3.5 9B configuration"),
+    )
+    mock_web_search = MagicMock(return_value=("Search Results", []))
+    monkeypatch.setattr("src.chat_processor.comprehensive_web_search", mock_web_search)
+
+    processor = ChatProcessor(memory_manager=MagicMock(), personal_docs_manager=MagicMock())
+    session = SimpleNamespace(endpoint_url="http://local", model="test", headers={})
+    processor.build_context_preface(
+        message="How to configure Qwen3.5:9B?",
+        session=session,
+        use_web=True,
+        use_rag=False,
+        use_memory=False,
+        use_skills=False,
+    )
+
+    mock_web_search.assert_called_with(
+        "Qwen3.5 9B configuration", time_filter=None, return_sources=True
+    )

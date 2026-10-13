@@ -420,6 +420,14 @@ class ChatProcessor:
                         timeout=15,
                     ).strip()
 
+                    # These headings signal leaked model reasoning, not a search
+                    # query. Keep the original user fallback for this response.
+                    if re.match(r"^\s*(?:thinking process|analysis)\s*:", generated_query, re.I):
+                        generated_query = ""
+                    else:
+                        from src.text_helpers import strip_think
+                        generated_query = strip_think(generated_query, prompt_echo=False).strip()
+
                     if generated_query:
                         # LLM successfully generated a non-empty query -> use the generated query
                         search_query = generated_query

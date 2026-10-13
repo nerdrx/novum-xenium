@@ -19,7 +19,7 @@ for both sides when comparing coding behavior without outside research.
 
 ## Latest measured result (2026-10-13)
 
-A clearly assisted follow-up produced a valid 4-second video after operator
+A clearly assisted follow-up produced a valid 5-second video after operator
 feedback directed the model to compare IPC payload fields. The unchanged external
 check still failed because Start remained disabled. The 300-second run timed out.
 This is partial GUI progress, not autonomous completion or an Aider comparison;

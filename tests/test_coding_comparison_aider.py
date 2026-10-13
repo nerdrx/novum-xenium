@@ -1,5 +1,7 @@
 """No-network checks for the Aider adapter's CLI and config generation."""
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -7,6 +9,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "coding_comparison_aider.py"
@@ -103,6 +106,31 @@ class AiderAdapterTests(unittest.TestCase):
         self.assertIn("--no-check-update", command)
         self.assertEqual(command[command.index("--file") + 1], "calc.py")
         self.assertNotIn("--openai-api-key", command)
+
+    def test_optional_test_command_enables_aider_auto_test(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            common = (
+                "/tmp/isolated/aider", "ollama_chat/qwen3.5:9b", root / "TASK.md",
+                root / "config.yml", root / "settings.yml", root / "empty.env", root,
+            )
+            without_test = aider_adapter.build_command(*common)
+            with_test = aider_adapter.build_command(*common, test_command="python -m unittest")
+        self.assertNotIn("--test-cmd", without_test)
+        self.assertEqual(
+            with_test[with_test.index("--test-cmd"):with_test.index("--test-cmd") + 3],
+            ["--test-cmd", "python -m unittest", "--auto-test"],
+        )
+
+    def test_blank_test_command_is_rejected(self):
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "argv", [
+            str(SCRIPT), "--task-file", "TASK.md", "--model", "model",
+            "--endpoint", "http://localhost", "--test-command", "  ",
+        ]), contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as error:
+            aider_adapter.main()
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn("--test-command must not be blank", stderr.getvalue())
 
     def test_source_files_are_validated_and_passed_to_aider(self):
         with tempfile.TemporaryDirectory() as directory:

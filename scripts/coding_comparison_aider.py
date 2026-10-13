@@ -78,6 +78,7 @@ def build_command(
     aider: str, model: str, task_file: Path, config: Path,
     model_settings: Path, empty_env_file: Path, temp_dir: Path,
     files: tuple[str, ...] = ("calc.py",),
+    test_command: str | None = None,
 ) -> list[str]:
     command = [
         aider,
@@ -99,6 +100,8 @@ def build_command(
         "--analytics-disable",
         "--no-pretty",
     ])
+    if test_command is not None:
+        command.extend(("--test-cmd", test_command, "--auto-test"))
     return command
 
 
@@ -175,7 +178,10 @@ def run(args) -> int:
         env["XDG_CONFIG_HOME"] = str(temp_dir / "xdg")
         env["XDG_CACHE_HOME"] = str(temp_dir / "cache")
         config, model_settings = write_aider_config(temp_dir, model, settings)
-        command = build_command(aider, model, task_file, config, model_settings, empty_env_file, temp_dir, files)
+        command = build_command(
+            aider, model, task_file, config, model_settings, empty_env_file,
+            temp_dir, files, getattr(args, "test_command", None),
+        )
         process = subprocess.Popen(command, cwd=workspace, env=env, start_new_session=(os.name == "posix"))
         try:
             returncode = process.wait(timeout=args.timeout)
@@ -206,6 +212,7 @@ def main() -> int:
     parser.add_argument("--pass-env", action="append", default=[], metavar="NAME",
                         help="Pass one additional caller environment variable by name")
     parser.add_argument("--timeout", type=float, default=600)
+    parser.add_argument("--test-command", help="Run this explicit test command through Aider's auto-test feedback")
     args = parser.parse_args()
     if not args.model:
         parser.error("supply --model or CODING_AGENT_COMPARISON_MODEL")
@@ -213,6 +220,8 @@ def main() -> int:
         parser.error("supply --endpoint or CODING_AGENT_COMPARISON_ENDPOINT")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be a positive finite number")
+    if args.test_command is not None and not args.test_command.strip():
+        parser.error("--test-command must not be blank")
     try:
         return run(args)
     except (OSError, ValueError, json.JSONDecodeError) as exc:

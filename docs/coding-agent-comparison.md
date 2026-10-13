@@ -181,6 +181,14 @@ Novum's existing evaluator selects an app endpoint by ID; that ID is not a raw
 provider URL for Aider. Supply the underlying Ollama or OpenAI-compatible URL
 explicitly, and verify the endpoint's current model mapping before a comparison.
 
+For repair tasks with an existing runnable check, pass `--test-command COMMAND`
+to the Aider adapter. This explicitly enables Aider's `--test-cmd` and
+`--auto-test` feedback loop. The command is operator-supplied and executes with
+the adapter's existing environment and working directory; it is not discovered
+from untrusted project metadata. Keep the final external checker independent of
+model-editable files and report any test modifications separately. Omitting this
+option preserves the one-shot adapter behavior.
+
 The adapter creates a temporary Aider home, config, and history paths, disables
 automatic commits and Git integration, and uses `--message-file` for one-shot
 task execution. Temporary files are removed when Aider exits.

@@ -34,7 +34,7 @@ def _todos():
 def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=None, todos=None,
                 pause_after_acceptance=False, teacher_event=None, checked_workflow=False,
                 attempt_shell_edit=False, registered_checks=False, disabled_bash=False,
-                malformed_check=False):
+                malformed_check=False, no_packet_start=False):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -102,11 +102,12 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         external_untrusted_context_seen=True,
         capabilities=capabilities_for_action("todowrite", initial_todowrite),
     )
-    grant = approvals.consume(
+    grant = None if no_packet_start else approvals.consume(
         pending.approval_id, decision=TASK_APPROVAL_DECISION,
         owner="alice", session_id="coding-packet-test",
     )
-    assert grant is not None
+    if not no_packet_start:
+        assert grant is not None
 
     async def execute(block, *args, **kwargs):
         executed.append((block.tool_type, block.content))
@@ -133,6 +134,12 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
     async def stream(candidates, messages, **kwargs):
         nonlocal turn
         turn += 1
+        if no_packet_start:
+            request = await kwargs["candidate_request_factory"](0, *candidates[0])
+            requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
+            yield 'data: {"delta":"I will inspect the workspace first."}\n\n'
+            yield "data: [DONE]\n\n"
+            return
         if turn <= len(actions):
             tool, args = actions[turn - 1]
             request = await kwargs["candidate_request_factory"](0, *candidates[0])
@@ -154,10 +161,21 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
          {"role": "user", "content": "Fix the auth refresh bug in this workspace and run tests"}],
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
-        relevant_tools={"todowrite", "bash", "write_file", "python"}, max_rounds=10,
+        relevant_tools={"todowrite", "bash", "write_file", "edit_file", "apply_patch",
+                        "python", "read_file", "grep", "glob", "ls"}, max_rounds=10,
         disabled_tools={"bash"} if disabled_bash else set(),
     ))
     return _types(chunks), executed, requested
+
+
+def test_initial_checked_schema_keeps_readers_and_hides_blocked_actions(monkeypatch, tmp_path):
+    _events, _executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, no_packet_start=True,
+    )
+
+    names = requested[0]
+    assert {"todowrite", "read_file", "grep", "glob", "ls"} <= names
+    assert not ({"bash", "python", "write_file", "edit_file", "apply_patch"} & names)
 
 
 def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monkeypatch, tmp_path):

@@ -1,7 +1,7 @@
 ---
 name: visual-verification
 description: Verify GUI, UI, frontend, website, CSS, and theme changes in a real rendered interface, including behavior and accessibility.
-version: 1.0.8
+version: 1.0.9
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -76,6 +76,8 @@ profile and does not change app defaults. It refuses root-owned workspaces and
 confines artifact output and test-script paths to the selected workspace.
 Inspect the report and screenshots; if you cannot view the images, say visual
 inspection remains unverified.
+
+For Electron tests attached with Playwright `connectOverCDP`, `locator.setInputFiles(path)` may populate a payload-backed `File` whose Electron-only `.path` is empty. When the app or its IPC bridge needs a real disk path, use `context.newCDPSession(page)`, call `DOM.getDocument` and `DOM.querySelector` for the file input, then `DOM.setFileInputFiles` with the fixture's absolute path. Assert both the renderer's displayed path and the app's resulting state. This tests disk-backed input selection through CDP, not the native operating-system picker; test that dialog separately before claiming picker behavior.
 
 ## Repository Delivery
 Before changing `.gitignore`, read and preserve its existing rules; merge new patterns instead of replacing the file. Before committing, inspect the staged paths and diff summary, and remove unintended caches, dependencies, build outputs, or large binaries from the index.

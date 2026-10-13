@@ -46,3 +46,17 @@ def test_visual_verification_bundle_preserves_repository_delivery_guidance(tmp_p
     assert 'correct only the unpushed history' in body
     assert 'unless the user explicitly requests removal' in body
     assert 'failed push is not a reason to delete local work' in body
+
+
+def test_visual_verification_documents_electron_cdp_disk_path_selection(tmp_path):
+    manager = SkillsManager(str(tmp_path))
+    source = (ROOT / 'agent-skills/visual-verification/SKILL.md').read_text()
+    imported = manager.import_bundle_from_files(
+        {'SKILL.md': source}, owner='alice', category='design',
+    )
+    body = manager.read_skill_md(imported['name'], owner='alice')
+    assert body is not None
+    assert 'version: 1.0.9' in source
+    assert 'connectOverCDP' in body and 'context.newCDPSession(page)' in body
+    assert 'DOM.setFileInputFiles' in body
+    assert 'not the native operating-system picker' in body

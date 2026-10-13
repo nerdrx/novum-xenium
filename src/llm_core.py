@@ -50,6 +50,56 @@ def _normalize_usage_counts(input_value=0, output_value=0):
     }
 
 
+def _verifier_response_diagnostics(data: dict) -> dict:
+    """Extract safe completion metadata without retaining generated text."""
+    diagnostics = {
+        "finish_reason": None,
+        "completion_tokens": None,
+        "content_chars": None,
+        "reasoning_chars": None,
+    }
+    if not isinstance(data, dict):
+        return diagnostics
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        count = usage.get("completion_tokens", usage.get("output_tokens"))
+        if isinstance(count, int) and not isinstance(count, bool) and 0 <= count <= 2**31 - 1:
+            diagnostics["completion_tokens"] = count
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return diagnostics
+    choice = choices[0]
+    reason = choice.get("finish_reason")
+    if isinstance(reason, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,40}", reason):
+        diagnostics["finish_reason"] = reason
+    message = choice.get("message") or {}
+    if not isinstance(message, dict):
+        return diagnostics
+    content = message.get("content")
+    if isinstance(content, str):
+        diagnostics["content_chars"] = len(content)
+    elif isinstance(content, list):
+        diagnostics["content_chars"] = sum(
+            len(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") != "thinking"
+            and isinstance(part.get("text"), str)
+        )
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        reasoning = message.get(key)
+        if isinstance(reasoning, str):
+            diagnostics["reasoning_chars"] = len(reasoning)
+            break
+    if diagnostics["reasoning_chars"] is None and isinstance(content, list):
+        diagnostics["reasoning_chars"] = sum(
+            len(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "thinking"
+            and isinstance(part.get("text"), str)
+        )
+    return diagnostics
+
+
 def _normalize_http_status(value) -> Optional[int]:
     """Accept only genuine three-digit integral HTTP status values."""
 
@@ -2447,6 +2497,7 @@ async def llm_call_async(
     workload: str = "foreground",
     availability_only_transport: bool = False,
     return_model_metadata: bool = False,
+    response_diagnostics: Optional[Dict[str, object]] = None,
 ) -> str | tuple[str, str]:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
     provider = _detect_provider(url)
@@ -2470,6 +2521,9 @@ async def llm_call_async(
     )
     cached_response = _get_cached_response(cache_key)
     if cached_response:
+        if response_diagnostics is not None:
+            response_diagnostics.clear()
+            response_diagnostics.update(_verifier_response_diagnostics({}))
         logger.debug(f"Returning cached response for key: {cache_key}")
         if return_model_metadata:
             return cached_response, (_get_cached_response_model(cache_key) or model)
@@ -2601,6 +2655,9 @@ async def llm_call_async(
             logger.info(f"LLM async call to {target_url} succeeded in {duration:.2f}s (attempt {attempt})")
             _clear_host_dead(target_url)
             data = r.json()
+            if response_diagnostics is not None:
+                response_diagnostics.clear()
+                response_diagnostics.update(_verifier_response_diagnostics(data))
             if isinstance(data, dict) and data.get("error"):
                 provider_error = data["error"]
                 status = _provider_stream_error_status(provider_error, default=400)

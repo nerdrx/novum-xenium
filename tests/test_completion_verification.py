@@ -399,6 +399,35 @@ def test_valid_unverified_verdict_does_not_retry_format(monkeypatch):
     assert len(calls) == 1
 
 
+def test_verifier_logs_only_bounded_response_metadata(monkeypatch, caplog):
+    import asyncio
+    import logging
+    import src.agent_loop as agent_loop
+    import src.llm_core
+
+    async def fake_call(**kwargs):
+        kwargs["response_diagnostics"].update({
+            "finish_reason": "length",
+            "completion_tokens": 2048,
+            "content_chars": 0,
+            "reasoning_chars": 777,
+        })
+        return "VERIFICATION: UNVERIFIED: missing real UI evidence"
+
+    monkeypatch.setattr(src.llm_core, "llm_call_async", fake_call)
+    caplog.set_level(logging.INFO, logger="src.agent_loop")
+    issues = asyncio.run(agent_loop._run_verifier_subagent(
+        "Create the GUI", "evidence", endpoint_url="http://localhost",
+        model="test-model", headers={},
+    ))
+
+    assert issues == ["Unverified: missing real UI evidence"]
+    assert "finish_reason=length" in caplog.text
+    assert "completion_tokens=2048" in caplog.text
+    assert "content_chars=0 reasoning_chars=777" in caplog.text
+    assert "missing real UI evidence" not in caplog.text
+
+
 def test_verifier_format_retry_provider_error_is_bounded(monkeypatch):
     import asyncio
     import src.agent_loop as agent_loop

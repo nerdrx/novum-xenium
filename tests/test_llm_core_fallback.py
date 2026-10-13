@@ -867,6 +867,57 @@ def test_nonstream_model_metadata_round_trips_through_response_cache(monkeypatch
     assert calls == ["https://selected.example/v1/chat/completions"]
 
 
+def test_nonstream_response_diagnostics_keep_only_finish_usage_and_lengths(monkeypatch):
+    llm_core._response_cache.clear()
+    llm_core._response_model_cache.clear()
+
+    class _Response:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": {
+                        "content": "",
+                        "reasoning_content": "private generated reasoning",
+                    },
+                }],
+                "usage": {"completion_tokens": 2048},
+            }
+
+    async def fake_post(*_args, **_kwargs):
+        return _Response()
+
+    monkeypatch.setattr(llm_core, "_get_http_client", lambda: object())
+    monkeypatch.setattr(llm_core, "httpx_post_kimi_aware_async", fake_post)
+    monkeypatch.setattr(llm_core, "_is_host_dead", lambda _url: False)
+    monkeypatch.setattr(llm_core, "note_model_activity", lambda *_args, **_kwargs: None)
+    diagnostics = {}
+
+    try:
+        response = asyncio.run(llm_core.llm_call_async(
+            url="https://diagnostics.example/v1",
+            model="verifier-diagnostics-test",
+            messages=[{"role": "user", "content": "test"}],
+            response_diagnostics=diagnostics,
+        ))
+    finally:
+        llm_core._response_cache.clear()
+        llm_core._response_model_cache.clear()
+
+    assert response == "private generated reasoning"  # existing return behavior
+    assert diagnostics == {
+        "finish_reason": "length",
+        "completion_tokens": 2048,
+        "content_chars": 0,
+        "reasoning_chars": len("private generated reasoning"),
+    }
+    assert "private generated reasoning" not in repr(diagnostics)
+
+
 @pytest.mark.parametrize(
     ("url", "line"),
     [

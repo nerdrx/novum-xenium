@@ -3864,6 +3864,7 @@ async def _run_verifier_subagent(
         parse_completion_verification,
     )
     prompt = build_completion_verification_prompt(instruction, actions_snapshot)
+    response_diagnostics = {}
     try:
         raw = await llm_call_async(
             url=endpoint_url, model=model,
@@ -3871,10 +3872,19 @@ async def _run_verifier_subagent(
             # The same-model replay needed 1111 tokens to finish its verdict;
             # 600 truncated both control reviews before a final line.
             headers=headers, temperature=0.0, max_tokens=2048, timeout=60,
+            response_diagnostics=response_diagnostics,
         )
     except Exception as e:
         logger.warning(f"[agent] verifier subagent failed: {e}")
         return ["Unverified: the completion reviewer was unavailable; report checks and remaining uncertainty."]
+    logger.info(
+        "[agent] verifier response metadata attempt=1 finish_reason=%s "
+        "completion_tokens=%s content_chars=%s reasoning_chars=%s",
+        response_diagnostics.get("finish_reason"),
+        response_diagnostics.get("completion_tokens"),
+        response_diagnostics.get("content_chars"),
+        response_diagnostics.get("reasoning_chars"),
+    )
     verdict = parse_completion_verification(_strip_think_blocks(raw or ""))
     if completion_verdict_needs_format_retry(verdict):
         # Formatting repair only: preserve identical request/evidence, model,
@@ -3888,15 +3898,25 @@ async def _run_verifier_subagent(
             "VERIFICATION: UNVERIFIED: <what evidence is missing>\n"
             "Output nothing after that final line."
         )
+        response_diagnostics = {}
         try:
             retry_raw = await llm_call_async(
                 url=endpoint_url, model=model,
                 messages=[{"role": "user", "content": retry_prompt}],
                 headers=headers, temperature=0.0, max_tokens=2048, timeout=60,
+                response_diagnostics=response_diagnostics,
             )
         except Exception as e:
             logger.warning(f"[agent] verifier format retry failed: {e}")
             return ["Unverified: the completion reviewer was unavailable; report checks and remaining uncertainty."]
+        logger.info(
+            "[agent] verifier response metadata attempt=2 finish_reason=%s "
+            "completion_tokens=%s content_chars=%s reasoning_chars=%s",
+            response_diagnostics.get("finish_reason"),
+            response_diagnostics.get("completion_tokens"),
+            response_diagnostics.get("content_chars"),
+            response_diagnostics.get("reasoning_chars"),
+        )
         verdict = parse_completion_verification(_strip_think_blocks(retry_raw or ""))
     if verdict["status"] == "passed":
         return []

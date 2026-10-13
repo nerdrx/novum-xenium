@@ -86,6 +86,7 @@ def _run_required_skill_view_case(
 ):
     import src.agent_loop as agent_loop
     from services.memory.skills import SkillsManager
+    import src.tool_execution as tool_execution
 
     monkeypatch.setattr(agent_loop, "get_setting", lambda key, default=None: default, raising=False)
     monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
@@ -131,18 +132,18 @@ def _run_required_skill_view_case(
     executor_owners = []
     security_contexts = []
 
-    async def fake_execute(block, *args, **kwargs):
+    async def fake_execute_impl(block, *args, **kwargs):
         executed.append((block.tool_type, block.content))
         executor_owners.append(kwargs.get("owner"))
         security_contexts.append(kwargs.get("security_context"))
         if block.tool_type == "read_file":
-            return "read_file", {"output": "Framework installation documentation", "exit_code": 0}
+            return "read_file: OK", {"output": "Framework installation documentation", "exit_code": 0}
         if block.tool_type == "manage_skills":
-            return "manage_skills", {"results": "Use a native UI and verify it.", "exit_code": 0}
+            return "manage_skills: OK", {"results": "Use a native UI and verify it.", "exit_code": 0}
         raise AssertionError(f"unexpected tool execution: {block.tool_type}")
 
     monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_stream)
-    monkeypatch.setattr(agent_loop, "execute_tool_block", fake_execute)
+    monkeypatch.setattr(tool_execution, "_execute_tool_block_impl", fake_execute_impl)
     events = _collect_agent_events(agent_loop.stream_agent_loop(
         "http://local.test/v1", "small-local-model",
         [{"role": "user", "content": "Build a Python GUI app using a framework."}],
@@ -171,6 +172,9 @@ def test_auto_allows_only_exact_server_required_skill_view_after_untrusted_read(
     assert executor_owners == ["alice", "alice"]
     assert not any(event.get("ask_user", {}).get("kind") == "tool_approval" for event in events)
     assert security_contexts[-1].external_untrusted_context_seen is True
+    assert not security_contexts[-1].decision_for(
+        "manage_skills", executed[-1][1], workspace=str(tmp_path),
+    ).allowed
     assert not security_contexts[-1].decision_for("write_file", '{"path":"app.js"}', workspace=str(tmp_path)).allowed
 
 
@@ -209,6 +213,69 @@ def test_required_skill_view_exception_preserves_ask_disabled_delegated_and_inco
                 pending.approval_id, decision="deny", owner="alice",
                 session_id="required-skill-view",
             )
+
+
+@pytest.mark.asyncio
+async def test_required_skill_view_dispatcher_permission_is_exact_and_single_use(monkeypatch):
+    import src.tool_execution as tool_execution
+
+    calls = []
+
+    async def fake_implementation(block, **kwargs):
+        calls.append((block.tool_type, block.content))
+        return "manage_skills: OK", {"results": "procedure", "exit_code": 0}
+
+    monkeypatch.setattr(tool_execution, "_execute_tool_block_impl", fake_implementation)
+    context = ToolRunSecurityContext(external_untrusted_context_seen=True)
+    view = json.dumps({"action": "view", "name": "ui-design"})
+
+    assert context.authorize_required_skill_view_once(
+        "manage_skills", view, "/workspace", "alice", "chat",
+    )
+    # A mismatched action consumes the pending one-use allowance and remains blocked.
+    desc, result = await tool_execution.execute_tool_block(
+        ToolBlock("manage_skills", json.dumps({"action": "delete", "name": "ui-design"})),
+        owner="alice", session_id="chat", workspace="/workspace",
+        security_context=context,
+    )
+    assert desc == "manage_skills: BLOCKED"
+    assert result["blocked"] is True
+    assert calls == []
+
+    assert context.authorize_required_skill_view_once(
+        "manage_skills", view, "/workspace", "alice", "chat",
+    )
+    _, wrong_owner = await tool_execution.execute_tool_block(
+        ToolBlock("manage_skills", view),
+        owner="bob", session_id="chat", workspace="/workspace",
+        security_context=context,
+    )
+    assert wrong_owner["blocked"] is True
+    assert calls == []
+
+    assert context.authorize_required_skill_view_once(
+        "manage_skills", view, "/workspace", "alice", "chat",
+    )
+    _, result = await tool_execution.execute_tool_block(
+        ToolBlock("manage_skills", view),
+        owner="alice", session_id="chat", workspace="/workspace",
+        security_context=context,
+    )
+    assert result.get("results") == "procedure"
+    _, replay = await tool_execution.execute_tool_block(
+        ToolBlock("manage_skills", view),
+        owner="alice", session_id="chat", workspace="/workspace",
+        security_context=context,
+    )
+    assert replay["blocked"] is True
+    assert len(calls) == 1
+
+    ask_context = ToolRunSecurityContext(
+        external_untrusted_context_seen=True, approval_mode="ask",
+    )
+    assert not ask_context.authorize_required_skill_view_once(
+        "manage_skills", view, "/workspace", "alice", "chat",
+    )
 
 
 def test_all_fence_tools_have_explicit_capabilities():

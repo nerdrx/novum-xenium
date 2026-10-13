@@ -3431,6 +3431,16 @@ def _resolve_tool_blocks(
     return tool_blocks, used_native, converted_calls
 
 
+def _native_tool_provenance(converted_calls, index, lowered_tool):
+    """Expose a native name only when conversion lowered it to another tool."""
+    if index < 0 or index >= len(converted_calls):
+        return {}
+    requested = converted_calls[index].get("name")
+    if isinstance(requested, str) and requested and requested != lowered_tool:
+        return {"requested_tool": requested}
+    return {}
+
+
 def _append_tool_results(
     messages: List[Dict],
     round_response: str,
@@ -7478,6 +7488,10 @@ async def stream_agent_loop(
         skill_reference_messages = []
         budget_hit = False
         for i, block in enumerate(tool_blocks):
+            native_tool_fields = (
+                _native_tool_provenance(converted_calls, i, block.tool_type)
+                if used_native else {}
+            )
             # --- Tool budget check ---
             if max_tool_calls > 0 and total_tool_calls >= max_tool_calls:
                 yield f'data: {json.dumps({"type": "budget_exceeded", "limit": max_tool_calls, "used": total_tool_calls})}\n\n'
@@ -7725,7 +7739,7 @@ async def stream_agent_loop(
                     )
             elif block.tool_type == "search_tools":
                 yield (
-                    f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "full_command": full_command, "round": round_num})}\n\n'
+                    f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "full_command": full_command, "round": round_num, **native_tool_fields})}\n\n'
                 )
                 try:
                     _args = json.loads(block.content or "{}")
@@ -7746,7 +7760,7 @@ async def stream_agent_loop(
                 result = {"output": search_output, "exit_code": 0, "discovered_tools": discovered}
             else:
                 yield (
-                    f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "full_command": full_command, "round": round_num})}\n\n'
+                    f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "full_command": full_command, "round": round_num, **native_tool_fields})}\n\n'
                 )
 
                 # Streaming progress for long-running tools (bash, python).
@@ -7760,6 +7774,14 @@ async def stream_agent_loop(
 
                 async def _run_tool():
                     try:
+                        if required_skill_view_allowed:
+                            run_security.authorize_required_skill_view_once(
+                                block.tool_type,
+                                block.content,
+                                workspace,
+                                owner,
+                                session_id,
+                            )
                         return await execute_tool_block(
                             block,
                             session_id=session_id,
@@ -8101,6 +8123,7 @@ async def stream_agent_loop(
 
             # Emit tool_output (include ui_event data if present)
             tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}
+            tool_output_data.update(native_tool_fields)
             if isinstance(result.get("browser_preview"), dict):
                 tool_output_data["browser_preview"] = result["browser_preview"]
             if isinstance(result.get("subagent"), dict):
@@ -8307,6 +8330,7 @@ async def stream_agent_loop(
                 "output": output_text,
                 "exit_code": result.get("exit_code"),
             }
+            tool_event.update(native_tool_fields)
             if skill_reference_message is not None or skill_reference_duplicate:
                 tool_event["required_skill_reference"] = skill_reference_name
             if result.get("policy"):

@@ -1055,7 +1055,20 @@ async def execute_tool_block(
                 },
             )
 
-    if isinstance(security_context, ToolRunSecurityContext) and not approval_claimed:
+    required_skill_view_claimed = False
+    if isinstance(security_context, ToolRunSecurityContext):
+        required_skill_view_claimed = security_context.consume_required_skill_view_once(
+            getattr(block, "tool_type", None),
+            getattr(block, "content", None),
+            workspace,
+            owner,
+            session_id,
+        )
+    if (
+        isinstance(security_context, ToolRunSecurityContext)
+        and not approval_claimed
+        and not required_skill_view_claimed
+    ):
         decision = security_context.decision_for(
             getattr(block, "tool_type", None),
             getattr(block, "content", None),

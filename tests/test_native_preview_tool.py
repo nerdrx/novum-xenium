@@ -54,3 +54,22 @@ def test_native_preview_fails_closed_when_executor_is_configured(monkeypatch):
     assert function_call_to_tool_block(
         "native_preview", '{"project_path":"."}'
     ) is None
+
+
+def test_lowered_native_tool_event_keeps_source_name_and_alignment(monkeypatch):
+    import src.agent_loop as agent_loop
+
+    monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
+    blocks, used_native, converted = agent_loop._resolve_tool_blocks("", [
+        {"id": "bad", "name": "unknown_tool", "arguments": "{}"},
+        {"id": "preview", "name": "native_preview", "arguments": '{"project_path":"."}'},
+        {"id": "shell", "name": "bash", "arguments": '{"command":"echo hi"}'},
+    ], round_num=1, is_api_model=True)
+
+    assert used_native
+    assert [block.tool_type for block in blocks] == ["bash", "bash"]
+    assert [call["id"] for call in converted] == ["preview", "shell"]
+    assert agent_loop._native_tool_provenance(converted, 0, blocks[0].tool_type) == {
+        "requested_tool": "native_preview"
+    }
+    assert agent_loop._native_tool_provenance(converted, 1, blocks[1].tool_type) == {}

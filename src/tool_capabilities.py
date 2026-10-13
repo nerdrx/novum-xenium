@@ -801,6 +801,41 @@ class ToolRunSecurityContext:
     public_read_urls: set[str] = field(default_factory=set)
     reviewed_actions: set[tuple[str, str, str]] = field(default_factory=set)
     workspace_snapshots_enabled: bool = False
+    _required_skill_view_once: tuple[str, str, str, str, str] | None = field(
+        default=None, init=False, repr=False,
+    )
+
+    def authorize_required_skill_view_once(
+        self, tool_name, content, workspace, owner, session_id,
+    ) -> bool:
+        """Arm one exact mandatory skill view for the dispatcher backstop."""
+        self._required_skill_view_once = None
+        if (
+            self.approval_mode != "auto"
+            or self.delegated_credential
+            or not self.external_untrusted_context_seen
+            or tool_name != "manage_skills"
+            or _action_from_content(tool_name, content) != "view"
+            or capabilities_for_action(tool_name, content).effects
+            != frozenset({ToolEffect.READ_PRIVATE})
+        ):
+            return False
+        self._required_skill_view_once = (
+            str(tool_name), str(content), str(workspace or ""),
+            str(owner or ""), str(session_id or ""),
+        )
+        return True
+
+    def consume_required_skill_view_once(
+        self, tool_name, content, workspace, owner, session_id,
+    ) -> bool:
+        """Consume the exact one-dispatch permission, including on mismatch."""
+        expected = self._required_skill_view_once
+        self._required_skill_view_once = None
+        return expected == (
+            str(tool_name), str(content), str(workspace or ""),
+            str(owner or ""), str(session_id or ""),
+        )
 
     def authorize_reviewed_action(self, tool_name, content, workspace):
         from src.approval_judge import candidate_action

@@ -6669,6 +6669,9 @@ async def stream_agent_loop(
         _previous_packet = _coding_work.state.packet if _coding_work.state else None
         _previous_packet_stage = _coding_work.state.stage if _coding_work.state else None
         if _coding_work.observe(approved.tool_name, approved.content, approved_result):
+            if (_previous_packet_stage == "done" and _coding_work.state.stage == "verify"
+                    and _coding_work.state.acceptance_result is None):
+                _scheduled_coding_check = None
             if not _coding_work.requires_packet:
                 _coding_packet_stall_recovery_active = False
             if _coding_work_stage_advanced(
@@ -8398,6 +8401,9 @@ async def stream_agent_loop(
             _previous_packet = _coding_work.state.packet if _coding_work.state else None
             _previous_packet_stage = _coding_work.state.stage if _coding_work.state else None
             if _coding_work.observe(block.tool_type, block.content, result):
+                if (_previous_packet_stage == "done" and _coding_work.state.stage == "verify"
+                        and _coding_work.state.acceptance_result is None):
+                    _scheduled_coding_check = None
                 if not _coding_work.requires_packet:
                     _coding_packet_stall_recovery_active = False
                 if _coding_work_stage_advanced(

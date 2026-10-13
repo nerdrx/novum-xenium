@@ -38,7 +38,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 stall_before_packet=False, fail_stall_reads=False, omit_acceptance=False,
                 acceptance_blocked=False, verify_existing=False, repair_failed_check=False,
                 max_tool_calls=0, baseline_blocked=False, max_rounds=10, extra_tools=False,
-                schema_details=None, repeated_failed_checks=False, batch_retry=False):
+                schema_details=None, repeated_failed_checks=False, batch_retry=False,
+                extra_shell_after_acceptance=False, extra_shell_exit=0):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -117,6 +118,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         actions.append(("write_file", {"path": "src/auth.py", "content": "fixed again"}))
     if repeated_failed_checks:
         actions.extend(("write_file", {"path": "src/auth.py", "content": "repair " + str(i)}) for i in range(3))
+    if extra_shell_after_acceptance:
+        actions.append(("bash", {"command": "echo additional inspection"}))
     requested = []
     executed = []
     initial_todowrite = json.dumps(actions[0][1])
@@ -145,6 +148,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
             }
         if block.tool_type == "bash":
             command = block.content
+            if command == "echo additional inspection":
+                return block.tool_type, {"exit_code": extra_shell_exit, "output": "extra shell result"}
             if command == _packet()["reproduce_command"]:
                 if baseline_blocked:
                     return "bash", {"exit_code": 1, "blocked": True, "error": "Check not authorized"}
@@ -796,6 +801,24 @@ def test_server_check_retries_after_real_edit_not_failed_acceptance_alone(monkey
         "todowrite", "bash", "todowrite", "write_file", "bash", "write_file", "bash",
     ]
     assert any(event.get("stage") == "done" for event in events)
+
+
+@pytest.mark.parametrize("extra_shell_exit", [0, 1])
+def test_server_rechecks_after_extra_shell_invalidates_passing_acceptance(monkeypatch, tmp_path, extra_shell_exit):
+    events, executed, _ = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True,
+        extra_shell_after_acceptance=True, extra_shell_exit=extra_shell_exit,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+    )
+    assert [command for tool, command in executed if tool == "bash"] == [
+        _packet()["reproduce_command"], _packet()["acceptance_command"],
+        "echo additional inspection", _packet()["acceptance_command"],
+    ]
+    assert [event["stage"] for event in events if event.get("type") == "coding_work_packet"] == [
+        "reproduce", "edit", "verify", "done", "verify", "done",
+    ]
+    assert any(event.get("type") == "agent_terminal" and event.get("status") == "completed"
+               for event in events)
 
 
 def test_server_check_respects_tool_budget(monkeypatch, tmp_path):

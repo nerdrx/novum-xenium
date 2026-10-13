@@ -144,7 +144,8 @@ def test_full_arguments_avoid_long_prefix_collisions():
     assert _tool_call_signature("grep", '{"path":"src","pattern":"foo"}') == _tool_call_signature("grep", '{"pattern":"foo", "path":"src"}')
 
 
-def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, failed=False, max_rounds=20):
+def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, failed=False, max_rounds=20,
+              workflow_blocked=False):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
     calls = []
@@ -166,11 +167,14 @@ def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, fail
             text = "Finished checking the requested pages."
         else:
             args = {"path": "example.py", "offset": rounds if paginate else 1, "limit": 10 if failed else 10 * rounds}
-            text = "I'll check this file now.\n```read_file\n" + json.dumps(args) + "\n```"
+            tool = "update_plan" if workflow_blocked else "read_file"
+            if workflow_blocked:
+                args = {"plan": "- [x] Repair everything"}
+            text = "I'll check this file now.\n```" + tool + "\n" + json.dumps(args) + "\n```"
             if native:
                 yield "data: " + json.dumps({"delta": "I'll check this file now."}) + "\n\n"
                 yield "data: " + json.dumps({"type": "tool_calls", "calls": [
-                    {"id": f"read-{rounds}", "name": "read_file", "arguments": json.dumps(args)},
+                    {"id": f"read-{rounds}", "name": tool, "arguments": json.dumps(args)},
                 ]}) + "\n\n"
                 yield "data: [DONE]\n\n"
                 return
@@ -179,6 +183,9 @@ def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, fail
 
     async def execute(block, *args, **kwargs):
         calls.append(block)
+        if workflow_blocked:
+            return block.tool_type, {"error": "Run the registered reproduction check first.",
+                                     "exit_code": 1, "blocked": True, "policy": "coding_work_packet"}
         return block.tool_type, {"output": str(len(calls)) if changing else "unchanged page", "exit_code": 1 if failed else 0}
 
     monkeypatch.setattr(al, "stream_llm_with_fallback", stream)
@@ -215,6 +222,16 @@ def test_unlimited_rounds_still_pause_unchanged_reads(monkeypatch):
     events, calls = run_reads(monkeypatch, max_rounds=0)
     assert len(calls) == 4, events
     assert any(event.get("type") == "loop_breaker_triggered" for event in events)
+    assert not any(event.get("type") == "rounds_exhausted" for event in events)
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_real_loop_bounds_workflow_rejected_plan_calls(monkeypatch, native):
+    events, calls = run_reads(monkeypatch, native=native, workflow_blocked=True, max_rounds=0)
+    assert len(calls) == 4
+    guard = next(event for event in events if event.get("type") == "loop_breaker_triggered")
+    assert guard["failed_retries"] == 3
+    assert guard["read_repeats"] == 0
     assert not any(event.get("type") == "rounds_exhausted" for event in events)
 
 

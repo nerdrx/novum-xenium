@@ -4173,7 +4173,11 @@ class _ToolProgressGuard:
         failed_tools = set()
         for record in records:
             tool, content, result = record["tool_name"], record["content"], record["result"]
-            if (tool in self.polls or tool == "ask_user" or result.get("blocked")
+            # Workflow rejections are actionable failures, not human approval waits.
+            # Otherwise blocked planning calls bypass both this guard and the
+            # exact-call backstop, which excludes tools classified as reads.
+            if (tool in self.polls or tool == "ask_user"
+                    or (result.get("blocked") and result.get("policy") != "coding_work_packet")
                     or result.get("approval_required") or result.get("ask_user")):
                 continue
             successful = tool_result_is_successful(result)

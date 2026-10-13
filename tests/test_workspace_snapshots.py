@@ -134,6 +134,46 @@ def test_symlink_and_dependency_exclusions(ws, tmp_path):
     assert outside.read_text() == "keep"
 
 
+def test_nested_project_build_outputs_are_ignored_but_source_is_restored(ws, monkeypatch):
+    monkeypatch.setattr(snapshots, "_MAX_FILE_BYTES", 32)
+    monkeypatch.setattr(snapshots, "_MAX_TOTAL_BYTES", 64)
+    project = ws / "nested" / "nflix"
+    source = project / "package.json"
+    source.parent.mkdir(parents=True)
+    source.write_text("before")
+    (project / "node_modules").mkdir()
+    (project / "node_modules" / "dependency.bin").write_bytes(b"x" * 128)
+    (project / "DIST-BUILD").mkdir()
+    (project / "DIST-BUILD" / "NxFlix.AppImage").write_bytes(b"x" * 128)
+    runtime_gui = project / "dist" / "renderer" / "index.html"
+    runtime_gui.parent.mkdir(parents=True)
+    runtime_gui.write_text("runtime UI")
+
+    saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    root, key = snapshots._identity(str(ws), "alice", "chat-1")
+    record = snapshots._read_manifest(snapshots._store(root, "alice", "chat-1"), saved["id"], key)
+    assert set(record["files"]) == {"nested/nflix/package.json"}
+
+    source.write_text("after")
+    dependency = project / "node_modules" / "dependency.bin"
+    appimage = project / "DIST-BUILD" / "NxFlix.AppImage"
+    dependency.write_bytes(b"d" * 128)
+    appimage.write_bytes(b"b" * 128)
+    runtime_gui.write_text("updated runtime UI")
+    preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
+    snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
+    assert source.read_text() == "before"
+    # Existing dist is excluded by snapshot policy: ignored runtime/build
+    # outputs remain untouched, rather than being falsely restored.
+    assert runtime_gui.read_text() == "updated runtime UI"
+    assert dependency.read_bytes() == b"d" * 128
+    assert appimage.read_bytes() == b"b" * 128
+
+    (ws / "oversized-source.bin").write_bytes(b"x" * 33)
+    with pytest.raises(snapshots.SnapshotError, match="size limit"):
+        snapshots.create_snapshot(str(ws), "alice", "chat-2")
+
+
 def test_stale_preview_rejected(ws):
     path = ws / "a.txt"
     path.write_text("one")

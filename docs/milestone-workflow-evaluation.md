@@ -297,3 +297,10 @@ Evidence: `evaluations/coding-abortable-20261013.json` and `coding-abortable-res
 A fresh qwen3.5:9b trial implemented a small standard-library line decoder, then stopped after two failed acceptance checks in 78.729 seconds. Independent original tests passed seven of eight cases; the implementation used `rstrip('\r')`, removing preserved carriage returns and more than the single CR allowed before LF. Source review additionally found that it joined every byte chunk before decoding, contrary to the incremental-decoding requirement. The original test suite covers boundary correctness but does not enforce incremental consumption; this is an explicit coverage limitation.
 
 Protected test/runner hashes matched, settings were restored, and no operator repaired the generated source. This trial demonstrates a model implementation failure, not a new platform defect. Evidence: `evaluations/coding-utf8-lines-20261014.json`; fixture: `evaluations/fixtures/diverse/utf8-lines`.
+
+
+### Bounded subprocess wrapper
+
+A fresh same-model task completed autonomously in 26.659 seconds. All six independent tests passed: captured streams and whitespace, literal shell metacharacters, nonzero status, invalid UTF-8 replacement, missing executable, and timeout propagation. Source review confirms a minimal direct `subprocess.run` call, with default shell disabled and normal timeout cleanup, followed by explicit replacement decoding. Protected test/runner hashes matched; settings were restored. No operator edited the implementation.
+
+This is a bounded helper success, not a full FFmpeg GUI result. The prompt named the required standard-library API; it does not test independent API selection, process descendants, or interactive cancellation. Evidence: `evaluations/coding-run-command-20261014.json`; fixture: `evaluations/fixtures/diverse/run-command`.

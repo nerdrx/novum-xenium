@@ -626,7 +626,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ask_user",
-            "description": "Ask the user a multiple-choice question only when required information is missing or a choice materially changes the result and has no reasonable default. For routine, reversible implementation choices, inspect the project and follow its conventions; choose a sensible default instead of asking. If the user delegated a choice (for example, naming an app), choose and proceed. Never bypass a required approval flow. The user sees clickable option buttons; calling this ENDS your turn and their selection arrives as your next message. Do NOT use it to confirm irreversible/destructive actions that have a dedicated confirmation flow.",
+            "description": "Ask the user a multiple-choice question only when required information is missing or a choice materially changes the result and has no reasonable default. For routine, reversible implementation choices, inspect the project and follow its conventions; choose a sensible default instead of asking. If the user delegated a choice (for example, naming an app), choose and proceed. Do not ask permission to inspect files, run checks, or continue work the user already authorized. Use the dedicated approval flow when approval is required; clarification never replaces or bypasses it. Never bypass a required approval flow. The user sees clickable option buttons; calling this ENDS your turn and their selection arrives as your next message. Do NOT use it to confirm irreversible/destructive actions that have a dedicated confirmation flow.",
             "parameters": {
                 "type": "object",
                 "properties": {

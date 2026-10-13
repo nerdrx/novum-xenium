@@ -130,7 +130,14 @@ def test_ask_user_guidance_prefers_project_defaults_for_routine_choices():
         if item["function"]["name"] == "ask_user"
     )
 
-    for guidance in (prompt, ask_user_schema):
+    from src.tool_index import BUILTIN_TOOL_DESCRIPTIONS
+
+    for guidance in (prompt, ask_user_schema, BUILTIN_TOOL_DESCRIPTIONS["ask_user"]):
         assert "routine, reversible implementation choices" in guidance
         assert "follow its existing conventions" in guidance or "follow its conventions" in guidance
         assert "required approval" in guidance
+        assert "required information is missing" in guidance
+        assert "no reasonable default" in guidance
+        assert "Do not ask permission to inspect files, run checks, or continue work the user already authorized" in guidance
+        assert "dedicated approval flow" in guidance
+        assert "confirm an assumption" not in guidance

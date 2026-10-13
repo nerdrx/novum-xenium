@@ -141,6 +141,80 @@ def test_large_result_that_exceeds_remaining_input_budget_is_archived(monkeypatc
     assert any("Recovered exact detail." in event for event in events)
 
 
+def test_read_file_archives_when_actual_context_is_full_below_configured_cap(monkeypatch, tmp_path):
+    import src.tool_result_store as store
+
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        loop, "get_setting",
+        lambda key, default=None: 24576 if key == "agent_input_token_budget" else default,
+    )
+    monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
+    monkeypatch.setattr(loop, "_build_system_prompt", lambda messages, *args, **kwargs: (list(messages), []))
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *args, **kwargs: 32768)
+    # Mirrors the live inspection: the configured input cap still has room,
+    # but the assembled request has consumed all context not reserved for output.
+    monkeypatch.setattr(
+        "src.context_inspector.describe_request",
+        lambda *args, **kwargs: {
+            "input_budget_tokens": 24576,
+            "available_tokens": 19716,
+            "total_tokens": 19716,
+            "context_length": 32768,
+            "output_reserve": 13052,
+        },
+    )
+    source = ("const marker = 'DETAIL_FROM_FULL_SOURCE';\n" + "// source line\n" * 500).ljust(7235, " ")[:7235]
+    requests = []
+
+    async def execute(block, **kwargs):
+        if block.tool_type == "read_file":
+            return "read", {"output": source, "exit_code": 0}
+        assert block.tool_type == "context_search"
+        return "search", await ContextSearchTool().execute(block.content, kwargs)
+
+    async def stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        requests.append(request["messages"])
+        if len(requests) == 1:
+            calls = [{"id": "read", "name": "read_file", "arguments": '{"path":"src/main.js"}'}]
+        elif len(requests) == 2:
+            result = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            assert "stored as" in result["content"]
+            assert source not in result["content"]
+            result_id = re.search(r"stored as ([\w-]+)", result["content"]).group(1)
+            calls = [{
+                "id": "search", "name": "context_search",
+                "arguments": json.dumps({"query": "DETAIL_FROM_FULL_SOURCE", "result_id": result_id}),
+            }]
+        else:
+            result = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
+            assert "DETAIL_FROM_FULL_SOURCE" in result["content"]
+            yield 'data: {"delta":"Recovered the source detail."}\n\n'
+            yield "data: [DONE]\n\n"
+            return
+        yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(loop, "execute_tool_block", execute)
+    monkeypatch.setattr(loop, "stream_llm_with_fallback", stream)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6-luna",
+            [{"role": "user", "content": "Inspect the main source and find its marker."}],
+            owner="alice", session_id="chat-context-already-full", relevant_tools={"read_file"},
+            max_tokens=512, max_rounds=3, _is_teacher_run=True,
+        )]
+
+    events = asyncio.run(run())
+    assert len(requests) == 3
+    assert any('"context_result_id"' in event for event in events)
+    assert any("Recovered the source detail." in event for event in events)
+
+
 def test_source_archive_preserves_literal_newlines_and_quotes_for_exact_chunks(monkeypatch, tmp_path):
     import src.tool_result_store as store
 

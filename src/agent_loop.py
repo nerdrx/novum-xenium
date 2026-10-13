@@ -5711,15 +5711,30 @@ async def stream_agent_loop(
         # context shaper, with no archive left to recover the missing detail.
         inspection = _last_context_inspection or {}
         input_budget = inspection.get("input_budget_tokens")
+        available_tokens = inspection.get("available_tokens")
+        if available_tokens is None:
+            try:
+                context_length = max(0, int(inspection.get("context_length") or 0))
+                output_reserve = max(0, int(inspection.get("output_reserve") or 0))
+                available_tokens = max(0, context_length - output_reserve) if context_length else None
+            except (TypeError, ValueError, OverflowError):
+                available_tokens = None
         try:
             input_budget = max(0, int(input_budget)) if input_budget is not None else None
+            available_tokens = max(0, int(available_tokens)) if available_tokens is not None else None
             used_tokens = max(0, int(inspection.get("total_tokens", 0)))
         except (TypeError, ValueError, OverflowError):
             input_budget = None
+            available_tokens = None
             used_tokens = 0
+        effective_budget = (
+            min(input_budget, available_tokens)
+            if input_budget is not None and available_tokens is not None
+            else input_budget if input_budget is not None else available_tokens
+        )
         remaining_tokens = (
-            max(0, input_budget - used_tokens - _context_preview_accounted_tokens - exchange_tokens)
-            if input_budget is not None else None
+            max(0, effective_budget - used_tokens - _context_preview_accounted_tokens - exchange_tokens)
+            if effective_budget is not None else None
         )
         exceeds_remaining_budget = (
             remaining_tokens is not None

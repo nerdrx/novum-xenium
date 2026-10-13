@@ -59,7 +59,8 @@ def test_resume_replays_persona_name_into_live_and_final_bubble():
         'hasActiveStream', 'fetch', 'API_BASE', '_streamRunIds', 'document',
         'sessionModule', '_shortModel', 'uiModule', '_applyModelColor',
         '_resumingStreams', '_resumeStreams', 'spinnerModule', 'markdownModule', '_streamDisplayText',
-        'updateBrowserPreview', 'chatRenderer',
+        'updateBrowserPreview', 'updateRunStatus', 'updateWorkspaceDock',
+        'recordCodingWorkToolActivity', 'renderCodingWorkPacketStatus', 'chatRenderer',
         {json.dumps('return (' + _FUNCTION + ');')}
       )(
         () => false,
@@ -80,6 +81,7 @@ def test_resume_replays_persona_name_into_live_and_final_bubble():
         {{ normalizeThinkingMarkup: (value) => value, squashOutsideCode: (value) => value, mdToHtml: (value) => value }},
         (value) => value,
         () => {{}},
+        () => {{}}, () => {{}}, () => {{}}, () => {{}},
         {{ addMessage: (...args) => added.push(args), recordSessionMetricsCost() {{}} }}
       );
 

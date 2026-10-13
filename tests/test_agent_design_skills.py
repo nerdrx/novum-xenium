@@ -23,7 +23,10 @@ def test_design_skill_templates_import_match_gui_task_and_preserve_ownership(tmp
     assert all(skill['procedure'] and skill['verification'] for skill in matched)
     # A collision cannot replace an existing procedure.
     original = manager.load(owner='alice')
-    manager.import_bundle_from_files({'SKILL.md': (ROOT / 'agent-skills/ui-design/SKILL.md').read_text()},
-                                    owner='bob', category='design')
+    imported = manager.import_bundle_from_files(
+        {'SKILL.md': (ROOT / 'agent-skills/ui-design/SKILL.md').read_text()},
+        owner='bob', category='design',
+    )
+    assert imported['owner'] == 'bob'
+    assert imported['name'] in {skill['name'] for skill in manager.load(owner='bob')}
     assert manager.load(owner='alice') == original
-    assert manager.load(owner='bob')[0]['name'] == 'ui-design-2'

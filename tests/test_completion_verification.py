@@ -5,6 +5,7 @@ import json
 import pytest
 
 from src.completion_verification import (
+    _format_action_event,
     build_completion_verification_prompt,
     compact_action_evidence,
     parse_completion_verification,
@@ -198,6 +199,45 @@ def test_actual_sized_history_keeps_early_success_with_later_retry_failure_and_p
     prompt = build_completion_verification_prompt("Create a private GitHub repository", snapshot)
     assert "Historical success does not prove current external state" in prompt
     assert "report conflicting attempts separately" in prompt
+
+
+def test_compaction_preserves_failed_native_preview_alongside_later_cli_validation():
+    events = [
+        {"tool": "write_file", "command": json.dumps({"path": f"src/file-{i}.js", "content": "x"}),
+         "exit_code": 0, "output": f"Wrote file {i}"}
+        for i in range(70)
+    ]
+    events.append({
+        "tool": "native_preview", "command": "Render Electron UI", "exit_code": 1,
+        "output": "PREVIEW_FAILURE: no renderer; SyntaxError: Identifier __dirname already declared",
+    })
+    events.append({"tool": "bash", "command": "npm test", "exit_code": 0,
+                   "output": "CLI_TESTS_PASSED: 12"})
+    events.extend(
+        {"tool": "read_file", "command": json.dumps({"path": f"docs/ref-{i}.md"}),
+         "exit_code": 0, "output": "Read documentation " + "x" * 300}
+        for i in range(110)
+    )
+
+    snapshot = compact_action_evidence(events, limit=2400)
+
+    assert len(snapshot) <= 2400
+    assert "native_preview" in snapshot
+    assert "PREVIEW_FAILURE: no renderer" in snapshot
+    assert "exit_code=1" in snapshot
+    assert "npm test" in snapshot and "CLI_TESTS_PASSED: 12" in snapshot
+    assert "Action summaries omitted" in snapshot
+
+
+@pytest.mark.parametrize("limit", [64, 72, 96, 128])
+def test_native_preview_event_formatter_respects_tight_budget(limit):
+    formatted = _format_action_event({
+        "tool": "native_preview", "command": "Run UI validation",
+        "exit_code": 1, "output": "PREVIEW_FAILURE: no renderer; " + "SyntaxError " * 20,
+    }, limit)
+
+    assert len(formatted) <= limit
+    assert "PREVIEW_FAILURE" in formatted
 
 
 def test_compaction_labels_action_gaps_when_synopses_cannot_fit():

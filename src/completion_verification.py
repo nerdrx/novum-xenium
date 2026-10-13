@@ -33,18 +33,24 @@ def _format_action_event(event: dict, limit: int) -> str:
     code = "unknown" if code is None else str(code)
     command = str(event.get("command") or "(no command)")
     output = str(event.get("output") or "(no output)")
+    ui_preview = tool.lower() == "native_preview"
     # Keep source records transparent: never tokenize or reconstruct a shell
     # command, since that can omit control flow or alter option/value meaning.
     # Tight budgets abbreviate fields while retaining the tool and exit status.
     tool_limit = min(80, max(8, limit // 3))
     tool = _head_tail(tool, tool_limit)
-    prefix = f"[{tool}] exit_code={code} command: "
-    separator = " output: "
+    prefix = f"[{tool}] exit_code={code}" + (" output: " if ui_preview else " command: ")
+    separator = "" if ui_preview else " output: "
     available = max(limit - len(prefix) - len(separator), 0)
-    command_limit = max(0, available * 2 // 3)
+    command_limit = 0 if ui_preview else max(0, available * 2 // 3)
     command_text = _head_tail(command, command_limit)
     output_limit = max(available - len(command_text), 0)
-    output_text = _head_tail(output, output_limit)
+    if ui_preview and len(output) > output_limit:
+        omission = " …[output omitted]…"
+        output_text = (output[:output_limit] if output_limit <= len(omission) + 16
+                       else output[:output_limit - len(omission)] + omission)
+    else:
+        output_text = _head_tail(output, output_limit)
     return prefix + command_text + separator + output_text
 
 
@@ -117,6 +123,8 @@ def compact_action_evidence(events, limit: int = 8000) -> str:
         )
     ]
     latest_validation = validation_indexes[-1] if validation_indexes else None
+    latest_ui_validation = next((index for index in range(len(actions) - 1, -1, -1)
+                                 if str(actions[index].get("tool") or "").lower() == "native_preview"), None)
     latest_writes = {}
     first_write_order = {}
     for index, event in enumerate(actions):
@@ -155,6 +163,7 @@ def compact_action_evidence(events, limit: int = 8000) -> str:
         protected = list(dict.fromkeys(
             [0, count - 1]
             + ([latest_validation] if latest_validation is not None else [])
+            + ([latest_ui_validation] if latest_ui_validation is not None else [])
             + ([latest_external] if latest_external is not None else [])
         ))[:max_selected]
         selected_set = set(protected)
@@ -217,7 +226,7 @@ def compact_action_evidence(events, limit: int = 8000) -> str:
         if index in budget_by_index and event.get("exit_code") not in (None, 0, "0")
     ]
     important = [index for index in dict.fromkeys(
-        ([latest_external, latest_validation] + external_evidence + failed_actions)
+        ([latest_external, latest_validation, latest_ui_validation] + external_evidence + failed_actions)
     ) if index is not None and index in budget_by_index]
     for index in important:
         addition = min(max(limit - len(result), 0), max(0, 900 - budget_by_index[index]))

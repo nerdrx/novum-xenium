@@ -237,6 +237,27 @@ def test_ui_design_requires_visual_verification_when_both_skills_match():
     assert gate.may_mutate
 
 
+def test_completed_skill_reviews_cannot_loop_while_explicit_documentation_is_pending():
+    url = "https://vendor.example/docs/gui"
+    gate = CodingGrounding(f"Build a GUI app following {url}")
+    gate.set_skill_candidates(["ui-design", "visual-verification"])
+    for name in ("ui-design", "visual-verification"):
+        assert gate.observe(
+            "manage_skills", {"results": f"{name} procedure"},
+            json.dumps({"action": "view", "name": name}),
+        )
+
+    duplicate = json.dumps({"action": "view", "name": "ui-design"})
+    assert gate.skill_reviews_satisfied
+    assert not gate.documentation_ready
+    assert "manage_skills" not in gate.phase_tools
+    assert not gate.allows_tool("manage_skills", duplicate)
+    assert "required suggested skill procedures have already been read" in gate.directive
+    assert url in gate.directive
+    assert "web_fetch" in gate.phase_tools
+    assert gate.allows_tool("web_fetch", json.dumps({"url": url}))
+
+
 def test_rereading_successful_ui_design_does_not_open_visual_skill_fallback():
     gate = CodingGrounding(task())
     gate.set_skill_candidates(["ui-design", "visual-verification"])

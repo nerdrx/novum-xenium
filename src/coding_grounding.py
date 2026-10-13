@@ -224,10 +224,13 @@ class CodingGrounding:
 
     @property
     def phase_tools(self):
-        """Keep the ready-for-skill phase focused on that one remaining gate."""
+        """Expose only tools that can advance an outstanding research gate."""
         if self.documentation_ready and self.skill_review_pending:
             return {"manage_skills", "ask_user", "search_tools"} & self.research_tools
-        return self.research_tools
+        tools = set(self.research_tools)
+        if not self.documentation_ready and self.skill_reviews_satisfied:
+            tools.discard("manage_skills")
+        return tools
 
     def allows_tool(self, tool_name, content=None):
         """Expose skill discovery, while keeping skill mutations behind the gate."""
@@ -276,6 +279,12 @@ class CodingGrounding:
             "and higher-priority instructions. "
             if self.skill_review_pending else ""
         )
+        skill_complete = (
+            "The required suggested skill procedures have already been read; do not call manage_skills "
+            "again while the documentation lookup is pending. "
+            if self.skill_candidates and self.skill_reviews_satisfied
+            and not self.documentation_ready else ""
+        )
         skill_fallback = (
             "A required suggested skill procedure was not consulted after the bounded opportunity; "
             "proceed without it and do not claim all required procedures were consulted. "
@@ -290,6 +299,7 @@ class CodingGrounding:
             + source_rule
             + url_rule
             + skill_rule
+            + skill_complete
             + skill_fallback
             + "Count evidence only after a successful tool result returns readable source or document content. "
             "Search snippets alone are leads, not evidence. Keep this brief; do not start a Deep Research job. "

@@ -17,6 +17,22 @@ equivalent web access configured for Aider; otherwise label the run an
 asymmetric research trial, not a controlled agent comparison. Keep web disabled
 for both sides when comparing coding behavior without outside research.
 
+## Latest measured result (2026-10-13)
+
+After registered check scheduling and approval research recovery (Python runtime
+`325a1b6`), both agents passed the fixed two-file acceptance check in both run
+orders using `qwen3.5:9b`. Novum completed its internal workflow in one run;
+the other ended incomplete without a terminal event, despite correct output.
+Aider completed both. Novum took 77.399 / 30.870 seconds; Aider took
+6.727 / 5.824 seconds. These two small trials demonstrate working repairs,
+not broad reliability or a general speed benchmark. Agent prompts and context
+overhead differ. Raw manual-intervention fields remain unrecorded.
+
+See [recorded results](evaluations/coding-registered-checks-comparison-20261013.json)
+for both adapter outcomes and external checks. The same record includes a
+separate failed GUI preview: improved diagnostics expose the FFmpeg handler
+failure, but the generated application has not passed conversion.
+
 ## Current host check
 
 On this host, `command -v aider` found no system Aider executable. Aider 0.86.2

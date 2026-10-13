@@ -1,0 +1,623 @@
+{
+  "runtime_python_revision": "325a1b6",
+  "preview_helper_revision": "82495c9",
+  "runs": [
+    {
+      "order": "forward",
+      "novum_metadata": {
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 13
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "endpoint_id": "6865006e",
+        "evidence": [
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 13995,
+            "model": "nx-model-5",
+            "output_tokens": 581,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 14576,
+            "type": "metrics"
+          },
+          {
+            "decision": "approve_task",
+            "type": "approval_decision"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 1,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 4,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 4,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 5,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 6,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 6,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 7,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 8,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 9,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 9,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 10,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 11,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 12,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 13,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "passed",
+            "round": 13,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 78378,
+            "model": "nx-model-5",
+            "output_tokens": 1686,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 80064,
+            "type": "metrics"
+          },
+          {
+            "reason": "coding_work_verified",
+            "review_status": "passed",
+            "status": "completed",
+            "test_status": "passed",
+            "type": "agent_terminal"
+          }
+        ],
+        "model": "qwen3.5:9b",
+        "output_saved": false,
+        "preset_id": null,
+        "run_id": "b0f3f6c16d55407c89d471bb1697e773",
+        "seconds": 77.293,
+        "session_id": "e743bf1d-7e92-4383-8f28-03b1cd259c84",
+        "source_files": [
+          "core.py",
+          "report.py"
+        ],
+        "status": "complete",
+        "stream_ended": true,
+        "terminal": {
+          "reason": "coding_work_verified",
+          "review_status": "passed",
+          "status": "completed",
+          "test_status": "passed",
+          "type": "agent_terminal"
+        },
+        "verification_passed": null
+      },
+      "comparison": {
+        "schema_version": 1,
+        "started_at": "2026-10-13T18:08:18.827215+00:00",
+        "model": "qwen3.5:9b",
+        "endpoint": "http://127.0.0.1:8097/v1",
+        "settings": {
+          "temperature": 1.0,
+          "max_tokens": 16384
+        },
+        "case": "multifile",
+        "run_order": [
+          "novum",
+          "aider"
+        ],
+        "fixture_sha256": "d4de77f937e8717993891f3f27b4f1bb5567bc6977487342167704aebdd6ef8a",
+        "source_files": [
+          "core.py",
+          "report.py"
+        ],
+        "task": "Repair this project: `core.total` must sum numeric values; `report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. Change `core.py` and `report.py`, then verify the result.\n",
+        "results": {
+          "novum": {
+            "command_template": [
+              "python3",
+              "/run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py",
+              "--task-file",
+              "{task_file}",
+              "--host-workspace",
+              "{workspace}",
+              "--container-workspace",
+              "/workspace/.nx-evaluations/same-model-multifile-20261013-200818/novum",
+              "--api-base",
+              "http://127.0.0.1:7000",
+              "--endpoint-id",
+              "6865006e",
+              "--model",
+              "{model}",
+              "--files-json",
+              "{source_files_json}",
+              "--approve-task",
+              "--timeout",
+              "240"
+            ],
+            "command_returncode": 0,
+            "command_error": null,
+            "timed_out": false,
+            "seconds": 77.399,
+            "acceptance_command": [
+              "/usr/bin/python3",
+              "-c",
+              "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+            ],
+            "acceptance_returncode": 0,
+            "acceptance_timed_out": false,
+            "passed": true,
+            "manual_interventions": {
+              "count": null,
+              "notes": [],
+              "operator_recorded": false
+            },
+            "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/same-model-multifile-20261013-200818/novum"
+          },
+          "aider": {
+            "command_template": [
+              "/tmp/nx-coding-agent-comparison-aider-venv/bin/python",
+              "/run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_aider.py",
+              "--task-file",
+              "{task_file}",
+              "--model",
+              "{model}",
+              "--endpoint-model",
+              "nx-model-5",
+              "--endpoint",
+              "{endpoint}",
+              "--settings-json",
+              "{settings_json}",
+              "--provider",
+              "openai-compatible",
+              "--files-json",
+              "{source_files_json}",
+              "--aider-bin",
+              "/tmp/nx-coding-agent-comparison-aider-venv/bin/aider",
+              "--timeout",
+              "240"
+            ],
+            "command_returncode": 0,
+            "command_error": null,
+            "timed_out": false,
+            "seconds": 6.727,
+            "acceptance_command": [
+              "/usr/bin/python3",
+              "-c",
+              "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+            ],
+            "acceptance_returncode": 0,
+            "acceptance_timed_out": false,
+            "passed": true,
+            "manual_interventions": {
+              "count": null,
+              "notes": [],
+              "operator_recorded": false
+            },
+            "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/same-model-multifile-20261013-200818/aider"
+          }
+        },
+        "model_output_saved": false,
+        "credentials_saved": false
+      },
+      "workflow_setting_restored": true
+    },
+    {
+      "order": "reverse",
+      "novum_metadata": {
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 9
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "endpoint_id": "6865006e",
+        "evidence": [
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 13988,
+            "model": "nx-model-5",
+            "output_tokens": 494,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 14482,
+            "type": "metrics"
+          },
+          {
+            "decision": "approve_task",
+            "type": "approval_decision"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 1,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 3,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 3,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 4,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 5,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 6,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 7,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 8,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 9,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 71919,
+            "model": "nx-model-5",
+            "output_tokens": 1078,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 72997,
+            "type": "metrics"
+          }
+        ],
+        "model": "qwen3.5:9b",
+        "output_saved": false,
+        "preset_id": null,
+        "run_id": "5fd5c7d82cf54a7c889179121a491795",
+        "seconds": 30.785,
+        "session_id": "14b8b4e5-4932-44b2-b410-f6f1df379f53",
+        "source_files": [
+          "core.py",
+          "report.py"
+        ],
+        "status": "incomplete",
+        "stream_ended": true,
+        "terminal": null,
+        "verification_passed": null
+      },
+      "comparison": {
+        "schema_version": 1,
+        "started_at": "2026-10-13T18:10:23.095690+00:00",
+        "model": "qwen3.5:9b",
+        "endpoint": "http://127.0.0.1:8097/v1",
+        "settings": {
+          "temperature": 1.0,
+          "max_tokens": 16384
+        },
+        "case": "multifile",
+        "run_order": [
+          "aider",
+          "novum"
+        ],
+        "fixture_sha256": "d4de77f937e8717993891f3f27b4f1bb5567bc6977487342167704aebdd6ef8a",
+        "source_files": [
+          "core.py",
+          "report.py"
+        ],
+        "task": "Repair this project: `core.total` must sum numeric values; `report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. Change `core.py` and `report.py`, then verify the result.\n",
+        "results": {
+          "aider": {
+            "command_template": [
+              "/tmp/nx-coding-agent-comparison-aider-venv/bin/python",
+              "/run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_aider.py",
+              "--task-file",
+              "{task_file}",
+              "--model",
+              "{model}",
+              "--endpoint-model",
+              "nx-model-5",
+              "--endpoint",
+              "{endpoint}",
+              "--settings-json",
+              "{settings_json}",
+              "--provider",
+              "openai-compatible",
+              "--files-json",
+              "{source_files_json}",
+              "--aider-bin",
+              "/tmp/nx-coding-agent-comparison-aider-venv/bin/aider",
+              "--timeout",
+              "240"
+            ],
+            "command_returncode": 0,
+            "command_error": null,
+            "timed_out": false,
+            "seconds": 5.824,
+            "acceptance_command": [
+              "/usr/bin/python3",
+              "-c",
+              "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+            ],
+            "acceptance_returncode": 0,
+            "acceptance_timed_out": false,
+            "passed": true,
+            "manual_interventions": {
+              "count": null,
+              "notes": [],
+              "operator_recorded": false
+            },
+            "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/same-model-multifile-20261013-201023/aider"
+          },
+          "novum": {
+            "command_template": [
+              "python3",
+              "/run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py",
+              "--task-file",
+              "{task_file}",
+              "--host-workspace",
+              "{workspace}",
+              "--container-workspace",
+              "/workspace/.nx-evaluations/same-model-multifile-20261013-201023/novum",
+              "--api-base",
+              "http://127.0.0.1:7000",
+              "--endpoint-id",
+              "6865006e",
+              "--model",
+              "{model}",
+              "--files-json",
+              "{source_files_json}",
+              "--approve-task",
+              "--timeout",
+              "240"
+            ],
+            "command_returncode": 2,
+            "command_error": null,
+            "timed_out": false,
+            "seconds": 30.87,
+            "acceptance_command": [
+              "/usr/bin/python3",
+              "-c",
+              "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+            ],
+            "acceptance_returncode": 0,
+            "acceptance_timed_out": false,
+            "passed": true,
+            "manual_interventions": {
+              "count": null,
+              "notes": [],
+              "operator_recorded": false
+            },
+            "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/same-model-multifile-20261013-201023/novum"
+          }
+        },
+        "model_output_saved": false,
+        "credentials_saved": false
+      },
+      "workflow_setting_restored": true
+    }
+  ],
+  "preview_diagnostics": {
+    "status": "failed",
+    "phase": "running workspace test",
+    "appEntry": "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/dist/main/index.js",
+    "behavior": "workspace test failed; app behavior remains unverified",
+    "test": "failed",
+    "report": "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/run-56efc1ee-a427-464d-a0e2-de253d846e95/report.json",
+    "error": "page.waitForFunction: Timeout 15000ms exceeded.",
+    "sourceFrames": [
+      "page.waitForFunction: Timeout 15000ms exceeded.",
+      "    at default (/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/qa-conversion-flow.mjs:25:14)",
+      "    at async file:///workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/[eval1]:251:19"
+    ],
+    "errors": {
+      "page": 1,
+      "console": 0,
+      "mainStdout": 10,
+      "stderr": 15,
+      "examples": [
+        "Error invoking remote method 'ffmpeg:spawn': [object Object]",
+        "Error occurred in handler for 'ffmpeg:spawn': {\n  success: false,\n  output: '/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/conversion-1a928829-b8ed-",
+        "[NxFlix] Output path: /workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/conversion-1a928829-b8ed-4c9f-9221-9f389f6fd743"
+      ],
+      "mainStderrExamples": [
+        "Error occurred in handler for 'ffmpeg:spawn': {\n  success: false,\n  output: '/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/conversion-1a928829-b8ed-4c9f-9221-9f389f6fd743',\n  exitCode: 234\n}"
+      ],
+      "mainStdoutExamples": [
+        "[NxFlix] Output path: /workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/conversion-1a928829-b8ed-4c9f-9221-9f389f6fd743",
+        "[NxFlix] Output exists: true",
+        "[NxFlix] Output size: 4096"
+      ]
+    }
+  },
+  "conclusions": [
+    "Both agents passed the fixed external multifile acceptance check in both orders.",
+    "Novum completed its internal workflow in the forward run, but the reverse run ended incomplete without a terminal event (adapter exit 2).",
+    "Aider took 6.727 and 5.824 seconds; Novum took 77.399 and 30.870 seconds. These are two small trials, not a general performance benchmark.",
+    "The isolated GUI preview still failed. Its leading summary now includes the FFmpeg IPC failure, output directory, and exit code 234. No GUI success is claimed."
+  ],
+  "limitations": [
+    "Same requested model and declared generation settings; agent prompts and context overhead differ.",
+    "Raw harness manual-intervention fields remain unrecorded; do not interpret null as an audited zero.",
+    "No broad reliability claim follows from this two-file fixture."
+  ]
+}

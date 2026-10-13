@@ -184,3 +184,28 @@ Startup `coding_workflow` events now reached the adapter with requested=true and
 enabled=true, verifying the route forwarding fix live. The focused repair itself
 failed; no repeated-success or broader reliability claim is supported. Further
 identical retries without a new diagnosis would not provide useful evidence.
+
+## Enforced acceptance retry boundary
+
+Checked coding now stops after two consecutive failed registered acceptance checks
+after an edit. Initial reproduction failures, blocked calls, and approval requests
+do not consume this allowance. A successful acceptance check resets the counter;
+editing or revising a packet does not. The saved counter survives checkpoint
+restoration. This does not limit arbitrary inspection calls or replace other
+execution/approval boundaries.
+
+The server stops queued later tool calls in the same batch, preserves work and
+evidence, and emits `coding_acceptance_retry_limit` instead of completion.
+79 focused tracker/integration tests passed, including a batch containing a failed
+check followed by a third edit. Restored exhausted-state behavior and tracker
+checkpoint roundtrip were tested separately; this is not an end-to-end approval
+database recovery test. Deployment used backups and two all-idle checks covering
+101 chats. Image `4359161e5a64` includes the change.
+
+The [same-model live follow-up](evaluations/coding-enforced-retry-20261013.json)
+retained the existing application and registered one failed acceptance check.
+Its 300-second harness deadline arrived before a second failure, so the live run
+did not exercise the retry-stop branch. The external GUI check still failed.
+The focused automated tests establish the boundary; this trial does not establish
+autonomous repair success. Original settings were restored and protected hashes
+matched. No generated application source was manually repaired.

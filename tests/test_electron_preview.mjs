@@ -213,6 +213,8 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
     const { spawn } = require('node:child_process');
     process.stderr.write('DBus warning: routine fixture startup notice\\n');
     process.stderr.write('App threw an error during load\\n/workspace/dist/main/index.js:14\\nSyntaxError: duplicate __dirname declaration\\n/workspace/dist/main/index.js:14\\n');
+    process.stdout.write('FFmpeg console error: decoder failed\\n');
+    process.stdout.write('x'.repeat(16000));
     const profile = process.argv.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});
     fs.writeFileSync(path.join(profile, 'DevToolsActivePort'), '9222\\n/devtools/browser/fixture\\n');
@@ -271,6 +273,12 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   assert.match(retrySummary.errors.mainStderrExamples[0], /dist\/main\/index\.js:14/);
   assert.match(retrySummary.errors.examples[0], /SyntaxError: duplicate __dirname declaration/,
     'the main-process exception should outrank routine stderr in the compact examples');
+  const retryReport = JSON.parse(await readFile(retrySummary.report, 'utf8'));
+  assert.ok(retryReport.diagnostics.mainStdout.includes('FFmpeg console error: decoder failed'), JSON.stringify(retryReport.diagnostics.mainStdout));
+  assert.ok(retryReport.diagnostics.mainStdout.length <= 80);
+  assert.ok(retryReport.diagnostics.mainStdout.every(line => line.length <= 500));
+  assert.match(retryReport.diagnostics.mainStdout.at(-1), /^x+$/,
+    'newline-free stdout should be retained as a bounded final chunk');
   const completedRuns = (await readdir(outputDir)).filter(name => name.startsWith('run-'));
   assert.equal(completedRuns.length, 2, 'each preview must retain isolated artifacts in its own run directory');
   const reports = await Promise.all(completedRuns.map(async name => {

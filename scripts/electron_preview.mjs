@@ -145,15 +145,20 @@ let runDirectory = '';
 let outputDir = '';
 let runId = '';
 let activePage = null;
+let flushMainOutput = () => {};
 let phase = 'initializing';
 let workspace = '';
 let appEntry = '';
 let electronPath = '';
 const diagnostics = {
   pageErrors: [], pageErrorDetails: [], consoleErrors: [], consoleErrorDetails: [],
-  failedRequests: [], badResponses: [], mainStderr: [],
+  failedRequests: [], badResponses: [], mainStdout: [], mainStderr: [],
 };
 const cap = (array, value) => { if (array.length < 80) array.push(String(value).slice(0, 500)); };
+const capLatest = (array, value) => {
+  if (array.length >= 80) array.shift();
+  array.push(String(value).slice(0, 500));
+};
 const capDetail = (array, value) => { if (array.length < 20) array.push(value); };
 const cleanUrl = (value) => { try { const u = new URL(value); return (u.origin + u.pathname).slice(0, 300); } catch { return String(value).slice(0, 300); } };
 const safeRm = (target, base) => {
@@ -201,17 +206,24 @@ try {
   });
   let electronLaunchError = null;
   electronProcess.on('error', error => { electronLaunchError = error; cap(diagnostics.mainStderr, error.message); });
-  const collectOutput = (stream, bucket) => {
+  const collectOutput = (stream, bucket, latest = false) => {
     let pending = '';
+    const add = latest ? value => capLatest(bucket, value) : value => cap(bucket, value);
     stream.setEncoding('utf8').on('data', chunk => {
-      pending += chunk;
-      const lines = pending.split(/\r?\n/);
+      const lines = (pending + chunk).split(/\r?\n/);
       pending = lines.pop() || '';
-      for (const line of lines) if (line.trim()) cap(bucket, line);
+      if (pending.length > 5000) pending = pending.slice(-5000);
+      for (const line of lines) if (line.trim()) add(line);
     });
-    stream.on('end', () => { if (pending.trim()) cap(bucket, pending); });
+    const flush = () => { if (pending.trim()) add(pending); pending = ''; };
+    stream.on('end', flush);
+    return flush;
   };
-  if (electronProcess.stderr) collectOutput(electronProcess.stderr, diagnostics.mainStderr);
+  const outputFlushes = [
+    electronProcess.stdout && collectOutput(electronProcess.stdout, diagnostics.mainStdout, true),
+    electronProcess.stderr && collectOutput(electronProcess.stderr, diagnostics.mainStderr),
+  ].filter(Boolean);
+  flushMainOutput = () => outputFlushes.forEach(flush => flush());
   const devtoolsFile = path.join(profile, 'DevToolsActivePort');
   const deadline = Date.now() + Math.max(10000, (config.timeout - 10) * 1000);
   let endpoint = '';
@@ -340,6 +352,7 @@ try {
     phase = 'workspace test completed';
   }
 
+  flushMainOutput();
   const runtimeIssues = diagnostics.pageErrors.length || diagnostics.consoleErrors.length ||
     diagnostics.failedRequests.length || diagnostics.badResponses.length ||
     electronProcess.exitCode !== null;
@@ -376,10 +389,13 @@ try {
       console: diagnostics.consoleErrors.length,
       requests: diagnostics.failedRequests.length,
       responses: diagnostics.badResponses.length,
+      mainStdout: diagnostics.mainStdout.length,
       mainStderr: diagnostics.mainStderr.length,
       examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors,
         ...diagnostics.failedRequests, ...diagnostics.badResponses,
-        ...summarizeMainStderr(diagnostics.mainStderr)].slice(0, 3).map(value => String(value).slice(0, 180)),
+        ...summarizeMainStderr(diagnostics.mainStderr),
+        ...diagnostics.mainStdout.slice(-3)].slice(0, 3).map(value => String(value).slice(0, 180)),
+      mainStdoutExamples: diagnostics.mainStdout.slice(-3),
       mainStderrExamples: summarizeMainStderr(diagnostics.mainStderr),
       actualSourceFrames: diagnostics.pageErrorDetails.slice(0, 2).map(detail => ({ message: detail.message, stack: detail.stack.slice(0, 800) })),
       consoleLocations: diagnostics.consoleErrorDetails.slice(0, 2),
@@ -401,6 +417,7 @@ try {
   if (page.isClosed() || runtimeIssues) process.exitCode = 1;
 } catch (error) {
   fail(error?.message || error);
+  flushMainOutput();
   const reportPath = runDirectory ? path.join(runDirectory, 'report.json') : '';
   const workspaceTestFailed = phase === 'running workspace test';
   const errorSummary = String(error?.message || error).slice(0, 1000);
@@ -432,7 +449,8 @@ try {
       ? 'workspace test failed; app behavior remains unverified'
       : 'unverified; preview failed before workspace tests',
     runId, workspace, appEntry, electron: electronPath, phase,
-    error: String(error?.stack || error).slice(0, 8000), diagnostics, testEvidence,
+    testEvidence,
+    error: String(error?.stack || error).slice(0, 8000), diagnostics,
   };
   if (reportPath) {
     try { fs.writeFileSync(reportPath, JSON.stringify(failureReport, null, 2), { mode: 0o600 }); } catch {}
@@ -445,9 +463,12 @@ try {
     ...(Object.keys(testEvidence).length ? { testEvidence } : {}),
     errors: {
       page: diagnostics.pageErrors.length, console: diagnostics.consoleErrors.length,
+      mainStdout: diagnostics.mainStdout.length,
       stderr: diagnostics.mainStderr.length,
       examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors,
-        ...summarizeMainStderr(diagnostics.mainStderr)].slice(0, 3).map(value => String(value).slice(0, 180)),
+        ...summarizeMainStderr(diagnostics.mainStderr),
+        ...diagnostics.mainStdout.slice(-3)].slice(0, 3).map(value => String(value).slice(0, 180)),
+      mainStdoutExamples: diagnostics.mainStdout.slice(-3),
       mainStderrExamples: summarizeMainStderr(diagnostics.mainStderr),
     },
     report: reportPath || null,

@@ -198,5 +198,184 @@
     "No manual fixture edits.",
     "No FFmpeg GUI conversion verified.",
     "Workflow and reviewer settings restored after run."
-  ]
+  ],
+  "retest": {
+    "novum_revision": "569820e",
+    "fixture_sha256": "0cd0ff0557b5cefbf8c05ae87be6d5d3377098cc0163f98f09e8e0b03fbf7710",
+    "run_order": [
+      "aider",
+      "novum"
+    ],
+    "settings": {
+      "temperature": 1.0,
+      "max_tokens": 16384
+    },
+    "novum": {
+      "actual_route": {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 7
+      },
+      "approval_count": 1,
+      "endpoint_id": "6865006e",
+      "evidence": [
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 1,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 2,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "input_tokens": 13818,
+          "model": "nx-model-5",
+          "output_tokens": 332,
+          "requested_model": "qwen3.5:9b",
+          "total_tokens": 14150,
+          "type": "metrics"
+        },
+        {
+          "decision": "approve_task",
+          "type": "approval_decision"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 0,
+          "stage": "reproduce",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 1,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 2,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 3,
+          "type": "model_actual"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 3,
+          "stage": "edit",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 4,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 5,
+          "type": "model_actual"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 5,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 6,
+          "type": "model_actual"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 6,
+          "stage": "done",
+          "test_status": "passed",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 7,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "input_tokens": 60644,
+          "model": "nx-model-5",
+          "output_tokens": 658,
+          "requested_model": "qwen3.5:9b",
+          "total_tokens": 61302,
+          "type": "metrics"
+        },
+        {
+          "reason": "coding_checks_passed",
+          "review_status": "not_reviewed",
+          "status": "completed",
+          "test_status": "passed",
+          "type": "agent_terminal"
+        }
+      ],
+      "model": "qwen3.5:9b",
+      "output_saved": false,
+      "preset_id": null,
+      "run_id": "d49b2b3763bb4d9481abbf5d7cea4039",
+      "seconds": 29.604,
+      "session_id": "a28fc592-5c42-4b78-a59b-f2f7fb5c66c0",
+      "source_files": [
+        "calc.py"
+      ],
+      "status": "complete",
+      "stream_ended": true,
+      "terminal": {
+        "reason": "coding_checks_passed",
+        "review_status": "not_reviewed",
+        "status": "completed",
+        "test_status": "passed",
+        "type": "agent_terminal"
+      },
+      "verification_passed": null
+    },
+    "results": {
+      "aider": {
+        "external_acceptance_passed": true,
+        "seconds": 3.52,
+        "command_returncode": 0,
+        "manual_code_edits": 0
+      },
+      "novum": {
+        "external_acceptance_passed": true,
+        "seconds": 29.668,
+        "command_returncode": 0,
+        "manual_code_edits": 0
+      }
+    },
+    "finding": "Same-model tiny repair completed with real exact acceptance exit 0, terminal coding_checks_passed, review_status not_reviewed, and verification_passed null. Aider also passed external acceptance. This trial generated a valid command initially, so it proves live unreviewed completion, not live malformed-command recovery. Command correction is covered by focused tracker tests.",
+    "gui_conversion_verified": false
+  }
 }

@@ -115,6 +115,23 @@ def _limits_from_model_entry(raw: Mapping[str, Any]) -> dict[str, Any]:
     return limits
 
 
+def _input_modalities_from_model_entry(raw: Mapping[str, Any]) -> tuple[str, ...] | None:
+    architecture = as_mapping(raw.get("architecture"))
+    values = architecture.get("input_modalities")
+    if not isinstance(values, list) or not values:
+        return None
+    modalities: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            return None
+        modality = mc.normalize_modality(value)
+        if not modality:
+            return None
+        if modality not in modalities:
+            modalities.append(modality)
+    return tuple(modalities)
+
+
 def _props_params(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return as_mapping(as_mapping(payload.get("default_generation_settings")).get("params"))
 
@@ -138,14 +155,22 @@ def _limits_from_props(payload: Mapping[str, Any], slots_payload: Any = None) ->
     return limits
 
 
-def _modalities_from_props(payload: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _modalities_from_props(
+    payload: Mapping[str, Any],
+    fallback: tuple[str, ...] | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     modalities = as_mapping(payload.get("modalities"))
-    input_modalities = [mc.MODALITY_TEXT]
+    input_modalities = list(fallback or (mc.MODALITY_TEXT,))
+    # Explicit runtime booleans override the model-list architecture; absent
+    # fields leave that model-specific evidence intact.
+    for key, modality in (("vision", mc.MODALITY_IMAGE), ("audio", mc.MODALITY_AUDIO)):
+        if modalities.get(key) is True and modality not in input_modalities:
+            input_modalities.append(modality)
+        elif modalities.get(key) is False and modality in input_modalities:
+            input_modalities.remove(modality)
+    if mc.MODALITY_TEXT not in input_modalities:
+        input_modalities.insert(0, mc.MODALITY_TEXT)
     output_modalities = [mc.MODALITY_TEXT]
-    if modalities.get("vision") is True:
-        input_modalities.append(mc.MODALITY_IMAGE)
-    if modalities.get("audio") is True:
-        input_modalities.append(mc.MODALITY_AUDIO)
     return tuple(input_modalities), tuple(output_modalities)
 
 
@@ -214,6 +239,7 @@ def _capability_for_family(
     capabilities: tuple[str, ...] = (),
     limits: Mapping[str, Any] | None = None,
     props_payload: Mapping[str, Any] | None = None,
+    model_input_modalities: tuple[str, ...] | None = None,
 ) -> mc.ModelCapability:
     if family == mc.FAMILY_EMBEDDING:
         return build_capability(
@@ -231,10 +257,22 @@ def _capability_for_family(
             capabilities=capabilities,
             limits=limits,
         )
+    if family == mc.FAMILY_UNKNOWN:
+        return build_capability(
+            family=mc.FAMILY_UNKNOWN,
+            input_modalities=model_input_modalities or (),
+            output_modalities=(),
+            capabilities=capabilities,
+            limits=limits,
+        )
     if props_payload:
-        input_modalities, output_modalities = _modalities_from_props(props_payload)
+        input_modalities, output_modalities = _modalities_from_props(
+            props_payload,
+            fallback=model_input_modalities,
+        )
     else:
-        input_modalities, output_modalities = (mc.MODALITY_TEXT,), (mc.MODALITY_TEXT,)
+        input_modalities = model_input_modalities or (mc.MODALITY_TEXT,)
+        output_modalities = (mc.MODALITY_TEXT,)
     return build_capability(
         family=mc.FAMILY_CHAT,
         input_modalities=input_modalities,
@@ -251,6 +289,7 @@ def _record(
     capabilities: tuple[str, ...] = (),
     limits: Mapping[str, Any] | None = None,
     props_payload: Mapping[str, Any] | None = None,
+    model_input_modalities: tuple[str, ...] | None = None,
     deterministic_controls: tuple[mc.DeterministicControl, ...] = (),
     extra_assertions: tuple[mc.CapabilityAssertion, ...] = (),
     raw: Mapping[str, Any] | None = None,
@@ -262,6 +301,7 @@ def _record(
         capabilities=capabilities,
         limits=limits,
         props_payload=props_payload,
+        model_input_modalities=model_input_modalities,
     )
     return ModelCapabilityRecord(
         vendor=VENDOR_LLAMACPP,
@@ -295,7 +335,24 @@ def record_from_model_payload(
         return None
     server_model = as_mapping(server_model)
     family = _family_from_server_model(server_model) if server_model else mc.FAMILY_UNKNOWN
+    model_input_modalities = _input_modalities_from_model_entry(raw)
     if family == mc.FAMILY_UNKNOWN:
+        if model_input_modalities is not None:
+            capabilities = (
+                (mc.CAP_VISION,)
+                if mc.MODALITY_IMAGE in model_input_modalities
+                else ()
+            )
+            return _record(
+                model_id=model_id,
+                family=mc.FAMILY_UNKNOWN,
+                capabilities=capabilities,
+                limits=_limits_from_model_entry(raw),
+                model_input_modalities=model_input_modalities,
+                raw=raw,
+                endpoint_id=endpoint_id,
+                base_url=base_url,
+            )
         return generic_openai.record_from_model(
             raw,
             vendor_id=VENDOR_LLAMACPP,
@@ -303,11 +360,14 @@ def record_from_model_payload(
             base_url=base_url,
         )
     capabilities = _capability_tokens_from_server_model(server_model)
+    if model_input_modalities and mc.MODALITY_IMAGE in model_input_modalities:
+        capabilities = merge_unique(capabilities, (mc.CAP_VISION,))
     return _record(
         model_id=model_id,
         family=family,
         capabilities=capabilities,
         limits=_limits_from_model_entry(raw),
+        model_input_modalities=model_input_modalities,
         raw=raw,
         endpoint_id=endpoint_id,
         base_url=base_url,
@@ -375,9 +435,20 @@ def records_from_payloads(
             limits = {**dict(model_record.capability.limits), **dict(props_record.capability.limits)}
             capability = _capability_for_family(
                 props_record.capability.family,
-                capabilities=merge_unique(model_record.capability.capabilities, props_record.capability.capabilities),
+                capabilities=merge_unique(
+                    tuple(
+                        capability
+                        for capability in model_record.capability.capabilities
+                        if not (
+                            capability == mc.CAP_VISION
+                            and as_mapping(props_payload.get("modalities")).get("vision") is False
+                        )
+                    ),
+                    props_record.capability.capabilities,
+                ),
                 limits=limits,
                 props_payload=props_payload,
+                model_input_modalities=model_record.capability.modalities.input,
             )
             records.append(
                 ModelCapabilityRecord(

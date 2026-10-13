@@ -518,6 +518,7 @@ def test_llamacpp_reader_merges_models_props_and_slots_payloads():
             {
                 "id": "gemma-4-E2B-it-Q8_0.gguf",
                 "owned_by": "llamacpp",
+                "architecture": {"input_modalities": ["text", "image"]},
                 "meta": {
                     "n_ctx_train": 131072,
                     "n_params": 4647450147,
@@ -612,6 +613,55 @@ def test_llamacpp_reader_merges_models_props_and_slots_payloads():
         mc.CONTROL_SYSTEM_PROMPT: mc.ASSERTION_CLAIMED,
         mc.CONTROL_TOOL_CHOICE: mc.ASSERTION_CLAIMED,
     }
+
+
+def test_llamacpp_reader_uses_explicit_model_architecture_modalities_per_entry():
+    models_payload = {
+        "object": "list",
+        "data": [
+            {"id": "vision.gguf", "architecture": {"input_modalities": ["text", "image"]}},
+            {"id": "text.gguf", "architecture": {"input_modalities": ["text"]}},
+            {"id": "missing.gguf"},
+            {"id": "malformed.gguf", "architecture": {"input_modalities": "text,image"}},
+            {"id": "unknown-modality.gguf", "architecture": {"input_modalities": ["text", "pixels"]}},
+        ],
+        "models": [
+            {"name": "vision.gguf", "capabilities": ["completion"]},
+            {"name": "text.gguf", "capabilities": ["completion"]},
+        ],
+    }
+    records = llamacpp.records_from_payloads(
+        models_payload=models_payload,
+        endpoint_id="test-llamacpp-endpoint",
+        base_url="http://127.0.0.1:8097",
+    )
+    by_id = {record.model_id: record for record in records}
+
+    assert by_id["vision.gguf"].stable_model_id == stable_model_id_for(
+        VENDOR_LLAMACPP,
+        "vision.gguf",
+        endpoint_id="test-llamacpp-endpoint",
+        base_url="http://127.0.0.1:8097",
+    )
+    assert by_id["vision.gguf"].capability.modalities.input == (mc.MODALITY_TEXT, mc.MODALITY_IMAGE)
+    assert mc.CAP_VISION in by_id["vision.gguf"].capability.capabilities
+    assert by_id["text.gguf"].capability.modalities.input == (mc.MODALITY_TEXT,)
+    assert mc.CAP_VISION not in by_id["text.gguf"].capability.capabilities
+    for model_id in ("missing.gguf", "malformed.gguf", "unknown-modality.gguf"):
+        assert by_id[model_id].capability.family == mc.FAMILY_UNKNOWN
+        assert by_id[model_id].capability.modalities.input == ()
+        assert mc.CAP_VISION not in by_id[model_id].capability.capabilities
+
+    props_without_modality_claim = llamacpp.records_from_payloads(
+        models_payload=models_payload,
+        props_payload={"model_alias": "vision.gguf"},
+        endpoint_id="test-llamacpp-endpoint",
+    )
+    vision_with_unreported_props = next(
+        record for record in props_without_modality_claim if record.model_id == "vision.gguf"
+    )
+    assert vision_with_unreported_props.capability.modalities.input == (mc.MODALITY_TEXT, mc.MODALITY_IMAGE)
+    assert mc.CAP_VISION in vision_with_unreported_props.capability.capabilities
 
 
 def test_llamacpp_openai_model_list_without_native_capability_shape_stays_unknown():

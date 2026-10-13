@@ -8,6 +8,7 @@ The LLM decides when to use tools by writing fenced code blocks.
 
 import asyncio
 import collections
+import copy
 import hashlib
 import os
 import json
@@ -5233,15 +5234,27 @@ async def stream_agent_loop(
         # the exact call that the server will seal for user approval.  Schema
         # visibility is not authority: both the loop and dispatcher still gate
         # execution, and only a one-use server record can cross that boundary.
-        return [
-            schema for schema in schemas
-            if tool_policy_names(
-                schema.get("function", {}).get("name") or schema.get("name", "")
-            ).isdisjoint(disabled_tools)
-            and (_coding_grounding.may_mutate or
-                 (schema.get("function", {}).get("name") or schema.get("name", ""))
-                 in _coding_grounding.phase_tools)
-        ]
+        filtered = []
+        for schema in schemas:
+            tool_name = schema.get("function", {}).get("name") or schema.get("name", "")
+            if (not tool_policy_names(tool_name).isdisjoint(disabled_tools)
+                    or not (_coding_grounding.may_mutate
+                            or tool_name in _coding_grounding.phase_tools)):
+                continue
+            if tool_name == "web_fetch" and _coding_grounding.requested_url_phase:
+                # Never mutate FUNCTION_TOOL_SCHEMAS: other concurrent turns
+                # share those dictionaries.
+                schema = copy.deepcopy(schema)
+                url_schema = (schema.get("function", {}).get("parameters", {})
+                              .get("properties", {}).get("url"))
+                if isinstance(url_schema, dict):
+                    url_schema["enum"] = _coding_grounding.requested_fetch_urls
+                    url_schema["description"] = (
+                        "Fetch only a URL explicitly supplied for this task or its listed strict "
+                        "GitHub raw/blob equivalent."
+                    )
+            filtered.append(schema)
+        return filtered
 
     def _tool_schemas_for_route(route_state):
         if "tools" in route_state:

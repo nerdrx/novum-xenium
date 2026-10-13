@@ -1,3 +1,5 @@
+import json
+
 from src.coding_grounding import CodingGrounding
 
 
@@ -90,6 +92,43 @@ def test_github_blob_url_matches_only_corresponding_raw_revision_and_path():
             "https://github.com/nerdrx/nx-hub/blob/main/docs/DESIGN.md."
         )
         assert not gate.observe("web_fetch", result, wrong_url)
+        assert not gate.may_mutate
+
+
+def test_explicit_github_url_allows_only_canonical_and_strict_https_alias():
+    canonical = "https://github.com/nerdrx/nx-hub/blob/main/docs/DESIGN.md"
+    raw = "https://raw.githubusercontent.com/nerdrx/nx-hub/main/docs/DESIGN.md"
+    gate = CodingGrounding(f"Build a GUI app using {canonical}")
+    assert gate.requested_url_phase
+    assert gate.requested_fetch_urls == sorted([canonical, raw])
+    assert gate.allows_tool("web_fetch", json.dumps({"url": canonical}))
+    assert gate.allows_tool("web_fetch", json.dumps({"url": raw}))
+
+    unsafe_aliases = (
+        raw + "?download=1",
+        raw + "#section",
+        "https://user@raw.githubusercontent.com/nerdrx/nx-hub/main/docs/DESIGN.md",
+        "https://raw.githubusercontent.com:444/nerdrx/nx-hub/main/docs/DESIGN.md",
+        "http://raw.githubusercontent.com/nerdrx/nx-hub/main/docs/DESIGN.md",
+        "https://[malformed-host",
+    )
+    for url in unsafe_aliases:
+        assert not gate.allows_tool("web_fetch", json.dumps({"url": url}))
+        assert not gate.observe("web_fetch", {"error": "policy blocked", "exit_code": 1},
+                                json.dumps({"url": url}))
+    assert gate.attempts == gate.failures == 0
+
+
+def test_alias_requires_exact_github_coordinates_and_clean_https_url():
+    canonical = "https://github.com/nerdrx/nx-hub/blob/main/docs/DESIGN.md"
+    gate = CodingGrounding(f"Build a GUI app using {canonical}")
+    for wrong_url in (
+        "https://raw.githubusercontent.com/other/nx-hub/main/docs/DESIGN.md",
+        "https://raw.githubusercontent.com/nerdrx/nx-hub/v0.13.0/docs/DESIGN.md",
+        "https://raw.githubusercontent.com/nerdrx/nx-hub/main/styles.css",
+        "https://raw.githubusercontent.com/nerdrx/nx-hub/main/docs/DESIGN.md?raw=1",
+    ):
+        assert not gate.observe("web_fetch", {"output": "Wrong page", "exit_code": 0}, wrong_url)
         assert not gate.may_mutate
 
 

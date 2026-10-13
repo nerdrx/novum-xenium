@@ -1,5 +1,6 @@
 """Loop integration for research-first coding turns."""
 import json
+import copy
 
 import src.agent_loop as al
 from test_agent_rounds_exhausted import _collect, _patch_common, _types
@@ -19,7 +20,7 @@ def _schemas(kwargs):
 
 
 def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_tools=None,
-         exact_approval=None):
+         exact_approval=None, schema_details=None):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
@@ -29,9 +30,16 @@ def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_to
         factory = kwargs.get("candidate_request_factory")
         if factory:
             request = await factory(0, *_candidates[0])
-            requests.append(_schemas(request.get("kwargs", {})))
+            request_kwargs = request.get("kwargs", {})
+            tool_schemas = request_kwargs.get("tools") or []
+            if schema_details is not None:
+                schema_details.append(tool_schemas)
+            requests.append(_schemas(request_kwargs))
             histories.append(list(request.get("messages") or []))
         else:
+            tool_schemas = kwargs.get("tools") or []
+            if schema_details is not None:
+                schema_details.append(tool_schemas)
             requests.append(_schemas(kwargs))
             histories.append(list(_messages))
         reply = replies[len(requests) - 1]
@@ -116,6 +124,37 @@ def test_hidden_write_before_fetch_is_blocked_without_execution(monkeypatch, tmp
     assert not ({"bash", "write_file"} & requests[0])
     assert executed == ["web_fetch"]
     assert any("RESEARCH FIRST" in json.dumps(history) for history in histories)
+
+
+def test_explicit_url_fetch_schema_is_narrow_and_shared_schema_is_unchanged(monkeypatch, tmp_path):
+    _no_suggested_skills(monkeypatch)
+    url = 'https://github.com/nerdrx/nx-hub/blob/main/docs/DESIGN.md'
+    raw_alias = 'https://raw.githubusercontent.com/nerdrx/nx-hub/main/docs/DESIGN.md'
+    wrong_url = 'https://raw.githubusercontent.com/nerdrx/nx-hub/v0.13.0/styles.css'
+    original_schemas = copy.deepcopy(al.FUNCTION_TOOL_SCHEMAS)
+    schema_details = []
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': wrong_url}, 'wrong-fetch'),
+         _call('web_fetch', {'url': raw_alias}, 'right-fetch'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented after the requested guide was read."}\n\n'],
+        {'web_fetch': [{'output': 'NX design guide contents', 'exit_code': 0}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+        schema_details=schema_details,
+    )
+
+    fetch_schema = next(schema for schema in schema_details[0]
+                        if schema.get('function', {}).get('name') == 'web_fetch')
+    url_schema = fetch_schema['function']['parameters']['properties']['url']
+    assert url_schema['enum'] == sorted([url, raw_alias])
+    assert 'web_fetch' in requests[1] and 'write_file' not in requests[1]
+    assert 'write_file' in requests[2]
+    assert executed == ['web_fetch', 'write_file']  # wrong URL never reached the network tool
+    assert al.FUNCTION_TOOL_SCHEMAS == original_schemas
+    blocked = [event for event in events if event.get('type') == 'tool_output'
+               and event.get('tool') == 'web_fetch']
+    assert len(blocked) == 2 and 'Coding research gate' in blocked[0]['output']
 
 
 def test_two_failed_lookups_open_bounded_escape(monkeypatch, tmp_path):

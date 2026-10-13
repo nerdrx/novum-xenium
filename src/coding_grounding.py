@@ -43,9 +43,20 @@ _URL = re.compile(r"https?://[^\s<>\]\[(){}\"']+", re.IGNORECASE)
 
 def _github_doc_coordinates(url):
     """Return only the strict owner/repo/revision/path GitHub doc identity."""
-    parsed = urlsplit(str(url or ""))
-    parts = parsed.path.strip("/").split("/")
-    host = (parsed.hostname or "").lower()
+    try:
+        parsed = urlsplit(str(url or ""))
+        parts = parsed.path.strip("/").split("/")
+        host = (parsed.hostname or "").lower()
+        safe_alias_url = (
+            parsed.scheme.lower() == "https"
+            and parsed.username is None and parsed.password is None
+            and parsed.port in (None, 443)
+            and not parsed.query and not parsed.fragment
+        )
+    except ValueError:
+        return None
+    if not safe_alias_url:
+        return None
     if host == "github.com" and len(parts) >= 5 and parts[2] == "blob":
         return tuple(parts[:2] + [parts[3]]) + ("/".join(parts[4:]),)
     if host == "raw.githubusercontent.com" and len(parts) >= 4:
@@ -58,6 +69,28 @@ def _same_requested_url(preferred, fetched):
         return True
     expected = _github_doc_coordinates(preferred)
     return bool(expected and expected == _github_doc_coordinates(fetched))
+
+
+def _github_doc_alias(url):
+    coords = _github_doc_coordinates(url)
+    if not coords:
+        return None
+    owner, repo, revision, path = coords
+    host = (urlsplit(url).hostname or "").lower()
+    if host == "github.com":
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{revision}/{path}"
+    return f"https://github.com/{owner}/{repo}/blob/{revision}/{path}"
+
+
+def _fetch_url_from_content(content):
+    raw = str(content or "").strip()
+    try:
+        args = json.loads(raw)
+        if isinstance(args, dict):
+            raw = str(args.get("url") or "")
+    except (TypeError, ValueError):
+        raw = raw.splitlines()[0].strip() if raw else ""
+    return raw.rstrip(".,;!")
 
 
 class CodingGrounding:
@@ -125,6 +158,28 @@ class CodingGrounding:
         return tools - self.disabled_tools if self.required else set()
 
     @property
+    def requested_url_phase(self):
+        return bool(
+            self.required and self.web_allowed and self.preferred_urls
+            and not self.documentation_ready
+        )
+
+    @property
+    def requested_fetch_urls(self):
+        """Exact task URLs plus only strict HTTPS GitHub raw/blob counterparts."""
+        urls = set(self.preferred_urls)
+        for url in tuple(urls):
+            alias = _github_doc_alias(url)
+            if alias:
+                urls.add(alias)
+        return sorted(urls)
+
+    def fetch_url_matches_task(self, content):
+        fetched = _fetch_url_from_content(content)
+        return any(_same_requested_url(preferred, fetched)
+                   for preferred in self.preferred_urls)
+
+    @property
     def phase_tools(self):
         """Keep the ready-for-skill phase focused on that one remaining gate."""
         if self.documentation_ready and self.skill_review_pending:
@@ -137,6 +192,8 @@ class CodingGrounding:
             return True
         if tool_name not in self.phase_tools:
             return False
+        if tool_name == "web_fetch" and self.requested_url_phase:
+            return self.fetch_url_matches_task(content)
         if tool_name == "manage_skills":
             return capabilities_for_action(tool_name, content).effects == frozenset({ToolEffect.READ_PRIVATE})
         return True
@@ -241,6 +298,9 @@ class CodingGrounding:
             return False
         if tool_name == "ask_user" or tool_name not in _RESEARCH_ATTEMPTS:
             return False
+        if tool_name == "web_fetch" and self.requested_url_phase:
+            if not self.fetch_url_matches_task(content):
+                return False
         self.attempts += 1
         output = result.get("output") if isinstance(result, dict) else None
         successful = tool_result_is_successful(result)

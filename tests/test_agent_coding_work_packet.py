@@ -37,7 +37,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 malformed_check=False, no_packet_start=False,
                 stall_before_packet=False, fail_stall_reads=False, omit_acceptance=False,
                 acceptance_blocked=False, verify_existing=False, repair_failed_check=False,
-                max_tool_calls=0, baseline_blocked=False, max_rounds=10):
+                max_tool_calls=0, baseline_blocked=False, max_rounds=10, extra_tools=False,
+                schema_details=None):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -45,6 +46,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         True if ((checked_workflow and key == "agent_milestone_workflow")
                  or (verifier_issues is not None and key == "agent_verifier_subagent")) else default
     ))
+    if extra_tools:
+        monkeypatch.setattr(al, "_image_tool_available", lambda *args: True)
     if verifier_issues is not None:
         async def verify(*_args, **_kwargs):
             return list(verifier_issues)
@@ -177,6 +180,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 assert all("tool_call_id" not in message for message in server_results)
         if no_packet_start and not stall_before_packet:
             request = await kwargs["candidate_request_factory"](0, *candidates[0])
+            if schema_details is not None:
+                schema_details.append(request["kwargs"]["tools"] or [])
             requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
             yield 'data: {"delta":"I will inspect the workspace first."}\n\n'
             yield "data: [DONE]\n\n"
@@ -188,10 +193,16 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
             if not no_packet_start:
                 assert "obsolete implementation chatter" not in sent
             assert "Preserve keyboard support" in sent
+            if schema_details is not None:
+                schema_details.append(request["kwargs"]["tools"] or [])
             requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
             call = {"id": f"packet-{turn}", "name": tool, "arguments": json.dumps(args)}
             yield "data: " + json.dumps({"type": "tool_calls", "calls": [call]}) + "\n\n"
         else:
+            if schema_details is not None:
+                request = await kwargs["candidate_request_factory"](0, *candidates[0])
+                schema_details.append(request["kwargs"]["tools"] or [])
+                requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
             yield 'data: {"delta":"Everything is complete."}\n\n'
         yield "data: [DONE]\n\n"
 
@@ -204,7 +215,9 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
         relevant_tools={"todowrite", "bash", "write_file", "edit_file", "apply_patch",
-                        "python", "read_file", "grep", "glob", "ls", "ask_user"}, max_rounds=max_rounds,
+                        "python", "read_file", "grep", "glob", "ls", "ask_user"}
+                       | ({"generate_image", "create_document", "delegate_subagent", "manage_skills"} if extra_tools else set()),
+        max_rounds=max_rounds,
         max_tool_calls=max_tool_calls,
         disabled_tools={"bash"} if disabled_bash else set(),
     ))
@@ -800,3 +813,27 @@ def test_server_result_preserves_prior_native_pair_and_reasoning():
     assert len(messages) == 3
     assert messages[-1]["metadata"]["trusted"] is False
     assert "tool_call_id" not in messages[-1]
+
+
+@pytest.mark.parametrize("initial", [True, False])
+def test_packet_selection_schemas_exclude_effectful_actions_but_keep_readers(monkeypatch, tmp_path, initial):
+    schemas = []
+    events, executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, extra_tools=True,
+        no_packet_start=initial, schema_details=schemas,
+    )
+    names = requested[0] if initial else requested[-1]
+    assert {"todowrite", "ask_user", "read_file", "grep", "glob", "ls"} <= names
+    assert not ({"generate_image", "create_document", "bash", "python", "write_file", "edit_file", "apply_patch"} & names)
+    if not initial:
+        assert "generate_image" in requested[0], 'edit stage fixture must actually expose the effectful candidate'
+        assert any(event.get("stage") == "done" for event in events)
+        assert not any(event.get("type") == "agent_terminal" and event.get("status") == "completed" for event in events)
+    selected = schemas[0] if initial else schemas[-1]
+    skill = next(schema for schema in selected if schema["function"]["name"] == "manage_skills")
+    actions = skill["function"]["parameters"]["properties"]["action"]["enum"]
+    assert "view" in actions
+    assert not ({"add", "edit", "delete", "publish"} & set(actions))
+    original = next(schema for schema in al.FUNCTION_TOOL_SCHEMAS
+                    if schema["function"]["name"] == "manage_skills")
+    assert "delete" in original["function"]["parameters"]["properties"]["action"]["enum"]

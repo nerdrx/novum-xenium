@@ -6143,15 +6143,24 @@ async def stream_agent_loop(
             tool_name = schema.get("function", {}).get("name")
             if tool_name == "run_coding_check":
                 continue
-            if (_coding_work.requires_packet and tool_name in {
-                "bash", "python", "write_file", "edit_file", "apply_patch",
-            }):
-                continue
-            if (_coding_work.state and _coding_work.state.stage == "reproduce"
-                    and tool_name in {
-                        "bash", "python", "write_file", "edit_file", "apply_patch",
-                    }):
-                continue
+            if (_coding_work.requires_packet or
+                    (_coding_work.state and _coding_work.state.stage == "reproduce")):
+                if tool_name not in {"todowrite", "ask_user"}:
+                    # Match the dispatcher's read-only phase, including mixed
+                    # action tools. Do not advertise actions the packet blocks.
+                    action = (schema.get("function", {}).get("parameters", {})
+                              .get("properties", {}).get("action", {}))
+                    choices = action.get("enum") if isinstance(action, dict) else None
+                    if isinstance(choices, list):
+                        allowed = [value for value in choices if isinstance(value, str)
+                                   and not _coding_work.blocks(tool_name, json.dumps({"action": value}))]
+                        if not allowed:
+                            continue
+                        if allowed != choices:
+                            schema = copy.deepcopy(schema)
+                            schema["function"]["parameters"]["properties"]["action"]["enum"] = allowed
+                    elif _coding_work.blocks(tool_name, "{}"):
+                        continue
             if (_coding_work.state and _coding_work.state.stage == "edit"
                     and tool_name in {"bash", "python"}):
                 continue

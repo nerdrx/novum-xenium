@@ -6,7 +6,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
-const html = `<!doctype html><meta charset="utf-8"><body>
+const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/model-picker-upgrade.css"><style>#model-picker-wrap{position:absolute;bottom:40px;right:40px}</style><body>
   <div class="model-picker-wrap" id="model-picker-wrap">
     <button type="button" id="model-picker-btn"><span id="model-picker-label">Choose model</span></button>
     <div class="model-picker-menu hidden" id="model-picker-menu">
@@ -48,7 +48,7 @@ const server = http.createServer((req, res) => {
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 
@@ -68,6 +68,7 @@ const server = http.createServer((req, res) => {
     await page.locator('#model-picker-btn').click();
     await page.waitForSelector('.model-switch-item');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'model-picker-search');
+    assert.equal(await page.locator('#model-picker-btn').getAttribute('aria-expanded'), 'true');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => document.querySelector('#model-picker-menu').classList.contains('hidden'));
     assert.equal(await page.evaluate(() => document.activeElement.id), 'model-picker-btn',
@@ -77,6 +78,9 @@ const server = http.createServer((req, res) => {
     await page.waitForSelector('.model-switch-item');
     await page.keyboard.press('Tab'); // Refresh
     await page.keyboard.press('Tab'); // Add models
+    await page.keyboard.press('Tab'); // Provider group
+    await page.keyboard.press('Tab'); // Model selection
+    assert.match(await page.evaluate(() => document.activeElement.className), /mp-select-model/);
     await page.keyboard.press('Tab'); // First favorite button
     assert.match(await page.evaluate(() => document.activeElement.className), /mp-fav-dot/,
       'favorite control is keyboard focusable');
@@ -87,8 +91,21 @@ const server = http.createServer((req, res) => {
 
     await page.locator('#model-picker-btn').click();
     await page.waitForSelector('.model-switch-item');
+    const provider = page.locator('.mp-provider-header');
+    await provider.click();
+    assert.equal(await page.locator('.mp-select-model').count(), 0, 'provider collapse hides its models');
+    assert.equal(await page.locator('.mp-provider-header').getAttribute('aria-expanded'), 'false');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('.mp-select-model').count(), 2, 'keyboard expands provider');
+    await page.locator('#model-picker-search').fill('Fixture');
+    assert.equal(await page.locator('.mp-select-model').count(), 2, 'provider search finds all its models');
+    assert.equal(await page.locator('.mp-provider-header').count(), 1);
+    assert.equal(await page.locator('.mp-model-name').first().textContent(), 'fixture/model-a');
+    assert.match(await page.locator('.model-switch-ep').first().textContent(), /Local/);
+    assert.equal(await page.locator('.mp-model-name').first().evaluate(el => getComputedStyle(el).whiteSpace), 'normal');
     await page.locator('#model-picker-search').fill('model-b');
     await page.keyboard.press('ArrowDown');
+    assert.match(await page.evaluate(() => document.activeElement.className), /mp-select-model/);
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => document.querySelector('#model-picker-menu').classList.contains('hidden'));
     assert.equal((await page.evaluate(() => window.fixtureState())).pending.modelId, 'fixture/model-b',
@@ -98,6 +115,7 @@ const server = http.createServer((req, res) => {
 
     await page.locator('#model-picker-btn').click();
     await page.waitForSelector('.model-switch-item');
+    assert.equal(await page.locator('.mp-select-model[aria-pressed="true"] .mp-model-name').textContent(), 'fixture/model-b');
     await page.locator('#outside').click();
     await page.waitForFunction(() => document.querySelector('#model-picker-menu').classList.contains('hidden'));
     assert.equal(await page.evaluate(() => document.activeElement.id), 'outside',

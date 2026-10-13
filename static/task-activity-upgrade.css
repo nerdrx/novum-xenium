@@ -1,0 +1,112 @@
+/* Compact coding status and folded tool activity. Loaded after style.css. */
+.coding-work-packet-status {
+  margin: 6px 24px 10px;
+  padding: 10px 12px;
+  max-width: min(680px, calc(100% - 48px));
+  border: 1px solid color-mix(in srgb, var(--accent, var(--red)) 30%, var(--border));
+  border-left: 3px solid var(--accent, var(--red));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg, #171717) 94%, var(--accent, var(--red)));
+  color: var(--fg, #eee);
+  font-size: 0.84rem;
+}
+.coding-work-packet-title { display: block; overflow-wrap: anywhere; line-height: 1.35; }
+.coding-work-packet-current {
+  margin: 4px 0 8px;
+  color: color-mix(in srgb, var(--fg, #eee) 82%, var(--accent, var(--red)));
+  overflow-wrap: anywhere;
+}
+.coding-work-packet-state { display: flex; flex-wrap: wrap; gap: 5px; }
+.coding-work-packet-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted, #aaa);
+  font-size: 0.76rem;
+}
+.coding-work-packet-chip strong { color: var(--fg, #eee); font-weight: 650; }
+.coding-work-packet-chip[data-test-status="not_verified"],
+.coding-work-packet-chip[data-review-status="not_reviewed"],
+.coding-work-packet-chip[data-review-status="unverified"] { border-style: dashed; }
+.coding-work-packet-chip[data-test-status="passed"],
+.coding-work-packet-chip[data-review-status="passed"] { border-color: color-mix(in srgb, #50b87a 48%, var(--border)); }
+.coding-work-packet-chip[data-test-status="failed"],
+.coding-work-packet-chip[data-review-status="failed"] { border-color: var(--color-error, #d65a5a); }
+.coding-work-packet-plan,
+.coding-work-packet-activity { margin-top: 7px; border-top: 1px solid var(--border); }
+.coding-work-packet-plan > summary,
+.coding-work-packet-activity > summary,
+.coding-work-packet-tool-group > summary {
+  padding: 8px 10px;
+  min-height: 36px;
+  box-sizing: border-box;
+  line-height: 1.4;
+  gap: 8px;
+  background: transparent;
+  border-bottom: 0;
+  color: color-mix(in srgb, var(--fg, #eee) 76%, transparent);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.coding-work-packet-plan > summary:focus-visible,
+.coding-work-packet-activity > summary:focus-visible,
+.coding-work-packet-tool-group > summary:focus-visible { outline: 2px solid var(--accent, var(--red)); outline-offset: 2px; }
+.coding-work-packet-plan-content { display: grid; gap: 5px; padding: 6px 2px 2px; }
+.coding-work-packet-plan-row { display: grid; grid-template-columns: minmax(105px, 0.32fr) minmax(0, 1fr); gap: 8px; }
+.coding-work-packet-plan-row > span { color: var(--muted, #aaa); }
+.coding-work-packet-plan-row code { overflow-wrap: anywhere; white-space: pre-wrap; color: var(--fg, #eee); font: inherit; }
+.coding-work-packet-tool-groups { display: grid; gap: 2px; padding: 2px 0 4px 8px; }
+.coding-work-packet-tool-group { border-left: 1px solid var(--border); padding-left: 8px; }
+.coding-work-packet-tool-group[data-failed]:not([data-failed="0"]) { border-left-color: var(--color-error, #d65a5a); }
+.coding-work-packet-tool-list { display: grid; gap: 5px; margin: 3px 0 5px; padding-left: 18px; }
+.coding-work-packet-tool-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; }
+.coding-work-packet-tool-name { min-width: 0; overflow-wrap: anywhere; font-weight: 550; }
+.coding-work-packet-tool-status { color: var(--muted, #aaa); font-size: 0.74rem; }
+.coding-work-packet-tool-item[data-outcome="failed"] .coding-work-packet-tool-status { color: var(--color-error, #d65a5a); font-weight: 650; }
+.coding-work-packet-tool-note { grid-column: 1 / -1; color: var(--muted, #aaa); font-size: 0.75rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* Keep the legacy timeline scannable; full command and output stay expandable. */
+.agent-thread-node { padding: 2px 0; }
+.agent-thread-node + .agent-thread-node { margin-top: 0; }
+.agent-thread-header { gap: 6px; font-size: 0.8em; }
+.agent-thread-elapsed { font-size: 10px; opacity: 0.75; }
+.agent-thread-tail { max-height: 80px !important; }
+.agent-thread-node.coding-work-group-hidden { display: none !important; }
+.coding-work-packet-tool-item { display: block; list-style: none; }
+.coding-work-packet-tool-disclosure > summary { cursor: pointer; overflow-wrap: anywhere; font-weight: 550; }
+.coding-work-packet-tool-full-detail { display: grid; gap: 5px; padding: 4px 0; }
+.coding-work-packet-tool-command,
+.coding-work-packet-tool-output,
+.coding-work-packet-tool-diff,
+.coding-work-packet-tool-error {
+  display: block;
+  margin: 2px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--fg, #eee);
+  background: color-mix(in srgb, var(--fg, #eee) 5%, transparent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.78em/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  max-height: 240px;
+  overflow: auto;
+}
+.coding-work-packet-tool-error { color: var(--color-error, #d65a5a); }
+@media (max-width: 600px) {
+  .coding-work-packet-status { margin-inline: 8px; max-width: calc(100% - 16px); }
+  .coding-work-packet-plan-row { grid-template-columns: 1fr; gap: 1px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-thread-node.running .agent-thread-dot { animation: none; }
+}
+
+/* Neutral disclosure surfaces; keep arrows aligned even inside an open parent. */
+.coding-work-packet-status details { background: transparent; border-color: var(--border); }
+.coding-work-packet-status summary::before { flex: 0 0 10px; margin: 0; transform: none; }
+.coding-work-packet-status details[open] > summary::before { transform: rotate(90deg); }
+.coding-work-packet-status summary:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }

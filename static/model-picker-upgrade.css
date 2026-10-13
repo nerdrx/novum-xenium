@@ -1,0 +1,66 @@
+/* Readable model selection, scoped to the chat picker. */
+#model-picker-menu {
+  width: min(480px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  padding: 10px;
+}
+#model-picker-list { max-height: min(55vh, 440px); overflow: auto; }
+#model-picker-list .model-switch-item { padding: 0; align-items: center; }
+#model-picker-list .mp-select-model {
+  display: grid;
+  height: auto;
+  align-items: center;
+  box-sizing: border-box;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 10px 8px;
+  background: transparent;
+  border: 0;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+#model-picker-list .mp-model-name {
+  grid-column: 2;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  line-height: 1.45;
+}
+#model-picker-list .model-switch-ep {
+  grid-column: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: .75;
+}
+#model-picker-list .mp-provider-header {
+  width: 100%;
+  height: auto;
+  min-height: 36px;
+  line-height: 1.4;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--fg);
+  padding: 10px 8px;
+  font: inherit;
+  font-size: .8rem;
+  opacity: .85;
+}
+#model-picker-list .mp-provider-header:disabled { opacity: .85; cursor: default; }
+#model-picker-list button:focus-visible {
+  outline: 2px solid var(--accent, var(--red));
+  outline-offset: -2px;
+}
+#model-picker-list .mp-select-model.kb-active {
+  background: color-mix(in srgb, var(--accent, var(--red)) 14%, transparent);
+}
+#model-picker-list .mp-select-model[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent, var(--red)) 12%, transparent);
+  box-shadow: inset 3px 0 var(--accent, var(--red));
+}

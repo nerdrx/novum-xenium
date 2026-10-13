@@ -76,6 +76,7 @@ function _handlePickerKeydown(e, listEl, itemSelector, closeFn) {
     if (e.key === 'ArrowDown') next = cur < items.length - 1 ? cur + 1 : 0;
     else next = cur > 0 ? cur - 1 : items.length - 1;
     items[next].classList.add('kb-active');
+    items[next].focus({ preventScroll: true });
     items[next].scrollIntoView({ block: 'nearest' });
   }
 }
@@ -208,9 +209,14 @@ function _initModelPickerDropdown() {
   if (!wrap || !btn || !menu || !search || !listEl) return;
   if (wrap.dataset.modelPickerBound === '1') return;
   wrap.dataset.modelPickerBound = '1';
+  btn.setAttribute('aria-expanded', 'false');
+  btn.setAttribute('aria-controls', menu.id);
+  search.setAttribute('aria-label', 'Search models and providers');
 
+  let closeTimer = null;
   function _close({ restoreFocus = false } = {}) {
     if (menu.classList.contains('hidden')) return;
+    btn.setAttribute('aria-expanded', 'false');
     // Restore scroll button
     const _scrollBtn = document.getElementById('scroll-bottom-btn');
     if (_scrollBtn) _scrollBtn.style.display = '';
@@ -218,13 +224,16 @@ function _initModelPickerDropdown() {
     menu.classList.add('closing');
     menu.addEventListener('animationend', function _onDone() {
       menu.removeEventListener('animationend', _onDone);
+      if (!menu.classList.contains('closing')) return;
+      clearTimeout(closeTimer);
       menu.classList.remove('closing');
       menu.classList.add('hidden');
       search.value = '';
     }, { once: true });
     // Fallback if animationend doesn't fire
-    setTimeout(() => {
-      if (!menu.classList.contains('hidden')) {
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(() => {
+      if (menu.classList.contains('closing')) {
         menu.classList.remove('closing');
         menu.classList.add('hidden');
         search.value = '';
@@ -316,7 +325,7 @@ function _initModelPickerDropdown() {
         result.push({
           key: seenKey,
           mid,
-          display: (allDisplay[i] || mid).split('/').pop(),
+          display: allDisplay[i] || mid,
           url: item.url,
           endpointId: item.endpoint_id,
           epName: item.endpoint_name || '',
@@ -361,6 +370,7 @@ function _initModelPickerDropdown() {
       row.textContent = text;
     }
     row.classList.add('model-picker-loading-row');
+    row.setAttribute('role', 'status');
     listEl.appendChild(row);
   }
 
@@ -421,7 +431,7 @@ function _initModelPickerDropdown() {
     return _PROVIDER_NAMES[slug] || slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, ' ');
   }
   function _providerGroupKey(m) {
-    if (m && m.category && m.category !== 'local' && m.epName) {
+    if (m && m.epName) {
       return `~endpoint:${m.epName}`;
     }
     return _providerSlug((m && m.mid) || '');
@@ -436,7 +446,6 @@ function _initModelPickerDropdown() {
     return _PROVIDER_ALIAS[slug] || slug;
   }
   const _collapsedProviders = new Set(_loadList('odysseus-model-collapsed'));
-  let _justExpandedProvider = null;
 
   function _populate(filter) {
     listEl.innerHTML = '';
@@ -447,7 +456,7 @@ function _initModelPickerDropdown() {
     listEl.classList.toggle('is-empty', !hasAnyModel);
     menu.classList.toggle('no-models', !hasAnyModel);
     if (search) {
-      search.placeholder = hasAnyModel ? 'Search models…' : 'No models connected';
+      search.placeholder = hasAnyModel ? 'Search models or providers…' : 'No models connected';
     }
     if (searchRow) {
       searchRow.classList.toggle('searching', !!q);
@@ -482,10 +491,20 @@ function _initModelPickerDropdown() {
     function _addRow(m) {
       const row = document.createElement('div');
       row.className = 'model-switch-item';
+      const select = document.createElement('button');
+      select.type = 'button';
+      select.className = 'mp-select-model';
+      select.setAttribute('aria-label', `Use ${m.display} from ${m.epName || m.category || 'provider'}`);
+      const current = _deps.getSessions().find(session => session.id === _deps.getCurrentSessionId());
+      const pending = _deps.getPendingChat();
+      const selectedModel = current?.model || pending?.modelId;
+      const selectedEndpoint = current?.endpoint_id || pending?.endpointId;
+      select.setAttribute('aria-pressed', String(selectedModel === m.mid && (!selectedEndpoint || selectedEndpoint === m.endpointId)));
+      row.appendChild(select);
       if (m.stale) {
         row.classList.add('model-switch-stale');
-        row.style.opacity = '0.45';
-        row.title = `Local server appears offline: ${m.staleReason}. Click to try anyway, or relaunch in Cookbook.`;
+        row.style.opacity = '0.75';
+        row.title = `Provider appears offline: ${m.staleReason}. Click to try anyway, or relaunch in Cookbook.`;
       }
       const _mlogo = providerLogo(m.mid);
       if (_mlogo) {
@@ -493,25 +512,21 @@ function _initModelPickerDropdown() {
         logoSpan.className = 'provider-logo';
         logoSpan.style.opacity = '0.6';
         logoSpan.innerHTML = _mlogo;
-        row.appendChild(logoSpan);
+        select.appendChild(logoSpan);
       }
       const nameSpan = document.createElement('span');
       nameSpan.className = 'mp-model-name';
       nameSpan.textContent = m.display;
-      // Long model names are clipped with ellipsis — expose the full name on
-      // hover so the suffix/variant tag is still discoverable (#1982).
+      // Keep the full identifier available on hover as well as in the row.
       nameSpan.title = m.display;
-      row.appendChild(nameSpan);
-      // Offline state is already conveyed by the row's reduced opacity —
-      // a redundant "offline" pill on top of that just added clutter.
-      // (Class kept on `row` so the opacity rule still applies; the text
-      // badge is gone.)
+      select.appendChild(nameSpan);
+      // Endpoint health is not model residency: never label a reachable provider as a running model.
       const epSpan = document.createElement('span');
       epSpan.className = 'model-switch-ep';
       // Don't show endpoint name if it matches the model name (local self-hosted)
       const _epDisplay = m.epName && !m.display.toLowerCase().includes(m.epName.toLowerCase().split('/').pop()) ? m.epName : '';
-      epSpan.textContent = _epDisplay;
-      row.appendChild(epSpan);
+      epSpan.textContent = [_epDisplay, m.category === 'local' ? 'Local' : '', m.stale ? 'Offline' : ''].filter(Boolean).join(' · ');
+      select.appendChild(epSpan);
 
       // Inline favorite dot — toggles favorite, never picks the model.
       const favDot = document.createElement('button');
@@ -521,7 +536,7 @@ function _initModelPickerDropdown() {
       const _setFavState = (on) => {
         favDot.classList.toggle('active', on);
         favDot.title = on ? 'Remove from favorites' : 'Add to favorites';
-        favDot.setAttribute('aria-label', on ? 'Remove from favorites' : 'Add to favorites');
+        favDot.setAttribute('aria-label', `${on ? 'Remove from favorites' : 'Add to favorites'}: ${m.display}`);
         favDot.setAttribute('aria-pressed', on ? 'true' : 'false');
       };
       _setFavState(favs.includes(m.mid));
@@ -542,8 +557,10 @@ function _initModelPickerDropdown() {
         // the in-place favorite update above is enough.
         if (!q) {
           const st = listEl.scrollTop;
+          const hadFocus = document.activeElement === favDot;
           _populate('');
           listEl.scrollTop = st;
+          if (hadFocus) [...listEl.querySelectorAll('.mp-fav-dot')].find(el => el.getAttribute('aria-label').endsWith(`: ${m.display}`))?.focus({ preventScroll: true });
         }
       });
       row.appendChild(favDot);
@@ -560,7 +577,7 @@ function _initModelPickerDropdown() {
           .filter(Boolean).join(' ').toLowerCase().includes(q);
       });
       if (matches.length === 0) _addEmpty('No matching models');
-      else matches.forEach(_addRow);
+      else _addGroups(matches, true);
       return;
     }
 
@@ -594,62 +611,39 @@ function _initModelPickerDropdown() {
       }
     }
 
-    // Small catalogs: still list everything so users aren't forced to search.
-    if (all.length <= BROWSE_ALL_LIMIT) {
-      const rest = all.filter(m => !shown.has(_pickerModelKey(m)));
-      if (rest.length) {
-        if (shown.size) _addSection('All models');
-        rest.forEach(_addRow);
-      }
-    } else {
-      // Large catalog: show provider groups with collapsible sections.
-      const rest = all.filter(m => !shown.has(_pickerModelKey(m)));
-      const groups = new Map();
-      rest.forEach(m => {
-        const slug = _providerGroupKey(m);
-        if (!groups.has(slug)) groups.set(slug, []);
-        groups.get(slug).push(m);
-      });
-      const sorted = [...groups.keys()].sort((a, b) =>
-        _providerGroupName(a).localeCompare(_providerGroupName(b)));
+    _addGroups(all.filter(m => !shown.has(_pickerModelKey(m))));
 
-      sorted.forEach(provider => {
-        const models = groups.get(provider);
-        const isCollapsed = _collapsedProviders.has(provider);
-        const header = document.createElement('div');
+    function _addGroups(models, searching = false) {
+      const groups = new Map();
+      models.forEach(m => {
+        const key = _providerGroupKey(m);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(m);
+      });
+      [...groups.keys()].sort((a, b) => _providerGroupName(a).localeCompare(_providerGroupName(b))).forEach(provider => {
+        const entries = groups.get(provider);
+        const collapsed = !searching && _collapsedProviders.has(provider);
+        const header = document.createElement('button');
+        header.type = 'button';
         header.className = 'mp-provider-header';
-        header.innerHTML =
-          `<svg class="mp-provider-chevron${isCollapsed ? ' collapsed' : ''}" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`
-          + `<span class="mp-provider-name">${_providerGroupName(provider)}</span>`
-          + `<span class="mp-provider-count">${models.length}</span>`;
-        header.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (_collapsedProviders.has(provider)) {
-            _collapsedProviders.delete(provider);
-            _justExpandedProvider = provider;
-          } else {
-            _collapsedProviders.add(provider);
-            _justExpandedProvider = null;
-          }
+        header.setAttribute('aria-expanded', String(!collapsed));
+        header.textContent = `${collapsed ? '▸' : '▾'} ${_providerGroupName(provider)} · ${entries.length}`;
+        header.disabled = searching;
+        header.addEventListener('click', () => {
+          if (collapsed) _collapsedProviders.delete(provider);
+          else _collapsedProviders.add(provider);
           _saveList('odysseus-model-collapsed', [..._collapsedProviders]);
           const st = listEl.scrollTop;
+          const index = [...listEl.querySelectorAll('.mp-provider-header')].indexOf(header);
           _populate('');
           listEl.scrollTop = st;
+          listEl.querySelectorAll('.mp-provider-header')[index]?.focus({ preventScroll: true });
         });
         listEl.appendChild(header);
-        if (!isCollapsed) {
-          const group = document.createElement('div');
-          group.className = 'mp-provider-group' + (_justExpandedProvider === provider ? ' mp-just-expanded' : '');
-          models.forEach(m => {
-            _addRow(m);
-            // Move the just-appended row into the group container
-            group.appendChild(listEl.lastElementChild);
-          });
-          listEl.appendChild(group);
-          if (_justExpandedProvider === provider) _justExpandedProvider = null;
-        }
+        if (!collapsed) entries.forEach(_addRow);
       });
     }
+
   }
 
 async function _pick(m) {
@@ -818,8 +812,10 @@ async function _pick(m) {
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menu.classList.contains('hidden') || menu.classList.contains('closing')) {
+      clearTimeout(closeTimer);
       // Force-clear any in-progress close animation
       menu.classList.remove('closing', 'hidden');
+      btn.setAttribute('aria-expanded', 'true');
       const hasCache = _hasModelCache();
       if (hasCache) {
         _populate('');
@@ -868,8 +864,9 @@ async function _pick(m) {
       }
     });
   }
-  search.addEventListener('keydown', (e) => {
-    _handlePickerKeydown(e, listEl, '.model-switch-item', () => _close({ restoreFocus: true }));
+  menu.addEventListener('keydown', (e) => {
+    if (e.target !== search && !e.target.classList.contains('mp-select-model')) return;
+    _handlePickerKeydown(e, listEl, '.mp-select-model', () => _close({ restoreFocus: true }));
   });
   const addModelsBtn = document.getElementById('model-picker-add-models-btn');
   if (addModelsBtn) {

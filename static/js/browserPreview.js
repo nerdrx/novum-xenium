@@ -1,3 +1,5 @@
+import { resetRunStatus } from './runStatus.js';
+import { resetWorkspaceDock } from './workspaceDock.js';
 const BROWSER_TOOL_PREFIX = 'mcp__builtin_browser__';
 const MAX_SCREENSHOT_BYTES = 3 * 1024 * 1024;
 const MAX_CACHED_SESSIONS = 12;
@@ -218,6 +220,8 @@ function updateBrowserPreview(event, sessionId) {
 }
 
 function resetBrowserPreview(sessionId) {
+  resetRunStatus(sessionId);
+  resetWorkspaceDock(sessionId);
   const id = validSessionId(sessionId);
   if (id) {
     if (visibleSessionId === id) {

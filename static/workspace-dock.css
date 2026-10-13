@@ -1,0 +1,33 @@
+.workspace-dock-toggle { margin-left: auto; }
+.workspace-dock {
+  position: fixed; right: 0; top: var(--desktop-titlebar-height, 0px); bottom: 0;
+  width: min(420px, 100vw); z-index: 280; box-sizing: border-box;
+  background: var(--panel, #19171f); color: var(--fg, #eee);
+  border-left: 1px solid var(--border, #39333f); padding: 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.workspace-dock header { display: flex; align-items: center; justify-content: space-between; }
+.workspace-dock h2 { font-size: 1rem; margin: 0; }
+.workspace-dock-tabs { display: flex; gap: 4px; }
+.workspace-dock button, .workspace-dock-toggle {
+  background: transparent; color: inherit; border: 1px solid var(--border, #39333f);
+  border-radius: 6px; padding: 7px 10px; cursor: pointer; font: inherit;
+  box-sizing: border-box; height: auto; min-height: 36px; line-height: 1.25;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.workspace-dock [aria-selected="true"] { background: color-mix(in srgb, var(--accent, #a88ad0) 20%, transparent); }
+.workspace-dock :focus-visible { outline: 2px solid var(--accent, #a88ad0); outline-offset: 2px; }
+.workspace-dock-content { overflow: auto; min-height: 0; overflow-wrap: anywhere; }
+.workspace-dock-content img { display: block; width: 100%; height: auto; object-fit: contain; border-radius: 6px; }
+.workspace-dock-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
+.workspace-dock-content a { display: block; padding: 8px 0; color: var(--accent, #bca1df); }
+.workspace-dock-content details { padding: 8px 0; border-bottom: 1px solid var(--border, #39333f); }
+@media (min-width: 1000px) { #chat-container.workspace-dock-open { margin-right: 420px; } }
+@media (max-width: 999px) { .workspace-dock { box-shadow: -12px 0 40px #0006; } }
+
+.workspace-dock-content pre { color: var(--fg); opacity: 1; background: var(--bg); padding: 12px; line-height: 1.55; }
+.workspace-dock-content summary { color: var(--fg); background: transparent; }
+
+.workspace-dock-content summary { padding: 10px 12px; line-height: 1.4; min-height: 40px; box-sizing: border-box; }
+.workspace-dock-content summary::before { flex: 0 0 10px; margin: 0; }
+.workspace-dock-content details { background: transparent; border-color: var(--border); padding: 0; }

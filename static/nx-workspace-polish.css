@@ -1,0 +1,107 @@
+/* Shared workspace rhythm; use the user's active theme throughout. */
+:root { --nx-space: 12px; --nx-panel-border: color-mix(in srgb, var(--fg) 14%, transparent); }
+.chat-history { gap: 6px; padding-top: 16px; padding-bottom: 24px; }
+.chat-history .msg { line-height: 1.65; }
+.chat-history .msg .body { overflow-wrap: anywhere; }
+.chat-input-bar { margin-bottom: max(14px, env(safe-area-inset-bottom)); }
+.chat-history .agent-thread { border-color: var(--nx-panel-border); }
+#solar-system-canvas, #constellations-canvas { opacity: .48; }
+.chat-history .msg-ai {
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+}
+
+/* Keep the model switcher in its own column so a larger touch target never
+   covers the message field. */
+html.nx-workspace .chat-input-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 8px;
+}
+html.nx-workspace .chat-input-top > textarea#message {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+html.nx-workspace .chat-input-top > .model-picker-wrap {
+  position: static;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+html.nx-workspace .model-picker-btn {
+  min-height: 36px;
+  height: auto;
+  padding: 7px 8px;
+}
+
+#nx-run-status { position: absolute; left: 12px; top: 10px; display: inline-flex;
+  align-items: center; gap: 7px; font-size: 11px; padding: 5px 9px;
+  border: 1px solid var(--nx-panel-border); border-radius: 20px;
+  color: var(--fg); background: var(--bg); max-width: 140px; }
+#nx-run-status[hidden] { display: none; }
+#nx-run-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+#nx-run-status[data-state="working"], #nx-run-status[data-state="testing"] { color: var(--accent, var(--fg)); }
+#nx-run-status[data-state="failed"] { color: var(--color-error, #e06c75); }
+#nx-run-status[data-state="waiting"] { border-style: dashed; }
+@media (max-width: 640px) {
+  #nx-run-status { position: relative; left: auto; top: auto; margin-right: auto; }
+  .chat-history { padding-top: 12px; }
+}
+
+@media (max-width: 768px) {
+  html.nx-workspace .chat-top-bar {
+    justify-content: flex-start;
+    gap: 6px;
+    padding-left: 48px;
+    padding-right: 56px;
+  }
+  html.nx-workspace .chat-meta-overlay {
+    position: relative;
+    inset: auto;
+    transform: none;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: none;
+    overflow: hidden;
+    justify-content: flex-start;
+    text-overflow: ellipsis;
+  }
+  html.nx-workspace .chat-meta-overlay #current-meta {
+    min-width: 0;
+  }
+  html.nx-workspace .chat-meta-overlay .chat-meta-count,
+  html.nx-workspace .chat-meta-overlay .session-cost-display,
+  html.nx-workspace .chat-meta-overlay .chat-context-pill {
+    display: none !important;
+  }
+  html.nx-workspace .chat-meta-overlay .export-dropdown-wrap {
+    margin-right: 0;
+  }
+  html.nx-workspace .chat-top-bar #nx-run-status {
+    order: 2;
+    position: relative;
+    inset: auto;
+    transform: none;
+    flex: 0 0 auto;
+    max-width: 92px;
+    margin: 0;
+    padding: 4px 7px;
+  }
+  html.nx-workspace .chat-top-bar .workspace-dock-toggle {
+    order: 3;
+    flex: 0 0 auto;
+    margin: 0;
+  }
+  html.nx-workspace .model-picker-btn {
+    min-height: 44px;
+    padding: 10px 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-container { transition: none; }
+}
+
+.chat-history .msg { border-color: var(--nx-panel-border); }
+:root:not(.density-compact) .chat-history .msg { padding: 14px 16px; }

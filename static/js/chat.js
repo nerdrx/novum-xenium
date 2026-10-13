@@ -39,7 +39,9 @@ import { createTerminalStreamError, isRecoverableStreamError, isUnsupportedToolC
 import { loadPanel } from './panels.js';
 import { appendSubagentCard } from './subagentCard.js';
 import { updateBrowserPreview } from './browserPreview.js';
-import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
+import { updateRunStatus } from './runStatus.js';
+import { updateWorkspaceDock } from './workspaceDock.js';
+import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './codingWorkPacket.js';
 
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -3063,12 +3065,17 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
                 if (_liveThinkContent) _liveThinkContent.id = _thinkIdDone;
                 if (_liveThinkToggle) _liveThinkToggle.id = _thinkIdDone + '-toggle';
               }
+              if (!_isBg) updateRunStatus({ type: 'stream_end' }, streamSessionId);
               // Normal foreground completion — metrics will be displayed in the final render block below
               break;
             }
             try {
               const json = JSON.parse(data);
-              if (!_isBg) updateBrowserPreview(json, streamSessionId);
+              if (!_isBg) {
+                updateBrowserPreview(json, streamSessionId);
+                updateRunStatus(json, streamSessionId);
+                updateWorkspaceDock(json, streamSessionId);
+              }
               // Handle SSE error events (e.g. HTTP 404 from provider)
               if (_nextIsError || json.status >= 400) {
                 _nextIsError = false;
@@ -3800,6 +3807,7 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
                 // Expand/collapse via delegated click handler (init at module bottom).
                 threadWrap.appendChild(node);
                 currentToolBubble = node;
+                recordCodingWorkToolActivity(json, holder, node);
                 // Animate the wave
                 const waveEl = node.querySelector('.agent-thread-wave');
                 if (waveEl) {
@@ -3839,6 +3847,7 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
                 // user doesn't stare at a blind "Running…" spinner.
                 if (_isBg) continue;
                 if (!currentToolBubble) continue;
+                recordCodingWorkToolActivity(json, holder, currentToolBubble);
                 const isImageProgress = /image/i.test(String(json.tool || '')) || /image/i.test(String(json.message || ''));
                 if (json.total || json.percent != null || isImageProgress) {
                   const content = currentToolBubble.querySelector('.agent-thread-content');
@@ -4057,6 +4066,7 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
                   });
                 }
 
+                recordCodingWorkToolActivity(json, holder, currentToolBubble);
                 // Schedule a thinking spinner between tool rounds (short delay so
                 // agent_step in the same SSE chunk can cancel it before it shows)
                 _scheduleThinkingSpinner();
@@ -5385,12 +5395,16 @@ import { renderCodingWorkPacketStatus } from './codingWorkPacket.js';
           if (!line) continue;
           const payload = line.slice(6);
           if (payload === '[DONE]') {
+            updateRunStatus({ type: 'stream_end' }, sessionId);
             try { await reader.cancel(); } catch (_) {}
             break readLoop;
           }
           let json;
           try { json = JSON.parse(payload); } catch (_) { continue; }
           updateBrowserPreview(json, sessionId);
+          updateRunStatus(json, sessionId);
+          updateWorkspaceDock(json, sessionId);
+          recordCodingWorkToolActivity(json, holder);
           if (eventIsError) {
             replayError = createTerminalStreamError(json);
           } else if (json.delta) {

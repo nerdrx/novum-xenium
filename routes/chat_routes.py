@@ -69,6 +69,7 @@ from routes.chat_helpers import (
     build_chat_context,
     save_assistant_response,
     run_post_response_tasks,
+    background_memory_extraction_allowed,
     skill_extraction_allowed,
     accumulate_token_usage,
     clean_thinking_for_save,
@@ -3050,6 +3051,7 @@ def setup_chat_routes(
                                     allow_background_extraction=(
                                         not tool_policy.block_all_tool_calls
                                         and not tool_approval_continuation
+                                        and background_memory_extraction_allowed(_skill_events)
                                     ),
                                 )
                             _stream_set(session, status="done")

@@ -1,6 +1,9 @@
 import pytest
 
-from routes.chat_helpers import skill_extraction_allowed
+from routes.chat_helpers import (
+    background_memory_extraction_allowed,
+    skill_extraction_allowed,
+)
 
 
 @pytest.mark.parametrize("event_type", [
@@ -55,3 +58,15 @@ def test_agent_mode_and_approval_continuation_remain_required():
     assert not skill_extraction_allowed(
         [], requested_agent=True, approval_continuation=True, workspace="",
     )
+
+
+def test_background_memory_skips_incomplete_agent_turns_but_keeps_normal_questions():
+    assert not background_memory_extraction_allowed([
+        {"type": "ask_user", "data": {"kind": "tool_approval", "approval_id": "a1"}},
+    ])
+    assert not background_memory_extraction_allowed([{"type": "agent_terminal"}])
+    assert not background_memory_extraction_allowed([{"type": "error"}])
+    assert background_memory_extraction_allowed([
+        {"type": "ask_user", "data": {"kind": "question"}},
+    ])
+    assert background_memory_extraction_allowed([{"type": "tool_start", "tool": "read_file"}])

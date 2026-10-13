@@ -1158,6 +1158,23 @@ def skill_extraction_allowed(events, *, requested_agent, approval_continuation, 
     return not coding_run or verified
 
 
+def background_memory_extraction_allowed(events):
+    """Avoid learning from an agent turn that ended before its task completed."""
+    incomplete = {
+        "agent_terminal", "budget_exceeded", "error", "intent_nudge_exhausted",
+        "loop_breaker_triggered", "rounds_exhausted",
+    }
+    for event in events:
+        event_type = event.get("type")
+        if event_type in incomplete:
+            return False
+        if event_type == "ask_user":
+            ask = event.get("data") or event.get("ask_user") or {}
+            if isinstance(ask, dict) and ask.get("kind") == "tool_approval":
+                return False
+    return True
+
+
 def run_post_response_tasks(
     sess,
     session_manager,

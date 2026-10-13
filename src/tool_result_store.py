@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from bisect import bisect_right
 from contextlib import closing
 from pathlib import Path
 
@@ -276,6 +277,116 @@ def read_result(owner: str | None, session_id: str, result_id: str) -> str | Non
             finally:
                 conn.close()
     except (sqlite3.Error, OSError, ValueError, TypeError):
+        return None
+
+
+def markdown_heading_outline(
+    owner: str | None, session_id: str, result_id: str,
+    *, max_headings: int = 24, max_chars: int = 1200,
+) -> dict | None:
+    """Return a bounded Markdown outline with offsets from stored archive chunks."""
+    try:
+        owner = _storage_owner(owner)
+        if (not isinstance(session_id, str) or not session_id.strip()
+                or not isinstance(result_id, str) or not result_id):
+            return None
+        if not isinstance(max_headings, int) or max_headings < 1:
+            return None
+        max_headings = min(max_headings, 64)
+        max_chars = min(max(0, int(max_chars)), 4000)
+        key = _scope_key(owner, session_id)
+        with _scope_lock(key):
+            if key in _FENCED_SCOPES:
+                return None
+            path = _scope_file(owner, session_id)
+            if not path.is_file() or path.is_symlink():
+                return None
+            conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+            conn.row_factory = sqlite3.Row
+            try:
+                result = conn.execute(
+                    "SELECT body FROM results WHERE id=? AND owner=? AND session_id=? "
+                    "AND tool_name='web_fetch' AND created_at>=?",
+                    (result_id, owner, session_id, time.time() - _TTL_SECONDS),
+                ).fetchone()
+                if result is None:
+                    return None
+                chunks = conn.execute(
+                    "SELECT c.chunk_index, f.body FROM chunks c "
+                    "JOIN chunk_fts f ON f.rowid=c.id WHERE c.result_id=? "
+                    "ORDER BY c.chunk_index",
+                    (result_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        body = result["body"]
+        # These intervals are derived from the actual persisted chunks. The
+        # returned offset is the real chunk_index consumed by context_search.
+        chunk_starts = []
+        chunk_ends = []
+        start = 0
+        for chunk in chunks:
+            text = chunk["body"]
+            chunk_starts.append(start)
+            chunk_ends.append(start + len(text))
+            start += max(1, len(text) - _CHUNK_OVERLAP)
+
+        preferred = []
+        fallback = []
+        preferred_count = 0
+        fallback_count = 0
+        in_fence = None
+        truncated = "archived result capped" in body
+        fence_re = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+        closing_fence_re = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
+        heading_re = re.compile(r"^ {0,3}(#{1,6})(?:\s+|$)(.*?)\s*#*\s*$")
+        position = 0
+        for line in body.splitlines(keepends=True):
+            content = line.rstrip("\r\n")
+            fence = fence_re.match(content)
+            if fence:
+                marker = fence.group(1)
+                if in_fence is None:
+                    in_fence = (marker[0], len(marker))
+                elif (closing_fence_re.match(content) and marker[0] == in_fence[0]
+                      and len(marker) >= in_fence[1]):
+                    in_fence = None
+            elif in_fence is None:
+                match = heading_re.match(content)
+                if match:
+                    chunk_pos = bisect_right(chunk_starts, position) - 1
+                    if chunk_pos >= 0 and position < chunk_ends[chunk_pos]:
+                        heading = {
+                            "offset": int(chunks[chunk_pos]["chunk_index"]),
+                            "level": len(match.group(1)),
+                            "text": match.group(2).strip()[:180],
+                        }
+                        if heading["level"] <= 2:
+                            preferred_count += 1
+                            if len(preferred) < max_headings + 1:
+                                preferred.append(heading)
+                        else:
+                            fallback_count += 1
+                            if len(fallback) < max_headings + 1:
+                                fallback.append(heading)
+            position += len(line)
+
+        # Top-level sections carry the most useful navigation. Fall back to
+        # deeper headings only when the source has no top-level sections.
+        selected = preferred or fallback
+        selected_count = preferred_count or fallback_count
+        omitted = truncated or selected_count > max_headings
+        output = []
+        used = 0
+        for heading in selected[:max_headings]:
+            cost = len(heading["text"])
+            if used + cost > max_chars:
+                omitted = True
+                break
+            output.append(heading)
+            used += cost
+        return {"headings": output, "omitted": omitted}
+    except (sqlite3.Error, OSError, ValueError, TypeError, OverflowError):
         return None
 
 

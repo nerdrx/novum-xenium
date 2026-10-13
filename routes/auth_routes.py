@@ -732,9 +732,9 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         body = await request.json()
         current = _load_settings()
         # Per-key validation for numeric settings: coerce to int and clamp to a
-        # sane range so a bad value can't disable the agent or let it run away.
+        # sane range. The explicit zero for agent_max_rounds is unlimited.
         _INT_RANGES = {
-            "agent_max_rounds": (1, 200),
+            "agent_max_rounds": (0, 200),  # 0 = unlimited steps
             "agent_max_tool_calls": (0, 1000),  # 0 = unlimited
         }
         for key in DEFAULT_SETTINGS:
@@ -745,10 +745,16 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             val = body[key]
             if key in _INT_RANGES:
                 lo, hi = _INT_RANGES[key]
+                if key == "agent_max_rounds" and isinstance(val, bool):
+                    raise HTTPException(400, f"{key} must be an integer")
+                if key == "agent_max_rounds" and isinstance(val, float) and not val.is_integer():
+                    raise HTTPException(400, f"{key} must be an integer")
                 try:
                     val = int(val)
                 except (TypeError, ValueError):
                     raise HTTPException(400, f"{key} must be an integer")
+                if key == "agent_max_rounds" and val < 0:
+                    raise HTTPException(400, f"{key} must be zero (unlimited) or positive")
                 val = max(lo, min(val, hi))
             current[key] = val
         _save_settings(current)

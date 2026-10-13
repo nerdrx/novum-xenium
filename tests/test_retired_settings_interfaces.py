@@ -83,6 +83,37 @@ async def test_generic_settings_hide_and_preserve_retired_fallbacks(monkeypatch)
     assert store["tts_enabled"] is False
 
 
+@pytest.mark.asyncio
+async def test_agent_max_rounds_accepts_zero_but_rejects_negative(monkeypatch):
+    store = dict(settings_mod.DEFAULT_SETTINGS)
+    monkeypatch.setattr(auth_routes, "migrate_from_settings", lambda: None)
+    monkeypatch.setattr(auth_routes, "_load_settings", lambda: dict(store))
+    monkeypatch.setattr(auth_routes, "_save_settings", lambda updated: store.update(updated))
+    set_settings = _route(
+        auth_routes.setup_auth_routes(_AuthManager()), "/api/auth/settings", "POST",
+    )
+
+    result = await set_settings(_Request({"agent_max_rounds": 0}, admin=True))
+    assert result["agent_max_rounds"] == 0
+    assert store["agent_max_rounds"] == 0
+    with pytest.raises(auth_routes.HTTPException) as exc:
+        await set_settings(_Request({"agent_max_rounds": -1}, admin=True))
+    assert exc.value.status_code == 400
+    assert store["agent_max_rounds"] == 0
+    with pytest.raises(auth_routes.HTTPException) as exc:
+        await set_settings(_Request({"agent_max_rounds": False}, admin=True))
+    assert exc.value.status_code == 400
+    assert store["agent_max_rounds"] == 0
+    with pytest.raises(auth_routes.HTTPException) as exc:
+        await set_settings(_Request({"agent_max_rounds": 0.5}, admin=True))
+    assert exc.value.status_code == 400
+    assert store["agent_max_rounds"] == 0
+    with pytest.raises(auth_routes.HTTPException) as exc:
+        await set_settings(_Request({"agent_max_rounds": "0.5"}, admin=True))
+    assert exc.value.status_code == 400
+    assert store["agent_max_rounds"] == 0
+
+
 def test_manage_settings_tombstones_legacy_fallback_key(monkeypatch):
     store = {
         **settings_mod.DEFAULT_SETTINGS,
@@ -117,3 +148,28 @@ def test_manage_settings_tombstones_legacy_fallback_key(monkeypatch):
 
     assert save_calls == []
     assert store["default_model_fallbacks"] == LEGACY_VALUE
+
+
+def test_manage_settings_accepts_unlimited_steps_but_rejects_invalid_round_caps(monkeypatch):
+    store = dict(settings_mod.DEFAULT_SETTINGS)
+
+    class _Db:
+        def close(self):
+            return None
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _Db())
+    monkeypatch.setattr(settings_mod, "load_settings", lambda: dict(store))
+    monkeypatch.setattr(settings_mod, "save_settings", lambda updated: store.update(updated))
+
+    accepted = asyncio.run(do_manage_settings(json.dumps({
+        "action": "set", "key": "agent_max_rounds", "value": "0",
+    })))
+    assert accepted["exit_code"] == 0
+    assert store["agent_max_rounds"] == 0
+
+    for value in (-1, 201, True, 0.5, "0.5"):
+        rejected = asyncio.run(do_manage_settings(json.dumps({
+            "action": "set", "key": "agent_max_rounds", "value": value,
+        })))
+        assert rejected["exit_code"] == 1
+        assert store["agent_max_rounds"] == 0

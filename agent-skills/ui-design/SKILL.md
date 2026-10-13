@@ -1,7 +1,7 @@
 ---
 name: ui-design
 description: Design and build usable GUI, app, frontend, website, and CSS interfaces from the user's actual brand reference.
-version: 1.0.3
+version: 1.0.4
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -25,6 +25,7 @@ Build or restyle a graphical application, website, dashboard, or form. Use along
 
 ## Runtime Boundary Check
 For desktop or native features, first inspect the actual framework, version, entry points, and runtime security settings; consult that version's official docs before choosing APIs.
+For a new application, check the chosen framework's currently supported release and installation requirements in its official documentation or package registry before pinning a version; do not choose an old release from memory. For an existing project, respect its pinned runtime unless an upgrade is needed and validated.
 In Electron, renderer code follows web rules; with `nodeIntegration: false`, do not call `require`, `child_process`, or filesystem APIs there. Never fall back to renderer Node APIs when isolation blocks them.
 If the app needs a native operation, verify a narrow existing preload bridge; otherwise add a minimal `contextBridge` API and validated IPC handler in the main process, then test that bridge before building the full UI.
 For process launch, use the supported main-process API with executable and argument array kept separate; preserve cancellation, errors, and completion status.

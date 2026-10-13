@@ -160,6 +160,8 @@ def _chat_stream_endpoint(
             "primary": (endpoint_url, model, kwargs.get("headers")),
             "fallbacks": kwargs.get("fallbacks"),
         }
+        if captured.get("capture_max_rounds"):
+            captured["agent"]["max_rounds"] = kwargs.get("max_rounds")
         if kwargs.get("external_untrusted_context_seen"):
             captured["agent_external_untrusted_context_seen"] = True
         if kwargs.get("exact_approval") is not None:
@@ -264,6 +266,29 @@ async def test_chat_stream_route_keeps_selected_model_strict_with_legacy_data(mo
         assert captured == {"chat": [selected]}
     else:
         assert captured == {"agent": {"primary": selected, "fallbacks": []}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("configured", "expected"), [
+    (0, 0), (-1, agent_loop.MAX_AGENT_ROUNDS), (False, agent_loop.MAX_AGENT_ROUNDS),
+    (0.5, agent_loop.MAX_AGENT_ROUNDS), ("0.5", agent_loop.MAX_AGENT_ROUNDS),
+])
+async def test_chat_stream_route_preserves_only_valid_unlimited_round_setting(
+    monkeypatch, configured, expected,
+):
+    captured = {"capture_max_rounds": True}
+    endpoint = _chat_stream_endpoint(monkeypatch, "agent", captured)
+    import src.settings as settings
+    monkeypatch.setattr(
+        settings, "get_setting",
+        lambda key, default=None: configured if key == "agent_max_rounds" else default,
+    )
+
+    response = await endpoint(_RouteRequest("agent"))
+    async for _ in response.body_iterator:
+        pass
+
+    assert captured["agent"]["max_rounds"] == expected
 
 
 @pytest.mark.asyncio

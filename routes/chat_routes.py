@@ -2763,10 +2763,22 @@ def setup_chat_routes(
                     # Per-message round cap from settings; clamp defensively in
                     # case settings.json was hand-edited to a bad value.
                     try:
-                        _max_rounds = int(get_setting("agent_max_rounds", _DEFAULT_ROUNDS) or _DEFAULT_ROUNDS)
+                        _raw_rounds = get_setting("agent_max_rounds", _DEFAULT_ROUNDS)
+                        if isinstance(_raw_rounds, bool):
+                            raise ValueError("boolean is not a step count")
+                        if isinstance(_raw_rounds, str) and not re.fullmatch(r"[+-]?\d+", _raw_rounds.strip()):
+                            raise ValueError("non-integer string is not a step count")
+                        _configured_rounds = int(_raw_rounds)
+                        if not isinstance(_raw_rounds, str) and _raw_rounds != _configured_rounds:
+                            raise ValueError("fractional value is not a step count")
                     except (TypeError, ValueError):
-                        _max_rounds = _DEFAULT_ROUNDS
-                    _max_rounds = max(1, min(_max_rounds, 200))
+                        _configured_rounds = _DEFAULT_ROUNDS
+                    # Zero is an explicit unlimited-step opt-in. Corrupt
+                    # negative values fall back to the finite default.
+                    _max_rounds = (
+                        min(_configured_rounds, 200)
+                        if _configured_rounds >= 0 else _DEFAULT_ROUNDS
+                    )
 
                     _forced_tools = None
                     if _search_enabled:

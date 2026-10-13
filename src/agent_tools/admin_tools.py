@@ -658,6 +658,10 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
                 return {"error": f"Unknown setting '{raw}'. Use action='list' to see available settings.", "exit_code": 1}
             if _is_secret(key):
                 return {"response": f"'{key}' is a credential/secret. For security I can't set it from chat. Open Settings and set it there.", "exit_code": 0}
+            if key == "agent_max_rounds" and isinstance(value, bool):
+                return {"error": "agent_max_rounds must be an integer from 0 to 200.", "exit_code": 1}
+            if key == "agent_max_rounds" and isinstance(value, float) and not value.is_integer():
+                return {"error": "agent_max_rounds must be an integer from 0 to 200.", "exit_code": 1}
             # Structured settings (dicts/lists like keybinds or vision fallbacks)
             # have no safe scalar coercion; _coerce would pass a bare string
             # straight through and clobber the structure. Refuse them here; they're
@@ -669,6 +673,8 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
                 value = _coerce(value, DEFAULT_SETTINGS[key])
             except (ValueError, TypeError):
                 return {"error": f"'{value}' isn't a valid value for {key} (expected {type(DEFAULT_SETTINGS[key]).__name__}).", "exit_code": 1}
+            if key == "agent_max_rounds" and not 0 <= value <= 200:
+                return {"error": "agent_max_rounds must be an integer from 0 to 200.", "exit_code": 1}
             if key in _ENUMS and str(value).lower() not in _ENUMS[key]:
                 return {"error": f"{key} must be one of: {', '.join(_ENUMS[key])}.", "exit_code": 1}
             s = load_settings()

@@ -74,6 +74,55 @@ def test_chunk_search_finds_tail_and_empty_query_paginates(tmp_path, monkeypatch
     assert 'Search matches are snippets' not in tail_page
 
 
+def test_web_fetch_outline_points_to_actual_later_archive_chunk(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    sections = [f"## {number}. Section {number}\n" + ("guide detail " * 160)
+                for number in range(1, 13)]
+    sections.extend([
+        "## 13. OLED ground amendment\nTrue black replaces the earlier gradient.",
+        "## 14. Final checks\nConfirm the OLED palette.",
+    ])
+    result_id = store.archive_result("alice", "guide", "web_fetch", "\n".join(sections))
+
+    outline = store.markdown_heading_outline("alice", "guide", result_id)
+    later_section = next(item for item in outline["headings"]
+                         if item["text"] == "13. OLED ground amendment")
+    assert later_section["offset"] > 0
+    exact_chunk = store.search_results(
+        "alice", "guide", "", result_id, offset=later_section["offset"],
+    )
+    assert f"chunk {later_section['offset']}" in exact_chunk
+    assert "13. OLED ground amendment" in exact_chunk
+    assert any(item["text"] == "14. Final checks" for item in outline["headings"])
+    assert store.markdown_heading_outline("bob", "guide", result_id) is None
+    assert store.markdown_heading_outline("alice", "other-guide", result_id) is None
+
+
+def test_web_fetch_outline_skips_fenced_headings_and_bounds_malformed_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    markdown = "# Real heading\n```md\n## Fake inside fence\n```\n~~~\n# Also fake\n~~~\n"
+    result_id = store.archive_result("alice", "guide", "web_fetch", markdown)
+    outline = store.markdown_heading_outline("alice", "guide", result_id)
+    assert [item["text"] for item in outline["headings"]] == ["Real heading"]
+
+    malformed = "# " + ("x" * 200000)
+    noisy_id = store.archive_result("alice", "guide", "web_fetch", malformed)
+    bounded = store.markdown_heading_outline(
+        "alice", "guide", noisy_id, max_headings=3, max_chars=90,
+    )
+    assert bounded["headings"] == []
+    assert bounded["omitted"]
+    assert store.markdown_heading_outline("alice", "guide", "missing") is None
+
+
+def test_non_markdown_outline_is_empty_and_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    result_id = store.archive_result("alice", "guide", "web_fetch", "plain text " * 1000)
+    assert store.markdown_heading_outline("alice", "guide", result_id) == {
+        "headings": [], "omitted": False,
+    }
+
+
 def test_query_operators_are_data_and_output_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
     store.archive_result("alice", "run", "tool", "alpha " * 5000)

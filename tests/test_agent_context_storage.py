@@ -21,7 +21,9 @@ def test_bulk_output_is_indexed_and_retrieved_in_real_agent_loop(monkeypatch, tm
     requests = []
     needle = "EXACTIMPORTANTDETAIL"
     opening_detail = "Opening hours Monday-Friday 08:00-18:00, Saturday 08:00-12:30."
-    raw = "Site navigation. " * 60 + opening_detail + " Start of page. " * 1000 + "\n" + needle + "\n" + " End of page. " * 1000
+    raw = ("# Guide overview\n" + "Site navigation. " * 60 + opening_detail
+           + " Start of page. " * 1000 + "\n## 13. Later design amendment\n"
+           + "Use the updated palette.\n" + needle + "\n" + " End of page. " * 1000)
 
     async def execute(block, **kwargs):
         if block.tool_type == "web_fetch":
@@ -42,6 +44,8 @@ def test_bulk_output_is_indexed_and_retrieved_in_real_agent_loop(monkeypatch, tm
             assert len(result["content"]) < 2800
             assert opening_detail in result["content"]
             assert needle not in result["content"]
+            assert "Untrusted source headings" in result["content"]
+            assert "13. Later design amendment" in result["content"]
             assert result["metadata"]["trusted"] is False
             result_id = re.search(r"stored as ([\w-]+)", result["content"]).group(1)
             calls = [{"id": "retrieve", "name": "context_search", "arguments": json.dumps({"query": needle, "result_id": result_id})}]

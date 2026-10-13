@@ -1,6 +1,7 @@
 """Stop coding turns that stream action promises without making progress."""
 import asyncio
 import json
+import pytest
 
 import src.agent_loop as al
 from tests.test_agent_rounds_exhausted import _collect, _patch_common, _types
@@ -21,7 +22,8 @@ def test_detector_is_narrow_to_long_unfenced_action_narration():
     assert not al._looks_like_repeated_action_narration("\n\n".join(f"Step {i}: inspect." for i in range(20)))
 
 
-def test_coding_narration_retries_once_then_fails_without_execution(monkeypatch):
+@pytest.mark.parametrize("max_rounds", [3, 0])
+def test_coding_narration_retries_once_then_fails_without_execution(monkeypatch, max_rounds):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set(), raising=False)
     requests = []
@@ -49,7 +51,7 @@ def test_coding_narration_retries_once_then_fails_without_execution(monkeypatch)
     ]
     events = _types(_collect(al.stream_agent_loop(
         "http://x/v1", "qwen3.5:9b", messages,
-        relevant_tools={"bash"}, workspace="/workspace", max_rounds=3,
+        relevant_tools={"bash"}, workspace="/workspace", max_rounds=max_rounds,
     )))
 
     assert len(requests) == 2
@@ -75,7 +77,7 @@ def test_actual_native_tool_call_disables_narration_guard(monkeypatch):
         round_num += 1
         if round_num == 1:
             yield 'data: ' + json.dumps({"type": "tool_calls", "calls": [
-                {"id": "read-1", "name": "read_file", "arguments": json.dumps({"path": "src/server.py"})},
+                {"id": "read-1", "name": "read_file", "arguments": json.dumps({"path": "README.md"})},
             ]}) + '\n\n'
             yield f'data: {json.dumps({"delta": _promises()})}\n\n'
         else:
@@ -84,13 +86,13 @@ def test_actual_native_tool_call_disables_narration_guard(monkeypatch):
 
     async def execute(block, *args, **kwargs):
         calls.append(block.tool_type)
-        return block.tool_type, {"output": "file exists", "exit_code": 0}
+        return block.tool_type, {"output": "Project guidance: preserve the existing GUI structure.", "exit_code": 0}
 
     monkeypatch.setattr(al, "stream_llm_with_fallback", stream, raising=False)
     monkeypatch.setattr(al, "execute_tool_block", execute, raising=False)
     events = _types(_collect(al.stream_agent_loop(
         "http://x/v1", "gpt-6.1-sol",
-        [{"role": "user", "content": "Implement the GUI in src/server.py."}],
+        [{"role": "user", "content": "Implement the GUI using this project's README guidance."}],
         relevant_tools={"read_file"}, workspace="/workspace", max_rounds=4,
     )))
 

@@ -1646,11 +1646,20 @@ async function initAgentSettings() {
   var msg = el('set-agentMsg');
   if (!toolsInput) return;
 
+  function parseRounds(raw, fallback) {
+    var text = String(raw == null ? '' : raw).trim();
+    if (!/^\d+$/.test(text)) return fallback;
+    var value = Number(text);
+    return Number.isFinite(value) ? Math.min(value, 200) : 200;
+  }
+
   try {
     var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
     var settings = await res.json();
     if (settings.agent_max_tool_calls) toolsInput.value = settings.agent_max_tool_calls;
-    if (roundsInput && settings.agent_max_rounds) roundsInput.value = settings.agent_max_rounds;
+    if (roundsInput && settings.agent_max_rounds != null) {
+      roundsInput.value = parseRounds(settings.agent_max_rounds, 20);
+    }
     if (supInput) supInput.checked = !!settings.agent_supervisor_ladder;
     if (groundingInput) groundingInput.checked = settings.agent_coding_grounding !== false;
     if (verifierInput) verifierInput.checked = !!settings.agent_verifier_subagent;
@@ -1666,7 +1675,7 @@ async function initAgentSettings() {
 
   async function save() {
     var tools = clampInt(toolsInput.value, 0, 1000, 0);
-    var rounds = roundsInput ? clampInt(roundsInput.value, 1, 200, 20) : null;
+    var rounds = roundsInput ? parseRounds(roundsInput.value, 20) : null;
     toolsInput.value = tools;                       // reflect the clamped value
     if (roundsInput) roundsInput.value = rounds;
     var payload = { agent_max_tool_calls: tools };
@@ -1677,7 +1686,7 @@ async function initAgentSettings() {
     try {
       await _postSettings(payload);
       msg.textContent = (tools > 0 ? 'Limit: ' + tools + ' tool calls' : 'Unlimited tool calls') +
-        (rounds != null ? ' · ' + rounds + ' steps/message' : '') +
+        (rounds != null ? (rounds === 0 ? ' · Unlimited steps/message' : ' · ' + rounds + ' steps/message') : '') +
         (supInput && supInput.checked ? ' · supervisor on' : '') +
         (groundingInput ? ' · docs ' + (groundingInput.checked ? 'on' : 'off') : '') +
         (verifierInput ? ' · review ' + (verifierInput.checked ? 'on' : 'off') : '');
@@ -1691,9 +1700,9 @@ async function initAgentSettings() {
   if (groundingInput) groundingInput.addEventListener('change', save);
   if (verifierInput) verifierInput.addEventListener('change', save);
   var cur = parseInt(toolsInput.value, 10) || 0;
-  var curR = roundsInput ? (parseInt(roundsInput.value, 10) || 20) : null;
+  var curR = roundsInput ? parseRounds(roundsInput.value, 20) : null;
   msg.textContent = (cur > 0 ? 'Limit: ' + cur + ' tool calls' : 'Unlimited tool calls') +
-    (curR != null ? ' · ' + curR + ' steps/message' : '') +
+    (curR != null ? (curR === 0 ? ' · Unlimited steps/message' : ' · ' + curR + ' steps/message') : '') +
     (supInput && supInput.checked ? ' · supervisor on' : '') +
     (groundingInput ? ' · docs ' + (groundingInput.checked ? 'on' : 'off') : '') +
     (verifierInput ? ' · review ' + (verifierInput.checked ? 'on' : 'off') : '');

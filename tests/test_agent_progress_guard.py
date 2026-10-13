@@ -112,7 +112,7 @@ def test_full_arguments_avoid_long_prefix_collisions():
     assert _tool_call_signature("grep", '{"path":"src","pattern":"foo"}') == _tool_call_signature("grep", '{"pattern":"foo", "path":"src"}')
 
 
-def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, failed=False):
+def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, failed=False, max_rounds=20):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
     calls = []
@@ -155,7 +155,7 @@ def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, fail
     async def collect():
         return [chunk async for chunk in al.stream_agent_loop(
             "http://x/v1", "gpt-6.1-sol" if native else "m", [{"role": "user", "content": "Inspect the source files"}],
-            approval_mode="full", relevant_tools={"read_file"}, max_rounds=20,
+            approval_mode="full", relevant_tools={"read_file"}, max_rounds=max_rounds,
             workspace="/workspace", owner="test-admin",
         )]
     events = _types(asyncio.run(collect()))
@@ -177,6 +177,13 @@ def test_real_loop_pauses_repeated_reads_despite_narration_and_saves_reason(monk
     metrics = next(event["data"] for event in events if event.get("type") == "metrics")
     assert "Agent paused:" in metrics["round_texts"][-1]
     assert len(metrics["tool_events"]) == 4
+
+
+def test_unlimited_rounds_still_pause_unchanged_reads(monkeypatch):
+    events, calls = run_reads(monkeypatch, max_rounds=0)
+    assert len(calls) == 4, events
+    assert any(event.get("type") == "loop_breaker_triggered" for event in events)
+    assert not any(event.get("type") == "rounds_exhausted" for event in events)
 
 
 @pytest.mark.parametrize("native", [False, True])

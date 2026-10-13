@@ -24,3 +24,15 @@ def test_agent_research_and_completion_review_settings_are_persisted():
     assert "payload.agent_verifier_subagent = !!verifierInput.checked" in script
     assert "groundingInput.addEventListener('change', save)" in script
     assert "verifierInput.addEventListener('change', save)" in script
+
+
+def test_agent_round_setting_displays_and_saves_zero_as_unlimited():
+    html = (ROOT / "static/index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static/js/settings.js").read_text(encoding="utf-8")
+    assert 'id="set-agentMaxRounds"' in html
+    assert "0 = unlimited" in html
+    assert "settings.agent_max_rounds != null" in script
+    assert "if (!/^\\d+$/.test(text)) return fallback" in script
+    assert "settings.agent_max_rounds, 20" in script
+    assert "rounds === 0 ? ' · Unlimited steps/message'" in script
+    assert "curR === 0 ? ' · Unlimited steps/message'" in script

@@ -8,6 +8,7 @@ return, or moves the done-break, could silently flip this. See PR #1999 / #1997.
 
 import asyncio
 import json
+import pytest
 
 import src.agent_loop as al
 
@@ -42,8 +43,11 @@ def _patch_common(monkeypatch):
 
 
 def _run_loop(monkeypatch, round_text, max_rounds=2):
+    responses = iter(round_text) if isinstance(round_text, (list, tuple)) else None
+
     async def _fake_stream(_candidates, messages, **kwargs):
-        yield f'data: {json.dumps({"delta": round_text})}\n\n'
+        text = next(responses, "All done, here is your answer.") if responses is not None else round_text
+        yield f'data: {json.dumps({"delta": text})}\n\n'
         yield "data: [DONE]\n\n"
     monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
 
@@ -74,6 +78,28 @@ def test_no_rounds_exhausted_on_normal_finish(monkeypatch):
     # A plain answer (no tool block) -> done-break on round 1 -> no event.
     events = _run_loop(monkeypatch, "All done, here is your answer.", max_rounds=2)
     assert not any(e.get("type") == "rounds_exhausted" for e in events), events
+
+
+@pytest.mark.parametrize("zero_cap", [0, "0"])
+def test_zero_round_cap_runs_until_normal_finish(monkeypatch, zero_cap):
+    _patch_common(monkeypatch)
+    events = _run_loop(
+        monkeypatch,
+        ['```update_plan\n{"plan":"- [ ] keep going"}\n```', "All done, here is your answer."],
+        max_rounds=zero_cap,
+    )
+    assert not any(e.get("type") == "rounds_exhausted" for e in events), events
+
+
+@pytest.mark.parametrize("invalid_cap", [-1, False, 0.5, "0.5"])
+def test_invalid_direct_round_cap_uses_finite_default(monkeypatch, invalid_cap):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "MAX_AGENT_ROUNDS", 2)
+    events = _run_loop(
+        monkeypatch, '```update_plan\n{"plan":"- [ ] keep going"}\n```', max_rounds=invalid_cap,
+    )
+    exhausted = next(e for e in events if e.get("type") == "rounds_exhausted")
+    assert exhausted["rounds"] == 2
 
 
 def test_emits_intent_nudge_exhausted_when_cap_is_exhausted(monkeypatch):

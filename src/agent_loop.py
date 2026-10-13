@@ -10,6 +10,7 @@ import asyncio
 import collections
 import copy
 import hashlib
+from itertools import count
 import os
 import json
 import re
@@ -4006,6 +4007,23 @@ async def stream_agent_loop(
       - data: [DONE]                                        (end)
     """
 
+    # Zero is an explicit opt-in to run until the task finishes or an existing
+    # safety/progress guard stops it. Invalid negative direct-call values keep
+    # the finite application default.
+    try:
+        if isinstance(max_rounds, bool):
+            raise ValueError("boolean is not a step count")
+        if isinstance(max_rounds, str) and not re.fullmatch(r"[+-]?\d+", max_rounds.strip()):
+            raise ValueError("non-integer string is not a step count")
+        converted_rounds = int(max_rounds)
+        if not isinstance(max_rounds, str) and max_rounds != converted_rounds:
+            raise ValueError("fractional value is not a step count")
+        max_rounds = converted_rounds
+    except (TypeError, ValueError):
+        max_rounds = MAX_AGENT_ROUNDS
+    if max_rounds < 0:
+        max_rounds = MAX_AGENT_ROUNDS
+
     from src.owner_identity import effective_storage_owner
     snapshot_owner = effective_storage_owner(owner)
     snapshot_workspace = workspace
@@ -5657,7 +5675,7 @@ async def stream_agent_loop(
         if len(raw_context) <= 6000 and not exceeds_remaining_budget:
             return _account_preview(formatted, exchange_tokens)
         try:
-            from src.tool_result_store import archive_result
+            from src.tool_result_store import archive_result, markdown_heading_outline
             # Cancelling to_thread's await does not stop its worker. Keep this
             # run alive until the archive write finishes so deletion can safely
             # release its scope fence.
@@ -5665,6 +5683,21 @@ async def stream_agent_loop(
                 archive_result, owner, session_id, tool_name, raw_context,
             )
             event["context_result_id"] = context_id
+            outline_text = ""
+            if tool_name == "web_fetch":
+                outline = await asyncio.to_thread(
+                    markdown_heading_outline, owner, session_id, context_id,
+                )
+                if outline and (outline["headings"] or outline["omitted"]):
+                    entries = "\n".join(
+                        f"- chunk {item['offset']} (level {item['level']}): {item['text']}"
+                        for item in outline["headings"]
+                    )
+                    omitted = "\n[Additional headings may be omitted.]" if outline["omitted"] else ""
+                    outline_text = (
+                        "\n[Untrusted source headings; offsets are exact context_search chunks.\n"
+                        + entries + omitted + "]\n"
+                    )
             if tool_name == "web_fetch":
                 source_url = _web_fetch_source_url(event.get("command"))
                 if source_url:
@@ -5680,6 +5713,7 @@ async def stream_agent_loop(
                 f"[Large result stored as {context_id}. This is a preview, not the full output. "
                 "Use context_search with this result_id and keywords for missing details, "
                 "or empty query plus offset for exact chunks.]\n"
+                + outline_text
                 + formatted[:head_chars] + "\n[... stored content ...]\n" + formatted[-250:]
             )
             return _account_preview(preview, exchange_tokens)
@@ -5969,7 +6003,8 @@ async def stream_agent_loop(
         )
         _approved_result_injected = True
 
-    for round_num in range(1, max_rounds + 1):
+    round_numbers = count(1) if max_rounds == 0 else range(1, max_rounds + 1)
+    for round_num in round_numbers:
         round_response = ""
         round_reasoning = ""  # reasoning_content deltas (DeepSeek-thinking, vLLM --reasoning-parser)
         # Delay completion prose until review passes. After a failed review,
@@ -6462,7 +6497,7 @@ async def stream_agent_loop(
                 await close_stream()
             _finalize_round_usage(include_empty=False)
             full_response = full_response[:-len(round_response)] if round_response else full_response
-            if not _coding_narration_retried and round_num < max_rounds:
+            if not _coding_narration_retried and (max_rounds == 0 or round_num < max_rounds):
                 _coding_narration_retried = True
                 retry_index = candidate_index if isinstance(candidate_index, int) else 0
                 if retry_index >= len(_candidates):
@@ -6489,7 +6524,7 @@ async def stream_agent_loop(
                 round_models.append(_round_actual_model)
                 round_endpoint_ids.append(_round_actual_endpoint_id)
                 round_endpoint_labels.append(_round_actual_endpoint_label)
-                if round_num < max_rounds:
+                if max_rounds == 0 or round_num < max_rounds:
                     yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
                 continue
 

@@ -1,0 +1,294 @@
+{
+  "model": "qwen3.5:9b",
+  "endpoint_model": "nx-model-5",
+  "settings": {
+    "temperature": 1.0,
+    "max_tokens": 16384
+  },
+  "order": [
+    "novum"
+  ],
+  "task": "Continue repairing this existing Electron FFmpeg GUI. The last independent GUI check created a valid video but failed: Start must recover after completion. Keep the current application and existing successful conversion behavior. First inspect renderer/main/preload and state the observed event sequence that leaves Start disabled; then make one targeted correction and run python3 qa_check.py. At most two repair-and-check attempts; if the same assertion still fails, report a concrete blocker with the remaining uncertainty. Do not ask permission for this authorized work. Do not edit qa_check.py, the QA test, fixture, assertions, or dependencies; do not rebuild, install, publish, or change styling. No web. Files: dist/main/index.js, dist/main/preload.js, dist/renderer/renderer.js, dist/renderer/index.html, package.json. The fixed test is .odysseus-preview/qa-conversion-flow.mjs. Stop on a real pass or the retry limit.\n",
+  "fixture_hashes": {
+    "dist/main/index.js": "38883d3b055b72d81ca07486dfed68a2040cd9b6068de5ebb866a456413ed7b6",
+    "dist/main/preload.js": "4abaab9202a0a691fc96ecdbec51b30153d4e7fdf4937994eeaa2518fa0dbfbe",
+    "dist/renderer/renderer.js": "2ac9baa50f3e501fd5644dda60f3a59f1b5eac5576e5e8cd1022aa2b9c64f9d6",
+    "dist/renderer/index.html": "4916deec3ea22cb5b8a86fe85a9091b11b672eccd1add648993d1d98d65524b8",
+    "package.json": "d9377b67a71c84711688c491e6586d161eef47200775575c51cad7c4392b88a0",
+    "test_input.mp4": "3c0242daa7688bfe7cb19ade2588060e211141b2898541bd34260d0d4009e93d",
+    ".odysseus-preview/qa-conversion-flow.mjs": "5c7375586bd1e010114350660676e981c3bd08c43780ab3582f083a01b94dd50",
+    "qa_check.py": "52f66afc26c27e48acbedcbbb32f4e7f620b899406637dfc0f1d5d1528af8cca",
+    "TASK.md": "ffb42a7bdfc4d34fccf8d6fbfac81186996be3e59fa2a2adaf1ed325ef47a6ac"
+  },
+  "baseline_exit": 1,
+  "results": {
+    "novum": {
+      "adapter_exit": 2,
+      "seconds": 162.949,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        ".odysseus-preview/qa-conversion-flow.mjs": true,
+        "test_input.mp4": true
+      },
+      "passed": false,
+      "manual_interventions": 2,
+      "adapter_metadata": {
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 15
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "endpoint_id": "6865006e",
+        "evidence": [
+          {
+            "enabled": true,
+            "requested": true,
+            "type": "coding_workflow"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 4,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 5,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 57078,
+            "model": "nx-model-5",
+            "output_tokens": 1281,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 58359,
+            "type": "metrics"
+          },
+          {
+            "decision": "approve_task",
+            "type": "approval_decision"
+          },
+          {
+            "enabled": true,
+            "requested": true,
+            "type": "coding_workflow"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 1,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 4,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 5,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 6,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 7,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 7,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 8,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 9,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 10,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 10,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 11,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 12,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 13,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 13,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 14,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 15,
+            "type": "model_actual"
+          }
+        ],
+        "model": "qwen3.5:9b",
+        "output_saved": false,
+        "preset_id": null,
+        "run_id": "a1feb017598048ad97f66a0d1b521fd3",
+        "seconds": 162.876,
+        "session_id": "ca211066-3b44-470e-afc6-4b39fae6fe09",
+        "source_files": [
+          "dist/main/index.js",
+          "dist/main/preload.js",
+          "dist/renderer/renderer.js",
+          "dist/renderer/index.html",
+          "package.json"
+        ],
+        "status": "incomplete",
+        "stream_ended": false,
+        "terminal": null,
+        "verification_passed": null
+      },
+      "external_check": {
+        "status": "failed",
+        "error": "Start must recover after completion\n\nfalse !== true\n",
+        "report": "/workspace/.nx-evaluations/gui-focused-recovery-20261013-214349/novum/.odysseus-preview/run-a8779a4c-d1f1-46b8-bba8-9ec058cb924a/report.json"
+      },
+      "interventions": [
+        "Focused follow-up prompt supplied the already observed failing assertion and requested diagnosis before repair, max two attempts.",
+        "Operator stopped only the owned QA run after repeated failed checks; three post-edit checks had completed before observation and stop."
+      ],
+      "operator_application_edits": 0,
+      "qa_checks": [
+        {
+          "exit_code": 1
+        },
+        {
+          "exit_code": 1
+        },
+        {
+          "exit_code": 1
+        },
+        {
+          "exit_code": 1
+        }
+      ]
+    }
+  },
+  "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/gui-focused-recovery-20261013-214349",
+  "limits": [
+    "Assisted focused follow-up, not autonomous task completion or matched benchmark.",
+    "Requested retry count was advisory, not a hard platform cap; operator stop occurred after third post-edit check.",
+    "Final protected hashes do not prove no temporary test edits.",
+    "No pass, so no repeatability claim or redundant passing checks."
+  ],
+  "revision": "f8e9aed",
+  "parent_workspace": "/workspace/.nx-evaluations/gui-workflow-state-20261013-212808/novum",
+  "baseline_provenance": "Inherited failed external check from parent; no unchanged operator baseline rerun.",
+  "decision": "Focused diagnosis-first repair did not complete this case. Preserve evidence and avoid unbounded retries or manually repairing generated code."
+}

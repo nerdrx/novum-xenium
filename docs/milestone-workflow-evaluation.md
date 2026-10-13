@@ -165,3 +165,22 @@ the final Start-recovery assertion and reached the 600-second limit. Only the ow
 QA run was stopped. Protected test/input hashes matched; the original setting was
 restored. No autonomous completion is claimed. The differing progress in these
 single runs is not evidence that telemetry made the model better.
+
+## Focused recovery of the remaining button defect
+
+The [focused follow-up](evaluations/coding-focused-recovery-20261013.json) copied
+the latest model-produced application, preserving its successful conversion work.
+The same qwen3.5:9b model received the known failing assertion, a diagnosis-first
+request, and a two-attempt limit. This is assisted recovery, not an autonomous
+retest of the original broad task. No operator edited application code.
+
+The model registered a packet and attempted repairs, but the independent GUI check
+still failed Start recovery. The operator stopped only this QA run after repeated
+failures, at about 163 seconds. The two-attempt instruction was not a hard cap:
+three post-edit checks had completed before the observation and stop. Protected
+test/input hashes matched and the original workflow setting was restored.
+
+Startup `coding_workflow` events now reached the adapter with requested=true and
+enabled=true, verifying the route forwarding fix live. The focused repair itself
+failed; no repeated-success or broader reliability claim is supported. Further
+identical retries without a new diagnosis would not provide useful evidence.

@@ -460,6 +460,8 @@ try {
     behavior: failureReport.behavior,
     test: workspaceTestFailed ? 'failed' : 'not run',
     error: errorSummary,
+    sourceFrames: String(error?.stack || '').split(/\r?\n/).slice(0, 5)
+      .map(frame => frame.slice(0, 300)),
     ...(Object.keys(testEvidence).length ? { testEvidence } : {}),
     errors: {
       page: diagnostics.pageErrors.length, console: diagnostics.consoleErrors.length,

@@ -356,6 +356,10 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   assert.equal(throwingSummary.behavior, 'workspace test failed; app behavior remains unverified');
   assert.equal(throwingSummary.test, 'failed');
   assert.match(throwingSummary.error, /fixture assertion: output was missing/);
+  assert.ok(throwingSummary.sourceFrames.some(frame => /throwing-test\.mjs:\d+:\d+/.test(frame)),
+    'failed test summary should identify the assertion source before visible page logs');
+  assert.ok(throwingSummary.sourceFrames.length <= 5);
+  assert.ok(throwingSummary.sourceFrames.every(frame => frame.length <= 300));
   const throwingReport = JSON.parse(await readFile(throwingSummary.report, 'utf8'));
   assert.equal(throwingReport.phase, 'running workspace test');
   assert.match(throwingReport.error, /fixture assertion: output was missing/);

@@ -447,5 +447,272 @@
       "nflix/.odysseus-preview/qa-conversion-flow.mjs": true
     },
     "manual_application_edits": 0
+  },
+  "packet_recovery_retest": {
+    "revision": "97896ba",
+    "model_metadata": {
+      "actual_route": {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 27
+      },
+      "approval_count": 1,
+      "endpoint_id": "6865006e",
+      "evidence": [
+        {
+          "endpoint_id": "6865006e",
+          "input_tokens": 27124,
+          "model": "nx-model-5",
+          "output_tokens": 637,
+          "requested_model": "qwen3.5:9b",
+          "total_tokens": 27761,
+          "type": "metrics"
+        },
+        {
+          "decision": "approve_task",
+          "type": "approval_decision"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 1,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 2,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 3,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 4,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 5,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 6,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 7,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 8,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 9,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 10,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 11,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 12,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 13,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 14,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 15,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 16,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 17,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 18,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 19,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 20,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 21,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 22,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 23,
+          "type": "model_actual"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 23,
+          "stage": "reproduce",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 24,
+          "type": "model_actual"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 24,
+          "stage": "edit",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 25,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 26,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 27,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "input_tokens": 489092,
+          "model": "nx-model-5",
+          "output_tokens": 6249,
+          "requested_model": "qwen3.5:9b",
+          "total_tokens": 495341,
+          "type": "metrics"
+        }
+      ],
+      "model": "qwen3.5:9b",
+      "output_saved": false,
+      "preset_id": null,
+      "run_id": "da56fd38d1554823ac9a16d275930f4c",
+      "seconds": 250.219,
+      "session_id": "2c6039bd-1ed8-45b8-966d-6a77462f3f95",
+      "source_files": [
+        "nflix/dist/main/index.js",
+        "nflix/dist/renderer/renderer.js",
+        "nflix/.odysseus-preview/qa-conversion-flow.mjs"
+      ],
+      "status": "incomplete",
+      "stream_ended": true,
+      "terminal": null,
+      "verification_passed": null
+    },
+    "result": "incomplete",
+    "gui_conversion_verified": false,
+    "baseline_executed": true,
+    "baseline_exit_code": 1,
+    "baseline_failure": "GUI conversion completion timeout at qa-conversion-flow.mjs:25 after15seconds",
+    "observed_failure": "Packet created and real baseline executed. Paused after three post-baseline source/test reads; successful-read signatures from before the fresh packet context remained in progress guard memory. No application edit or acceptance pass. The recorded events alone do not prove the new prepacket recovery nudge caused packet creation.",
+    "source_unchanged": {
+      "nflix/dist/main/index.js": true,
+      "nflix/dist/renderer/renderer.js": true,
+      "nflix/.odysseus-preview/qa-conversion-flow.mjs": true
+    },
+    "manual_application_edits": 0
   }
 }

@@ -84,6 +84,11 @@ def test_read_recovery_resets_only_read_window_not_failed_retry_counter():
     assert sum(bool(tools) for tools in guard.failure_rounds) == 4
     assert sum(kind == "failure" for calls in guard.recent for _, kind in calls) == 3
     assert not any(kind == "read" for calls in guard.recent for _, kind in calls)
+    assert not any(outcome == "read" for outcome in guard.seen.values())
+    assert any(outcome == "failure" for outcome in guard.seen.values())
+    failure_stall = guard.observe([record("bash", "same failure", "missing", 1)])
+    assert failure_stall["failed_retries"] == 4
+    assert failure_stall["read_repeats"] == 0
 
 
 def test_forward_coding_evidence_resets_old_reads_but_new_stalls_still_pause():
@@ -97,7 +102,8 @@ def test_forward_coding_evidence_resets_old_reads_but_new_stalls_still_pause():
     guard.reset_read_stall_window()
     assert not any(kind == "read" for calls in guard.recent for _, kind in calls)
 
-    for _ in range(2):
+    # The same path read before the accepted packet is fresh in the new context.
+    for _ in range(3):
         assert guard.observe([record()]) is None
     stall = guard.observe([record()])
     assert stall["read_repeats"] == 3

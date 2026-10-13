@@ -4224,7 +4224,7 @@ class _ToolProgressGuard:
             signature = (_tool_call_signature(tool, content), digest)
             if signature in self.seen:
                 repeats.append((tool, "read" if successful else "failure"))
-            self._remember(self.seen, signature, None)
+            self._remember(self.seen, signature, "read" if successful else "failure")
         if monitored:
             self.recent.append(repeats)
             self.failure_rounds.append(failed_tools)
@@ -4243,10 +4243,14 @@ class _ToolProgressGuard:
                 "repeated_rounds": len(repeated_rounds)}
 
     def reset_read_stall_window(self):
-        """Forget repeated successful reads while retaining failed retries."""
+        """Forget successful reads from the prior context; preserve failed retries."""
         self.recent = collections.deque(
             ([item for item in calls if item[1] != "read"] for calls in self.recent),
             maxlen=self.recent.maxlen,
+        )
+        self.seen = collections.OrderedDict(
+            (signature, outcome) for signature, outcome in self.seen.items()
+            if outcome != "read"
         )
 
 

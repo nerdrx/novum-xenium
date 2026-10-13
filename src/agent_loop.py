@@ -3288,11 +3288,14 @@ def _build_system_prompt(
             merged.append(msg)
 
     _project_message = None
-    if workspace and not suppress_local_context:
+    if workspace and not suppress_local_context and "read_file" not in (disabled_tools or set()):
         try:
             from src.project_workflows import project_prompt_context
             from src.owner_identity import effective_storage_owner
-            _project_context = project_prompt_context(effective_storage_owner(owner), workspace, max_chars=4000)
+            _project_context = project_prompt_context(
+                effective_storage_owner(owner), workspace, max_chars=4000,
+                query=_extract_last_user_message(messages),
+            )
             if _project_context:
                 _project_message = untrusted_context_message("repository guidance and map", _project_context)
         except (ValueError, OSError):

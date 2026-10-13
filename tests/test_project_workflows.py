@@ -588,3 +588,14 @@ def test_project_routes_create_and_verify_managed_worktree(repo, monkeypatch):
 async def _set_user(request, call_next, user):
     request.state.current_user = user
     return await call_next(request)
+
+
+def test_prompt_map_ranks_symbols_without_reading_ignored_sources(repo):
+    (repo / "convert.py").write_text("def convert_video(): pass\n")
+    (repo / "ignored.py").write_text("def private_conversion(): pass\n")
+    (repo / ".gitignore").write_text("ignored.py\n")
+    context = workflows.project_prompt_context("alice", str(repo), query="convert_video")
+    assert "convert_video" in context
+    assert "private_conversion" not in context
+    assert context.index("convert.py") < context.index('"README.md"')
+    assert "PROJECT REFERENCE DATA" in context

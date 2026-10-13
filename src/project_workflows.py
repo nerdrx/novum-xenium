@@ -734,7 +734,7 @@ def _build_hints(repo: str, limit: int) -> list[str]:
     return hints
 
 
-def project_prompt_context(owner: str, workspace: str, max_chars: int = 6000) -> str:
+def project_prompt_context(owner: str, workspace: str, max_chars: int = 6000, *, query: str = "") -> str:
     """Return bounded, explicitly untrusted project context for one workspace."""
     if not isinstance(max_chars, int) or isinstance(max_chars, bool):
         max_chars = 6000
@@ -756,7 +756,8 @@ def project_prompt_context(owner: str, workspace: str, max_chars: int = 6000) ->
         for component in relative.split(os.sep):
             current = os.path.join(current, component)
             applicable_dirs.append(current)
-    remaining -= 1200  # Reserve room for script hints and the compact map.
+    map_budget = min(1600, max_chars // 2)
+    remaining -= map_budget  # Reserve space even when instruction files are long.
     for directory in applicable_dirs:
         for name in ("AGENTS.md", "CLAUDE.md"):
             path = os.path.join(directory, name)
@@ -780,9 +781,12 @@ def project_prompt_context(owner: str, workspace: str, max_chars: int = 6000) ->
             hint_text = "Conventional build/test hints (not executed):\n" + "\n".join(hints)
             parts.append(hint_text[:max(0, remaining)])
             remaining -= len(parts[-1]) + 2
+    remaining += map_budget
     if remaining > 100:
-        map_text = "Compact repository map:\n" + "\n".join(
-            f"- {path}" for path in report["workspace_map"][:80]
+        from src.repository_context import build_repository_context
+        map_text = build_repository_context(
+            repo, query, max_chars=remaining,
+            allowed_paths=set(report["workspace_map"]),
         )
         parts.append(map_text[:remaining])
         if report["map_truncated"]:

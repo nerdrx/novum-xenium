@@ -490,7 +490,8 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
     if len(actual_user_indices) > 1:
         anchor_index = actual_user_indices[0]
         anchor_end = actual_user_indices[1]
-        task_anchor = _truncate_message_to_token_budget(convo_msgs[anchor_index], 512)
+        candidate_anchor = _truncate_message_to_token_budget(convo_msgs[anchor_index], 512)
+        task_anchor = {**candidate_anchor, "_agent_injected": "task_anchor"}
         anchor_turn = (anchor_index, anchor_end)
     post_user = convo_msgs[latest_user + 1:]
     exchanges = []
@@ -511,7 +512,18 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
          if exchange[0].get("role") == "assistant" and exchange[0].get("tool_calls")),
         [],
     )
-    required_tail_messages = current_user + latest_native
+    # Reserve only the non-truncatable part of the newest native exchange
+    # while deciding how much of the leading system prompt can fit. A large
+    # tool result is shortened below; counting its full body here can prevent
+    # the system prompt from being shortened at all, leaving no room for the
+    # call/result pair even when the compact pair fits.
+    truncated_result_notice = "[Tool result truncated to fit context.]"
+    compact_latest_native = [
+        ({**message, "content": truncated_result_notice}
+         if message.get("role") == "tool" else message)
+        for message in latest_native
+    ]
+    required_tail_messages = current_user + compact_latest_native
     if task_anchor and estimate_tokens(required_tail_messages + [task_anchor]) <= budget:
         required_tail_messages = [task_anchor] + required_tail_messages
     else:
@@ -553,14 +565,56 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
     for exchange in reversed(exchanges):
         cost = estimate_tokens(exchange)
         if cost > remaining:
-            if remaining < 4:
-                break
-            per_message = max(4, remaining // len(exchange))
-            exchange = [
-                _truncate_message_to_token_budget(message, per_message)
-                for message in exchange
-            ]
-            cost = estimate_tokens(exchange)
+            # Keep the newest native call byte-for-byte. Its tool result is
+            # ordinary context and can be shortened, but changing the call
+            # arguments would make the result no longer describe the actual
+            # executed action (and callers validate the call/result pairing).
+            if (latest_native and exchange[0] == latest_native[0]
+                    and exchange[0].get("role") == "assistant"
+                    and exchange[0].get("tool_calls")):
+                call = exchange[0]
+                results = exchange[1:]
+                minimal_results = [
+                    {**message, "content": truncated_result_notice}
+                    for message in results
+                ]
+                minimum_cost = estimate_tokens([call, *minimal_results])
+                if not results or minimum_cost > remaining:
+                    break
+                result_budget = remaining - minimum_cost
+                shortened = [call]
+                for index, message in enumerate(results):
+                    share = result_budget // (len(results) - index)
+                    result_budget -= share
+                    if share <= 32:
+                        # Keep an explicit omission marker so the model does
+                        # not mistake a shortened result for an empty success.
+                        shortened.append({**message, "content": truncated_result_notice})
+                    else:
+                        candidate = _truncate_message_to_token_budget(message, share)
+                        marker = {**message, "content": truncated_result_notice}
+                        # The text truncator enforces a 200-character minimum;
+                        # at small shares that can exceed this result's slice.
+                        # Fall back to the bounded notice instead of letting
+                        # one result push the whole newest exchange over budget.
+                        if estimate_tokens([candidate]) > estimate_tokens([marker]) + share:
+                            candidate = marker
+                        shortened.append(candidate)
+                exchange = shortened
+                cost = estimate_tokens(exchange)
+                if cost > remaining:
+                    # Estimator/tokenizer differences should fail closed rather
+                    # than silently dropping or mutating the latest call.
+                    break
+            else:
+                if remaining < 4:
+                    break
+                per_message = max(4, remaining // len(exchange))
+                exchange = [
+                    _truncate_message_to_token_budget(message, per_message)
+                    for message in exchange
+                ]
+                cost = estimate_tokens(exchange)
         if cost > remaining:
             break
         kept_exchanges[:0] = exchange
@@ -617,6 +671,7 @@ async def maybe_compact(
     Returns (messages, context_length, was_compacted).
     """
     messages = list(messages)
+    original_messages = list(messages)
     carried_anchor = _task_anchor_from_messages(messages)
     if carried_anchor:
         messages = _ensure_task_anchor(messages, carried_anchor)
@@ -697,7 +752,7 @@ async def maybe_compact(
         # Degrade gracefully: keep the conversation intact rather than
         # silently dropping the older half. was_compacted=False signals the
         # caller nothing was summarized; trim_for_context handles length.
-        return messages, context_length, False
+        return original_messages, context_length, False
     summary = normalize_compaction_summary(summary)
 
     summary_msg = {

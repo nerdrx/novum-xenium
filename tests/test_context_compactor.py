@@ -54,6 +54,78 @@ def test_large_preset_cannot_displace_current_request_or_latest_exchange(with_ex
     assert "Current user message omitted" not in result[0]["content"]
 
 
+def test_large_latest_native_result_truncates_after_preserving_call_and_notice():
+    call = {"role": "assistant", "content": None, "tool_calls": [{
+        "id": "latest", "type": "function", "function": {
+            "name": "read_file", "arguments": '{"path":"src/app.py"}',
+        },
+    }]}
+    result = {"role": "tool", "tool_call_id": "latest", "content": "source body " * 20_000}
+    messages = [
+        {"role": "system", "content": "Current instructions. " * 1000},
+        {"role": "system", "content": "Protected coding guidance. " * 100, "_protected": True},
+        {"role": "user", "content": "Inspect and fix the source."},
+        call,
+        result,
+    ]
+
+    trimmed = trim_for_context(messages, context_length=2800, reserve_tokens=1800)
+    actual_call = next(message for message in trimmed if message.get("role") == "assistant")
+    actual_result = next(message for message in trimmed if message.get("role") == "tool")
+
+    assert actual_call == call
+    assert actual_result["tool_call_id"] == "latest"
+    assert actual_result["content"] != result["content"]
+    assert "truncated to fit context" in actual_result["content"].lower()
+    assert estimate_tokens(trimmed) + 1800 <= 2800
+
+
+def test_small_multi_result_shares_fall_back_to_notice_without_dropping_calls(monkeypatch):
+    call = {"role": "assistant", "content": None, "tool_calls": [
+        {"id": f"latest-{index}", "type": "function", "function": {
+            "name": "read_file", "arguments": f'{{"path":"src/{index}.py"}}',
+        }}
+        for index in range(3)
+    ]}
+    results = [
+        {"role": "tool", "tool_call_id": f"latest-{index}", "content": "SOURCE-EVIDENCE " * 1000}
+        for index in range(3)
+    ]
+    marker = "[Tool result truncated to fit context.]"
+    baseline = [
+        {"role": "system", "content": "System."},
+        {"role": "system", "content": "Protected guidance " * 100, "_protected": True},
+        {"role": "user", "content": "Inspect the source."},
+        call,
+        *[{**message, "content": marker} for message in results],
+    ]
+    # Leave about 45 content tokens per result. The shared truncator's
+    # 200-character floor would exceed that slice, so each output must use the
+    # short omission notice while retaining every native result id.
+    context_length = estimate_tokens(baseline) + 3 * 45 + 512
+    original_truncate = cc._truncate_message_to_token_budget
+    result_shares = []
+
+    def record_result_share(message, share):
+        if message.get("role") == "tool":
+            result_shares.append(share)
+        return original_truncate(message, share)
+
+    monkeypatch.setattr(cc, "_truncate_message_to_token_budget", record_result_share)
+
+    trimmed = trim_for_context(baseline[:4] + results, context_length, reserve_tokens=512)
+
+    actual_call = next(message for message in trimmed if message.get("role") == "assistant")
+    actual_results = [message for message in trimmed if message.get("role") == "tool"]
+    assert actual_call == call
+    assert [message["tool_call_id"] for message in actual_results] == [
+        f"latest-{index}" for index in range(3)
+    ]
+    assert all(message["content"] == marker for message in actual_results)
+    assert result_shares and all(33 <= share <= 63 for share in result_shares)
+    assert estimate_tokens(trimmed) + 512 <= context_length
+
+
 class TestCompactThreshold:
     def test_value(self):
         assert COMPACT_THRESHOLD == 0.85
@@ -251,7 +323,11 @@ class TestTrimForContext:
             m.get("role") == "user" and "LATEST_USER_REQUEST_MARKER" in m.get("content", "")
             for m in trimmed
         )
-        assert not any("old-" in str(m.get("content", "")) for m in trimmed)
+        assert not any(
+            "old-" in str(message.get("content", ""))
+            and message.get("_agent_injected") != "task_anchor"
+            for message in trimmed
+        )
         for i, message in enumerate(trimmed):
             if message.get("role") == "tool":
                 assert i > 0 and trimmed[i - 1].get("role") in {"assistant", "tool"}

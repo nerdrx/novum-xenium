@@ -1241,6 +1241,71 @@ async def _restore_approved_coding_source(
     return None
 
 
+async def _restore_approved_read_context(exact_approval, owner, session_id):
+    """Restore a small set of successful read results from this sealed run."""
+    if exact_approval is None or not session_id:
+        return None
+    pending = exact_approval.pending
+    source_run_id = pending.origin_run_id
+    source_owner = str(owner or "").strip().casefold()
+    source_session = str(session_id)
+    if (not source_run_id or pending.owner != source_owner
+            or pending.session_id != source_session):
+        return None
+
+    from src import run_checkpoints
+    checkpoint = await asyncio.to_thread(
+        run_checkpoints.get_run_checkpoint,
+        source_run_id,
+        source_session,
+        source_owner,
+    )
+    if (not checkpoint or checkpoint.get("run_id") != source_run_id
+            or checkpoint.get("session_id") != source_session
+            or checkpoint.get("owner") != source_owner):
+        return None
+
+    # Checkpoint outcomes are server-recorded SSE results. Keep only completed
+    # read-only inspection calls; their contents remain untrusted model input.
+    allowed_tools = {"read_file", "grep", "glob", "ls", "get_workspace"}
+    snippets = []
+    total_chars = 0
+    outcomes = checkpoint.get("tool_outcomes")
+    for outcome in reversed(outcomes if isinstance(outcomes, list) else []):
+        if not isinstance(outcome, dict):
+            continue
+        tool = outcome.get("tool")
+        output = outcome.get("output")
+        if (tool not in allowed_tools or type(outcome.get("exit_code")) is not int
+                or outcome["exit_code"] != 0 or not isinstance(output, str) or not output):
+            continue
+        command = outcome.get("command")
+        header = f"[{tool}" + (f": {command[:160]}" if isinstance(command, str) and command else "") + "]\n"
+        remaining = 5_000 - total_chars - len(header)
+        if remaining <= 0:
+            break
+        body_limit = min(1_400, remaining)
+        marker = "\n[Earlier run output excerpt truncated.]"
+        if len(output) > body_limit:
+            body_limit = max(0, body_limit - len(marker))
+        body = output[:body_limit]
+        if len(output) > len(body):
+            body += marker
+        entry = header + body
+        snippets.append(entry)
+        total_chars += len(entry)
+        if len(snippets) >= 3 or total_chars >= 5_000:
+            break
+    if not snippets:
+        return None
+    snippets.reverse()
+    return untrusted_context_message(
+        "successful read-only results from this approved task run",
+        "\n\n".join(snippets),
+        provenance_origin="approved_run_tool_outcomes",
+    )
+
+
 _WORKSPACE_CODE_ACTION_RE = re.compile(
     r"\b(?:fix|debug|repair|restyle|redesign|rework|overhaul|implement|edit|add|remove|change|update|refactor|wire|hook|"
     r"test|verify|run|build|lint|compile|commit|branch|merge|review|"
@@ -4424,6 +4489,11 @@ async def stream_agent_loop(
     )
     if restored_source:
         messages = _insert_before_latest_user(messages, restored_source)
+    restored_read_context = await _restore_approved_read_context(
+        exact_approval, owner, session_id,
+    )
+    if restored_read_context:
+        messages = _insert_before_latest_user(messages, restored_read_context)
     if _explicitly_references_missing_workspace(_retrieval_query, workspace):
         msg = (
             "No active workspace is set. Use `/workspace pick` or "

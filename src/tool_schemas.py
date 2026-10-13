@@ -1460,6 +1460,11 @@ def _repair_document_function_args(tool_type: str, arguments: str) -> Optional[d
 def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock]:
     """Convert a native function call into a ToolBlock for the existing execution pipeline."""
     tool_type = _TOOL_NAME_MAP.get(name, name)
+    def reject_native_preview(category: str) -> None:
+        # Keep diagnostics useful while never logging model-supplied values,
+        # which can contain workspace paths, source, or injected secrets.
+        logger.warning("Rejected native_preview arguments (%s)", category)
+
     try:
         if not arguments or (isinstance(arguments, str) and not arguments.strip()):
             args = {}
@@ -1470,6 +1475,9 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
         if args is not None:
             logger.warning(f"Repaired malformed document function call arguments for {name}")
         else:
+            if name == "native_preview":
+                reject_native_preview("invalid_json")
+                return None
             logger.error(f"Failed to parse function call arguments for {name}: {arguments}")
             return None
 
@@ -1481,7 +1489,7 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
     # fail-closed set can't drift from the dispatch/blocklist sets.
     if not isinstance(args, dict):
         if name == "native_preview":
-            logger.warning("Rejecting non-object native_preview arguments")
+            reject_native_preview("not_object")
             return None
         if tool_type.startswith("mcp__email__") or name in BUILTIN_EMAIL_TOOLS:
             logger.warning(f"Non-object email function call arguments for {name}: {args!r}; rejecting")
@@ -1493,10 +1501,11 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
         # Do not send this helper through the separate worker: it is baked into
         # the app container and the worker image does not carry its display stack.
         if os.getenv("ODYSSEUS_EXECUTOR_URL", "").strip():
-            logger.warning("native_preview is unavailable with separate execution configured")
+            reject_native_preview("separate_executor_unavailable")
             return None
         allowed = {"project_path", "test_script", "timeout", "no_sandbox"}
         if set(args) - allowed:
+            reject_native_preview("unknown_fields")
             return None
         def relative_path(value, *, optional=False):
             if optional and value == "":
@@ -1509,9 +1518,17 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
         test_script = args.get("test_script", "")
         timeout = args.get("timeout", 35)
         no_sandbox = args.get("no_sandbox", False)
-        if (not relative_path(project) or not relative_path(test_script, optional=True)
-                or isinstance(timeout, bool) or not isinstance(timeout, int) or not 15 <= timeout <= 45
-                or not isinstance(no_sandbox, bool)):
+        if not relative_path(project):
+            reject_native_preview("invalid_project_path")
+            return None
+        if not relative_path(test_script, optional=True):
+            reject_native_preview("invalid_test_script_path")
+            return None
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or not 15 <= timeout <= 45:
+            reject_native_preview("invalid_timeout")
+            return None
+        if not isinstance(no_sandbox, bool):
+            reject_native_preview("invalid_no_sandbox")
             return None
         command = ["node", "/app/scripts/electron_preview.mjs", "--workspace-bound",
                    "--workspace", project, "--timeout", str(timeout)]

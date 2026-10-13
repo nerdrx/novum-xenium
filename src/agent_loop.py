@@ -4570,6 +4570,10 @@ async def stream_agent_loop(
         and not incognito and not delegated_credential and not approved_plan
         and "todowrite" not in disabled_tools
     ))
+    if _coding_work.enabled:
+        # Checked slices use TodoWrite. The separate approved-plan editor has
+        # no active plan here and invites unchecked completion updates.
+        disabled_tools = set(disabled_tools) | {"update_plan"}
     _coding_work_restore = _coding_work.restore_checkpoint(
         coding_work_checkpoint, recovery=coding_work_checkpoint_recovery,
     )

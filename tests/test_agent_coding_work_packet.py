@@ -221,6 +221,7 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
     assert [event["stage"] for event in packet_events] == ["reproduce", "edit", "verify", "done"], (packet_events, executed)
     assert packet_events[-1]["test_status"] == "passed"
     assert packet_events[-1]["review_status"] == "not_reviewed"
+    assert all("update_plan" not in tools for tools in requested)
     # The task-scoped grant executes the sealed TodoWrite once before the
     # model's repeated checklist call; the duplicate packet must not reset it.
     assert [tool for tool, _content in executed] == ["todowrite", "todowrite", "bash", "write_file", "bash"]

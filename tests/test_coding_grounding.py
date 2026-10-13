@@ -151,6 +151,29 @@ def test_trivial_edits_and_guidance_skip_gate_but_no_web_keeps_local_gate():
     assert "local project documentation only" in offline.directive
 
 
+def test_substantive_gui_repair_and_restyling_require_grounding():
+    repair_request = (
+        "Continue the original task in this workspace: a working FFmpeg desktop GUI. "
+        "This is a repair after an independent acceptance test failed. "
+        "Fix the native file/process bridge and layout. Compact the workflow and "
+        "restyle the interface to match the guide."
+    )
+    assert CodingGrounding(repair_request).required
+    assert CodingGrounding("Restyle the existing desktop GUI layout to match the guide.").required
+    assert CodingGrounding("Redesign the app interface and screen workflow.").required
+
+
+def test_gui_copy_edits_and_plan_or_guide_mode_stay_out_of_repair_gate():
+    for text in (
+        "Fix the button copy in the GUI.",
+        "Correct the typo in the app's interface label.",
+    ):
+        assert not CodingGrounding(text).required
+    repair = "Restyle the existing desktop GUI layout to match the guide."
+    assert not CodingGrounding(repair, plan_mode=True).required
+    assert not CodingGrounding(repair, guide_mode=True).required
+
+
 def test_explicit_without_browsing_stays_local():
     gate = CodingGrounding("Build a GUI without browsing")
     assert not gate.web_allowed

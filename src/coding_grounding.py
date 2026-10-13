@@ -21,6 +21,19 @@ _SUBSTANTIVE_CODE_TASK = re.compile(
     r"\b(?:library|framework|dependency|package|sdk|api|plugin|service)\b",
     re.IGNORECASE | re.DOTALL,
 )
+_SUBSTANTIVE_GUI_REPAIR = re.compile(
+    r"\b(?:repair|restyle|redesign|rework|overhaul)\b.{0,120}"
+    r"\b(?:existing\s+)?(?:desktop\s+)?(?:apps?|gui|uis?|interfaces?|frontends?|layouts?|screens?)\b"
+    r"|\b(?:existing\s+)?(?:desktop\s+)?(?:apps?|gui|uis?|interfaces?|frontends?|layouts?|screens?)\b"
+    r".{0,120}\b(?:repair|restyle|redesign|rework|overhaul)\b"
+    r"|\bfix\b.{0,100}\b(?:native|functional|broken|failing|failed|regression|"
+    r"acceptance\s+test|workflow|process\s+bridge)\b.{0,100}"
+    r"\b(?:apps?|gui|uis?|interfaces?|frontends?|layouts?|screens?)\b"
+    r"|\bfix\b.{0,100}\b(?:apps?|gui|uis?|interfaces?|frontends?|layouts?|screens?)\b"
+    r".{0,100}\b(?:native|functional|broken|failing|failed|regression|"
+    r"acceptance\s+test|workflow|process\s+bridge)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _NO_WEB = re.compile(
     r"\b(?:no (?:web|internet|online|network)|offline|local only|"
     r"don't use (?:the )?(?:web|internet|browser)|do not use (?:the )?"
@@ -108,7 +121,10 @@ class CodingGrounding:
         self.web_allowed = bool(web_allowed) and not _NO_WEB.search(self.task)
         self.required = bool(
             self.task and not plan_mode and not guide_mode
-            and _SUBSTANTIVE_CODE_TASK.search(self.task)
+            and (
+                _SUBSTANTIVE_CODE_TASK.search(self.task)
+                or _SUBSTANTIVE_GUI_REPAIR.search(self.task)
+            )
         )
         self.attempts = 0
         self.failures = 0

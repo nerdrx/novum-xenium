@@ -20,6 +20,27 @@ def _schemas(kwargs):
     }
 
 
+def test_selected_workspace_routes_substantive_gui_repairs_into_grounding_gate():
+    from src.coding_grounding import CodingGrounding
+
+    requests = (
+        "Continue the original task in this workspace: a working FFmpeg desktop GUI. "
+        "This is a repair after an independent acceptance test failed, not a fresh "
+        "successful build. Keep qwen3.5:9b and the existing Electron version. "
+        "Fix the native file/process bridge and layout.",
+        "Restyle the existing desktop GUI layout to match the guide.",
+        "Redesign the existing app interface and screen workflow.",
+    )
+    for request in requests:
+        assert al._use_coding_tools(request, "/workspace")
+        coding_task = request if al._use_coding_tools(request, "/workspace") else ""
+        assert CodingGrounding(coding_task).required
+
+    copy_edit = "Fix the button copy in the GUI."
+    assert al._use_coding_tools(copy_edit, "/workspace")
+    assert not CodingGrounding(copy_edit).required
+
+
 def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_tools=None,
          exact_approval=None, schema_details=None, server_run_id=None):
     _patch_common(monkeypatch)

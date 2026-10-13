@@ -627,7 +627,8 @@ def test_missing_work_packet_todowrite_gets_actionable_model_visible_error(monke
     assert executed == ["todowrite", "bash"]
 
 
-def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_context(monkeypatch, tmp_path):
+@pytest.mark.parametrize("premature_verification", [False, True])
+def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_context(monkeypatch, tmp_path, premature_verification):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -647,13 +648,15 @@ def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_con
         "acceptance_command": "pytest -q tests/test_auth.py -k expired",
         "acceptance_condition": "Expired tokens fail safely",
     }
+    if premature_verification:
+        packet_b["mode"] = "verify_existing"
     todos_a = [
         {"content": milestones[0], "status": "in_progress"},
         {"content": milestones[1], "status": "pending"},
     ]
     todos_b = [
         {"content": milestones[0], "status": "completed"},
-        {"content": milestones[1], "status": "in_progress"},
+        {"content": milestones[1], "status": "completed" if premature_verification else "in_progress"},
     ]
     actions = [
         ("todowrite", {"todos": todos_a, "work_packet": packet_a}),
@@ -668,6 +671,10 @@ def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_con
         ("bash", {"command": packet_b["acceptance_command"]}),
         ("final", {}),
     ]
+    if premature_verification:
+        # Server scheduling must run both fresh checks without another model
+        # action or a dummy edit.
+        del actions[6:9]
     monkeypatch.setattr(coding_tools, "read_todos", lambda _ctx: [])
     executed, requests = [], []
     sealed = json.dumps(actions[0][1])
@@ -692,6 +699,8 @@ def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_con
             return block.tool_type, {"exit_code": 0, "output": "saved", **data}
         if block.tool_type == "bash":
             command = block.content
+            if premature_verification and command == packet_b["reproduce_command"]:
+                return block.tool_type, {"exit_code": 0, "output": "existing work baseline passed"}
             if command in {packet_a["reproduce_command"], packet_b["reproduce_command"]}:
                 label = "first slice baseline failure" if command == packet_a["reproduce_command"] else "second slice baseline failure"
                 return block.tool_type, {"exit_code": 1, "output": label}
@@ -735,9 +744,19 @@ def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_con
     )))
 
     packet_events = [event for event in events if event.get("type") == "coding_work_packet"]
-    assert [event["stage"] for event in packet_events] == [
+    expected_stages = [
         "reproduce", "edit", "verify", "done", "reproduce", "edit", "verify", "done",
-    ], (packet_events, executed, " ".join(event.get("delta", "") for event in events))
+    ]
+    if premature_verification:
+        expected_stages.pop(5)
+        dispatched_todos = [json.loads(content) for tool, content in executed if tool == "todowrite"]
+        assert dispatched_todos[-1]["todos"][1]["status"] == "in_progress"
+        assert todos_b[1]["status"] == "completed"  # The model's original claim was not mutated.
+        assert sum(tool == "write_file" for tool, _ in executed) == 1
+        assert any(tool == "bash" and content == packet_b["reproduce_command"] for tool, content in executed)
+        assert any(tool == "bash" and content == packet_b["acceptance_command"] for tool, content in executed)
+    assert [event["stage"] for event in packet_events] == expected_stages, (
+        packet_events, executed, " ".join(event.get("delta", "") for event in events))
     assert [event["packet"]["objective"] for event in packet_events if event["stage"] == "done"] == [
         packet_a["objective"], packet_b["objective"],
     ]
@@ -748,7 +767,7 @@ def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_con
 
     # The second reproduction begins a fresh packet context: the original user
     # request remains, while prior model chatter and the previous packet's goal do not.
-    second_packet_request = requests[7]
+    second_packet_request = requests[6 if premature_verification else 7]
     request_text = json.dumps(second_packet_request, ensure_ascii=False)
     assert "Preserve keyboard support" in request_text
     assert "obsolete implementation chatter" not in request_text

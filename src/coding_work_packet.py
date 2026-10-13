@@ -363,6 +363,31 @@ class CodingWorkTracker:
             self.review_status = "unverified"
         return True
 
+    def normalize_todo_update(self, args):
+        """Downgrade a premature final verification claim into work to execute."""
+        if (not self.enabled or self.retry_limit_reached or not self.state
+                or self.state.stage != "done" or not isinstance(args, dict)):
+            return args
+        pending = [name for name in self.milestones if name not in self.completed]
+        todos = args.get("todos")
+        if (len(pending) != 1 or not isinstance(todos, list)
+                or any(not isinstance(item, dict) for item in todos)
+                or tuple(item.get("content") for item in todos) != self.milestones
+                or any(item.get("status") != "completed" for item in todos)):
+            return args
+        try:
+            packet = CodingWorkPacket(**normalize_work_packet_paths(args.get("work_packet"), self.workspace))
+        except (TypeError, ValueError):
+            return args
+        if packet.mode != "verify_existing" or packet.objective != pending[0]:
+            return args
+        # Preserve the claim as unverified: normal dispatch, baseline, and
+        # acceptance must still run before this item can earn completion.
+        return {**args, "todos": [
+            {**item, "status": "in_progress"} if item["content"] == pending[0] else dict(item)
+            for item in todos
+        ]}
+
     def valid_todo_update(self, args):
         if not self.enabled:
             return True

@@ -8023,6 +8023,14 @@ async def stream_agent_loop(
         skill_reference_messages = []
         budget_hit = False
         for i, block in enumerate(tool_blocks):
+            if block.tool_type == "todowrite":
+                try:
+                    todo_args = json.loads(block.content)
+                    normalized_todos = _coding_work.normalize_todo_update(todo_args)
+                    if normalized_todos is not todo_args:
+                        block = ToolBlock("todowrite", json.dumps(normalized_todos))
+                except (TypeError, ValueError):
+                    pass  # Normal validation reports malformed input.
             coding_check_error = None
             if block.tool_type == "run_coding_check":
                 check_command, coding_check_error = _coding_work.check_command(block.content)

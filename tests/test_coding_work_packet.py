@@ -566,3 +566,78 @@ def test_acceptance_success_resets_consecutive_failure_count(packet):
     assert tracker.failed_acceptance_checks == 1
     tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
     assert tracker.failed_acceptance_checks == 0
+
+
+def _passed_slice_with_pending_verification(packet, extra_pending=False):
+    from src.coding_work_packet import CodingWorkTracker
+    tracker = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Implement", "status": "in_progress"},
+             {"content": "Verify implementation", "status": "pending"}]
+    if extra_pending:
+        todos.append({"content": "Another outcome", "status": "pending"})
+    tracker.observe("todowrite", "{}", {"exit_code": 0, "todos": todos, "work_packet": packet.to_dict()})
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    args = {"todos": [dict(item, status="completed") for item in todos],
+            "work_packet": dict(packet.to_dict(), objective="Verify implementation", mode="verify_existing")}
+    return tracker, args
+
+
+def test_premature_final_verification_is_downgraded_and_requires_fresh_checks(packet):
+    tracker, args = _passed_slice_with_pending_verification(packet)
+    normalized = tracker.normalize_todo_update(args)
+    assert args["todos"][1]["status"] == "completed"  # Caller data stays intact.
+    assert normalized["todos"] == [
+        {"content": "Implement", "status": "completed"},
+        {"content": "Verify implementation", "status": "in_progress"},
+    ]
+    assert tracker.completed == {"Implement"}
+    assert not tracker.blocks("todowrite", normalized)
+    assert tracker.observe("todowrite", "{}", {**normalized, "exit_code": 0})
+    assert tracker.state.stage == "reproduce"
+    assert tracker.state.reproduction_result is None
+    assert tracker.state.acceptance_result is None
+    assert tracker.pending
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 0})
+    assert tracker.state.stage == "verify"
+    assert tracker.completed == {"Implement"}
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    assert not tracker.pending
+    assert tracker.completed == {"Implement", "Verify implementation"}
+
+
+@pytest.mark.parametrize("case", ["multiple", "rename", "reorder", "change", "objective", "invalid", "unfinished", "disabled"])
+def test_verification_normalization_rejects_ambiguous_or_unearned_scope(packet, case):
+    tracker, args = _passed_slice_with_pending_verification(packet, extra_pending=case == "multiple")
+    if case == "rename":
+        args["todos"][1]["content"] = "Different outcome"
+    elif case == "reorder":
+        args["todos"].reverse()
+    elif case == "change":
+        args["work_packet"]["mode"] = "change"
+    elif case == "objective":
+        args["work_packet"]["objective"] = "Something else"
+    elif case == "invalid":
+        args["work_packet"]["files"] = ["../outside.py"]
+    elif case == "unfinished":
+        tracker.state.stage = "verify"
+    elif case == "disabled":
+        tracker.enabled = False
+    assert tracker.normalize_todo_update(args) is args
+    assert tracker.completed == {"Implement"}
+
+
+def test_normalized_verification_failed_baseline_still_requires_repair(packet):
+    tracker, args = _passed_slice_with_pending_verification(packet)
+    normalized = tracker.normalize_todo_update(args)
+    # A denied or pending dispatch cannot create the new packet.
+    assert not tracker.observe("todowrite", "{}", {**normalized, "exit_code": 0, "approval_required": True})
+    assert tracker.state.stage == "done"
+    assert tracker.completed == {"Implement"}
+    tracker.observe("todowrite", "{}", {**normalized, "exit_code": 0})
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    assert tracker.state.stage == "edit"
+    assert not tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    assert tracker.pending
+    assert tracker.completed == {"Implement"}

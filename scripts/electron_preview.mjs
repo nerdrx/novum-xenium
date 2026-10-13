@@ -121,8 +121,12 @@ let phase = 'initializing';
 let workspace = '';
 let appEntry = '';
 let electronPath = '';
-const diagnostics = { pageErrors: [], consoleErrors: [], failedRequests: [], badResponses: [], mainStderr: [] };
+const diagnostics = {
+  pageErrors: [], pageErrorDetails: [], consoleErrors: [], consoleErrorDetails: [],
+  failedRequests: [], badResponses: [], mainStderr: [],
+};
 const cap = (array, value) => { if (array.length < 80) array.push(String(value).slice(0, 500)); };
+const capDetail = (array, value) => { if (array.length < 20) array.push(value); };
 const cleanUrl = (value) => { try { const u = new URL(value); return (u.origin + u.pathname).slice(0, 300); } catch { return String(value).slice(0, 300); } };
 const safeRm = (target, base) => {
   if (!target || !base) return;
@@ -197,15 +201,27 @@ try {
   browser = await pw.chromium.connectOverCDP(endpoint, { timeout: Math.max(5000, (config.timeout - 12) * 1000) });
   const context = browser.contexts()[0];
   if (!context) throw new Error('Electron DevTools endpoint exposed no browser context');
-  let page = context.pages().find(candidate => !candidate.url().startsWith('devtools:'));
-  if (!page) page = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Electron opened no renderer page')), Math.max(5000, (config.timeout - 15) * 1000));
-    context.once('page', target => { clearTimeout(timer); resolve(target); });
-  });
   const attachPageDiagnostics = target => {
-    target.on('pageerror', error => cap(diagnostics.pageErrors, error.message));
+    target.on('pageerror', error => {
+      cap(diagnostics.pageErrors, error.message);
+      capDetail(diagnostics.pageErrorDetails, {
+        message: String(error.message || error).slice(0, 300),
+        stack: String(error.stack || '').slice(0, 1600),
+      });
+    });
     target.on('console', message => {
-      if (message.type() === 'error') cap(diagnostics.consoleErrors, message.text());
+      if (message.type() === 'error') {
+        cap(diagnostics.consoleErrors, message.text());
+        const location = message.location?.() || {};
+        capDetail(diagnostics.consoleErrorDetails, {
+          message: String(message.text()).slice(0, 300),
+          location: {
+            url: String(location.url || '').slice(0, 300),
+            lineNumber: Number.isInteger(location.lineNumber) ? location.lineNumber : null,
+            columnNumber: Number.isInteger(location.columnNumber) ? location.columnNumber : null,
+          },
+        });
+      }
     });
     target.on('requestfailed', request => cap(
       diagnostics.failedRequests, cleanUrl(request.url()) + ': ' + (request.failure()?.errorText || 'failed'),
@@ -214,7 +230,20 @@ try {
       if (response.status() >= 400) cap(diagnostics.badResponses, response.status() + ' ' + cleanUrl(response.url()));
     });
   };
-  for (const openPage of context.pages()) attachPageDiagnostics(openPage);
+  const diagnosedPages = new WeakSet();
+  const watchPage = target => {
+    if (diagnosedPages.has(target)) return;
+    diagnosedPages.add(target);
+    attachPageDiagnostics(target);
+  };
+  context.on('page', watchPage);
+  for (const openPage of context.pages()) watchPage(openPage);
+  let page = context.pages().find(candidate => !candidate.url().startsWith('devtools:'));
+  if (!page) page = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Electron opened no renderer page')), Math.max(5000, (config.timeout - 15) * 1000));
+    context.once('page', target => { clearTimeout(timer); resolve(target); });
+  });
+  watchPage(page);
   phase = 'inspecting rendered page';
   // Revisit the initial document only after diagnostics are attached.
   await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.max(5000, (config.timeout - 15) * 1000) }).catch(() => {});
@@ -276,12 +305,25 @@ try {
   const runtimeIssues = diagnostics.pageErrors.length || diagnostics.consoleErrors.length ||
     diagnostics.failedRequests.length || diagnostics.badResponses.length ||
     electronProcess.exitCode !== null;
+  const electronDiagnosticLeads = runtimeIssues ? {
+    note: 'Documentation leads for investigation; not a diagnosis or verified remediation.',
+    processModel: 'https://www.electronjs.org/docs/latest/tutorial/process-model',
+    contextIsolation: 'https://www.electronjs.org/docs/latest/tutorial/context-isolation',
+    ipc: 'https://www.electronjs.org/docs/latest/tutorial/ipc',
+    runtimeBoundaries: [
+      'Attach preload through BrowserWindow.webPreferences.preload; it is not an HTML script.',
+      'Keep privileged Electron APIs in preload/main and expose narrow APIs with contextBridge for renderer use.',
+      'Values sent over IPC must be serializable.',
+      'Use renderer error stacks/source locations to find source code; report JSON line numbers are not source locations.',
+    ],
+  } : undefined;
   const report = {
     status: !page.isClosed() && !runtimeIssues ? 'rendered; behavior unverified' : 'runtime issues observed',
     runId, workspace, appEntry: config.entryPath, electron: config.electronPath,
     rendererConnected: !page.isClosed(),
     viewportMode: 'Playwright renderer viewport emulation; native BrowserWindow bounds/resize unverified',
-    desktop, compact, test, diagnostics, electronPid: electronProcess.pid, electronExitCode: electronProcess.exitCode,
+    desktop, compact, test, diagnostics, electronDiagnosticLeads,
+    electronPid: electronProcess.pid, electronExitCode: electronProcess.exitCode,
     sandbox: config.noSandbox ? 'disabled for this explicit isolated test only' : 'default Electron/Chromium settings',
   };
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
@@ -298,9 +340,12 @@ try {
       responses: diagnostics.badResponses.length,
       mainStderr: diagnostics.mainStderr.length,
       examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors, ...diagnostics.mainStderr].slice(0, 3).map(value => String(value).slice(0, 180)),
+      actualSourceFrames: diagnostics.pageErrorDetails.slice(0, 2).map(detail => ({ message: detail.message, stack: detail.stack.slice(0, 800) })),
+      consoleLocations: diagnostics.consoleErrorDetails.slice(0, 2),
     },
     behavior: test.configured ? test.status : 'unverified; no workspace test script supplied',
     test: test.status,
+    electronDiagnosticLeads,
     screenshots: [desktopPath, compactPath],
     report: reportPath,
   };

@@ -110,7 +110,8 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
     const fs = require('node:fs');
     const path = require('node:path');
     class Page extends EventEmitter {
-      url() { return 'file:///fixture/index.html'; }
+      constructor(url = 'file:///fixture/index.html') { super(); this.pageUrl = url; }
+      url() { return this.pageUrl; }
       isClosed() { return false; }
       async reload() {
         const config = JSON.parse(process.env.ODYSSEUS_PREVIEW_CONFIG || '{}');
@@ -127,7 +128,14 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
     }
     const page = new Page();
     const context = new EventEmitter();
-    context.pages = () => [page];
+    const pages = [page];
+    context.pages = () => pages;
+    context.openPopup = () => {
+      const popup = new Page('file:///fixture/popup.html');
+      pages.push(popup);
+      context.emit('page', popup);
+      return popup;
+    };
     exports.chromium = { async connectOverCDP() {
       return { contexts: () => [context], close: async () => {} };
     }};
@@ -197,12 +205,55 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   }));
   assert.ok(reports.some(Boolean), 'retry should produce its own report');
 
+  const popupScript = path.join(root, 'popup-test.mjs');
+  await writeFile(popupScript, `
+    export default async ({context}) => {
+      const popup = context.openPopup();
+      popup.emit('pageerror', new Error('popup renderer exploded'));
+      popup.emit('console', {
+        type: () => 'error', text: () => 'popup console exploded',
+        location: () => ({url: 'file:///fixture/popup.js', lineNumber: 23, columnNumber: 7}),
+      });
+    };
+  `);
+  const popupRun = spawn(node, [helper, '--workspace', root, '--test-script', 'popup-test.mjs', '--timeout', '15'], { stdio: ['ignore', 'pipe', 'ignore'], env });
+  let popupStdout = '';
+  popupRun.stdout.setEncoding('utf8').on('data', chunk => { popupStdout += chunk; });
+  const popupResult = await new Promise(resolve => popupRun.once('close', code => resolve({ code })));
+  assert.equal(popupResult.code, 1, 'renderer errors in test-created popup pages must fail the preview');
+  const runsAfterPopup = (await readdir(outputDir)).filter(name => name.startsWith('run-'));
+  assert.equal(runsAfterPopup.length, 3);
+  const popupReports = await Promise.all(runsAfterPopup.map(async name => {
+    try { return JSON.parse(await readFile(path.join(outputDir, name, 'report.json'), 'utf8')); } catch { return null; }
+  }));
+  const popupReport = popupReports.find(report => report?.diagnostics?.pageErrors?.includes('popup renderer exploded'));
+  assert.ok(popupReport, 'the report should include page errors from pages opened after CDP connection');
+  assert.match(popupReport.diagnostics.pageErrorDetails[0].stack, /popup-test\.mjs/,
+    'the report should retain renderer stack source frames');
+  assert.deepEqual(popupReport.diagnostics.consoleErrorDetails[0].location, {
+    url: 'file:///fixture/popup.js', lineNumber: 23, columnNumber: 7,
+  });
+  const leads = popupReport.electronDiagnosticLeads;
+  assert.match(leads.processModel, /^https:\/\/www\.electronjs\.org\/docs\/latest\//);
+  assert.match(leads.contextIsolation, /^https:\/\/www\.electronjs\.org\/docs\/latest\//);
+  assert.match(leads.ipc, /^https:\/\/www\.electronjs\.org\/docs\/latest\//);
+  assert.ok(leads.runtimeBoundaries.some(note => note.includes('BrowserWindow.webPreferences.preload')));
+  assert.match(leads.note, /not a diagnosis or verified remediation/i);
+  const popupSummary = JSON.parse(popupStdout.split('PREVIEW_RESULT: ')[1]);
+  assert.equal(popupSummary.electronDiagnosticLeads.note, leads.note);
+  assert.equal(popupSummary.electronDiagnosticLeads.runtimeBoundaries.length, 4);
+  assert.match(popupSummary.errors.actualSourceFrames[0].stack, /popup-test\.mjs/);
+  assert.deepEqual(popupSummary.errors.consoleLocations[0].location, {
+    url: 'file:///fixture/popup.js', lineNumber: 23, columnNumber: 7,
+  });
+  assert.ok(popupStdout.length < 6000, 'source-location evidence should keep the summary bounded');
+
   await writeFile(path.join(root, '.trigger-asset-failure'), '1');
   const failedAssetRun = spawn(node, [helper, '--workspace', root, '--timeout', '15'], { stdio: 'ignore', env });
   const failedAssetResult = await new Promise(resolve => failedAssetRun.once('close', code => resolve({ code })));
   assert.equal(failedAssetResult.code, 1, 'failed requests and HTTP errors must fail the preview');
   const allRuns = (await readdir(outputDir)).filter(name => name.startsWith('run-'));
-  assert.equal(allRuns.length, 3);
+  assert.equal(allRuns.length, 4);
   const reportsAfterAssetFailure = await Promise.all(allRuns.map(async name => {
     try { return JSON.parse(await readFile(path.join(outputDir, name, 'report.json'), 'utf8')); } catch { return null; }
   }));

@@ -303,3 +303,15 @@ def parse_completion_verification(raw: str) -> dict:
         if reason:
             return {"status": "unverified", "issues": [reason]}
     return {"status": "unverified", "issues": ["Verifier returned a malformed or incomplete verdict."]}
+
+
+def completion_verdict_needs_format_retry(verdict: dict) -> bool:
+    """Retry only parser-format failures, never an evidence-based UNVERIFIED."""
+    return (
+        isinstance(verdict, dict)
+        and verdict.get("status") == "unverified"
+        and verdict.get("issues") in (
+            ["Verifier returned no single final verdict."],
+            ["Verifier returned a malformed or incomplete verdict."],
+        )
+    )

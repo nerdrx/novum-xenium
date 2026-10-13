@@ -7,6 +7,7 @@ import pytest
 from src.completion_verification import (
     _format_action_event,
     build_completion_verification_prompt,
+    completion_verdict_needs_format_retry,
     compact_action_evidence,
     parse_completion_verification,
 )
@@ -43,6 +44,21 @@ def test_missing_ambiguous_or_unverified_verdict_does_not_pass(raw):
     result = parse_completion_verification(raw)
     assert result["status"] == "unverified"
     assert result["issues"]
+
+
+def test_only_structural_verdict_failures_qualify_for_format_retry():
+    assert completion_verdict_needs_format_retry(
+        parse_completion_verification("analysis only")
+    )
+    assert completion_verdict_needs_format_retry(
+        parse_completion_verification("VERIFICATION: UNVERIFIED:")
+    )
+    assert not completion_verdict_needs_format_retry(
+        parse_completion_verification("VERIFICATION: UNVERIFIED: UI behavior is untested")
+    )
+    assert not completion_verdict_needs_format_retry(
+        parse_completion_verification("VERIFICATION: FAIL: UI test missing")
+    )
 
 
 def test_prompt_requires_request_derived_functional_and_external_evidence():
@@ -324,3 +340,85 @@ def test_verifier_subagent_provider_error_is_unverified(monkeypatch):
         model="test-model", headers={},
     ))
     assert issues and issues[0].startswith("Unverified:")
+
+
+@pytest.mark.parametrize("retry_response, expected", [
+    ("VERIFICATION: SUCCESS", []),
+    ("VERIFICATION: SUCCESS\ntrailing text", [
+        "Unverified: Verifier returned no single final verdict.",
+    ]),
+])
+def test_verifier_retries_malformed_format_once_with_same_evidence(
+    monkeypatch, retry_response, expected,
+):
+    import asyncio
+    import src.agent_loop as agent_loop
+    import src.llm_core
+
+    calls = []
+    responses = iter(["analysis without a verdict", retry_response])
+
+    async def fake_call(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    monkeypatch.setattr(src.llm_core, "llm_call_async", fake_call)
+    issues = asyncio.run(agent_loop._run_verifier_subagent(
+        "Create the GUI", "[bash] npm test (exit_code=0)",
+        endpoint_url="http://localhost", model="test-model", headers={"x-test": "1"},
+    ))
+
+    assert issues == expected
+    assert len(calls) == 2
+    assert calls[0]["url"] == calls[1]["url"] == "http://localhost"
+    assert calls[0]["model"] == calls[1]["model"] == "test-model"
+    assert calls[0]["headers"] == calls[1]["headers"] == {"x-test": "1"}
+    assert "Create the GUI" in calls[0]["messages"][0]["content"]
+    assert "[bash] npm test (exit_code=0)" in calls[1]["messages"][0]["content"]
+    assert "Formatting retry" in calls[1]["messages"][0]["content"]
+
+
+def test_valid_unverified_verdict_does_not_retry_format(monkeypatch):
+    import asyncio
+    import src.agent_loop as agent_loop
+    import src.llm_core
+
+    calls = []
+
+    async def fake_call(**kwargs):
+        calls.append(kwargs)
+        return "VERIFICATION: UNVERIFIED: the GUI behavior was not exercised"
+
+    monkeypatch.setattr(src.llm_core, "llm_call_async", fake_call)
+    issues = asyncio.run(agent_loop._run_verifier_subagent(
+        "Create the GUI", "[bash] npm test (exit_code=0)",
+        endpoint_url="http://localhost", model="test-model", headers={},
+    ))
+
+    assert issues == ["Unverified: the GUI behavior was not exercised"]
+    assert len(calls) == 1
+
+
+def test_verifier_format_retry_provider_error_is_bounded(monkeypatch):
+    import asyncio
+    import src.agent_loop as agent_loop
+    import src.llm_core
+
+    calls = []
+
+    async def fail_second_call(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return "analysis without a verdict"
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(src.llm_core, "llm_call_async", fail_second_call)
+    issues = asyncio.run(agent_loop._run_verifier_subagent(
+        "Create the GUI", "same evidence", endpoint_url="http://localhost",
+        model="test-model", headers={},
+    ))
+
+    assert issues == [
+        "Unverified: the completion reviewer was unavailable; report checks and remaining uncertainty."
+    ]
+    assert len(calls) == 2

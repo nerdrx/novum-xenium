@@ -56,7 +56,7 @@ def test_visual_verification_documents_electron_cdp_disk_path_selection(tmp_path
     )
     body = manager.read_skill_md(imported['name'], owner='alice')
     assert body is not None
-    assert 'version: 1.0.9' in source
+    assert 'version: 1.0.10' in source
     assert 'connectOverCDP' in body and 'context.newCDPSession(page)' in body
     assert 'DOM.setFileInputFiles' in body
     assert 'not the native operating-system picker' in body

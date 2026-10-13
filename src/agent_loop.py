@@ -3859,7 +3859,9 @@ async def _run_verifier_subagent(
     """Review completion independently; missing evidence never counts as a pass."""
     from src.llm_core import llm_call_async
     from src.completion_verification import (
-        build_completion_verification_prompt, parse_completion_verification,
+        build_completion_verification_prompt,
+        completion_verdict_needs_format_retry,
+        parse_completion_verification,
     )
     prompt = build_completion_verification_prompt(instruction, actions_snapshot)
     try:
@@ -3874,6 +3876,28 @@ async def _run_verifier_subagent(
         logger.warning(f"[agent] verifier subagent failed: {e}")
         return ["Unverified: the completion reviewer was unavailable; report checks and remaining uncertainty."]
     verdict = parse_completion_verification(_strip_think_blocks(raw or ""))
+    if completion_verdict_needs_format_retry(verdict):
+        # Formatting repair only: preserve identical request/evidence, model,
+        # and strict parser; never turn missing evidence into a pass.
+        retry_prompt = (
+            prompt
+            + "\n\nFormatting retry: the previous response lacked one valid final verdict line. "
+            "Re-evaluate only the same request and evidence above. End with exactly one of:\n"
+            "VERIFICATION: SUCCESS\n"
+            "VERIFICATION: FAIL: <specific unmet requirements, separated by semicolons>\n"
+            "VERIFICATION: UNVERIFIED: <what evidence is missing>\n"
+            "Output nothing after that final line."
+        )
+        try:
+            retry_raw = await llm_call_async(
+                url=endpoint_url, model=model,
+                messages=[{"role": "user", "content": retry_prompt}],
+                headers=headers, temperature=0.0, max_tokens=2048, timeout=60,
+            )
+        except Exception as e:
+            logger.warning(f"[agent] verifier format retry failed: {e}")
+            return ["Unverified: the completion reviewer was unavailable; report checks and remaining uncertainty."]
+        verdict = parse_completion_verification(_strip_think_blocks(retry_raw or ""))
     if verdict["status"] == "passed":
         return []
     return [f"{verdict['status'].capitalize()}: {issue}" for issue in verdict["issues"]]

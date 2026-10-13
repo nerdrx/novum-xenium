@@ -237,6 +237,27 @@ def test_ui_design_requires_visual_verification_when_both_skills_match():
     assert gate.may_mutate
 
 
+def test_rereading_successful_ui_design_does_not_open_visual_skill_fallback():
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["ui-design", "visual-verification"])
+    assert gate.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
+
+    content = '{"action":"view","name":"ui-design"}'
+    result = {"results": "Design procedure"}
+    assert gate.observe("manage_skills", result, content)
+    assert gate.observe("manage_skills", result, content)
+    assert gate.skill_view_attempts == 1
+    assert gate.skill_review_pending
+    assert not gate.may_mutate
+
+    assert gate.observe(
+        "manage_skills", {"results": "Render and critique procedure"},
+        '{"action":"view","name":"visual-verification"}',
+    )
+    assert gate.skill_reviews_satisfied
+    assert gate.may_mutate
+
+
 def test_visual_skill_pair_unavailable_or_failed_still_uses_bounded_escape():
     unavailable = CodingGrounding(task())
     assert unavailable.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")

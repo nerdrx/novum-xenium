@@ -330,12 +330,18 @@ class CodingGrounding:
             # follow-up result after approval/denial will be observed instead.
             if isinstance(result, dict) and result.get("approval_required"):
                 return False
-            self.skill_view_attempts += 1
             name = str(args.get("name") or args.get("skill_id") or "").strip()
             skill_text = result.get("results") if isinstance(result, dict) else None
-            if (name in self.skill_candidates
-                    and tool_result_is_successful(result)
-                    and isinstance(skill_text, str) and skill_text.strip()):
+            successful_view = (
+                name in self.skill_candidates
+                and tool_result_is_successful(result)
+                and isinstance(skill_text, str) and skill_text.strip()
+            )
+            # Re-reading an already successful procedure is progress-neutral,
+            # not a failed/missing lookup that should release another gate.
+            if not (successful_view and name in self.viewed_skills):
+                self.skill_view_attempts += 1
+            if successful_view:
                 self.viewed_skills.add(name)
                 return True
             return False

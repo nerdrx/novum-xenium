@@ -124,7 +124,7 @@ class NovumAdapterTests(unittest.TestCase):
         cls.thread.join()
 
     def invoke(self, directory, *, mode="complete", timeout="5", preset_id=None,
-               approve_task=False, files_json=None):
+               approve_task=False, files_json=None, allow_web_search=False):
         Handler.mode = mode
         Handler.calls = []
         env = {**os.environ, "ODYSSEUS_SESSION": "private-test-token"}
@@ -140,6 +140,8 @@ class NovumAdapterTests(unittest.TestCase):
             command.extend(("--files-json", files_json))
         if approve_task:
             command.append("--approve-task")
+        if allow_web_search:
+            command.append("--allow-web-search")
         return subprocess.run(command, cwd=directory, env=env, text=True, capture_output=True, timeout=10)
 
     def test_stream_uses_explicit_mapping_and_reports_run_identity_without_output(self):
@@ -160,12 +162,23 @@ class NovumAdapterTests(unittest.TestCase):
         self.assertEqual(chat["selected_endpoint_id"], ["ep-test"])
         self.assertEqual(chat["workspace"], ["/mapped/workspace"])
         self.assertEqual(chat["mode"], ["agent"])
+        self.assertEqual(chat["allow_web_search"], ["false"])
+        self.assertFalse(report["allow_web_search"])
         self.assertEqual(report["status"], "complete")
         self.assertEqual(report["actual_route"]["model"], "served-model")
         self.assertEqual(report["actual_route"]["endpoint_id"], "ep-actual")
         self.assertEqual(report["verification_passed"], True)
         self.assertIn("coding_work_packet", [event["type"] for event in report["evidence"]])
         self.assertNotIn("DO NOT EMIT", result.stdout)
+
+    def test_web_search_is_opt_in_and_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "TASK.md").write_text("Use official docs to fix the defect.\n")
+            Path(directory, "calc.py").write_text("broken\n")
+            result = self.invoke(directory, mode="verified", allow_web_search=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Handler.calls[1][1]["allow_web_search"], ["true"])
+        self.assertIs(json.loads(result.stdout)["allow_web_search"], True)
 
     def test_done_without_outcome_evidence_is_unverified(self):
         with tempfile.TemporaryDirectory() as directory:

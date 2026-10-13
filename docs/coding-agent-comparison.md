@@ -9,6 +9,14 @@ or copy environment variables into the report.
 The external acceptance check is capped at 15 seconds; a timeout is recorded as
 a failed check so the comparison report is still written.
 
+Comparisons are offline by default: the Novum adapter sends
+`allow_web_search=false`. For research-enabled Novum trials, opt in with
+`--allow-web-search`; the adapter records that choice in its metadata report.
+This only enables Novum's web tools. A fair research comparison also needs
+equivalent web access configured for Aider; otherwise label the run an
+asymmetric research trial, not a controlled agent comparison. Keep web disabled
+for both sides when comparing coding behavior without outside research.
+
 ## Current host check
 
 On this host, `command -v aider` found no system Aider executable. Aider 0.86.2
@@ -99,6 +107,9 @@ the mounted fixture):
 ```text
 python /run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py --task-file {task_file} --host-workspace {workspace} --container-workspace /workspace/path/to/this/fixture --api-base http://127.0.0.1:7000 --endpoint-id ENDPOINT_ID --model {model} --files-json '{source_files_json}'
 ```
+
+Add `--allow-web-search` to this Novum command only when the trial is explicitly
+research-enabled and the Aider side has equivalent web access.
 
 It creates a session, streams the task in agent mode, and prints one JSON
 metadata record with session ID, run ID, actual route, bounded outcome evidence, and status; it does not save model output. Stream termination alone never counts as verified completion. External acceptance results remain separate from the agent's own completion status. If Novum pauses for tool approval, the adapter reports

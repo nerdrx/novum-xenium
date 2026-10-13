@@ -137,6 +137,8 @@ def main() -> int:
     parser.add_argument("--files-json", help="JSON array of source files in this fixture")
     parser.add_argument("--approve-task", action="store_true",
                         help="Approve at most three exact tool requests in this isolated QA workspace")
+    parser.add_argument("--allow-web-search", action="store_true",
+                        help="Enable Novum web search for a research-enabled comparison")
     parser.add_argument("--model", required=True)
     parser.add_argument("--session-cookie-env", default="ODYSSEUS_SESSION", help="Environment variable containing the app session cookie value")
     parser.add_argument("--timeout", type=float, default=600)
@@ -212,7 +214,7 @@ def main() -> int:
             "session": str(session_id),
             "mode": "agent",
             "allow_bash": "true",
-            "allow_web_search": "false",
+            "allow_web_search": "true" if args.allow_web_search else "false",
             "selected_endpoint_id": args.endpoint_id,
             "workspace": args.container_workspace,
         }
@@ -318,6 +320,7 @@ def main() -> int:
         emit(status=status,
              session_id=session_id, run_id=run_id, model=args.model, endpoint_id=args.endpoint_id,
              preset_id=args.preset_id, source_files=list(files),
+             allow_web_search=args.allow_web_search,
              seconds=round(time.monotonic() - started, 3), output_saved=False,
              stream_ended=stream_ended, actual_route=actual_route, terminal=terminal,
              verification_passed=verification_passed, approval_count=approval_count, evidence=evidence)
@@ -333,7 +336,8 @@ def main() -> int:
             except (HTTPError, URLError, OSError):
                 pass
         emit(status="timeout", session_id=session_id, run_id=run_id, model=args.model,
-             endpoint_id=args.endpoint_id, preset_id=args.preset_id, source_files=list(files), stopped_exact_run=stopped,
+             endpoint_id=args.endpoint_id, preset_id=args.preset_id, source_files=list(files),
+             allow_web_search=args.allow_web_search, stopped_exact_run=stopped,
              seconds=round(time.monotonic() - started, 3), output_saved=False,
              stream_ended=stream_ended, actual_route=actual_route, terminal=terminal,
              verification_passed=verification_passed, approval_count=approval_count, evidence=evidence)
@@ -343,7 +347,7 @@ def main() -> int:
         # environment- or account-specific details.
         emit(status="error", error=type(exc).__name__, session_id=session_id,
              run_id=run_id, model=args.model, endpoint_id=args.endpoint_id, preset_id=args.preset_id,
-             source_files=list(files),
+             source_files=list(files), allow_web_search=args.allow_web_search,
              seconds=round(time.monotonic() - started, 3), output_saved=False,
              stream_ended=stream_ended, actual_route=actual_route, terminal=terminal,
              verification_passed=verification_passed, approval_count=approval_count, evidence=evidence)

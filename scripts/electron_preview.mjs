@@ -1,0 +1,519 @@
+#!/usr/bin/env node
+/** Run the selected workspace's real Electron app under private Xvfb. */
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { constants } from 'node:fs';
+import * as fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
+
+const MAX_TIMEOUT_S = 45;
+const OUTPUT_DIR_NAME = '.odysseus-preview';
+const require = createRequire(import.meta.url);
+
+function inside(root, target) {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+function resolveFileInside(root, value, label) {
+  if (typeof value !== 'string' || !value || path.isAbsolute(value)) {
+    throw new Error(`${label} must be a relative path inside the workspace`);
+  }
+  const resolved = fs.realpathSync(path.resolve(root, value));
+  if (!inside(root, resolved) || !fs.statSync(resolved).isFile()) {
+    throw new Error(`${label} must resolve to a file inside the workspace`);
+  }
+  return resolved;
+}
+
+export function resolveWorkspaceProject(rawWorkspace, rawTestScript = '') {
+  const workspace = fs.realpathSync(rawWorkspace || process.cwd());
+  if (!fs.statSync(workspace).isDirectory()) throw new Error('workspace is not a directory');
+  const manifestPath = resolveFileInside(workspace, 'package.json', 'package.json');
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`cannot parse package.json: ${error.message}`);
+  }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error('package.json must contain an object');
+  }
+  const entry = typeof manifest.main === 'string' && manifest.main.trim()
+    ? manifest.main.trim() : 'index.js';
+  const entryPath = resolveFileInside(workspace, entry, 'Electron manifest entry');
+  const electronPath = resolveFileInside(
+    workspace, 'node_modules/electron/dist/electron', 'workspace-local Electron executable',
+  );
+  if (!(fs.statSync(electronPath).mode & 0o111)) {
+    throw new Error('workspace-local Electron executable is not executable');
+  }
+  let testScript = '';
+  if (rawTestScript) testScript = resolveFileInside(workspace, rawTestScript, 'test script');
+  return { workspace, manifestPath, manifest, entryPath, electronPath, testScript };
+}
+
+function findOnPath(name) {
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch { /* try next PATH entry */ }
+  }
+  return '';
+}
+
+function resolvePlaywright(workspace) {
+  const local = path.join(workspace, 'node_modules/playwright');
+  if (fs.existsSync(path.join(local, 'package.json'))) return fs.realpathSync(local);
+  const cli = findOnPath('playwright-mcp');
+  const bundled = cli && path.join(path.dirname(cli), 'node_modules/playwright');
+  if (bundled && fs.existsSync(path.join(bundled, 'package.json'))) return fs.realpathSync(bundled);
+  throw new Error('Playwright is unavailable; install/use an existing local or built-in Playwright package');
+}
+
+function parseArgs(argv) {
+  const out = { workspace: process.cwd(), testScript: '', timeout: 35, noSandbox: false };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--workspace' || arg === '--test-script' || arg === '--timeout') {
+      const value = argv[++i];
+      if (!value) throw new Error(`${arg} requires a value`);
+      if (arg === '--workspace') out.workspace = value;
+      else if (arg === '--test-script') out.testScript = value;
+      else out.timeout = Number(value);
+    } else if (arg === '--no-sandbox') {
+      out.noSandbox = true;
+    } else if (arg === '--help' || arg === '-h') {
+      out.help = true;
+    } else {
+      throw new Error(`unknown option: ${arg}`);
+    }
+  }
+  if (!Number.isInteger(out.timeout) || out.timeout < 15 || out.timeout > MAX_TIMEOUT_S) {
+    throw new Error(`--timeout must be an integer from 15 to ${MAX_TIMEOUT_S} seconds`);
+  }
+  return out;
+}
+
+export const ELECTRON_WORKER_SOURCE = String.raw`
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import * as fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+
+const require = createRequire(import.meta.url);
+const fail = (message) => { console.error('PREVIEW_ERROR: ' + message); process.exitCode = 1; };
+let electronProcess;
+let browser;
+let profile = '';
+let runDirectory = '';
+let outputDir = '';
+let runId = '';
+let phase = 'initializing';
+let workspace = '';
+let appEntry = '';
+let electronPath = '';
+const diagnostics = { pageErrors: [], consoleErrors: [], failedRequests: [], badResponses: [], mainStderr: [] };
+const cap = (array, value) => { if (array.length < 80) array.push(String(value).slice(0, 500)); };
+const cleanUrl = (value) => { try { const u = new URL(value); return (u.origin + u.pathname).slice(0, 300); } catch { return String(value).slice(0, 300); } };
+const safeRm = (target, base) => {
+  if (!target || !base) return;
+  try {
+    const st = fs.lstatSync(target);
+    if (st.isSymbolicLink() || !st.isDirectory()) return;
+    const real = fs.realpathSync(target);
+    if (real === base || !real.startsWith(base + path.sep)) return;
+    fs.rmSync(real, { recursive: true, force: true });
+  } catch { /* already gone */ }
+};
+
+try {
+  const config = JSON.parse(process.env.ODYSSEUS_PREVIEW_CONFIG || '{}');
+  workspace = fs.realpathSync(config.workspace);
+  const playwrightPath = config.playwrightPath;
+  const outputStat = fs.lstatSync(config.outputDir);
+  if (outputStat.isSymbolicLink() || !outputStat.isDirectory() || outputStat.uid !== process.getuid()) {
+    throw new Error('preview output must be a real directory owned by the workspace user');
+  }
+  outputDir = fs.realpathSync(config.outputDir);
+  const outputRel = path.relative(workspace, outputDir);
+  if (outputRel === '..' || outputRel.startsWith('..' + path.sep) || path.isAbsolute(outputRel)) {
+    throw new Error('preview output directory escapes the workspace');
+  }
+  appEntry = config.entryPath;
+  electronPath = config.electronPath;
+  const pw = require(playwrightPath);
+  if (!pw.chromium?.connectOverCDP) throw new Error('installed Playwright package lacks Chromium CDP support');
+
+  runId = randomUUID();
+  runDirectory = path.join(outputDir, 'run-' + runId);
+  fs.mkdirSync(runDirectory, { mode: 0o700 });
+  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'odysseus-electron-preview-' + process.getuid() + '-'));
+  const desktopPath = path.join(runDirectory, 'desktop.png');
+  const compactPath = path.join(runDirectory, 'compact.png');
+  const reportPath = path.join(runDirectory, 'report.json');
+
+  phase = 'launching Electron';
+  const args = [workspace, '--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--remote-allow-origins=*'];
+  if (config.noSandbox) args.push('--no-sandbox');
+  electronProcess = spawn(config.electronPath, args, {
+    cwd: workspace, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let electronLaunchError = null;
+  electronProcess.on('error', error => { electronLaunchError = error; cap(diagnostics.mainStderr, error.message); });
+  const collectOutput = (stream, bucket) => {
+    let pending = '';
+    stream.setEncoding('utf8').on('data', chunk => {
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() || '';
+      for (const line of lines) if (line.trim()) cap(bucket, line);
+    });
+    stream.on('end', () => { if (pending.trim()) cap(bucket, pending); });
+  };
+  if (electronProcess.stderr) collectOutput(electronProcess.stderr, diagnostics.mainStderr);
+  const devtoolsFile = path.join(profile, 'DevToolsActivePort');
+  const deadline = Date.now() + Math.max(10000, (config.timeout - 10) * 1000);
+  let endpoint = '';
+  while (Date.now() < deadline) {
+    if (electronLaunchError) throw new Error('could not start workspace Electron: ' + electronLaunchError.message);
+    if (electronProcess.exitCode !== null) throw new Error('Electron exited before opening its private DevTools endpoint (exit ' + electronProcess.exitCode + ')');
+    try {
+      const port = Number(fs.readFileSync(devtoolsFile, 'utf8').split(/\r?\n/)[0]);
+      if (Number.isInteger(port) && port > 0 && port < 65536) { endpoint = 'http://127.0.0.1:' + port; break; }
+    } catch { /* Electron has not written its fresh profile endpoint yet */ }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (!endpoint) throw new Error('Electron did not create a loopback DevTools endpoint before timeout');
+  phase = 'connecting Playwright';
+  browser = await pw.chromium.connectOverCDP(endpoint, { timeout: Math.max(5000, (config.timeout - 12) * 1000) });
+  const context = browser.contexts()[0];
+  if (!context) throw new Error('Electron DevTools endpoint exposed no browser context');
+  let page = context.pages().find(candidate => !candidate.url().startsWith('devtools:'));
+  if (!page) page = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Electron opened no renderer page')), Math.max(5000, (config.timeout - 15) * 1000));
+    context.once('page', target => { clearTimeout(timer); resolve(target); });
+  });
+  const attachPageDiagnostics = target => {
+    target.on('pageerror', error => cap(diagnostics.pageErrors, error.message));
+    target.on('console', message => {
+      if (message.type() === 'error') cap(diagnostics.consoleErrors, message.text());
+    });
+    target.on('requestfailed', request => cap(
+      diagnostics.failedRequests, cleanUrl(request.url()) + ': ' + (request.failure()?.errorText || 'failed'),
+    ));
+    target.on('response', response => {
+      if (response.status() >= 400) cap(diagnostics.badResponses, response.status() + ' ' + cleanUrl(response.url()));
+    });
+  };
+  for (const openPage of context.pages()) attachPageDiagnostics(openPage);
+  phase = 'inspecting rendered page';
+  // Revisit the initial document only after diagnostics are attached.
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.max(5000, (config.timeout - 15) * 1000) }).catch(() => {});
+  await page.waitForLoadState('domcontentloaded', { timeout: Math.max(5000, (config.timeout - 15) * 1000) }).catch(() => {});
+  await page.waitForTimeout(250);
+  const inspect = async (width, height, screenshot) => {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(150);
+    const baseline = await page.evaluate(() => {
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      const controls = [...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')]
+        .filter(visible).slice(0, 60).map(el => {
+          const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
+          return {
+            tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '',
+            label: (el.getAttribute('aria-label') || (el.labels ? [...el.labels].map(label => label.innerText.trim()).filter(Boolean).join(' ') : '') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().slice(0, 120),
+            disabled: !!el.disabled,
+            rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+            color: style.color, background: style.backgroundColor, fontSize: style.fontSize,
+            borderRadius: style.borderRadius, boxShadow: style.boxShadow,
+          };
+        });
+      const htmlStyle = getComputedStyle(document.documentElement);
+      const bodyStyle = getComputedStyle(document.body);
+      return {
+        title: document.title, url: location.href,
+        viewport: { width: innerWidth, height: innerHeight },
+        document: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight,
+          horizontalOverflow: document.documentElement.scrollWidth > innerWidth },
+        html: { background: htmlStyle.backgroundColor, backgroundImage: htmlStyle.backgroundImage },
+        body: { background: bodyStyle.backgroundColor, backgroundImage: bodyStyle.backgroundImage,
+          color: bodyStyle.color, fontFamily: bodyStyle.fontFamily,
+          text: (document.body?.innerText || '').slice(0, 1800) },
+        controls,
+      };
+    });
+    await page.screenshot({ path: screenshot, fullPage: true, animations: 'disabled', timeout: 10000 });
+    return { ...baseline, screenshot };
+  };
+  const desktop = await inspect(1280, 800, desktopPath);
+  const compact = await inspect(800, 600, compactPath);
+
+  let test = { configured: false, status: 'not exercised; no workspace test script supplied' };
+  if (config.testScript) {
+    const mod = await import(pathToFileURL(config.testScript).href);
+    const run = typeof mod.default === 'function' ? mod.default : mod.run;
+    if (typeof run !== 'function') throw new Error('test script must export a default function or named run function');
+    const value = await run({
+      app: { pid: electronProcess.pid, executablePath: config.electronPath, exitCode: electronProcess.exitCode },
+      page, context, artifacts: { outputDir, desktopPath, compactPath },
+    });
+    test = { configured: true, status: 'completed', result: value === undefined ? null : value };
+  }
+
+  const runtimeIssues = diagnostics.pageErrors.length || diagnostics.consoleErrors.length ||
+    diagnostics.failedRequests.length || diagnostics.badResponses.length ||
+    electronProcess.exitCode !== null;
+  const report = {
+    status: !page.isClosed() && !runtimeIssues ? 'rendered; behavior unverified' : 'runtime issues observed',
+    runId, workspace, appEntry: config.entryPath, electron: config.electronPath,
+    rendererConnected: !page.isClosed(),
+    viewportMode: 'Playwright renderer viewport emulation; native BrowserWindow bounds/resize unverified',
+    desktop, compact, test, diagnostics, electronPid: electronProcess.pid, electronExitCode: electronProcess.exitCode,
+    sandbox: config.noSandbox ? 'disabled for this explicit isolated test only' : 'default Electron/Chromium settings',
+  };
+  fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
+  const summary = {
+    status: !page.isClosed() && !runtimeIssues ? 'rendered; behavior unverified' : 'runtime issues observed',
+    appEntry,
+    rendererConnected: !page.isClosed(),
+    viewports: [desktop.viewport, compact.viewport],
+    viewportMode: 'emulated renderer viewport; native BrowserWindow size unverified',
+    errors: {
+      page: diagnostics.pageErrors.length,
+      console: diagnostics.consoleErrors.length,
+      requests: diagnostics.failedRequests.length,
+      responses: diagnostics.badResponses.length,
+      mainStderr: diagnostics.mainStderr.length,
+      examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors, ...diagnostics.mainStderr].slice(0, 3).map(value => String(value).slice(0, 180)),
+    },
+    behavior: test.configured ? test.status : 'unverified; no workspace test script supplied',
+    test: test.status,
+    screenshots: [desktopPath, compactPath],
+    report: reportPath,
+  };
+  console.log('PREVIEW_RESULT: ' + JSON.stringify(summary));
+  if (page.isClosed() || runtimeIssues) process.exitCode = 1;
+} catch (error) {
+  fail(error?.message || error);
+  const reportPath = runDirectory ? path.join(runDirectory, 'report.json') : '';
+  const failureReport = {
+    status: 'failed', behavior: 'unverified; preview failed before workspace tests',
+    runId, workspace, appEntry, electron: electronPath, phase,
+    error: String(error?.stack || error).slice(0, 8000), diagnostics,
+  };
+  if (reportPath) {
+    try { fs.writeFileSync(reportPath, JSON.stringify(failureReport, null, 2), { mode: 0o600 }); } catch {}
+  }
+  console.log('PREVIEW_RESULT: ' + JSON.stringify({
+    status: 'failed', phase, appEntry,
+    errors: {
+      page: diagnostics.pageErrors.length, console: diagnostics.consoleErrors.length,
+      stderr: diagnostics.mainStderr.length,
+      examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors, ...diagnostics.mainStderr].slice(0, 3).map(value => String(value).slice(0, 180)),
+      mainStderrExamples: diagnostics.mainStderr.slice(0, 3).map(value => String(value).slice(0, 180)),
+    },
+    report: reportPath || null,
+  }));
+} finally {
+  if (browser) { try { await browser.close(); } catch { /* close CDP connection */ } }
+  if (electronProcess && electronProcess.exitCode === null) {
+    electronProcess.kill('SIGTERM');
+    await Promise.race([new Promise(resolve => electronProcess.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 1500))]);
+    if (electronProcess.exitCode === null) {
+      electronProcess.kill('SIGKILL');
+      await Promise.race([new Promise(resolve => electronProcess.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 1000))]);
+    }
+  }
+  if (profile) safeRm(profile, os.tmpdir());
+}
+`;
+
+async function waitForExit(child) {
+  return await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({ code: code ?? (signal ? 128 : 1), signal }));
+  });
+}
+
+function procInfo(pid) {
+  try {
+    const stat = fs.readFileSync(path.join('/proc', String(pid), 'stat'), 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    return { pid: Number(pid), ppid: Number(fields[1]), startTime: fields[19] };
+  } catch { return null; }
+}
+
+function ownedDescendants(rootPid, expectedStartTime) {
+  const root = procInfo(rootPid);
+  if (!root || !expectedStartTime || root.startTime !== expectedStartTime) return [];
+  const parents = new Map();
+  for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+    try {
+      const stat = fs.readFileSync(path.join('/proc', entry.name, 'stat'), 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      const pid = Number(entry.name), ppid = Number(fields[1]), startTime = fields[19];
+      if (!parents.has(ppid)) parents.set(ppid, []);
+      parents.get(ppid).push({ pid, startTime });
+    } catch { /* process exited while enumerating */ }
+  }
+  const found = [];
+  const visit = processInfo => {
+    for (const child of parents.get(processInfo.pid) || []) visit(child);
+    found.push(processInfo);
+  };
+  visit(root);
+  return found;
+}
+
+async function killOwnedTree(pid, expectedStartTime, graceMs = 1200) {
+  if (!pid || process.platform !== 'linux') return;
+  const owned = new Map();
+  const remember = entry => owned.set(entry.pid + ':' + entry.startTime, entry);
+  for (const entry of ownedDescendants(pid, expectedStartTime)) remember(entry);
+  const signalSet = signal => {
+    for (const entry of owned.values()) {
+      if (procInfo(entry.pid)?.startTime !== entry.startTime) continue;
+      try { process.kill(entry.pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+  };
+  signalSet('SIGTERM');
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    for (const child of ownedDescendants(pid, expectedStartTime)) remember(child);
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  // Keep the initial PID set: descendants may be reparented if the helper exits
+  // during timeout cleanup, but are still exactly those spawned by this run.
+  signalSet('SIGKILL');
+}
+
+export async function runOwnedCommand(command, args, { timeoutMs, env, stdio = 'inherit' } = {}) {
+  // Stay in the invoking Bash process group: its hard cancellation then kills
+  // this helper and every non-detached workspace/Xvfb/Electron descendant.
+  const child = spawn(command, args, { stdio, env });
+  const expectedStartTime = child.pid ? procInfo(child.pid)?.startTime : undefined;
+  let timedOut = false;
+  let interrupted = false;
+  let timer;
+  const onSignal = () => { interrupted = true; void killOwnedTree(child.pid, expectedStartTime); };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  const timeout = new Promise(resolve => {
+    timer = setTimeout(async () => {
+      timedOut = true;
+      await killOwnedTree(child.pid, expectedStartTime);
+      resolve({ code: 124, signal: 'SIGKILL' });
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    const result = await Promise.race([waitForExit(child), timeout]);
+    clearTimeout(timer);
+    if (timedOut || interrupted) await killOwnedTree(child.pid, expectedStartTime, 0);
+    return { ...result, code: timedOut ? 124 : result.code, timedOut, interrupted };
+  } finally {
+    clearTimeout(timer);
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  }
+}
+
+function usage() {
+  console.log(`Usage: node /app/scripts/electron_preview.mjs [--workspace DIR] [--test-script RELATIVE.mjs] [--timeout 15..45] [--no-sandbox]\n\nLaunches the workspace-local Electron app under Xvfb, captures rendered DOM/styles/screenshots at 1280x800 and 800x600, and optionally runs a workspace test module. Outputs are kept in .odysseus-preview/. --no-sandbox affects only this isolated test run.`);
+}
+
+async function main() {
+  let options;
+  try { options = parseArgs(process.argv.slice(2)); }
+  catch (error) { console.error(`PREVIEW_ERROR: ${error.message}`); process.exitCode = 2; return; }
+  if (options.help) { usage(); return; }
+  if (process.platform !== 'linux') {
+    console.error('PREVIEW_ERROR: this isolated Electron workflow currently requires Linux and xvfb-run');
+    process.exitCode = 2; return;
+  }
+  let project;
+  try { project = resolveWorkspaceProject(options.workspace, options.testScript); }
+  catch (error) { console.error(`PREVIEW_ERROR: ${error.message}`); process.exitCode = 2; return; }
+  const stat = fs.statSync(project.workspace);
+  if (stat.uid === 0) {
+    console.error('PREVIEW_ERROR: refusing to launch project code from a root-owned workspace');
+    process.exitCode = 2; return;
+  }
+  const xvfb = findOnPath('xvfb-run');
+  if (!xvfb) { console.error('PREVIEW_ERROR: xvfb-run is not installed'); process.exitCode = 2; return; }
+  const node = process.execPath;
+  const setpriv = findOnPath('setpriv');
+  let command = node;
+  let args = [process.argv[1], '--worker'];
+  if (process.getuid?.() === 0) {
+    if (!setpriv) { console.error('PREVIEW_ERROR: setpriv is required to drop root privileges'); process.exitCode = 2; return; }
+    command = setpriv;
+    args = [`--reuid=${stat.uid}`, `--regid=${stat.gid}`, '--init-groups', '--', node, process.argv[1], '--worker'];
+  } else if (process.getuid?.() !== stat.uid) {
+    console.error('PREVIEW_ERROR: run this helper as the workspace owner or as root with setpriv installed');
+    process.exitCode = 2; return;
+  }
+  let playwrightPath;
+  try { playwrightPath = resolvePlaywright(project.workspace); }
+  catch (error) { console.error(`PREVIEW_ERROR: ${error.message}`); process.exitCode = 2; return; }
+  const outputDir = path.join(project.workspace, OUTPUT_DIR_NAME);
+  const config = {
+    ...project, playwrightPath, outputDir,
+    xvfbPath: xvfb,
+    noSandbox: options.noSandbox, timeout: options.timeout,
+  };
+  const env = {
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    HOME: project.workspace,
+    LANG: 'C.UTF-8',
+    ODYSSEUS_PREVIEW_CONFIG: JSON.stringify(config),
+  };
+  const worker = await runOwnedCommand(command, args, { timeoutMs: options.timeout * 1000, env });
+  if (worker.timedOut) {
+    console.error(`PREVIEW_TIMEOUT: stopped the owned Electron/Xvfb process group after ${options.timeout}s`);
+    process.exitCode = 124;
+  } else if (worker.interrupted) {
+    console.error('PREVIEW_CANCELLED: stopped the owned Electron/Xvfb process group');
+    process.exitCode = 130;
+  } else {
+    process.exitCode = worker.code;
+  }
+}
+
+if (process.argv[2] === '--worker') {
+  const config = JSON.parse(process.env.ODYSSEUS_PREVIEW_CONFIG || '{}');
+  try {
+    fs.mkdirSync(config.outputDir, { mode: 0o700 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+  const st = fs.lstatSync(config.outputDir);
+  if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid()) throw new Error('unsafe preview output directory');
+  const workspace = fs.realpathSync(config.workspace);
+  const outputDir = fs.realpathSync(config.outputDir);
+  const outputRel = path.relative(workspace, outputDir);
+  if (outputRel === '..' || outputRel.startsWith('..' + path.sep) || path.isAbsolute(outputRel)) {
+    throw new Error('preview output directory escapes the workspace');
+  }
+  const child = spawn(config.xvfbPath, ['-a', '--server-args=-screen 0 1280x800x24', process.execPath, '--input-type=module', '-e', ELECTRON_WORKER_SOURCE], {
+    stdio: 'inherit', env: { ...process.env, ODYSSEUS_PREVIEW_CONFIG: JSON.stringify(config) },
+  });
+  const result = await waitForExit(child);
+  process.exitCode = result.code;
+} else if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

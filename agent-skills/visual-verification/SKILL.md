@@ -1,7 +1,7 @@
 ---
 name: visual-verification
 description: Verify GUI, UI, frontend, website, CSS, and theme changes in a real rendered interface, including behavior and accessibility.
-version: 1.0.4
+version: 1.0.5
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -37,6 +37,31 @@ Keep container testing separate from production app configuration. Do not weaken
 Record the real launch stderr and verify the owned process has a rendered window or a working automation target. A printed `App started`, an exit code hidden by `|| true`, or an unsuccessful background launch is not evidence. Keep failure output intact, consult the matching framework documentation, and retest the same path after a repair. Preserve existing IPC handlers when changing one native operation; run the previously working checks again after replacing a main-process file.
 
 Reference: [Electron command-line switches](https://www.electronjs.org/docs/latest/api/command-line-switches).
+
+For a Linux Electron workspace in this container, use the workspace-bound helper:
+`node /app/scripts/electron_preview.mjs --workspace "$PWD"`. It requires a
+workspace-local `node_modules/electron`, runs the real manifest entry under a
+private Xvfb display and fresh profile, and saves desktop/compact screenshots,
+DOM/style measurements, and runtime diagnostics in a unique run directory under
+`.odysseus-preview/`. Its fresh browser profile lives in a private OS temporary
+directory and is removed after a normal run.
+The two sizes use renderer viewport emulation; actual native BrowserWindow bounds
+remain unverified.
+Set `--test-script relative/path.mjs` only for an existing workspace test module
+that exports a default or named `run` function; it receives Playwright's
+`{ app: { pid, executablePath, exitCode }, page, context, artifacts }`. It can
+exercise renderer interactions and any IPC bridge exposed to the renderer; it
+does not receive Electron main-process evaluation access. A missing test script
+means behavior was not exercised. Use `--timeout 15..45` (default 35) to stay
+within the Bash tool's cancellation window. Electron, Xvfb, and the helper stay
+in that invocation's owned process group, while an internal timeout reaps only
+its child tree. A hard cancellation may leave only the private temporary profile
+for OS cleanup. If observed sandbox startup errors require it, retry with
+`--no-sandbox` for this isolated test only; the helper uses a private display and
+profile and does not change app defaults. It refuses root-owned workspaces and
+confines artifact output and test-script paths to the selected workspace.
+Inspect the report and screenshots; if you cannot view the images, say visual
+inspection remains unverified.
 
 ## Verification
 - No blocking parse, page, startup, or request errors remain in the tested flow.

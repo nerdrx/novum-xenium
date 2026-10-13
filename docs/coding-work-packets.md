@@ -31,4 +31,9 @@ the full skill catalog is replaced by on-demand discovery in packet context.
 
 A run-scoped status card shows the objective, stage, test status, and review status.
 Reconnect replay can restore this card; saved history does not yet persist it.
-Automatic milestone scheduling and cross-run packet continuation remain work.
+Settings → AI → Work in checked coding steps enables automatic packet selection
+for substantive coding tasks. It defaults off, alongside the existing experience.
+The agent must retain the checklist item names, finish each slice with a passing
+check, and select a new packet for the next slice. A checklist cannot skip an
+unverified item merely by marking it complete. Cross-run packet continuation
+remains work; a new run must establish fresh evidence.

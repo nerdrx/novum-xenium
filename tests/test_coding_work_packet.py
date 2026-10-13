@@ -113,3 +113,29 @@ def test_fresh_packet_context_preserves_instructions_and_native_pairs():
     assert messages == instructions + old + [marker] + calls
     assert fresh_packet_context(messages, "missing") == messages
     assert marker["metadata"]["trusted"] is False
+
+
+def test_checked_workflow_requires_each_slice_and_rejects_checklist_shortcuts(packet):
+    from src.coding_work_packet import CodingWorkTracker
+    tracker = CodingWorkTracker(enabled=True)
+    first = [{"content": "Fix refresh", "status": "in_progress"},
+             {"content": "Fix logout", "status": "pending"}]
+    result = {"exit_code": 0, "todos": first, "work_packet": packet.to_dict()}
+    assert tracker.pending and tracker.blocks("write_file", "{}")
+    assert tracker.blocks("bash", "anything")
+    assert tracker.observe("todowrite", "{}", result)
+    assert tracker.blocks("todowrite", {"todos": [{"content": "Fix refresh", "status": "completed"}]})
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    assert tracker.pending  # One passed slice is not the entire task.
+    assert tracker.blocks("write_file", "{}")
+    second = [dict(first[0], status="completed"), dict(first[1], status="in_progress")]
+    second_packet = dict(packet.to_dict(), objective="Fix logout")
+    assert not tracker.blocks("todowrite", {"todos": second, "work_packet": second_packet})
+    assert tracker.observe("todowrite", "{}", {"exit_code": 0, "todos": second, "work_packet": second_packet})
+    assert tracker.state.stage == "reproduce"
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    assert not tracker.pending

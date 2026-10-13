@@ -4527,12 +4527,19 @@ async def stream_agent_loop(
         disabled_tools=disabled_tools, plan_mode=plan_mode, guide_mode=guide_only,
     )
     from src.coding_work_packet import CodingWorkTracker, fresh_packet_context
-    _coding_work = CodingWorkTracker()
+    _coding_work = CodingWorkTracker(enabled=bool(
+        get_setting("agent_milestone_workflow", False)
+        and _use_coding_tools(_retrieval_query or _last_user, workspace)
+        and workspace and not plan_mode and not guide_only
+        and not incognito and not delegated_credential and not approved_plan
+        and "todowrite" not in disabled_tools
+        and (relevant_tools is None or "todowrite" in relevant_tools)
+    ))
     _coding_work_nudges = 0
     _coding_packet_boundary = None
     from src.milestone_checkpoint import MilestoneCheckpoint
     _milestone_checkpoint = MilestoneCheckpoint(bool(
-        _coding_grounding.required and workspace and owner and session_id
+        _coding_grounding.required and workspace and owner and session_id and not _coding_work.enabled
         and not approved_plan and not incognito and not delegated_credential
         and "todowrite" not in disabled_tools
         and (relevant_tools is None or "todowrite" in relevant_tools)
@@ -5850,6 +5857,10 @@ async def stream_agent_loop(
                 _prepend_agent_directive(route_messages, _milestone_checkpoint.directive)
                 if route_tools is not None:
                     route_tools.add("todowrite")
+        if _coding_work.enabled:
+            _prepend_agent_directive(route_messages, _coding_work.instruction)
+            if route_tools is not None:
+                route_tools.add("todowrite")
         if guide_only:
             _prepend_agent_directive(route_messages, GUIDE_ONLY_DIRECTIVE)
         for skill_name, reference in _skill_reference_messages_by_name.items():
@@ -8084,6 +8095,7 @@ async def stream_agent_loop(
 
             _milestone_checkpoint.observe(block.tool_type, result)
             if _coding_work.observe(block.tool_type, block.content, result):
+                _coding_work_nudges = 0
                 packet_event = _coding_work.event(round_num)
                 yield f'data: {json.dumps(packet_event)}\n\n'
                 packet_message = untrusted_context_message(

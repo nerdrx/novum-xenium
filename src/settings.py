@@ -115,6 +115,7 @@ DEFAULT_SETTINGS = {
     "agent_max_tool_calls": 0,
     "agent_coding_grounding": True,  # read sources before substantial coding changes
     "agent_verifier_subagent": False,  # bounded independent same-model completion review
+    "agent_milestone_workflow": False,  # opt into small changes with a real check after each
     "agent_max_rounds": 20,  # per-message step cap; 0 explicitly opts into unlimited steps
     # Soft input-token budget for the agent loop. The DEFAULT value (6000) is the
     # "auto" sentinel: it means "scale the budget to the model's context window"

@@ -1643,6 +1643,7 @@ async function initAgentSettings() {
   var supInput = el('set-agentSupervisorLadder');
   var groundingInput = el('set-agentCodingGrounding');
   var verifierInput = el('set-agentVerifierSubagent');
+  var milestoneInput = el('set-agentMilestoneWorkflow');
   var msg = el('set-agentMsg');
   if (!toolsInput) return;
 
@@ -1663,6 +1664,7 @@ async function initAgentSettings() {
     if (supInput) supInput.checked = !!settings.agent_supervisor_ladder;
     if (groundingInput) groundingInput.checked = settings.agent_coding_grounding !== false;
     if (verifierInput) verifierInput.checked = !!settings.agent_verifier_subagent;
+    if (milestoneInput) milestoneInput.checked = !!settings.agent_milestone_workflow;
   } catch (e) {}
 
   // Clamp + coerce a raw input to an int in [lo, hi]; falls back to `dflt`
@@ -1683,6 +1685,7 @@ async function initAgentSettings() {
     if (supInput) payload.agent_supervisor_ladder = !!supInput.checked;
     if (groundingInput) payload.agent_coding_grounding = !!groundingInput.checked;
     if (verifierInput) payload.agent_verifier_subagent = !!verifierInput.checked;
+    if (milestoneInput) payload.agent_milestone_workflow = !!milestoneInput.checked;
     try {
       await _postSettings(payload);
       msg.textContent = (tools > 0 ? 'Limit: ' + tools + ' tool calls' : 'Unlimited tool calls') +
@@ -1699,6 +1702,7 @@ async function initAgentSettings() {
   if (supInput) supInput.addEventListener('change', save);
   if (groundingInput) groundingInput.addEventListener('change', save);
   if (verifierInput) verifierInput.addEventListener('change', save);
+  if (milestoneInput) milestoneInput.addEventListener('change', save);
   var cur = parseInt(toolsInput.value, 10) || 0;
   var curR = roundsInput ? parseRounds(roundsInput.value, 20) : null;
   msg.textContent = (cur > 0 ? 'Limit: ' + cur + ' tool calls' : 'Unlimited tool calls') +

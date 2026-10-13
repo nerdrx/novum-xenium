@@ -162,8 +162,34 @@ class CodingWorkState:
 class CodingWorkTracker:
     """Run-local packet evidence. Tool proposals never count as execution."""
 
-    def __init__(self):
+    def __init__(self, enabled=False):
+        self.enabled = bool(enabled)
         self.state = None
+        self.milestones = ()
+        self.completed = set()
+        self.current_milestone = None
+
+    def valid_todo_update(self, args):
+        if not self.enabled:
+            return True
+        if not isinstance(args, dict) or not isinstance(args.get("todos"), list):
+            return False
+        todos = args["todos"]
+        names = [item.get("content") for item in todos if isinstance(item, dict)]
+        if (len(names) != len(todos) or not names or any(not isinstance(n, str) or not n for n in names)
+                or len(set(names)) != len(names)):
+            return False
+        if self.milestones and tuple(names) != self.milestones:
+            return False
+        if any(item.get("status") == "completed" and item["content"] not in self.completed for item in todos):
+            return False
+        active = [item["content"] for item in todos if item.get("status") == "in_progress"]
+        if "work_packet" in args:
+            if len(active) != 1 or active[0] in self.completed:
+                return False
+            if self.current_milestone and self.state and self.state.stage != "done" and active[0] != self.current_milestone:
+                return False
+        return True
 
     def observe(self, tool, content, result):
         import json
@@ -171,12 +197,17 @@ class CodingWorkTracker:
             if tool == "todowrite" and isinstance(result, dict) and "work_packet" in result:
                 if _executed_result(result) != 0:
                     return False
+                if not self.valid_todo_update(result):
+                    return False
                 packet = CodingWorkPacket(**result["work_packet"])
                 if self.state and self.state.packet == packet:
                     return False  # Repeated checklist writes cannot erase evidence.
                 if self.state and self.state.stage != "done":
                     return False  # Finish the current slice before replacing it.
                 self.state = CodingWorkState(packet)
+                if self.enabled:
+                    self.milestones = self.milestones or tuple(item["content"] for item in result["todos"])
+                    self.current_milestone = next(item["content"] for item in result["todos"] if item["status"] == "in_progress")
                 return True
             if not self.state:
                 return False
@@ -204,18 +235,35 @@ class CodingWorkTracker:
                     self.state.stage = "verify"
             elif tool in _EDIT_TOOLS:
                 self.state.record_edit(tool, result)
+            if self.enabled and self.current_milestone:
+                if self.state.stage == "done":
+                    self.completed.add(self.current_milestone)
+                else:
+                    self.completed.discard(self.current_milestone)
             return self.state.to_dict() != before
         except (ValueError, TypeError):
+            if self.enabled and self.current_milestone and self.state.stage != "done":
+                self.completed.discard(self.current_milestone)
             return bool(self.state and "before" in locals() and self.state.to_dict() != before)
 
     @property
     def pending(self):
-        return self.state is not None and self.state.stage != "done"
+        return ((self.enabled and (not self.milestones or set(self.milestones) != self.completed))
+                or (self.state is not None and self.state.stage != "done"))
 
     @property
     def instruction(self):
-        if not self.state:
-            return ""
+        if not self.state or (self.enabled and self.state.stage == "done" and self.pending):
+            return (
+                "Work in checked coding steps. Inspect the project using read tools, then call todowrite "
+                "with small implementation slices (not separate planning or research chores). "
+                "Keep checklist item names and order stable. Mark exactly one in_progress and attach "
+                "work_packet with objective, files, reproduce_command, acceptance_command, and acceptance_condition. "
+                "Use an existing baseline check, then edit and run the acceptance check. "
+                "Only mark a slice completed after its real acceptance command passes. "
+                "Continue with a new packet for the next pending slice; do not ask for approval to continue. "
+                "This workflow grants no extra permissions."
+            ) if self.enabled else ""
         return (
             "The current coding slice is at stage " + self.state.stage + ". "
             "Execute the recorded reproduction command before editing. Use file-edit tools, "
@@ -226,17 +274,27 @@ class CodingWorkTracker:
 
     def blocks(self, tool, content):
         import json
-        if self.pending and tool == "todowrite":
+        if self.enabled and tool == "todowrite":
+            try:
+                args = json.loads(content) if isinstance(content, str) else content
+                if not self.valid_todo_update(args):
+                    return True
+            except (TypeError, ValueError):
+                return True
+        if self.state and self.state.stage != "done" and tool == "todowrite":
             try:
                 args = json.loads(content) if isinstance(content, str) else content
                 if isinstance(args, dict) and "work_packet" in args:
                     return CodingWorkPacket(**args["work_packet"]) != self.state.packet
             except (TypeError, ValueError):
                 return True
-        if not self.state or self.state.stage != "reproduce":
+        needs_packet = self.enabled and (not self.state or (self.state.stage == "done" and self.pending))
+        if not needs_packet and (not self.state or self.state.stage != "reproduce"):
             return False
         from src.tool_capabilities import ToolEffect, capabilities_for_action
         if tool == "bash":
+            if needs_packet:
+                return True
             command = content
             try:
                 if isinstance(command, str) and command.lstrip().startswith("{"):

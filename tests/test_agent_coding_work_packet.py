@@ -6,6 +6,7 @@ import pytest
 
 import src.agent_loop as al
 from src.coding_grounding import CodingGrounding
+from src.settings import DEFAULT_SETTINGS
 from src.agent_tools import coding_tools
 from src.tool_approval_scopes import TASK_APPROVAL_DECISION
 from src.tool_approvals import ToolApprovalStore
@@ -144,3 +145,132 @@ def test_failed_acceptance_cannot_mark_packet_done_or_finish_as_verified(monkeyp
         event.get("delta", "") for event in events
     )
     assert [tool for tool, _content in executed] == ["todowrite", "todowrite", "bash", "write_file", "bash"]
+
+
+def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_context(monkeypatch, tmp_path):
+    _patch_common(monkeypatch)
+    monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
+    monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: True if key == "agent_milestone_workflow" else default)
+
+    class GroundedCodingTask(CodingGrounding):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.evidence.add("read_file")
+
+    monkeypatch.setattr("src.coding_grounding.CodingGrounding", GroundedCodingTask)
+    milestones = ["Fix refresh behavior", "Handle expired refresh tokens"]
+    packet_a = _packet()
+    packet_b = {
+        **_packet(), "objective": "Handle expired refresh tokens",
+        "reproduce_command": "pytest -q tests/test_auth.py::test_expired_refresh",
+        "acceptance_command": "pytest -q tests/test_auth.py -k expired",
+        "acceptance_condition": "Expired tokens fail safely",
+    }
+    todos_a = [
+        {"content": milestones[0], "status": "in_progress"},
+        {"content": milestones[1], "status": "pending"},
+    ]
+    todos_b = [
+        {"content": milestones[0], "status": "completed"},
+        {"content": milestones[1], "status": "in_progress"},
+    ]
+    actions = [
+        ("todowrite", {"todos": todos_a, "work_packet": packet_a}),
+        ("bash", {"command": packet_a["reproduce_command"]}),
+        ("write_file", {"path": "src/auth.py", "content": "slice one"}),
+        ("bash", {"command": packet_a["acceptance_command"]}),
+        # A premature final answer must be held while the second milestone is pending.
+        ("final", {}),
+        ("todowrite", {"todos": todos_b, "work_packet": packet_b}),
+        ("bash", {"command": packet_b["reproduce_command"]}),
+        ("write_file", {"path": "src/auth.py", "content": "slice two"}),
+        ("bash", {"command": packet_b["acceptance_command"]}),
+        ("final", {}),
+    ]
+    monkeypatch.setattr(coding_tools, "read_todos", lambda _ctx: [])
+    executed, requests = [], []
+    sealed = json.dumps(actions[0][1])
+    approvals = ToolApprovalStore()
+    pending = approvals.create(
+        owner="alice", session_id="coding-slices-test", origin_run_id="slice-origin",
+        tool_name="todowrite", content=sealed, workspace=str(tmp_path),
+        selected_tools={"todowrite", "bash", "write_file"},
+        external_untrusted_context_seen=True,
+        capabilities=capabilities_for_action("todowrite", sealed),
+    )
+    grant = approvals.consume(
+        pending.approval_id, decision=TASK_APPROVAL_DECISION,
+        owner="alice", session_id="coding-slices-test",
+    )
+    assert grant is not None
+
+    async def execute(block, *args, **kwargs):
+        executed.append((block.tool_type, block.content))
+        if block.tool_type == "todowrite":
+            data = json.loads(block.content)
+            return block.tool_type, {"exit_code": 0, "output": "saved", **data}
+        if block.tool_type == "bash":
+            command = block.content
+            if command in {packet_a["reproduce_command"], packet_b["reproduce_command"]}:
+                label = "first slice baseline failure" if command == packet_a["reproduce_command"] else "second slice baseline failure"
+                return block.tool_type, {"exit_code": 1, "output": label}
+            assert command in {packet_a["acceptance_command"], packet_b["acceptance_command"]}
+            return block.tool_type, {"exit_code": 0, "output": "acceptance passed"}
+        if block.tool_type == "write_file":
+            return block.tool_type, {"exit_code": 0, "output": "saved src/auth.py"}
+        raise AssertionError(f"Unexpected tool: {block.tool_type}")
+
+    monkeypatch.setattr(al, "execute_tool_block", execute)
+    turn = 0
+
+    async def stream(candidates, messages, **kwargs):
+        nonlocal turn
+        turn += 1
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        requests.append(request)
+        if turn > len(actions):
+            kind, args = "final", {}
+        else:
+            kind, args = actions[turn - 1]
+        if kind == "final":
+            text = "First slice is done." if turn == 5 else "Both coding slices are complete."
+            yield "data: " + json.dumps({"delta": text}) + "\n\n"
+        else:
+            name = kind
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
+                "id": f"slice-{turn}", "name": name, "arguments": json.dumps(args),
+            }]}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "stream_llm_with_fallback", stream)
+    events = _types(_collect(al.stream_agent_loop(
+        "http://x/v1", "gpt-4o",
+        [{"role": "user", "content": "Preserve keyboard support in src/auth.py"},
+         {"role": "assistant", "content": "obsolete implementation chatter"},
+         {"role": "user", "content": "Implement the auth module refresh behavior in src/auth.py in two small changes and verify each"}],
+        workspace=str(tmp_path), owner="alice", session_id="coding-slices-test",
+        approval_mode="auto", exact_approval=grant, server_run_id="slice-resume",
+        relevant_tools={"todowrite", "bash", "write_file"}, max_rounds=20,
+    )))
+
+    packet_events = [event for event in events if event.get("type") == "coding_work_packet"]
+    assert [event["stage"] for event in packet_events] == [
+        "reproduce", "edit", "verify", "done", "reproduce", "edit", "verify", "done",
+    ], (packet_events, executed, " ".join(event.get("delta", "") for event in events))
+    assert [event["packet"]["objective"] for event in packet_events if event["stage"] == "done"] == [
+        packet_a["objective"], packet_b["objective"],
+    ]
+    deltas = " ".join(event.get("delta", "") for event in events)
+    assert "First slice is done." not in deltas
+    assert "Both coding slices are complete." in deltas
+    assert DEFAULT_SETTINGS["agent_milestone_workflow"] is False
+
+    # The second reproduction begins a fresh packet context: the original user
+    # request remains, while prior model chatter and the previous packet's goal do not.
+    second_packet_request = requests[7]
+    request_text = json.dumps(second_packet_request, ensure_ascii=False)
+    assert "Preserve keyboard support" in request_text
+    assert "obsolete implementation chatter" not in request_text
+    assert packet_a["acceptance_condition"] not in request_text
+    assert "first slice baseline failure" not in request_text

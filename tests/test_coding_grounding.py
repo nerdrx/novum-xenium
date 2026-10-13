@@ -502,3 +502,34 @@ def test_milestone_notes_available_during_research_without_unlocking_writes():
     disabled = CodingGrounding("Build a Python CLI tool", disabled_tools={"todowrite"})
     assert "todowrite" not in disabled.phase_tools
     assert not disabled.allows_tool("todowrite")
+
+
+def test_behavior_only_repair_requires_verification_but_keeps_design_candidate():
+    from src.tool_schemas import FUNCTION_TOOL_SCHEMAS
+    gate = CodingGrounding("Repair this existing Electron GUI. Do not rebuild, install, publish, or change styling.")
+    gate.set_skill_candidates(["ui-design", "visual-verification", "custom-repair"])
+    gate.observe("read_file", {"output": "Project documentation", "exit_code": 0}, "README.md")
+    assert gate.pending_required_skill_names == ["visual-verification"]
+    assert gate.skill_candidates == {"ui-design", "visual-verification", "custom-repair"}
+    focused = gate.constrain_skill_view_schemas(FUNCTION_TOOL_SCHEMAS)
+    assert focused[0]["function"]["parameters"]["properties"]["name"]["enum"] == ["visual-verification"]
+    assert not gate.may_mutate
+    gate.observe("manage_skills", {"results": "Verification procedure", "exit_code": 0},
+                 '{"action":"view","name":"visual-verification"}')
+    assert gate.may_mutate
+    assert gate.allows_tool("manage_skills", '{"action":"view","name":"ui-design"}')
+
+
+def test_visual_pair_remains_for_design_and_explicit_skill_requests():
+    for scope in (
+        "Build a new Electron GUI app. Do not change styling.",
+        "Repair this existing Electron GUI and improve its styling.",
+        "Repair this existing Electron GUI. Do not change styling. Read ui-design first.",
+    ):
+        gate = CodingGrounding(scope)
+        gate.set_skill_candidates(["ui-design", "visual-verification"])
+        assert gate.required_visual_skills == {"ui-design", "visual-verification"}
+    gate = CodingGrounding("Repair this existing Electron GUI; no styling changes.")
+    gate.set_skill_candidates(["custom-repair"])
+    assert gate.skill_candidates == {"custom-repair"}
+    assert gate.pending_required_skill_names == []

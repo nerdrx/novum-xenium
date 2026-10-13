@@ -116,3 +116,19 @@ The ordinary-coding default was deployed with two authenticated all-idle checks
 covering 101 chats, a runtime backup, and an in-place update preserving customized
 files. The running source matches canonical `4d9694b`; the app returned HTTP 200
 after restart. The checked-mode default was already deployed before this trial.
+
+## Inspection-stop audit and repair scope
+
+The Novum checkpoint confirms the research gate opened after one successful read
+of each required skill. Later source reads succeeded; no edit or test was attempted.
+The final question requested permission to inspect a test script it had already
+read. This is not evidence of a stuck gate, exhausted budget, or missing tools.
+
+One unnecessary preparation requirement was corrected: when a repair explicitly
+says not to change styling, the built-in design/verification pair requires only
+visual verification. Skill suggestions remain available, and an explicit request
+for `ui-design` retains both procedures. This narrowly recognizes the supported
+English no-styling phrases; it is not a general semantic scope classifier.
+72 focused grounding, resume, integration, and design tests passed. This change
+reduces preparation overhead; it does not demonstrate recovery from the model's
+inspection loop or successful autonomous GUI repair.

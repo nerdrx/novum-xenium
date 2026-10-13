@@ -260,8 +260,8 @@ class CodingGrounding:
         """Limit the preparation phase to viewing one exact matched skill."""
         if not self.skill_preparation_required:
             return schemas
-        if self._visual_skill_pair <= self.skill_candidates:
-            names = sorted(self._visual_skill_pair - self.viewed_skills)
+        if self.required_visual_skills <= self.skill_candidates:
+            names = sorted(self.required_visual_skills - self.viewed_skills)
         else:
             # Any matched procedure satisfies the ordinary one-skill review.
             names = sorted(self.skill_candidates - self.viewed_skills)
@@ -293,16 +293,30 @@ class CodingGrounding:
         return result
 
     @property
+    def required_visual_skills(self):
+        """Narrow only the built-in pair for an explicit behavior-only repair."""
+        scope = self.latest_scope or self.task
+        no_style = re.search(
+            r"\b(?:do not|don't)\b[^.!?\n]{0,100}\bchange styling\b|\bno styling changes\b",
+            scope, re.I,
+        )
+        if (self._visual_skill_pair <= self.skill_candidates
+                and re.search(r"\b(?:repair|fix)\b", scope, re.I)
+                and no_style and not re.search(r"\bui-design\b", scope, re.I)):
+            return frozenset({"visual-verification"})
+        return self._visual_skill_pair
+
+    @property
     def skill_reviews_satisfied(self):
         """Keep the visual critique step paired with the UI workflow when available."""
-        if self._visual_skill_pair <= self.skill_candidates:
-            return self._visual_skill_pair <= self.viewed_skills
+        if self.required_visual_skills <= self.skill_candidates:
+            return self.required_visual_skills <= self.viewed_skills
         return bool(self.skill_candidates & self.viewed_skills)
 
     @property
     def pending_required_skill_names(self):
-        if self._visual_skill_pair <= self.skill_candidates:
-            return sorted(self._visual_skill_pair - self.viewed_skills)
+        if self.required_visual_skills <= self.skill_candidates:
+            return sorted(self.required_visual_skills - self.viewed_skills)
         return []
 
     @property

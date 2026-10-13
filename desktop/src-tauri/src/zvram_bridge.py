@@ -54,6 +54,16 @@ def _supports_live_control(model_helper):
         return False
 
 
+def _supports_model_name(model_helper):
+    try:
+        parameters = inspect.signature(model_helper.build_server_command).parameters
+        return "model_name" in parameters or any(
+            item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values()
+        )
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
 def _supports_native_mode(model_helper):
     try:
         parameters = inspect.signature(model_helper.build_server_command).parameters
@@ -177,10 +187,36 @@ def _model_rows(model_helper, backend_checkout):
             name = item["name"]
             if not path.is_file() or type(size) is not int or size < 0 or not isinstance(name, str):
                 continue
-            rows.append({"name": _clean_text(name, 256), "path": str(path), "size": size})
+            row = {"name": _clean_text(name, 256), "path": str(path), "size": size}
+            projector_value = item.get("mmproj_path")
+            if isinstance(projector_value, str):
+                projector = _verified_projector_path(projector_value, backend_checkout)
+                if projector is not None:
+                    row["mmproj_path"] = str(projector)
+            rows.append(row)
         except (KeyError, OSError, TypeError, ValueError):
             continue
     return rows
+
+
+def _verified_projector_path(value, backend_checkout):
+    """Accept only a direct GGUF Ollama projector blob from local storage."""
+    if not re.fullmatch(r"sha256-[0-9a-f]{64}", Path(value).name):
+        return None
+    try:
+        blobs = (Path(backend_checkout) / "data/ollama/models/blobs").resolve(strict=True)
+        raw = Path(value).expanduser()
+        if raw.is_symlink():
+            return None
+        path = raw.resolve(strict=True)
+        if path.parent != blobs or not path.is_file():
+            return None
+        with path.open("rb") as stream:
+            if stream.read(4) != b"GGUF":
+                return None
+        return path
+    except (OSError, ValueError):
+        return None
 
 
 def _profile_name(request, alias, model_name):
@@ -282,6 +318,8 @@ def _build_manager_profile(model_helper, name, params):
     )
     if _supports_live_control(model_helper):
         options["live_control"] = params["live_control"]
+    if _supports_model_name(model_helper) and isinstance(params.get("model_name"), str):
+        options["model_name"] = params["model_name"]
     mode = params.get("mode", "zvram")
     if mode not in _ROUTER_MODES:
         raise ValueError("mode must be regular or zvram")
@@ -329,7 +367,7 @@ def _router_cache_path(manager):
     return cache
 
 
-def _build_router_profile(model_helper, manager, params, models):
+def _build_router_profile(model_helper, manager, params, models, backend_checkout):
     # Reuse the installed helper's paging options; only replace the single-model
     # server arguments. Router children inherit its arguments and environment.
     profile = _build_manager_profile(model_helper, _ROUTER_NAME, params)
@@ -338,22 +376,36 @@ def _build_router_profile(model_helper, manager, params, models):
     for flag in ('--model', '--alias'):
         index = command.index(flag, start)
         del command[index:index + 2]
+    # The router command has no single model. Projectors belong in each model's
+    # preset entry; never let a picked model's projector become router-global.
+    if '--mmproj' in command[start:]:
+        index = command.index('--mmproj', start)
+        del command[index:index + 2]
     command += ['--models-preset', str(_router_preset_path(manager)), '--models-max', '1', '--models-autoload']
-    _write_router_preset(manager, models)
+    _write_router_preset(manager, models, backend_checkout)
     profile['env']['LLAMA_CACHE'] = str(_router_cache_path(manager))
     return profile
 
 
-def _write_router_preset(manager, models):
+def _write_router_preset(manager, models, backend_checkout):
     lines = ['version = 1', '']
     seen = set()
     for index, model in enumerate(models):
         name, path = model['name'], model['path']
+        projector = model.get('mmproj_path')
         if not _ALIAS_RE.fullmatch(name) or name in seen or any(c in path for c in '\r\n\0;#') or path != path.strip():
             raise ValueError('A discovered model name or path cannot be represented safely in the router preset')
         seen.add(name)
         # llama.cpp normalizes preset section names; explicit aliases preserve chat IDs.
-        lines += [f'[nx-model-{index}]', f'alias = {name}', f'model = {path}', 'load-on-startup = false', '']
+        lines += [f'[nx-model-{index}]', f'alias = {name}', f'model = {path}']
+        if projector is not None:
+            verified = _verified_projector_path(projector, backend_checkout)
+            verified_text = str(verified) if verified is not None else ""
+            if (verified is None or any(c in verified_text for c in '\r\n\0;#')
+                    or verified_text != verified_text.strip()):
+                raise ValueError('A discovered projector path cannot be represented safely in the router preset')
+            lines.append(f'mmproj = {verified_text}')
+        lines += ['load-on-startup = false', '']
     path = _router_preset_path(manager)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex)
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
@@ -623,7 +675,8 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
     return {
         "available": True, "installation": installation,
         "ignore_swap_guard_supported": _supports_ignore_swap_guard(installation),
-        "models": models, "profiles": profiles,
+        "models": [{key: value for key, value in model.items() if key != "mmproj_path"}
+                   for model in models], "profiles": profiles,
         "router": _router_status(model_helper, manager_helper, manager, params_state),
         "router_supported": _router_supported(model_helper),
         "live_control_supported": _supports_live_control(model_helper),
@@ -692,7 +745,7 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
                     raise ValueError('Ignoring the swap-growth guard requires zVram 0.4.2 or newer')
                 if _ROUTER_NAME in params_state and previous.get('router') is not True:
                     raise ValueError('The router profile name is already used by a legacy profile')
-                profile = _build_router_profile(model_helper, manager, params, models)
+                profile = _build_router_profile(model_helper, manager, params, models, backend_checkout)
                 if action == 'router_configure' and running:
                     if not manager.stop(_ROUTER_NAME):
                         raise ValueError('The owned model router stopped before settings could be applied')

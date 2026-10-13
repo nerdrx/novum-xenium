@@ -68,13 +68,17 @@ class ModelHelpers(ModelHelper):
     def __init__(self, model):
         self.model = Path(model)
         self.registered = []
+        self.projector = None
 
     def discover_models(self, checkout):
         try:
             size = self.model.stat().st_size
         except FileNotFoundError:
             return []
-        return [{"name": "tiny", "path": str(self.model), "size": size}]
+        row = {"name": "tiny", "path": str(self.model), "size": size}
+        if self.projector is not None:
+            row["mmproj_path"] = str(self.projector)
+        return [row]
 
     def register_endpoint(self, alias, port, *, xenium):
         self.registered.append((alias, port, xenium))
@@ -106,7 +110,8 @@ class BridgeTests(unittest.TestCase):
         if not options.get('live_control', False):
             command.append('--no-live-control')
         return (command + ['--', 'server', '--model', model, '--alias', alias,
-                 '--host', '127.0.0.1', '--port', str(options['port']), '--ctx-size', str(options['context'])], {})
+                 '--mmproj', '/tmp/single-model-projector.gguf', '--host', '127.0.0.1',
+                 '--port', str(options['port']), '--ctx-size', str(options['context'])], {})
 
     def start_router(self, **options):
         options.setdefault('mode', 'zvram')
@@ -135,6 +140,42 @@ class BridgeTests(unittest.TestCase):
         preset = self.home / 'router-models.ini'
         self.assertEqual(preset.stat().st_mode & 0o777, 0o600)
         self.assertIn(f'[nx-model-0]\nalias = tiny\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
+
+    def test_router_preset_keeps_projector_bound_to_its_ollama_model(self):
+        blobs = self.checkout / 'data/ollama/models/blobs'
+        blobs.mkdir(parents=True)
+        projector = blobs / ('sha256-' + 'a' * 64)
+        projector.write_bytes(b'GGUF projector')
+        self.model_helper.projector = projector
+        result = self.start_router()
+        self.assertTrue(result['started'])
+        self.assertNotIn('mmproj_path', result['models'][0])
+        preset = (self.home / 'router-models.ini').read_text()
+        self.assertIn(f'mmproj = {projector.resolve()}', preset)
+        stored = json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']
+        argv = stored['command']
+        self.assertNotIn('--mmproj', argv)
+        self.assertIn(f'[nx-model-0]\nalias = tiny\nmodel = {self.model}\nmmproj = {projector.resolve()}\nload-on-startup = false', preset)
+
+    def test_router_ignores_unverified_projector_metadata(self):
+        outside = self.base / 'outside-projector.gguf'
+        outside.write_bytes(b'GGUF unrelated')
+        self.model_helper.projector = outside
+        result = self.start_router()
+        self.assertTrue(result['started'])
+        preset = (self.home / 'router-models.ini').read_text()
+        self.assertNotIn('mmproj =', preset)
+
+    def test_router_preset_rejects_projector_path_delimiters(self):
+        unsafe_checkout = self.base / 'backend;#unsafe'
+        blobs = unsafe_checkout / 'data/ollama/models/blobs'
+        blobs.mkdir(parents=True)
+        projector = blobs / ('sha256-' + 'b' * 64)
+        projector.write_bytes(b'GGUF projector')
+        with self.assertRaisesRegex(ValueError, 'projector path'):
+            bridge._write_router_preset(self.manager, [{
+                'name': 'tiny', 'path': str(self.model), 'mmproj_path': str(projector),
+            }], unsafe_checkout)
 
     def test_regular_router_uses_native_server_and_persists_autostart(self):
         with mock.patch.object(bridge, '_router_supported', return_value=True), \

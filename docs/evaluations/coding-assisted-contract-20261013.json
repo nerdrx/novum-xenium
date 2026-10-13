@@ -1,0 +1,346 @@
+{
+  "runtime_revision": "6d59181",
+  "metadata": {
+    "actual_route": {
+      "endpoint_id": "6865006e",
+      "model": "nx-model-5",
+      "requested_model": "qwen3.5:9b",
+      "round": 10
+    },
+    "allow_web_search": false,
+    "approval_count": 1,
+    "endpoint_id": "6865006e",
+    "evidence": [
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 3,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 4,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 5,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 6,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 7,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 8,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 9,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 10,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 11,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 12,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 13,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 14,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 15,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 16,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 17,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 18,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 19,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "input_tokens": 280043,
+        "model": "nx-model-5",
+        "output_tokens": 3640,
+        "requested_model": "qwen3.5:9b",
+        "total_tokens": 283683,
+        "type": "metrics"
+      },
+      {
+        "decision": "approve_task",
+        "type": "approval_decision"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 0,
+        "stage": "reproduce",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 1,
+        "stage": "edit",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 2,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 3,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 4,
+        "type": "model_actual"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 4,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 5,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 6,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 7,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 8,
+        "type": "model_actual"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 8,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 9,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 10,
+        "type": "model_actual"
+      }
+    ],
+    "model": "qwen3.5:9b",
+    "output_saved": false,
+    "preset_id": null,
+    "run_id": "226425bb4d784646bc3595c3af44303c",
+    "seconds": 300.009,
+    "session_id": "31d5ab9b-6a9d-471e-8ebe-ddd74710582a",
+    "source_files": [
+      "nflix/dist/main/index.js",
+      "nflix/dist/renderer/renderer.js",
+      "nflix/.odysseus-preview/qa-conversion-flow.mjs"
+    ],
+    "status": "timeout",
+    "stopped_exact_run": true,
+    "stream_ended": false,
+    "terminal": null,
+    "verification_passed": null
+  },
+  "checkpoint_status": "stopped",
+  "external_preview": {
+    "status": "failed",
+    "phase": "running workspace test",
+    "appEntry": "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/dist/main/index.js",
+    "behavior": "workspace test failed; app behavior remains unverified",
+    "test": "failed",
+    "report": "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/run-86874adb-54c4-4f20-b9e6-6f1dc01f7883/report.json",
+    "error": "Start must recover after completion\n\nfalse !== true\n",
+    "sourceFrames": [
+      "AssertionError [ERR_ASSERTION]: Start must recover after completion",
+      "",
+      "false !== true",
+      "",
+      "    at default (file:///workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/external-check-35115407146641e4bd25073b9246d5ed.mjs:31:10)"
+    ],
+    "errors": {
+      "page": 0,
+      "console": 0,
+      "mainStdout": 11,
+      "stderr": 10,
+      "examples": [
+        "[2293:1013/183829.950576:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory",
+        "[2293:1013/183830.078087:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory",
+        "[2293:1013/183830.078114:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory"
+      ],
+      "mainStderrExamples": [
+        "[2293:1013/183829.950576:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory",
+        "[2293:1013/183830.078087:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory",
+        "[2293:1013/183830.078114:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory"
+      ],
+      "mainStdoutExamples": [
+        "[NxFlix] Output path: /workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/conversion-6f719220-11fa-4f5c-b526-9dba47cb25a6/converted.mp4",
+        "[NxFlix] Output exists: true",
+        "[NxFlix] Output size: 74347"
+      ]
+    }
+  },
+  "external_acceptance_exit": 1,
+  "checker_sha256": "5c7375586bd1e010114350660676e981c3bd08c43780ab3582f083a01b94dd50",
+  "files": {
+    "nflix/dist/main/index.js": {
+      "before_sha256": "0c16429665f71308c4a6a1b9821cec5af1f5de4b6001108f7de535325cbbdf85",
+      "after_sha256": "0c16429665f71308c4a6a1b9821cec5af1f5de4b6001108f7de535325cbbdf85",
+      "unchanged": true
+    },
+    "nflix/dist/renderer/renderer.js": {
+      "before_sha256": "6225e1ef1b25dfd2ef1231ed35c5baaa9d3fda94bed53ed645d0a596895dd776",
+      "after_sha256": "874c171d7ff7140859c116722fd9cac726fb60a4e800e2fbf6305b0d54602746",
+      "unchanged": false
+    },
+    "nflix/.odysseus-preview/qa-conversion-flow.mjs": {
+      "before_sha256": "5c7375586bd1e010114350660676e981c3bd08c43780ab3582f083a01b94dd50",
+      "after_sha256": "5c7375586bd1e010114350660676e981c3bd08c43780ab3582f083a01b94dd50",
+      "unchanged": true
+    }
+  },
+  "video": {
+    "path": "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/conversion-6f719220-11fa-4f5c-b526-9dba47cb25a6/converted.mp4",
+    "duration": "5.000000",
+    "size": "74347",
+    "streams": [
+      {
+        "codec": "h264",
+        "type": "video"
+      },
+      {
+        "codec": "aac",
+        "type": "audio"
+      }
+    ]
+  },
+  "workflow_setting_restored": true,
+  "manual_app_edits": 0,
+  "manual_model_interventions": 1,
+  "assistance": "Operator supplied observed directory-only output, absolute test path, and instruction to compare renderer payload fields against main-process receiver fields. Not an autonomous or controlled Aider comparison.",
+  "mutations": [
+    {
+      "tool": "edit_file",
+      "command": "{\"path\": \"/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/dist/renderer/renderer.js\", \"old_string\": \"  const spawnPromise = window.electron.spawnFFmpeg({\\n    input: inputPathText,\\n    output: outputPath.value,\\n    args: argsText\\n  });\", \"new_string\": \"  const spawnPromise = window.electron.spawnFFmpeg({\\n    input: inputPathText,\\n    output: outputPath.value,\\n    outputName: outputName.value,\\n    args: argsText\\n  });\"}",
+      "output": "Edited /workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/dist/renderer/renderer.js (1 replacement)",
+      "exit_code": 0
+    },
+    {
+      "tool": "edit_file",
+      "command": "{\"path\": \"/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/dist/renderer/renderer.js\", \"old_string\": \"  window.electron.onCompletion((data) => {\\n    addLog(`\\u2705 Conversion completed: ${data.output}`, 'success');\\n    startBtn.disabled = false;\\n    startBtn.textContent = 'Start';\\n  });\", \"new_string\": \"  window.electron.onCompletion((data) => {\\n    addLog(`\\u2705 Conversion completed: ${data.output}`, 'success');\\n    startBtn.disabled = false;\\n    startBtn.textContent = 'Start';\\n    inputFile.disabled = false;\\n    inputPath.disabled = false;\\n    outputPath.disabled = false;\\n    argsInput.disabled = false;\\n  });\"}",
+      "output": "Edited /workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/dist/renderer/renderer.js (1 replacement)",
+      "exit_code": 0
+    }
+  ],
+  "conclusion": "Assisted model repaired the filename contract and produced a valid video. Fixed external test still failed because Start remained disabled after completion. Run timed out at 300 seconds; no full interaction or review pass."
+}

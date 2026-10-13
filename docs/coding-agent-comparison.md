@@ -19,6 +19,12 @@ for both sides when comparing coding behavior without outside research.
 
 ## Latest measured result (2026-10-13)
 
+A clearly assisted follow-up produced a valid 4-second video after operator
+feedback directed the model to compare IPC payload fields. The unchanged external
+check still failed because Start remained disabled. The 300-second run timed out.
+This is partial GUI progress, not autonomous completion or an Aider comparison;
+see [assisted contract evidence](evaluations/coding-assisted-contract-20261013.json).
+
 A subsequent same-model GUI repair trial failed after 419 seconds. The model
 repaired an import and the Start-button identifier, but not the output filename contract. A separate
 headless check using preserved pre-run test bytes failed too; no operator edited

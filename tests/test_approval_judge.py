@@ -110,9 +110,70 @@ async def test_strict_verdict_and_tool_free_current_route(monkeypatch, raw, deci
     call = calls[0]
     assert call["model"] == "loaded-model" and call["headers"] == {"X-Test": "route"}
     assert call["max_retries"] == 1 and call["max_tokens"] == 128
+    assert isinstance(call["response_diagnostics"], dict)
     assert "tools" not in call and len(call["messages"]) == 2
     assert json.loads(call["messages"][1]["content"]) == {
         "request": "find coding docs", "action": {"kind": "public_read", "url": "https://docs.example/guide"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw,category", [
+    ("not json", "malformed_json"),
+    ('{"decision":"allow","reason":"ok","extra":"private response text"}', "invalid_verdict_schema"),
+])
+async def test_review_fallback_logs_only_category_and_safe_response_metadata(monkeypatch, caplog, raw, category):
+    from src import approval_judge
+
+    async def completion(**kwargs):
+        kwargs["response_diagnostics"].update({
+            "finish_reason": "length", "completion_tokens": 128,
+            "content_chars": len(raw), "reasoning_chars": 9,
+        })
+        return raw
+
+    monkeypatch.setattr("src.llm_core.llm_call_async", completion)
+    caplog.set_level("INFO", logger="src.approval_judge")
+    verdict = await review_public_read("https://docs.example/guide", "find docs",
+                                      endpoint_url="http://local.test/v1", model="test", headers=None)
+    assert verdict["decision"] == "ask"
+    record = next(r.getMessage() for r in caplog.records if "[approval_judge] fallback=" in r.getMessage())
+    assert f"fallback={category}" in record
+    assert "finish_reason=length completion_tokens=128" in record
+    assert f"content_chars={len(raw)} reasoning_chars=9" in record
+    assert "private response text" not in record and raw not in record
+
+
+@pytest.mark.asyncio
+async def test_review_fallback_distinguishes_provider_error_without_logging_error_text(monkeypatch, caplog):
+    from src import approval_judge
+
+    async def failure(**kwargs):
+        kwargs["response_diagnostics"].update({"finish_reason": "error", "completion_tokens": 0})
+        raise RuntimeError("credential-like provider detail")
+
+    monkeypatch.setattr("src.llm_core.llm_call_async", failure)
+    caplog.set_level("INFO", logger="src.approval_judge")
+    verdict = await review_public_read("https://docs.example/guide", "find docs",
+                                      endpoint_url="http://local.test/v1", model="test", headers=None)
+    assert verdict["decision"] == "ask"
+    record = next(r.getMessage() for r in caplog.records if "[approval_judge] fallback=" in r.getMessage())
+    assert "fallback=provider_or_response_error" in record
+    assert "credential-like" not in record
+
+
+@pytest.mark.asyncio
+async def test_review_without_trusted_request_is_classified_without_call(monkeypatch, caplog):
+    from src import approval_judge
+
+    async def unexpected(**kwargs):
+        raise AssertionError("judge must not run without trusted request")
+
+    monkeypatch.setattr("src.llm_core.llm_call_async", unexpected)
+    caplog.set_level("INFO", logger="src.approval_judge")
+    verdict = await review_public_read("https://docs.example/guide", "",
+                                      endpoint_url="http://local.test/v1", model="test", headers=None)
+    assert verdict["decision"] == "ask"
+    assert any("fallback=empty_request" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio

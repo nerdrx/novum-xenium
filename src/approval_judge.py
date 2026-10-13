@@ -5,6 +5,7 @@ import json
 import re
 import os
 import shlex
+import logging
 from urllib.parse import urlsplit
 
 from src.tool_capabilities import _web_fetch_read_url
@@ -13,6 +14,7 @@ MAX_REVIEWS_PER_RUN = 32
 MAX_TRUSTED_REQUESTS = 4
 MAX_TRUSTED_REQUEST_CHARS = 6000
 _TIMEOUT_SECONDS = 8
+logger = logging.getLogger(__name__)
 _SENSITIVE_PATH = re.compile(
     r"(?:^|/)(?:api|admin|auth|authorize|oauth|login|logout|settings|delete|remove|"
     r"unsubscribe|webhook|collect|track|upload|send|execute|token|secret)(?:/|$)", re.I,
@@ -196,6 +198,7 @@ async def _review(action, request, *, endpoint_url, model, headers):
 
     ask = {"decision": "ask", "reason": "Auto review could not confidently approve this action."}
     if not request:
+        _log_review_fallback("empty_request", {})
         return ask
     messages = [
         {"role": "system", "content": (
@@ -211,19 +214,44 @@ async def _review(action, request, *, endpoint_url, model, headers):
         )},
         {"role": "user", "content": json.dumps({"request": request, "action": action})},
     ]
+    diagnostics = {}
     try:
         raw = await asyncio.wait_for(llm_call_async(
             url=endpoint_url, model=model, headers=headers, messages=messages,
             temperature=0.0, max_tokens=128, timeout=_TIMEOUT_SECONDS, max_retries=1,
+            response_diagnostics=diagnostics,
         ), timeout=_TIMEOUT_SECONDS)
         if not isinstance(raw, str) or len(raw) > 1200:
+            _log_review_fallback("response_not_text_or_oversized", diagnostics)
             return ask
-        verdict = json.loads(raw)
+        try:
+            verdict = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            _log_review_fallback("malformed_json", diagnostics)
+            return ask
         if (not isinstance(verdict, dict) or set(verdict) != {"decision", "reason"}
                 or verdict["decision"] not in {"allow", "ask"}
                 or not isinstance(verdict["reason"], str)
                 or not 0 < len(verdict["reason"].strip()) <= 240):
+            _log_review_fallback("invalid_verdict_schema", diagnostics)
             return ask
         return {"decision": verdict["decision"], "reason": verdict["reason"].strip()}
-    except Exception:
+    except asyncio.TimeoutError:
+        _log_review_fallback("timeout", diagnostics)
         return ask
+    except Exception:
+        _log_review_fallback("provider_or_response_error", diagnostics)
+        return ask
+
+
+def _log_review_fallback(category, diagnostics):
+    """Log only bounded response metadata; never include response/error text."""
+    logger.info(
+        "[approval_judge] fallback=%s finish_reason=%s completion_tokens=%s "
+        "content_chars=%s reasoning_chars=%s",
+        category,
+        diagnostics.get("finish_reason"),
+        diagnostics.get("completion_tokens"),
+        diagnostics.get("content_chars"),
+        diagnostics.get("reasoning_chars"),
+    )

@@ -1,7 +1,10 @@
 """Incomplete tool arguments must not silently finish or partially execute."""
 import json
+import time
 
 import src.agent_loop as al
+from src.tool_approvals import TaskApprovalContinuation
+from src.tool_approval_scopes import ToolApprovalScope
 from test_agent_rounds_exhausted import _patch_common, _collect, _types
 
 
@@ -36,9 +39,23 @@ def _run(monkeypatch, recover, invalid_preview=False):
 
     monkeypatch.setattr(al, 'execute_tool_block', execute)
     monkeypatch.setattr(al, 'stream_llm_with_fallback', stream)
+    # Model the explicit "Allow for this task" response used when selected
+    # skill context arms Auto's separate-action gate. Approval-policy behavior
+    # is covered independently; this test isolates parsing and retry behavior.
+    task_grant = TaskApprovalContinuation(
+        origin_run_id="origin-run", question_run_id="approval-run",
+        source_approval_id="approved-write", owner="test", session_id="",
+        workspace="", document_id="", document_version=None,
+        document_digest="", selected_label="Allow for this task",
+        reply="Allow for this task.", continuation_query="Write the app.",
+        selected_tools=("write_file", "update_plan"),
+        external_untrusted_context_seen=True, web_search_enabled=False,
+        expires_at=time.time() + 300, scope=ToolApprovalScope.TASK,
+    )
     events = _types(_collect(al.stream_agent_loop(
         'http://x/v1', 'm', [{'role': 'user', 'content': 'Write the app.'}],
         relevant_tools={'write_file', 'update_plan'}, max_rounds=6,
+        task_continuation=task_grant,
     )))
     return events, requests, executed
 

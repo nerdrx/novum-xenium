@@ -4602,13 +4602,18 @@ async def stream_agent_loop(
         and coding_work_checkpoint.get("enabled") is True
         and isinstance(coding_work_checkpoint.get("packet"), dict)
     )
+    _coding_work_requested = bool(get_setting("agent_milestone_workflow", False))
     _coding_work = CodingWorkTracker(workspace=workspace, enabled=bool(
-        get_setting("agent_milestone_workflow", False)
+        _coding_work_requested
         and (_use_coding_tools(_retrieval_query or _last_user, workspace) or _resume_coding_work)
         and workspace and not plan_mode and not guide_only
         and not incognito and not delegated_credential and not approved_plan
         and "todowrite" not in disabled_tools
     ))
+    yield 'data: ' + json.dumps({
+        "type": "coding_workflow", "requested": _coding_work_requested,
+        "enabled": _coding_work.enabled,
+    }) + '\n\n'
     if _coding_work.enabled:
         # Checked slices use TodoWrite. The separate approved-plan editor has
         # no active plan here and invites unchecked completion updates.

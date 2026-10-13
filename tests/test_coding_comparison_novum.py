@@ -334,3 +334,12 @@ class NovumAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_workflow_startup_summary_preserves_false_without_prompt_content():
+    import runpy
+    summarize = runpy.run_path(str(SCRIPT))["summarize_event"]
+    assert summarize({"type": "coding_workflow", "requested": True, "enabled": False,
+                      "prompt": "private task"}) == {
+        "type": "coding_workflow", "requested": True, "enabled": False,
+    }

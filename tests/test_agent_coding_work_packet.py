@@ -837,3 +837,11 @@ def test_packet_selection_schemas_exclude_effectful_actions_but_keep_readers(mon
     original = next(schema for schema in al.FUNCTION_TOOL_SCHEMAS
                     if schema["function"]["name"] == "manage_skills")
     assert "delete" in original["function"]["parameters"]["properties"]["action"]["enum"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_workflow_startup_state_is_reported_before_any_packet(monkeypatch, tmp_path, enabled):
+    events, _, _ = _run_packet(monkeypatch, tmp_path, checked_workflow=enabled, no_packet_start=True)
+    status = [event for event in events if event.get("type") == "coding_workflow"]
+    assert status == [{"type": "coding_workflow", "requested": enabled, "enabled": enabled}]
+    assert not any(event.get("type") == "coding_work_packet" for event in events)

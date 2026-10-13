@@ -20,6 +20,7 @@ from urllib.request import Request, build_opener, HTTPCookieProcessor
 from http.cookiejar import CookieJar
 
 EVENT_FIELDS = {
+    "coding_workflow": ("requested", "enabled"),
     "model_actual": ("model", "requested_model", "endpoint_id", "round"),
     "fallback": ("selected_model", "answered_by", "answered_by_endpoint_id", "round"),
     "agent_terminal": (

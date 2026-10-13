@@ -427,6 +427,25 @@ class CodingWorkTracker:
 
     @property
     def instruction(self):
+        if self.enabled and self.milestones and self.state and self.state.stage == "done" and self.pending:
+            import json
+
+            next_slice = next(name for name in self.milestones if name not in self.completed)
+            todos = [{"content": name, "status": (
+                "completed" if name in self.completed else
+                "in_progress" if name == next_slice else "pending"
+            )} for name in self.milestones]
+            return (
+                "The current slice passed. The task still has unchecked slices. Call todowrite now "
+                "with this exact todos list and a new work_packet for " + json.dumps(next_slice) + ":\n"
+                + json.dumps({"todos": todos}) + "\n"
+                "Add work_packet with objective, files, reproduce_command, acceptance_command, and "
+                "acceptance_condition for that slice. If its code is already implemented, set "
+                'work_packet.mode to "verify_existing"; run its baseline and acceptance checks without '
+                "a dummy edit. Otherwise use mode change and reproduce, edit, then test. "
+                "Do not mark other slices completed: only the active slice earns completion from its check. "
+                "Do not ask the user to run checks you can run. This workflow grants no extra permissions."
+            )
         if not self.state or (self.enabled and self.state.stage == "done" and self.pending):
             return (
                 "Work in checked coding steps. Inspect the project using read tools, then call todowrite "

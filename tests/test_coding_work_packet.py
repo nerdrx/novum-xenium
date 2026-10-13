@@ -447,3 +447,33 @@ def test_failed_verification_baseline_requires_repair(packet):
     for bad_mode in [None, [], "skip"]:
         with pytest.raises(ValueError, match="mode"):
             replace(packet, mode=bad_mode)
+
+
+def test_next_slice_guidance_preserves_names_and_requires_fresh_checks(packet):
+    import json
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    names = ['Repair "sum"', 'Verify count\nincluding empty input', 'Verify integration']
+    todos = [{"content": name, "status": "in_progress" if i == 0 else "pending"}
+             for i, name in enumerate(names)]
+    tracker.observe("todowrite", "{}", {
+        "exit_code": 0, "todos": todos, "work_packet": packet.to_dict()})
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+
+    update = json.loads(tracker.instruction.splitlines()[1])
+    assert [item["content"] for item in update["todos"]] == names
+    assert [item["status"] for item in update["todos"]] == ["completed", "in_progress", "pending"]
+    assert tracker.blocks("todowrite", update)  # Guidance alone grants no packet/evidence.
+    update["work_packet"] = dict(packet.to_dict(), objective=names[1], mode="verify_existing")
+    assert not tracker.blocks("todowrite", update)
+    tracker.observe("todowrite", "{}", dict(update, exit_code=0))
+    assert tracker.completed == {names[0]}
+    assert tracker.state.stage == "reproduce"
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 0})
+    assert tracker.completed == {names[0]}
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    assert tracker.completed == set(names[:2])
+    assert tracker.pending  # The remaining integration slice was not silently credited.

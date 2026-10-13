@@ -74,3 +74,12 @@ recorded. Autonomous GUI completion remains unproven; the assisted conversion pa
 not establish dependable general app generation or prove another framework
 feature is required. Preserve this
 separation when reporting completion, pushing new evidence, or deciding further work.
+
+## Final helper verification
+
+The preview status correction (`85e1707`) passed 11 Node tests and a real
+headless run against the same preserved checker. It now reports
+`rendered; workspace test completed`; the test and output remain separate from
+agent completion and review. Image `37cd19b69d33` includes the correction. The
+standalone helper was updated without a backend restart. The live report is
+recorded under `preview_status_recheck` in the assisted recovery evidence.

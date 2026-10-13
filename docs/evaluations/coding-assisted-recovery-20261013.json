@@ -367,5 +367,60 @@
     "External fixed checker passed conversion, valid stream/duration, no page errors, and Start re-enabled. This proves only that tested interaction.",
     "Screenshots capture pre-test render; visual inspection found lower controls below the initial viewport and verbose raw FFmpeg output. They are not evidence of polished product design.",
     "Helper top-level status still says behavior unverified despite completed test; this reporting mismatch is being corrected separately."
-  ]
+  ],
+  "preview_status_recheck": {
+    "revision": "85e1707",
+    "image_id": "37cd19b69d33",
+    "focused_node_tests": 11,
+    "summary": {
+      "status": "rendered; workspace test completed",
+      "appEntry": "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/dist/main/index.js",
+      "rendererConnected": true,
+      "viewports": [
+        {
+          "width": 1280,
+          "height": 800
+        },
+        {
+          "width": 800,
+          "height": 600
+        }
+      ],
+      "viewportMode": "emulated renderer viewport; native BrowserWindow size unverified",
+      "errors": {
+        "page": 0,
+        "console": 0,
+        "requests": 0,
+        "responses": 0,
+        "mainStdout": 11,
+        "mainStderr": 10,
+        "examples": [
+          "[3699:1013/184808.707967:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory",
+          "[3699:1013/184808.805237:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory",
+          "[3699:1013/184808.805277:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory"
+        ],
+        "mainStdoutExamples": [
+          "[NxFlix] Output path: /workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/conversion-0635af12-b7d8-441e-b19d-ae1d6d8a0247/converted.mp4",
+          "[NxFlix] Output exists: true",
+          "[NxFlix] Output size: 74347"
+        ],
+        "mainStderrExamples": [
+          "[3699:1013/184808.707967:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory",
+          "[3699:1013/184808.805237:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory",
+          "[3699:1013/184808.805277:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory"
+        ],
+        "actualSourceFrames": [],
+        "consoleLocations": []
+      },
+      "behavior": "completed",
+      "test": "completed",
+      "screenshots": [
+        "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/run-d834c1ff-fb88-4533-9ec9-e745c1955594/desktop.png",
+        "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/run-d834c1ff-fb88-4533-9ec9-e745c1955594/compact.png"
+      ],
+      "report": "/workspace/.nx-evaluations/ffmpeg-matched-on-20261013/nflix/.odysseus-preview/run-d834c1ff-fb88-4533-9ec9-e745c1955594/report.json"
+    },
+    "exit_code": 0,
+    "note": "Repeated only to validate changed helper status; app source and preserved checker unchanged."
+  }
 }

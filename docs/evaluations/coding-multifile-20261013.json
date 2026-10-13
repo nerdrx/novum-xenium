@@ -1,0 +1,142 @@
+{
+  "date": "2026-10-13",
+  "scope": "Two-file sum/count repair, one trial per order; not a general benchmark",
+  "novum_revision": "7c60b3c",
+  "aider_version": "0.86.2",
+  "model": "qwen3.5:9b",
+  "trials": [
+    {
+      "order": [
+        "aider",
+        "novum"
+      ],
+      "settings": {
+        "temperature": 1.0,
+        "max_tokens": 16384
+      },
+      "fixture_sha256": "bc074f70e194006fec8d3ac295a9f7877cb37677284e3c20317067dd1e17c56e",
+      "serving_model": "nx-model-5",
+      "results": {
+        "aider": {
+          "seconds": 5.374,
+          "external_acceptance_passed": true,
+          "command_returncode": 0,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          },
+          "manual_code_edits": 0
+        },
+        "novum": {
+          "seconds": 46.893,
+          "external_acceptance_passed": true,
+          "command_returncode": 2,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          },
+          "manual_code_edits": 0
+        }
+      },
+      "novum_status": "incomplete",
+      "novum_terminal": null,
+      "novum_task_approvals": 1,
+      "novum_packet_events": [
+        {
+          "review_status": "not_reviewed",
+          "round": 0,
+          "stage": "reproduce",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 7,
+          "stage": "edit",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        }
+      ]
+    },
+    {
+      "order": [
+        "novum",
+        "aider"
+      ],
+      "settings": {
+        "temperature": 1.0,
+        "max_tokens": 16384
+      },
+      "fixture_sha256": "bc074f70e194006fec8d3ac295a9f7877cb37677284e3c20317067dd1e17c56e",
+      "serving_model": "nx-model-5",
+      "results": {
+        "novum": {
+          "seconds": 66.118,
+          "external_acceptance_passed": false,
+          "command_returncode": 2,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'sum': total(values), 'count': len(values)}\n"
+          },
+          "manual_code_edits": 0
+        },
+        "aider": {
+          "seconds": 5.674,
+          "external_acceptance_passed": true,
+          "command_returncode": 0,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          },
+          "manual_code_edits": 0
+        }
+      },
+      "novum_status": "incomplete",
+      "novum_terminal": null,
+      "novum_task_approvals": 1,
+      "novum_packet_events": [
+        {
+          "review_status": "not_reviewed",
+          "round": 0,
+          "stage": "reproduce",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 11,
+          "stage": "edit",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 12,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 13,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 14,
+          "stage": "done",
+          "test_status": "passed",
+          "type": "coding_work_packet"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Requested settings match; effective context/output capacity differs by agent overhead.",
+    "Only two stochastic trials; ordering does not establish causation or speed performance.",
+    "No manual code edits were made to either fixture.",
+    "No FFmpeg GUI was verified."
+  ]
+}

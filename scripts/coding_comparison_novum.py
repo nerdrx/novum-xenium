@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import sys
 import time
 import socket
@@ -94,6 +95,30 @@ def validate_base(value: str) -> str:
     return value.rstrip("/")
 
 
+def source_files(raw: str | None, workspace: Path) -> tuple[str, ...]:
+    files = ["calc.py"] if raw is None else json.loads(raw)
+    if (not isinstance(files, list) or not files
+            or any(not isinstance(name, str) or not name for name in files)):
+        raise ValueError("source files must be a non-empty JSON string array")
+    checked = []
+    root = workspace.resolve(strict=True)
+    for name in files:
+        path = PurePosixPath(name)
+        candidate = workspace / name
+        if ("\\" in name or path.is_absolute() or path.as_posix() != name
+                or any(part in {"", ".", ".."} for part in path.parts)
+                or not candidate.is_file()):
+            raise ValueError("source files must be existing workspace-relative paths")
+        try:
+            candidate.resolve(strict=True).relative_to(root)
+        except ValueError as exc:
+            raise ValueError("source files must remain inside the workspace") from exc
+        checked.append(name)
+    if len(set(checked)) != len(checked):
+        raise ValueError("source files must be unique")
+    return tuple(checked)
+
+
 def emit(**values) -> None:
     print(json.dumps(values, sort_keys=True), flush=True)
 
@@ -106,6 +131,7 @@ def main() -> int:
     parser.add_argument("--api-base", required=True)
     parser.add_argument("--endpoint-id", required=True)
     parser.add_argument("--preset-id", help="Novum preset supplying generation settings for this comparison")
+    parser.add_argument("--files-json", help="JSON array of source files in this fixture")
     parser.add_argument("--approve-task", action="store_true",
                         help="Approve at most three exact tool requests in this isolated QA workspace")
     parser.add_argument("--model", required=True)
@@ -124,8 +150,7 @@ def main() -> int:
         host = Path(args.host_workspace).resolve(strict=True)
         task_file = Path(args.task_file).resolve(strict=True)
         task_file.relative_to(host)
-        if not (host / "calc.py").is_file():
-            raise ValueError("workspace must contain the comparison fixture calc.py")
+        files = source_files(args.files_json, host)
         if not args.container_workspace.startswith("/"):
             raise ValueError("container workspace must be an absolute path")
         cookie_value = os.environ.get(args.session_cookie_env, "").strip()
@@ -289,7 +314,7 @@ def main() -> int:
             status, returncode = "incomplete", 2
         emit(status=status,
              session_id=session_id, run_id=run_id, model=args.model, endpoint_id=args.endpoint_id,
-             preset_id=args.preset_id,
+             preset_id=args.preset_id, source_files=list(files),
              seconds=round(time.monotonic() - started, 3), output_saved=False,
              stream_ended=stream_ended, actual_route=actual_route, terminal=terminal,
              verification_passed=verification_passed, approval_count=approval_count, evidence=evidence)
@@ -305,7 +330,7 @@ def main() -> int:
             except (HTTPError, URLError, OSError):
                 pass
         emit(status="timeout", session_id=session_id, run_id=run_id, model=args.model,
-             endpoint_id=args.endpoint_id, preset_id=args.preset_id, stopped_exact_run=stopped,
+             endpoint_id=args.endpoint_id, preset_id=args.preset_id, source_files=list(files), stopped_exact_run=stopped,
              seconds=round(time.monotonic() - started, 3), output_saved=False,
              stream_ended=stream_ended, actual_route=actual_route, terminal=terminal,
              verification_passed=verification_passed, approval_count=approval_count, evidence=evidence)
@@ -315,6 +340,7 @@ def main() -> int:
         # environment- or account-specific details.
         emit(status="error", error=type(exc).__name__, session_id=session_id,
              run_id=run_id, model=args.model, endpoint_id=args.endpoint_id, preset_id=args.preset_id,
+             source_files=list(files),
              seconds=round(time.monotonic() - started, 3), output_saved=False,
              stream_ended=stream_ended, actual_route=actual_route, terminal=terminal,
              verification_passed=verification_passed, approval_count=approval_count, evidence=evidence)

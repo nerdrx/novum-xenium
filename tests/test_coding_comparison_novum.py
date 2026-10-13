@@ -119,7 +119,8 @@ class NovumAdapterTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
 
-    def invoke(self, directory, *, mode="complete", timeout="5", preset_id=None, approve_task=False):
+    def invoke(self, directory, *, mode="complete", timeout="5", preset_id=None,
+               approve_task=False, files_json=None):
         Handler.mode = mode
         Handler.calls = []
         env = {**os.environ, "ODYSSEUS_SESSION": "private-test-token"}
@@ -131,6 +132,8 @@ class NovumAdapterTests(unittest.TestCase):
         ]
         if preset_id is not None:
             command.extend(("--preset-id", preset_id))
+        if files_json is not None:
+            command.extend(("--files-json", files_json))
         if approve_task:
             command.append("--approve-task")
         return subprocess.run(command, cwd=directory, env=env, text=True, capture_output=True, timeout=10)
@@ -202,6 +205,27 @@ class NovumAdapterTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(Handler.calls[1][1]["preset_id"], ["code_analyze"])
         self.assertEqual(json.loads(result.stdout)["preset_id"], "code_analyze")
+
+    def test_multifile_selection_accepts_named_files_without_calc_py(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "TASK.md").write_text("Fix core.py and report.py.\n")
+            Path(directory, "core.py").write_text("def total(values): return len(values)\n")
+            Path(directory, "report.py").write_text("from core import total\n")
+            result = self.invoke(directory, mode="verified", files_json='["core.py", "report.py"]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["source_files"], ["core.py", "report.py"])
+        self.assertEqual(Handler.calls[1][1]["workspace"], ["/mapped/workspace"])
+
+    def test_invalid_source_file_selection_fails_before_network(self):
+        cases = ('[]', '["../outside.py"]', '["missing.py"]', '["calc.py", "calc.py"]')
+        for files_json in cases:
+            with self.subTest(files_json=files_json), tempfile.TemporaryDirectory() as directory:
+                Handler.calls = []
+                Path(directory, "TASK.md").write_text("Fix calc.py.\n")
+                Path(directory, "calc.py").write_text("broken\n")
+                result = self.invoke(directory, files_json=files_json)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(Handler.calls, [])
 
     def test_approval_is_reported_without_opt_in(self):
         with tempfile.TemporaryDirectory() as directory:

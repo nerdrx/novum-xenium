@@ -79,11 +79,11 @@ Use the bundled adapter for Aider by replacing the sample Aider command with:
 ```
 
 For the `multifile` case, add `--case multifile` to the runner and
-`--files-json '{source_files_json}'` to the bundled Aider command so Aider is
-given the same fixture source files named in the task. Novum receives the same
-isolated workspace, and its task identifies those same files. The runner still
-executes its fixed acceptance command after each agent; task text cannot change
-the checker.
+`--files-json '{source_files_json}'` to both bundled adapter commands. Aider
+opens each listed file explicitly; Novum validates the list against its mapped
+workspace and receives the same isolated files. The task identifies the same
+files. The runner still executes its fixed acceptance command after each agent;
+task text cannot change the checker.
 
 For OpenAI-compatible servers whose advertised model ID differs from the
 comparison's logical model name, pass `--endpoint-model ID` to the Aider
@@ -97,7 +97,7 @@ Novum command template has this shape (replace the container path mapping for
 the mounted fixture):
 
 ```text
-python /run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py --task-file {task_file} --host-workspace {workspace} --container-workspace /workspace/path/to/this/fixture --api-base http://127.0.0.1:7000 --endpoint-id ENDPOINT_ID --model {model}
+python /run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py --task-file {task_file} --host-workspace {workspace} --container-workspace /workspace/path/to/this/fixture --api-base http://127.0.0.1:7000 --endpoint-id ENDPOINT_ID --model {model} --files-json '{source_files_json}'
 ```
 
 It creates a session, streams the task in agent mode, and prints one JSON

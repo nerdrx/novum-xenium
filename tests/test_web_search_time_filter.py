@@ -8,25 +8,26 @@ bare string (back-compat).
 """
 import sys
 from unittest.mock import MagicMock
+from tests.helpers.import_state import clear_module, preserve_import_state
 
-# Clean up any mocks from previous tests to ensure we load real modules.
-for mod in ['src.agent_tools', 'src.tool_parsing', 'src.tool_schemas', 'src.tool_execution']:
-    sys.modules.pop(mod, None)
-
-# Mock heavy database/model dependencies before importing (avoids the
-# src.tool_schemas <-> src.agent_tools circular import pulling in the DB layer).
-for mod in [
+_IMPORT_STATE = (
     'sqlalchemy', 'sqlalchemy.orm', 'sqlalchemy.ext', 'sqlalchemy.ext.declarative',
     'sqlalchemy.ext.hybrid', 'sqlalchemy.sql', 'sqlalchemy.sql.expression',
-    'src.database', 'core.models', 'core.database', 'core.auth'
-]:
-    if mod not in sys.modules:
-        sys.modules[mod] = MagicMock()
+    'src', 'src.database', 'src.agent_tools', 'src.tool_parsing',
+    'src.tool_schemas', 'src.tool_execution',
+    'core', 'core.models', 'core.database', 'core.auth',
+)
+with preserve_import_state(*_IMPORT_STATE):
+    for mod in _IMPORT_STATE:
+        if mod.startswith(('sqlalchemy', 'core.', 'src.database')) and mod not in sys.modules:
+            sys.modules[mod] = MagicMock()
+    for mod in ('src.agent_tools', 'src.tool_parsing', 'src.tool_schemas', 'src.tool_execution'):
+        clear_module(mod)
+
+    import src.agent_tools  # noqa: E402, F401
+    from src.tool_schemas import function_call_to_tool_block  # noqa: E402
 
 import json  # noqa: E402
-
-import src.agent_tools  # noqa: E402, F401
-from src.tool_schemas import function_call_to_tool_block  # noqa: E402
 
 
 def test_time_filter_is_preserved_as_json():

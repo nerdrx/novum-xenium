@@ -92,6 +92,10 @@ def _run_required_skill_view_case(
     monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
     monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *args, **kwargs: 10)
     monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda owner: set(), raising=False)
+    # Keep this run's fixture owner authorized regardless of the Docker/CI auth
+    # mode. The wrapper still enforces its public-tool gate; all taint,
+    # capability, approval, and delegated-credential checks remain real.
+    monkeypatch.setattr(tool_execution, "_owner_is_admin", lambda owner: owner == "alice")
     monkeypatch.setattr(agent_loop, "_agent_route_tool_mode", lambda *args, **kwargs: (False, False, False))
     original_build_system_prompt = agent_loop._build_system_prompt
 

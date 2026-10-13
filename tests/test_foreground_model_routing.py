@@ -33,6 +33,130 @@ def _collect(gen):
     return asyncio.run(_run())
 
 
+def test_required_skill_references_survive_final_route_budget_after_source_reads():
+    from pathlib import Path
+    from src.model_context import estimate_tokens
+
+    bodies = [
+        Path("agent-skills/ui-design/SKILL.md").read_text(),
+        Path("agent-skills/visual-verification/SKILL.md").read_text(),
+    ]
+    messages = [
+        {"role": "system", "content": "Trusted route instructions. " * 250},
+        {"role": "system", "content": "Protected coding requirements." , "_protected": True},
+        {"role": "user", "content": "Repair and visually verify the existing desktop app."},
+    ]
+    references = []
+    for index, (name, body) in enumerate(zip(("ui-design", "visual-verification"), bodies)):
+        reference = agent_loop.untrusted_context_message(
+            f"required skill procedure: {name}", body, arm_tool_gate=False,
+        )
+        reference.update(_agent_injected="context", _required_skill_reference=name)
+        references.append(reference)
+        call_id = f"skill-{index}"
+        messages.extend([
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": call_id, "type": "function",
+                "function": {"name": "manage_skills", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_call_id": call_id, "content": "Skill viewed; see separate reference."},
+            reference,
+        ])
+    latest_read_call = None
+    for index in range(5):
+        call_id = f"read-{index}"
+        latest_read_call = {
+            "role": "assistant", "content": None, "tool_calls": [{
+                "id": call_id, "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"},
+            }],
+        }
+        messages.extend([
+            latest_read_call,
+            {"role": "tool", "tool_call_id": call_id, "content": f"source-{index} " * 1500},
+        ])
+
+    shaped = agent_loop._trim_with_required_skill_references(
+        messages, context_length=32_000, reserve_tokens=16_000,
+    )
+    assert estimate_tokens(shaped) <= 16_000
+    assert all(any(
+        {key: value for key, value in message.items() if key != "_protected"} == reference
+        for message in shaped
+    ) for reference in references)
+    assert all(reference["metadata"]["trusted"] is False for reference in references)
+    assert all(reference["role"] == "user" for reference in references)
+    assert all(sum(body in str(message.get("content") or "") for message in shaped) == 1
+               for body in bodies)
+    assert any(
+        message.get("role") == "system"
+        and str(message.get("content") or "").startswith(messages[0]["content"][:2_000])
+        and "[System prompt truncated for context limits]" in str(message.get("content") or "")
+        for message in shaped
+    )
+    assert any(message == messages[1] for message in shaped)
+    assert any(message.get("tool_call_id") == "read-4" for message in shaped)
+    assert latest_read_call in shaped
+
+
+def test_required_skill_reference_budget_fallback_is_untrusted_and_explicit():
+    from pathlib import Path
+    from src.model_context import estimate_tokens
+
+    body = Path("agent-skills/ui-design/SKILL.md").read_text()
+    reference = agent_loop.untrusted_context_message(
+        "required skill procedure: ui-design", body, arm_tool_gate=False,
+    )
+    reference.update(_agent_injected="context", _required_skill_reference="ui-design")
+    messages = [
+        {"role": "system", "content": "Trusted route instructions."},
+        {"role": "user", "content": "Original app repair request."},
+        reference,
+        {"role": "user", "content": "Continue with the latest error."},
+    ]
+    shaped = agent_loop._trim_with_required_skill_references(
+        messages, context_length=2_500, reserve_tokens=1_500,
+    )
+    assert estimate_tokens(shaped) <= 1_000
+    assert not any(body in str(message.get("content") or "") for message in shaped)
+    warning = next(
+        message for message in shaped
+        if "did not fit this request's context budget" in str(message.get("content") or "")
+    )
+    assert warning["role"] == "user"
+    assert warning["metadata"]["trusted"] is False
+    assert any(message.get("content") == "Continue with the latest error." for message in shaped)
+
+
+def test_required_skill_reference_does_not_displace_latest_text_tool_result():
+    from src.model_context import estimate_tokens
+
+    body = "Specific procedure guidance. " * 500
+    reference = agent_loop.untrusted_context_message(
+        "required skill procedure: gui-workflow", body, arm_tool_gate=False,
+    )
+    reference.update(_agent_injected="context", _required_skill_reference="gui-workflow")
+    tool_result = agent_loop.untrusted_context_message(
+        "tool execution results", "The latest source inspection found the failing handler.",
+    )
+    messages = [
+        {"role": "system", "content": "Trusted route instructions."},
+        {"role": "user", "content": "Fix the existing GUI handler."},
+        tool_result,
+        reference,
+    ]
+    shaped = agent_loop._trim_with_required_skill_references(
+        messages, context_length=4_000, reserve_tokens=1_000,
+    )
+    assert estimate_tokens(shaped) <= 3_000
+    assert any(message == tool_result for message in shaped)
+    assert any(
+        "skill reference availability" in str(message.get("content") or "")
+        and "did not fit this request's context budget" in str(message.get("content") or "")
+        for message in shaped
+    )
+
+
 class _EmptyQuery:
     def filter(self, *args, **kwargs):
         return self

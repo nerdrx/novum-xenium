@@ -1370,6 +1370,8 @@ def _workspace_coding_rules(workspace: Optional[str]) -> str:
         "- For code repair tasks, find the canonical helper, parser, validator, service, or boundary function responsible for the behavior and patch it there when possible. Hidden tests often call helpers directly.\n"
         "- If output is huge, use `rg`, `grep`, `head`, `tail`, focused `sed -n`, or scripts that summarize only relevant parts. Do not flood the context with full logs or full files.\n"
         "- If a command fails, use the failure output to choose the next diagnostic or patch. Do not silently stop or claim success.\n"
+        "- If the cause remains unclear after inspecting the failing lines, or a repair repeats an earlier failure, consult the runtime/framework documentation before guessing another change. Re-reading unchanged files is not new evidence. Use available web tools when allowed, or local documentation when offline.\n"
+        "- For documentation searches, start with the exact API/symbol and runtime name. If results are irrelevant, simplify or rephrase the query rather than treating them as evidence; fetch the relevant official page and check the installed version before applying its advice.\n"
         "- After code changes, run the smallest relevant verification command you can infer from the repo (for example a focused test, `py_compile`, `node --check`, lint, or build). If verification cannot run, say exactly why.\n"
         "- Keep going until the requested change is actually made and checked, or state the concrete blocker."
     )
@@ -3527,6 +3529,125 @@ def _append_tool_results(
         )
 
 
+def _trim_with_required_skill_references(messages, context_length, reserve_tokens=512):
+    """Keep bounded, untrusted viewed-skill references when the route can fit them."""
+    references = [message for message in messages if message.get("_required_skill_reference")]
+    if not references:
+        from src.context_compactor import trim_for_context
+        return trim_for_context(messages, context_length, reserve_tokens=reserve_tokens)
+
+    from src.context_compactor import trim_for_context
+
+    def fits(candidate, expected_references):
+        trimmed = trim_for_context(candidate, context_length, reserve_tokens=reserve_tokens)
+        budget = max(0, context_length - reserve_tokens)
+        if estimate_tokens(trimmed) > budget:
+            return None
+        # Do not trade away the leading instructions, protected route guidance,
+        # or the latest actual user request to preserve a skill body.
+        core = []
+        first_unprotected_system_kept = False
+        for message in messages:
+            if message.get("role") == "system" and message.get("_protected"):
+                core.append(message)
+            elif message.get("role") == "system" and not first_unprotected_system_kept:
+                core.append(message)
+                first_unprotected_system_kept = True
+            if (
+                message.get("role") == "user"
+                and message.get("_agent_injected") != "context"
+                and (message.get("metadata") or {}).get("trusted") is not False
+            ):
+                latest_user = message
+        for item in core:
+            if any(item == kept for kept in trimmed):
+                continue
+            content = item.get("content")
+            if item.get("_protected") or not isinstance(content, str) or len(content) <= 2_000:
+                return None
+            if not any(
+                kept.get("role") == "system"
+                and isinstance(kept.get("content"), str)
+                and kept["content"].startswith(content[:2_000])
+                and "[System prompt truncated for context limits]" in kept["content"]
+                for kept in trimmed
+            ):
+                return None
+        if "latest_user" in locals() and not any(latest_user == kept for kept in trimmed):
+            return None
+        if any(not any(ref == kept for kept in trimmed) for ref in expected_references):
+            return None
+        latest_call_index = max(
+            (i for i, message in enumerate(messages)
+             if message.get("role") == "assistant" and message.get("tool_calls")),
+            default=-1,
+        )
+        if latest_call_index >= 0:
+            latest_call = messages[latest_call_index]
+            expected = []
+            for message in messages[latest_call_index + 1:]:
+                if message.get("role") != "tool":
+                    break
+                expected.append(message)
+            call_index = next(
+                (i for i, message in enumerate(trimmed)
+                 if message.get("role") == "assistant"
+                 and message.get("tool_calls") == latest_call.get("tool_calls")),
+                -1,
+            )
+            if call_index < 0 or trimmed[call_index] != latest_call:
+                return None
+            actual = trimmed[call_index + 1:call_index + 1 + len(expected)]
+            if not expected or actual != expected:
+                return None
+        latest_user_index = max(
+            (i for i, message in enumerate(messages)
+             if message.get("role") == "user"
+             and message.get("_agent_injected") != "context"
+             and (message.get("metadata") or {}).get("trusted") is not False),
+            default=-1,
+        )
+        latest_text_result = next(
+            (message for index, message in reversed(list(enumerate(messages)))
+             if index > latest_user_index
+             and message.get("role") == "user"
+             and (message.get("metadata") or {}).get("source") == "tool execution results"),
+            None,
+        )
+        if latest_text_result is not None and not any(
+            latest_text_result == kept for kept in trimmed
+        ):
+            return None
+        return trimmed
+
+    protected = [
+        {**message, "_protected": True} if message.get("_required_skill_reference") else message
+        for message in messages
+    ]
+    retained = fits(protected, [dict(ref, _protected=True) for ref in references])
+    if retained is not None:
+        return retained
+
+    names = sorted({str(message.get("_required_skill_reference") or "skill") for message in references})
+    base = [message for message in messages if not message.get("_required_skill_reference")]
+    warning = untrusted_context_message(
+        "skill reference availability",
+        "The full previously viewed procedure(s) " + ", ".join(names)
+        + " did not fit this request's context budget and are omitted here. "
+        "Do not assume their steps are present or claim to have applied them; retrieve the exact "
+        "procedure again with manage_skills action=view if needed.",
+        arm_tool_gate=False,
+    )
+    warning["_agent_injected"] = "context"
+    warning["_protected"] = True
+    fallback = fits([*base, warning], [warning])
+    if fallback is not None:
+        return fallback
+    # The ordinary trim remains the safe last resort when even the short
+    # untrusted omission notice cannot fit alongside the user's request.
+    return trim_for_context(base, context_length, reserve_tokens=reserve_tokens)
+
+
 def _compute_final_metrics(
     messages: List[Dict],
     full_response: str,
@@ -4871,6 +4992,10 @@ async def stream_agent_loop(
     # Refresh filesystem orientation per model request; conversation trimming
     # must not turn a parent workspace into an apparently empty project.
     _workspace_orientation = ""
+    # Route rebuilding strips prompt-only injected messages from ordinary
+    # history. Keep exact successful skill views separately so each rebuilt
+    # route can reattach them as untrusted reference data before budget trim.
+    _skill_reference_messages_by_name = {}
 
     def _trim_route_request_messages(candidate_url, candidate_model, route_messages, route_tools=None):
         """Apply the candidate route's own context budget to its request."""
@@ -5234,7 +5359,7 @@ async def stream_agent_loop(
                     )
                 trim_reserve_tokens = reserve_tokens
             message_budget = max(1, prompt_budget - schema_tokens)
-            trimmed_messages = trim_for_context(
+            trimmed_messages = _trim_with_required_skill_references(
                 route_messages,
                 message_budget,
                 reserve_tokens=trim_reserve_tokens,
@@ -5438,6 +5563,12 @@ async def stream_agent_loop(
             _prepend_agent_directive(route_messages, build_active_plan_note(approved_plan))
         if guide_only:
             _prepend_agent_directive(route_messages, GUIDE_ONLY_DIRECTIVE)
+        for skill_name, reference in _skill_reference_messages_by_name.items():
+            if not any(
+                message.get("_required_skill_reference") == skill_name
+                for message in route_messages
+            ):
+                route_messages.append(dict(reference))
         return {
             "messages": route_messages,
             "mcp_schemas": route_mcp_schemas,
@@ -5661,6 +5792,33 @@ async def stream_agent_loop(
 
     _context_preview_accounted_round = None
     _context_preview_accounted_tokens = 0
+    _skill_reference_names = set()
+    _skill_reference_warned = set()
+    _skill_reference_chars = 0
+
+    def _make_skill_reference(name, body):
+        nonlocal _skill_reference_chars
+        if not name or name in _skill_reference_names or name in _skill_reference_warned:
+            return None
+        if (len(_skill_reference_names) < 2 and isinstance(body, str)
+                and _skill_reference_chars + len(body) <= 20_000):
+            _skill_reference_names.add(name)
+            _skill_reference_chars += len(body)
+            label = f"required skill procedure: {name}"
+            content = body
+        else:
+            _skill_reference_warned.add(name)
+            label = "skill reference availability"
+            content = (
+                f"The full procedure {name} exceeds the bounded retained-reference size. "
+                "Its complete body is not included here; retrieve it again if needed and do not "
+                "claim to have applied its unavailable steps."
+            )
+        message = untrusted_context_message(label, content, arm_tool_gate=False)
+        message["_agent_injected"] = "context"
+        message["_required_skill_reference"] = name
+        _skill_reference_messages_by_name[name] = message
+        return message
 
     async def _context_result_preview(
         tool_name, description, result, formatted, event, *,
@@ -5791,6 +5949,8 @@ async def stream_agent_loop(
         # file forever. Only the last call in a native batch is eligible, so
         # every other result in that exchange is already accounted for.
         requested_file_read = tool_name == "read_file" and isinstance(result.get("output"), str)
+        if event.get("required_skill_reference"):
+            return _account_preview(formatted, exchange_tokens)
         if selected_skill_view and len(formatted) <= 12000 and not exceeds_remaining_budget:
             return _account_preview(formatted, exchange_tokens)
         if (
@@ -6141,8 +6301,32 @@ async def stream_agent_loop(
         tool_events.append(approved_tool_event)
         if approved.tool_name in _VERIFIER_EFFECTFUL_TOOLS:
             _effectful_used = True
+        approved_skill_reference = None
+        if approved.tool_name == "manage_skills":
+            approved_skill_view = _coding_grounding.observe(
+                approved.tool_name, approved_result, approved.content,
+            )
+            if approved_skill_view:
+                try:
+                    approved_skill_args = json.loads(approved.content or "{}")
+                except (TypeError, ValueError):
+                    approved_skill_args = {}
+                approved_skill_reference = _make_skill_reference(
+                    str(approved_skill_args.get("name") or approved_skill_args.get("skill_id") or "").strip(),
+                    approved_result.get("results"),
+                )
+                if approved_skill_reference is not None:
+                    approved_tool_event["required_skill_reference"] = str(
+                        approved_skill_args.get("name") or approved_skill_args.get("skill_id") or ""
+                    ).strip()
+        approved_formatted = format_tool_result(desc, approved_result)
+        if approved_skill_reference is not None:
+            approved_formatted = (
+                f"Viewed required skill procedure {approved_tool_event['required_skill_reference']}. "
+                "Its untrusted reference body follows separately when it fits the request context."
+            )
         formatted_approved_result = await _context_result_preview(
-            approved.tool_name, desc, approved_result, format_tool_result(desc, approved_result), approved_tool_event,
+            approved.tool_name, desc, approved_result, approved_formatted, approved_tool_event,
         )
         _append_tool_results(
             messages,
@@ -6161,6 +6345,8 @@ async def stream_agent_loop(
                 }
             ],
         )
+        if approved_skill_reference is not None:
+            messages.append(approved_skill_reference)
         _approved_result_injected = True
 
     round_numbers = count(1) if max_rounds == 0 else range(1, max_rounds + 1)
@@ -7214,6 +7400,7 @@ async def stream_agent_loop(
         tool_results = []
         tool_result_texts = []  # plain text for native tool role messages
         tool_result_records = []  # aligned structured provenance for next round
+        skill_reference_messages = []
         budget_hit = False
         for i, block in enumerate(tool_blocks):
             # --- Tool budget check ---
@@ -7522,7 +7709,27 @@ async def stream_agent_loop(
                     yield f'data: {json.dumps({"delta": held_delta})}\n\n'
                 held_round_deltas.clear()
             _grounding_was_open = _coding_grounding.may_mutate
-            _coding_grounding.observe(block.tool_type, result, block.content)
+            successful_skill_view = _coding_grounding.observe(
+                block.tool_type, result, block.content,
+            )
+            skill_reference_message = None
+            skill_reference_name = ""
+            skill_reference_duplicate = False
+            if successful_skill_view and block.tool_type == "manage_skills":
+                try:
+                    _skill_args = json.loads(block.content or "{}")
+                except (TypeError, ValueError):
+                    _skill_args = {}
+                skill_reference_name = str(
+                    _skill_args.get("name") or _skill_args.get("skill_id") or ""
+                ).strip()
+                skill_body = result.get("results") if isinstance(result, dict) else None
+                skill_reference_duplicate = bool(
+                    skill_reference_name
+                    and skill_reference_name in (_skill_reference_names | _skill_reference_warned)
+                )
+                if not skill_reference_duplicate:
+                    skill_reference_message = _make_skill_reference(skill_reference_name, skill_body)
             if (
                 not _skill_stall_recovery_used
                 and _coding_grounding.documentation_ready
@@ -7995,6 +8202,8 @@ async def stream_agent_loop(
                 "output": output_text,
                 "exit_code": result.get("exit_code"),
             }
+            if skill_reference_message is not None or skill_reference_duplicate:
+                tool_event["required_skill_reference"] = skill_reference_name
             if result.get("policy"):
                 tool_event["policy"] = result["policy"]
                 tool_event["blocked"] = bool(result.get("blocked"))
@@ -8024,6 +8233,19 @@ async def stream_agent_loop(
                 _effectful_used = True
 
             formatted = format_tool_result(desc, result)
+            if skill_reference_message is not None or skill_reference_duplicate:
+                formatted = (
+                    f"Viewed required skill procedure {skill_reference_name}. "
+                    + (
+                        "Its untrusted reference body is already present in the run context."
+                        if skill_reference_duplicate and skill_reference_name in _skill_reference_names
+                        else "Its full untrusted reference body was too large to retain; retrieve it if needed."
+                        if skill_reference_duplicate
+                        else "Its untrusted reference body follows separately when it fits the request context."
+                    )
+                )
+                if skill_reference_message is not None:
+                    skill_reference_messages.append(skill_reference_message)
             formatted = await _context_result_preview(
                 block.tool_type, desc, result, formatted, tool_event,
                 tool_index=i,
@@ -8103,6 +8325,7 @@ async def stream_agent_loop(
                              tool_results, tool_result_texts, used_native, round_num,
                              round_reasoning=round_reasoning,
                              tool_result_records=tool_result_records)
+        messages.extend(skill_reference_messages)
 
         stall = _progress_guard.observe(tool_result_records)
         if stall:

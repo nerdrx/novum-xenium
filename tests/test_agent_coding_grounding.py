@@ -365,6 +365,44 @@ def test_documentation_ready_schema_focuses_on_pending_skill(monkeypatch, tmp_pa
     assert executed == ['web_fetch', 'manage_skills', 'write_file']
 
 
+def test_viewed_skill_reference_is_reattached_after_route_rebuild_and_duplicate_read(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    import src.project_workflows as workflows
+    monkeypatch.setattr(workflows, 'verification_plan', lambda *_args: None)
+
+    async def no_workspace_verification(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(workflows, 'run_workspace_verification', no_workspace_verification)
+    url = 'https://vendor.example/docs/gui'
+    skill_body = 'Use the existing spacing scale and verify the rendered GUI.'
+    events, requests, histories, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view-1'),
+         _call('read_file', {'path': 'src/main.js'}, 'read-source'),
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view-2'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented using the viewed procedure."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'read_file': [{'output': 'The application entry point.', 'exit_code': 0}],
+         'manage_skills': [{'results': skill_body, 'exit_code': 0},
+                           {'results': skill_body, 'exit_code': 0}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    # Rebuild after the successful view, perform a real source read, then
+    # rebuild again for the duplicate view and subsequent write.
+    for history in histories[2:5]:
+        retained = [message for message in history
+                    if skill_body in str(message.get('content') or '')]
+        assert len(retained) == 1
+        assert retained[0]['role'] == 'user'
+        assert retained[0]['metadata']['trusted'] is False
+        assert retained[0]['_required_skill_reference'] == 'ui-design'
+    assert executed == ['web_fetch', 'manage_skills', 'read_file', 'manage_skills', 'write_file']
+
+
 def test_out_of_phase_fetch_is_blocked_without_spending_research_budget(monkeypatch, tmp_path):
     _seed_ui_skill(monkeypatch)
     url = 'https://vendor.example/docs/gui'

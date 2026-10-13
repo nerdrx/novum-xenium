@@ -266,5 +266,186 @@
     "observed_failure": "Model reached required skill lookup, but the generic schema filter rejected the argument-sensitive skill tool using empty arguments. No packet was created.",
     "test_unchanged": true,
     "manual_application_edits": 0
+  },
+  "research_retest": {
+    "revision": "9893335",
+    "model_metadata": {
+      "actual_route": {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 19
+      },
+      "approval_count": 0,
+      "endpoint_id": "6865006e",
+      "evidence": [
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 1,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 2,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 3,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 4,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 5,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 6,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 7,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 8,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 9,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 10,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 11,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 12,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 13,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 14,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 15,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 16,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 17,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 18,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 19,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "input_tokens": 323859,
+          "model": "nx-model-5",
+          "output_tokens": 2997,
+          "requested_model": "qwen3.5:9b",
+          "total_tokens": 326856,
+          "type": "metrics"
+        }
+      ],
+      "model": "qwen3.5:9b",
+      "output_saved": false,
+      "preset_id": null,
+      "run_id": "4ff63567ef464a0182eb7d98a00f6d12",
+      "seconds": 125.91,
+      "session_id": "afb0a68a-15ae-4a12-9bd8-e46b1a189d96",
+      "source_files": [
+        "nflix/dist/main/index.js",
+        "nflix/dist/renderer/renderer.js",
+        "nflix/.odysseus-preview/qa-conversion-flow.mjs"
+      ],
+      "status": "incomplete",
+      "stream_ended": true,
+      "terminal": null,
+      "verification_passed": null
+    },
+    "result": "incomplete",
+    "gui_conversion_verified": false,
+    "observed_failure": "The model loaded skills and read application code but never created a work packet. It paused on three unchanged read/planning results. No conversion test ran.",
+    "source_unchanged": {
+      "nflix/dist/main/index.js": true,
+      "nflix/dist/renderer/renderer.js": true,
+      "nflix/.odysseus-preview/qa-conversion-flow.mjs": true
+    },
+    "manual_application_edits": 0
   }
 }

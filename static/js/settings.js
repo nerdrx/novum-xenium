@@ -1664,7 +1664,7 @@ async function initAgentSettings() {
     if (supInput) supInput.checked = !!settings.agent_supervisor_ladder;
     if (groundingInput) groundingInput.checked = settings.agent_coding_grounding !== false;
     if (verifierInput) verifierInput.checked = !!settings.agent_verifier_subagent;
-    if (milestoneInput) milestoneInput.checked = !!settings.agent_milestone_workflow;
+    if (milestoneInput) milestoneInput.checked = settings.agent_milestone_workflow !== false;
   } catch (e) {}
 
   // Clamp + coerce a raw input to an int in [lo, hi]; falls back to `dflt`

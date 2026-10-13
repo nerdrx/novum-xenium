@@ -39,13 +39,13 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 acceptance_blocked=False, verify_existing=False, repair_failed_check=False,
                 max_tool_calls=0, baseline_blocked=False, max_rounds=10, extra_tools=False,
                 schema_details=None, repeated_failed_checks=False, batch_retry=False,
-                extra_shell_after_acceptance=False, extra_shell_exit=0):
+                extra_shell_after_acceptance=False, extra_shell_exit=0, user_request=None):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
     monkeypatch.setattr(al, "get_setting", lambda key, default=None: (
-        True if ((checked_workflow and key == "agent_milestone_workflow")
-                 or (verifier_issues is not None and key == "agent_verifier_subagent")) else default
+        checked_workflow if key == "agent_milestone_workflow" else (
+            True if verifier_issues is not None and key == "agent_verifier_subagent" else default)
     ))
     if extra_tools:
         monkeypatch.setattr(al, "_image_tool_available", lambda *args: True)
@@ -224,7 +224,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         "http://x/v1", "gpt-4o",
         [{"role": "user", "content": "Preserve keyboard support"},
          {"role": "assistant", "content": "obsolete implementation chatter"},
-         {"role": "user", "content": "Fix the auth refresh bug in this workspace and run tests"}],
+         {"role": "user", "content": user_request or "Fix the auth refresh bug in this workspace and run tests"}],
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
         relevant_tools={"todowrite", "bash", "write_file", "edit_file", "apply_patch",
@@ -768,7 +768,7 @@ def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_con
     deltas = " ".join(event.get("delta", "") for event in events)
     assert "First slice is done." not in deltas
     assert "Both coding slices are complete." in deltas
-    assert DEFAULT_SETTINGS["agent_milestone_workflow"] is False
+    assert DEFAULT_SETTINGS["agent_milestone_workflow"] is True
 
     # The second reproduction begins a fresh packet context: the original user
     # request remains, while prior model chatter and the previous packet's goal do not.
@@ -922,3 +922,12 @@ def test_exhausted_restored_tracker_stops_before_approval_or_model_execution(mon
     assert not requested
     assert not any(tool in {"bash", "write_file"} for tool, _ in executed)
     assert any(event.get("reason") == "coding_acceptance_retry_limit" for event in events)
+
+
+@pytest.mark.parametrize("user_text", ["Hello, how are you?", "Review the code for bugs", "Convert this video with ffmpeg"])
+def test_checked_default_keeps_non_coding_turns_lightweight(monkeypatch, tmp_path, user_text):
+    events, _, _ = _run_packet(monkeypatch, tmp_path, checked_workflow=True,
+                               no_packet_start=True, user_request=user_text)
+    status = [event for event in events if event.get("type") == "coding_workflow"]
+    assert status == [{"type": "coding_workflow", "requested": True, "enabled": False}]
+    assert not any(event.get("type") == "coding_work_packet" for event in events)

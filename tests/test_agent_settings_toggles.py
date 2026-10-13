@@ -13,8 +13,8 @@ def test_agent_research_and_completion_review_settings_are_persisted():
 
     assert 'id="set-agentCodingGrounding" type="checkbox" checked' in html
     assert 'id="set-agentVerifierSubagent" type="checkbox">' in html
-    assert 'id="set-agentMilestoneWorkflow" type="checkbox">' in html
-    assert DEFAULT_SETTINGS["agent_milestone_workflow"] is False
+    assert 'id="set-agentMilestoneWorkflow" type="checkbox" checked>' in html
+    assert DEFAULT_SETTINGS["agent_milestone_workflow"] is True
     assert "Research coding documentation" in html
     assert "Review task completion" in html
     assert "can still miss things" in html
@@ -26,7 +26,7 @@ def test_agent_research_and_completion_review_settings_are_persisted():
 
     assert "settings.agent_coding_grounding !== false" in script
     assert "!!settings.agent_verifier_subagent" in script
-    assert "!!settings.agent_milestone_workflow" in script
+    assert "settings.agent_milestone_workflow !== false" in script
     assert "payload.agent_coding_grounding = !!groundingInput.checked" in script
     assert "payload.agent_verifier_subagent = !!verifierInput.checked" in script
     assert "payload.agent_milestone_workflow = !!milestoneInput.checked" in script
@@ -45,3 +45,13 @@ def test_agent_round_setting_displays_and_saves_zero_as_unlimited():
     assert "settings.agent_max_rounds, 20" in script
     assert "rounds === 0 ? ' · Unlimited steps/message'" in script
     assert "curR === 0 ? ' · Unlimited steps/message'" in script
+
+
+def test_checked_coding_default_respects_saved_opt_out(monkeypatch, tmp_path):
+    import src.settings as settings
+
+    monkeypatch.setattr(settings, "SETTINGS_FILE", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(settings, "_settings_cache", None)
+    assert settings.load_settings()["agent_milestone_workflow"] is True
+    settings.save_settings({"agent_milestone_workflow": False})
+    assert settings.load_settings()["agent_milestone_workflow"] is False

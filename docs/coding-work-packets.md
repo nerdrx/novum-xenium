@@ -76,7 +76,10 @@ the full skill catalog is replaced by on-demand discovery in packet context.
 A run-scoped status card shows the objective, stage, test status, and review status.
 Reconnect replay can restore this card; saved history does not yet persist it.
 Settings → AI → Work in checked coding steps enables automatic packet selection
-for substantive coding tasks. It defaults off, alongside the existing experience.
+for coding changes. It defaults on; ordinary chat, read-only inspection, and media
+conversion do not activate checked steps. The setting remains an off switch. Saved
+opt-outs remain respected when upgrading; enable the switch to opt an older
+installation in. Existing plan, incognito, and permission exclusions still apply.
 In this mode a new slice requires the packet in the same checklist call; a plain
 checklist is rejected with instructions to supply it. Existing active slices
 can still receive status-only checklist updates.

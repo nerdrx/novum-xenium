@@ -311,3 +311,12 @@ This is a bounded helper success, not a full FFmpeg GUI result. The prompt named
 At the user's request, new/missing settings now enable checked coding automatically for coding changes. A separate conservative intent gate excludes ordinary conversation, read-only code reviews, and media conversion without changing general tool discovery. Existing plan/incognito/permission exclusions and exact checkpoint continuation remain. Explicit saved false values remain false on upgrades; this user's runtime was explicitly enabled through the authenticated settings API. The UI retains its switch and explains the coding-only default.
 
 79 focused tests passed across intent classification, settings persistence, and workflow integration, including ordinary chat/review/conversion with the preference on and saved opt-out restoration. Deployment checked 105 chats idle twice, preserved runtime backups, and verified checkout/runtime/live/image file parity. Image: `909efaf4b681`. This changes defaults and activation scope; it is not a new claim of model coding reliability.
+
+
+### Configuration merge and reviewer exhaustion
+
+With the user's enabled workflow preference left unchanged, qwen3.5:9b repaired its first attempt and produced a recursive configuration merge passing all six independent tests. Falsey overrides, replacement semantics, input preservation and nested copy isolation passed. Original tests/runner remained unchanged and no operator edited the solution. The 116.562-second run nevertheless remained unverified: completion review exhausted 2048 tokens, then its bounded 4096-token retry, both with zero final-content characters. This is implementation acceptance, not complete reviewed success.
+
+The review failure message now explicitly identifies the reviewer output limit and preserves the distinction from recorded check results. It still fails closed and does not expand retries or infer success. All 37 completion-verification tests pass, including malformed output, unavailable review, and bounded length retry. Evidence: `evaluations/coding-merge-config-20261014.json`; fixture: `evaluations/fixtures/diverse/merge-config`.
+
+Deployment checked 101 chats idle twice, preserved runtime backups, and verified canonical/runtime/live/image parity (`ea7894fe2989`).

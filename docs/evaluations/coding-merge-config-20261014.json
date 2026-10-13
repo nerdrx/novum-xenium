@@ -1,0 +1,218 @@
+{
+  "model": "qwen3.5:9b",
+  "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/merge-config-20261014-004204",
+  "results": {
+    "merge-config": {
+      "adapter_exit": 2,
+      "seconds": 116.562,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "passed": true,
+      "source_changed": true,
+      "task": "Implement `merge_config(defaults, overrides) -> dict` in `solution.py` using only Python's standard library.\n\nBoth inputs are dictionaries with string keys and acyclic JSON-like values: dictionaries, lists, strings, numbers, booleans, and None. No argument validation is required.\n\nReturn a new dictionary containing all keys from either input. When a key occurs in both and both values are dictionaries, merge those dictionaries recursively with the same rules. Otherwise the override value replaces the default completely, including None, False, zero, empty strings, and lists. A list replaces a list; never concatenate lists or merge their elements. Keys present only in defaults retain their values; keys present only in overrides are added.\n\nDo not mutate either input. Deep-copy all retained/replaced values: no mutable dictionary or list reachable from the result may be shared with either input. Inputs need not preserve internal alias relationships in the result. Key order is not part of the contract. Return the dictionary; do not print or write files.\n\nChange only `solution.py`. Run `python3 qa_check.py`. No dependencies.\n",
+      "baseline_exit": 1,
+      "initial_hashes": {
+        "solution.py": "358ae8fd166ce263064bc116df6bf9ecf9aa6785819326531b55e8896a901bc2",
+        "test_solution.py": "f45e9aaecbec0bf043cb298e3dcfc09f2e0c5ae190b083f21e6edbdcf3f4f553",
+        "qa_check.py": "da3ef138f187faa8fe37d2f0cfb2b3d270a437717eb1fe66b4c2dde4d1db26a9",
+        "TASK.md": "252459137e56eb3ce92997445df1abbfa01ededa2ebd74acb5eee16253889367"
+      },
+      "adapter": {
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 11
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "endpoint_id": "6865006e",
+        "evidence": [
+          {
+            "enabled": true,
+            "requested": true,
+            "type": "coding_workflow"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 14192,
+            "model": "nx-model-5",
+            "output_tokens": 364,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 14556,
+            "type": "metrics"
+          },
+          {
+            "decision": "approve_task",
+            "type": "approval_decision"
+          },
+          {
+            "enabled": true,
+            "requested": true,
+            "type": "coding_workflow"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 1,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 3,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 4,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 5,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 6,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 6,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 7,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 8,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 9,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 10,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "unverified",
+            "round": 10,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 11,
+            "type": "model_actual"
+          },
+          {
+            "reason": "completion_unverified",
+            "status": "failed",
+            "type": "agent_terminal"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 108117,
+            "model": "nx-model-5",
+            "output_tokens": 3248,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 111365,
+            "type": "metrics"
+          }
+        ],
+        "model": "qwen3.5:9b",
+        "output_saved": false,
+        "preset_id": null,
+        "run_id": "e6e60f6ded5049e7bb168ce8c48ceaee",
+        "seconds": 116.516,
+        "session_id": "1c1bd7ac-64e0-4436-868c-59b9ab9f68f6",
+        "source_files": [
+          "solution.py"
+        ],
+        "status": "unverified",
+        "stream_ended": true,
+        "terminal": {
+          "reason": "completion_unverified",
+          "status": "failed",
+          "type": "agent_terminal"
+        },
+        "verification_passed": null
+      },
+      "generated_source": "import copy\n\n\ndef merge_config(defaults, overrides) -> dict:\n    \"\"\"Merge defaults with overrides recursively.\n    \n    When a key occurs in both and both values are dictionaries, merge recursively.\n    Otherwise, override replaces default completely.\n    All values are deep-copied to avoid aliasing.\n    \"\"\"\n    def deep_merge(base, override):\n        # Start with empty dict, build up result\n        result = {}\n        \n        for key, base_val in base.items():\n            override_val = override.get(key)\n            \n            if key not in override:\n                # Key only in defaults, deep copy base value\n                result[key] = copy.deepcopy(base_val)\n            elif isinstance(base_val, dict) and isinstance(override_val, dict):\n                # Both are dicts, merge recursively\n                result[key] = deep_merge(base_val, override_val)\n            else:\n                # Override replaces default completely (deep copy override value)\n                result[key] = copy.deepcopy(override_val)\n        \n        # Now add keys only from overrides\n        for key, override_val in override.items():\n            if key not in base:\n                # Key only in overrides, deep copy override value\n                result[key] = copy.deepcopy(override_val)\n        \n        return result\n    \n    return deep_merge(defaults, overrides)\n",
+      "external_test_output": "test_does_not_mutate_inputs (test_solution.MergeConfigTests.test_does_not_mutate_inputs) ... ok\ntest_empty_dictionaries_and_fresh_top_level (test_solution.MergeConfigTests.test_empty_dictionaries_and_fresh_top_level) ... ok\ntest_falsey_values_replace_defaults (test_solution.MergeConfigTests.test_falsey_values_replace_defaults) ... ok\ntest_nested_merge_retains_and_adds_keys (test_solution.MergeConfigTests.test_nested_merge_retains_and_adds_keys) ... ok\ntest_nested_result_mutations_never_alias_inputs (test_solution.MergeConfigTests.test_nested_result_mutations_never_alias_inputs) ... ok\ntest_type_changes_and_lists_replace_whole_values (test_solution.MergeConfigTests.test_type_changes_and_lists_replace_whole_values) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.000s\n\nOK\n"
+    }
+  },
+  "limits": [
+    "Independent implementation acceptance passed all six tests; run remained unverified because completion reviewer produced no verdict.",
+    "Reviewer diagnostics: attempt1 length/2048 tokens/0 content chars; attempt2 length/4096 tokens/0 content chars.",
+    "No operator implementation edits. Original protected tests unchanged. Runtime workflow preference remained enabled without test harness override."
+  ]
+}

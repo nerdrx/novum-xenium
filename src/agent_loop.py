@@ -4041,6 +4041,10 @@ async def _run_verifier_subagent(
             response_diagnostics.get("reasoning_chars"),
         )
         verdict = parse_completion_verification(_strip_think_blocks(retry_raw or ""))
+    if (completion_verdict_needs_format_retry(verdict)
+            and response_diagnostics.get("finish_reason") == "length"):
+        return ["Unverified: the completion reviewer reached its output limit without a verdict; "
+                "completed checks remain recorded, but independent review is unfinished."]
     if verdict["status"] == "passed":
         return []
     return [f"{verdict['status'].capitalize()}: {issue}" for issue in verdict["issues"]]

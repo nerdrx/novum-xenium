@@ -408,7 +408,8 @@ def test_verifier_length_retry_increases_budget_but_still_fails_closed(monkeypat
     assert all(call["model"] == "test-model" for call in calls)
     assert all(call["reasoning_mode"] == "off" for call in calls)
     assert "Formatting retry" in calls[1]["messages"][0]["content"]
-    assert issues == ["Unverified: Verifier returned no single final verdict."]
+    assert issues == ["Unverified: the completion reviewer reached its output limit without a verdict; "
+                      "completed checks remain recorded, but independent review is unfinished."]
 
 
 def test_valid_unverified_verdict_does_not_retry_format(monkeypatch):

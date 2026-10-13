@@ -167,11 +167,26 @@ the count. Do not treat an empty intervention field as proof of zero.
 
 ## Limits
 
-This is one small, deterministic Python repair. It helps check wiring and
+These are small Python repair fixtures with deterministic checks. They help check wiring and
 compare this narrow task, but cannot establish general coding ability, tool
 quality, or repeatability. It does not verify that an adapter actually used
 the reported model/settings; confirm those in the serving agent and model
 endpoint. Larger claims need a predeclared task suite, repeated trials, and
 separate review of tool-use behavior. No larger evaluation is included here.
+
+## Latest checked-workflow comparison
+
+The two-order trial at runtime revision `f6c44b2` is recorded in
+[`coding-multifile-current-20261013.json`](evaluations/coding-multifile-current-20261013.json).
+Both agents repaired both files and passed the external assertions in both
+orders. Novum nevertheless returned `incomplete`: its registered slice passed,
+but the remaining checklist milestones had no separate completion evidence.
+This is a workflow failure despite correct final code. No independent review
+or FFmpeg GUI success is implied.
+
+Both used the same qwen3.5:9b serving model, explicit task, initial files, and
+requested sampling settings, with web disabled. Agent prompts and overhead
+differ. One trial per order is insufficient for a general speed or reliability
+claim; the report retains timings as observations only.
 
 The first checked-mode live result is recorded in `evaluations/coding-checked-20261013.json`. Both agents produced the correct one-line repair and passed the external assertions, but Novum did not verify overall completion and emitted a misleading final notice. This result demonstrates the narrow test flow, not reliable application development.

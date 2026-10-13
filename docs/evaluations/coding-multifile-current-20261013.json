@@ -1,0 +1,215 @@
+{
+  "date": "2026-10-13",
+  "scope": "Two-file checked-workflow comparison, one trial per order",
+  "novum_runtime_revision": "f6c44b2",
+  "adapter_revision": "3620e94",
+  "aider_version": "0.86.2",
+  "model": "qwen3.5:9b",
+  "trials": [
+    {
+      "started_at": "2026-10-13T16:56:07.003289+00:00",
+      "run_order": [
+        "aider",
+        "novum"
+      ],
+      "task": "Repair this project: `core.total` must sum numeric values; `report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. Change `core.py` and `report.py`, then verify the result.\n",
+      "settings": {
+        "temperature": 1.0,
+        "max_tokens": 16384
+      },
+      "fixture_sha256": "d4de77f937e8717993891f3f27b4f1bb5567bc6977487342167704aebdd6ef8a",
+      "results": {
+        "aider": {
+          "seconds": 9.781,
+          "command_returncode": 0,
+          "acceptance_command": [
+            "/usr/bin/python3",
+            "-c",
+            "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+          ],
+          "acceptance_returncode": 0,
+          "timed_out": false,
+          "external_acceptance_passed": true,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          }
+        },
+        "novum": {
+          "seconds": 74.43,
+          "command_returncode": 2,
+          "acceptance_command": [
+            "/usr/bin/python3",
+            "-c",
+            "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+          ],
+          "acceptance_returncode": 0,
+          "timed_out": false,
+          "external_acceptance_passed": true,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\n\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          }
+        }
+      },
+      "novum": {
+        "run_id": "8a10b3b02ffe44e2992da48fb2ff2077",
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 23
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "status": "incomplete",
+        "terminal": null,
+        "verification_passed": null,
+        "packet_events": [
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 14,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 15,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 16,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 17,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          }
+        ]
+      }
+    },
+    {
+      "started_at": "2026-10-13T16:58:07.635683+00:00",
+      "run_order": [
+        "novum",
+        "aider"
+      ],
+      "task": "Repair this project: `core.total` must sum numeric values; `report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. Change `core.py` and `report.py`, then verify the result.\n",
+      "settings": {
+        "temperature": 1.0,
+        "max_tokens": 16384
+      },
+      "fixture_sha256": "d4de77f937e8717993891f3f27b4f1bb5567bc6977487342167704aebdd6ef8a",
+      "results": {
+        "novum": {
+          "seconds": 63.269,
+          "command_returncode": 2,
+          "acceptance_command": [
+            "/usr/bin/python3",
+            "-c",
+            "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+          ],
+          "acceptance_returncode": 0,
+          "timed_out": false,
+          "external_acceptance_passed": true,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          }
+        },
+        "aider": {
+          "seconds": 4.722,
+          "command_returncode": 0,
+          "acceptance_command": [
+            "/usr/bin/python3",
+            "-c",
+            "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+          ],
+          "acceptance_returncode": 0,
+          "timed_out": false,
+          "external_acceptance_passed": true,
+          "final_source": {
+            "core.py": "def total(values):\n    return sum(values)\n",
+            "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+          }
+        }
+      },
+      "novum": {
+        "run_id": "b839fe58be3847d38426f22fd721d007",
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 21
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "status": "incomplete",
+        "terminal": null,
+        "verification_passed": null,
+        "packet_events": [
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 16,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 17,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 17,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 18,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          }
+        ]
+      }
+    }
+  ],
+  "limitations": [
+    "Same task and byte-identical initial files, same serving model, requested temperature 1.0 and output budget 16384; agent prompts and effective context overhead differ.",
+    "No web access in these comparison trials. Aider uses whole-file edits without Git or repository map on this tiny fixture.",
+    "External assertions cover positive, empty and mixed-sign input; they do not establish general application reliability.",
+    "Both agents produced correct final files in both orders. Novum left its checklist incomplete in both trials; external acceptance must not be presented as internal workflow completion.",
+    "Only one stochastic trial per order; timings are observations, not a general speed benchmark.",
+    "The Novum packet test result covers its registered command, not independent review. A zero-exit print-only command does not automatically enforce the textual expected output.",
+    "No manual fixture source repairs were performed during these trials. The FFmpeg GUI conversion remains unverified."
+  ]
+}

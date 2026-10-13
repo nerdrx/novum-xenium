@@ -412,6 +412,28 @@ def test_failed_skill_views_release_only_after_bounded_attempts(monkeypatch, tmp
                for event in events)
 
 
+def test_rejected_non_view_calls_release_skill_gate_after_bounded_attempts(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
+    url = 'https://vendor.example/docs/gui'
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        [_call('web_fetch', {'url': url}, 'fetch'),
+         _call('manage_skills', {'action': 'list'}, 'list-1'),
+         _call('manage_skills', {'action': 'delete', 'name': 'ui-design'}, 'delete'),
+         _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
+         'data: {"delta":"Implemented after the bounded skill lookup attempts."}\n\n'],
+        {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'write_file': [{'output': 'saved', 'exit_code': 0}]},
+    )
+
+    assert requests[1] == {'manage_skills'}
+    assert requests[2] == {'manage_skills'}
+    assert 'write_file' in requests[3]
+    assert executed == ['web_fetch', 'write_file']
+    assert any(event.get('type') == 'coding_research'
+               and event.get('status') == 'sources_read' for event in events)
+
+
 def test_missing_skill_candidate_keeps_documentation_phase_and_opens_after_lookup(monkeypatch, tmp_path):
     _no_suggested_skills(monkeypatch)
     url = 'https://vendor.example/docs/gui'

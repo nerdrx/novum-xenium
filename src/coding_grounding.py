@@ -428,15 +428,24 @@ class CodingGrounding:
     def observe(self, tool_name, result, content=None):
         """Record actual result; return True only when it supplies usable evidence."""
         if self.required and tool_name == "manage_skills" and self.skill_candidates:
+            # A rejected malformed/non-view call is still one bounded attempt
+            # once skill preparation is the active phase. It never counts as
+            # a successful view or as an approval.
+            if isinstance(result, dict) and result.get("approval_required"):
+                return False
             try:
                 args = json.loads(str(content or ""))
             except (TypeError, ValueError):
+                if self.skill_preparation_required:
+                    self.skill_view_attempts += 1
                 return False
-            if not isinstance(args, dict) or args.get("action") != "view":
+            if not isinstance(args, dict):
+                if self.skill_preparation_required:
+                    self.skill_view_attempts += 1
                 return False
-            # An approval prompt is still pending, not a failed lookup. The
-            # follow-up result after approval/denial will be observed instead.
-            if isinstance(result, dict) and result.get("approval_required"):
+            if str(args.get("action") or "").strip().lower() != "view":
+                if self.skill_preparation_required:
+                    self.skill_view_attempts += 1
                 return False
             name = str(args.get("name") or args.get("skill_id") or "").strip()
             skill_text = result.get("results") if isinstance(result, dict) else None

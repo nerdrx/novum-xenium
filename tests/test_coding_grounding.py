@@ -363,6 +363,23 @@ def test_skill_view_must_match_a_suggested_candidate_and_failure_escape_is_bound
     assert not gate.observe("manage_skills", {"error": "not found", "exit_code": 1},
                             '{"action":"view","name":"gui-workflow"}')
     assert gate.may_mutate  # two completed, unsuccessful lookups release the gate
+
+
+def test_rejected_skill_calls_consume_bounded_preparation_attempts_not_success():
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["gui-workflow"])
+    assert gate.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
+
+    for call in ("malformed", '{"action":"list","name":"gui-workflow"}'):
+        assert not gate.allows_tool("manage_skills", call)
+        assert not gate.observe(
+            "manage_skills", {"error": "blocked by coding research gate", "exit_code": 1}, call,
+        )
+
+    assert gate.skill_view_attempts == gate.max_skill_view_attempts
+    assert not gate.skill_reviews_satisfied
+    assert gate.may_mutate  # bounded fallback; neither rejected call counts as a view
+    assert "procedure was not consulted" in gate.directive
     assert "do not claim all required procedures were consulted" in gate.directive
 
 

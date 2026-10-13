@@ -303,14 +303,17 @@ try {
 
   let test = { configured: false, status: 'not exercised; no workspace test script supplied' };
   if (config.testScript) {
+    phase = 'loading workspace test';
     const mod = await import(pathToFileURL(config.testScript).href);
     const run = typeof mod.default === 'function' ? mod.default : mod.run;
     if (typeof run !== 'function') throw new Error('test script must export a default function or named run function');
+    phase = 'running workspace test';
     const value = await run({
       app: { pid: electronProcess.pid, executablePath: config.electronPath, exitCode: electronProcess.exitCode },
       page, context, artifacts: { outputDir, desktopPath, compactPath },
     });
     test = { configured: true, status: 'completed', result: value === undefined ? null : value };
+    phase = 'workspace test completed';
   }
 
   const runtimeIssues = diagnostics.pageErrors.length || diagnostics.consoleErrors.length ||
@@ -374,8 +377,13 @@ try {
 } catch (error) {
   fail(error?.message || error);
   const reportPath = runDirectory ? path.join(runDirectory, 'report.json') : '';
+  const workspaceTestFailed = phase === 'running workspace test';
+  const errorSummary = String(error?.message || error).slice(0, 1000);
   const failureReport = {
-    status: 'failed', behavior: 'unverified; preview failed before workspace tests',
+    status: 'failed',
+    behavior: workspaceTestFailed
+      ? 'workspace test failed; app behavior remains unverified'
+      : 'unverified; preview failed before workspace tests',
     runId, workspace, appEntry, electron: electronPath, phase,
     error: String(error?.stack || error).slice(0, 8000), diagnostics,
   };
@@ -384,6 +392,9 @@ try {
   }
   console.log('PREVIEW_RESULT: ' + JSON.stringify({
     status: 'failed', phase, appEntry,
+    behavior: failureReport.behavior,
+    test: workspaceTestFailed ? 'failed' : 'not run',
+    error: errorSummary,
     errors: {
       page: diagnostics.pageErrors.length, console: diagnostics.consoleErrors.length,
       stderr: diagnostics.mainStderr.length,

@@ -296,12 +296,32 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   });
   assert.ok(popupStdout.length < 6000, 'source-location evidence should keep the summary bounded');
 
+  const throwingScript = path.join(root, 'throwing-test.mjs');
+  await writeFile(throwingScript, `
+    export default async () => { throw new Error('fixture assertion: output was missing'); };
+  `);
+  const throwingRun = spawn(node, [helper, '--workspace', root, '--test-script', 'throwing-test.mjs', '--timeout', '15'], {
+    stdio: ['ignore', 'pipe', 'ignore'], env,
+  });
+  let throwingStdout = '';
+  throwingRun.stdout.setEncoding('utf8').on('data', chunk => { throwingStdout += chunk; });
+  const throwingResult = await new Promise(resolve => throwingRun.once('close', code => resolve({ code })));
+  assert.equal(throwingResult.code, 1, 'a thrown workspace test must fail the preview');
+  const throwingSummary = JSON.parse(throwingStdout.split('PREVIEW_RESULT: ')[1]);
+  assert.equal(throwingSummary.phase, 'running workspace test');
+  assert.equal(throwingSummary.behavior, 'workspace test failed; app behavior remains unverified');
+  assert.equal(throwingSummary.test, 'failed');
+  assert.match(throwingSummary.error, /fixture assertion: output was missing/);
+  const throwingReport = JSON.parse(await readFile(throwingSummary.report, 'utf8'));
+  assert.equal(throwingReport.phase, 'running workspace test');
+  assert.match(throwingReport.error, /fixture assertion: output was missing/);
+
   await writeFile(path.join(root, '.trigger-asset-failure'), '1');
   const failedAssetRun = spawn(node, [helper, '--workspace', root, '--timeout', '15'], { stdio: 'ignore', env });
   const failedAssetResult = await new Promise(resolve => failedAssetRun.once('close', code => resolve({ code })));
   assert.equal(failedAssetResult.code, 1, 'failed requests and HTTP errors must fail the preview');
   const allRuns = (await readdir(outputDir)).filter(name => name.startsWith('run-'));
-  assert.equal(allRuns.length, 4);
+  assert.equal(allRuns.length, 5);
   const reportsAfterAssetFailure = await Promise.all(allRuns.map(async name => {
     try { return JSON.parse(await readFile(path.join(outputDir, name, 'report.json'), 'utf8')); } catch { return null; }
   }));

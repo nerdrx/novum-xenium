@@ -45,7 +45,7 @@ FUNCTION_TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "project_path": {"type": "string", "description": "Project directory relative to the active workspace; use '.' for the workspace root"},
-                    "test_script": {"type": "string", "description": "Existing project-relative ES module exporting async run({page, context, artifacts, app}) or a default function. Use Playwright page actions and explicit assertions; app contains process metadata only. Create this test first to verify real behavior; omission checks startup only."},
+                    "test_script": {"type": "string", "description": "Existing project-relative ES module exporting async run({page, context, artifacts, app}) or a default function. Use Playwright page actions and explicit assertions; app contains process metadata only; artifacts contains outputDir, desktopPath, compactPath (no input fixture). Throw/assert on failure. Create this test first to verify real behavior; omission checks startup only."},
                     "timeout": {"type": "integer", "minimum": 15, "maximum": 45, "description": "Maximum preview runtime in seconds (default 35)"},
                     "no_sandbox": {"type": "boolean", "description": "Retry this isolated test launch without Chromium sandboxing when required; never changes app defaults"},
                 },

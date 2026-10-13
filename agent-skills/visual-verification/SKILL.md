@@ -1,7 +1,7 @@
 ---
 name: visual-verification
 description: Verify GUI, UI, frontend, website, CSS, and theme changes in a real rendered interface, including behavior and accessibility.
-version: 1.0.7
+version: 1.0.8
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -50,14 +50,20 @@ The helper requires a
 workspace-local `node_modules/electron`, runs the real manifest entry under a
 private Xvfb display and fresh profile, and saves desktop/compact screenshots,
 DOM/style measurements, and runtime diagnostics in a unique run directory under
-.odysseus-preview/`, which it creates a local Git ignore rule for without
+`.odysseus-preview/`, which it creates a local Git ignore rule for without
 overwriting an existing rule. Its fresh browser profile lives in a private OS temporary
 directory and is removed after a normal run.
 The two sizes use renderer viewport emulation; actual native BrowserWindow bounds
 remain unverified.
 Set `--test-script relative/path.mjs` only for an existing workspace test module
 that exports a default or named `run` function; it receives Playwright's
-`{ app: { pid, executablePath, exitCode }, page, context, artifacts }`. It can
+`{ app: { pid, executablePath, exitCode }, page, context,
+artifacts: { outputDir, desktopPath, compactPath } }`. The artifacts fields are
+output paths, not input fixtures. Resolve an existing project fixture relative
+to the test module with `new URL("../fixture.ext", import.meta.url)` and
+`fileURLToPath`, or create a small valid fixture before the run. Throw or use
+`node:assert/strict` when the expected result is absent; returning
+`{ completion: false }` does not fail the test. It can
 exercise renderer interactions and any IPC bridge exposed to the renderer; it
 does not receive Electron main-process evaluation access. A missing test script
 means behavior was not exercised. Use `--timeout 15..45` (default 35) to stay

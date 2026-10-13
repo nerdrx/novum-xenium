@@ -86,7 +86,7 @@ python /run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py --t
 
 It creates a session, streams the task in agent mode, and prints one JSON
 metadata record with session ID, run ID, actual route, bounded outcome evidence, and status; it does not save model output. Stream termination alone never counts as verified completion. External acceptance results remain separate from the agent's own completion status. If Novum pauses for tool approval, the adapter reports
-`approval_needed` without approving it. On timeout it stops only the run ID
+`approval_needed` without approving it. For an explicitly authorized isolated QA task, `--approve-task` permits at most three exact task approvals within the original deadline; it never grants session-wide approval and reports the approval count. On timeout it stops only the run ID
 received for that session. Verify the app's live endpoint/model mapping before
 running. The current app stream route obtains generation temperature from the
 selected preset, rather than accepting per-request `temperature` or `top_p`;
@@ -146,3 +146,5 @@ quality, or repeatability. It does not verify that an adapter actually used
 the reported model/settings; confirm those in the serving agent and model
 endpoint. Larger claims need a predeclared task suite, repeated trials, and
 separate review of tool-use behavior. No larger evaluation is included here.
+
+The first checked-mode live result is recorded in `evaluations/coding-checked-20261013.json`. Both agents produced the correct one-line repair and passed the external assertions, but Novum did not verify overall completion and emitted a misleading final notice. This result demonstrates the narrow test flow, not reliable application development.

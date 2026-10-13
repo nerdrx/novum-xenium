@@ -35,6 +35,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
         if self.path == "/api/chat_stream":
+            chat_call = sum(path == "/api/chat_stream" for path, *_ in self.calls)
             if self.mode == "timeout":
                 self.send_response(200)
                 self.send_header("X-Odysseus-Run-Id", "run-test")
@@ -44,8 +45,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.wfile.flush()
                 time.sleep(0.7)
                 return
-            payload = (b'data: {"type":"ask_user","ask_user":{"kind":"tool_approval","approval_id":"approval-x"}}\n\n'
-                       if self.mode == "approval" else b"data: [DONE]\n\n")
+            events = {
+                "approval": [
+                    {"type": "tool_output", "ask_user": {"kind": "tool_approval", "approval_id": "approval-x"}},
+                ],
+                "approval_then_verified": ([
+                    {"type": "tool_output", "ask_user": {"kind": "tool_approval", "approval_id": "approval-x",
+                     "session_id": "session-test", "workspace": "/mapped/workspace"}},
+                ] if chat_call == 1 else [
+                    {"type": "agent_terminal", "status": "completed"},
+                ]),
+                "approval_wrong_session": [
+                    {"type": "ask_user", "data": {"kind": "tool_approval", "approval_id": "approval-x",
+                     "session_id": "different-session"}},
+                ],
+                "approval_malformed": [
+                    {"type": "ask_user", "data": {"kind": "tool_approval", "approval_id": "bad\nid"}},
+                ],
+                "approval_valid_then_invalid": [
+                    {"type": "ask_user", "data": {"kind": "tool_approval", "approval_id": "approval-x"}},
+                    {"type": "tool_output", "ask_user": {"kind": "tool_approval", "approval_id": "bad\nid"}},
+                ],
+                "error_done": [
+                    {"error": "Provider request failed: PRIVATE BODY", "status": 502},
+                ],
+                "unverified_done": [
+                    {"type": "agent_terminal", "status": "failed", "reason": "completion_unverified",
+                     "message": "PRIVATE TERMINAL BODY"},
+                ],
+                "verified": [
+                    {"type": "model_actual", "model": "served-model", "requested_model": "qwen3.5:9b",
+                     "endpoint_id": "ep-actual", "round": 1},
+                    {"type": "coding_work_packet", "round": 1, "stage": "done", "test_status": "passed",
+                     "review_status": "passed", "packet": {"private": "DO NOT EMIT"}},
+                    {"type": "verification", "passed": True, "status": "passed"},
+                    {"type": "agent_terminal", "status": "completed"},
+                    {"type": "metrics", "data": {"model": "served-model", "endpoint_id": "ep-actual",
+                     "input_tokens": 120, "output_tokens": 44, "total_tokens": 164}},
+                ],
+            }
+            payload = b"".join(
+                (b"data: " + json.dumps(event).encode() + b"\n\n")
+                for event in events.get(self.mode, [])
+            ) + b"data: [DONE]\n\n"
             self.send_response(200)
             self.send_header("X-Odysseus-Run-Id", "run-test")
             self.send_header("Content-Type", "text/event-stream")
@@ -77,7 +119,7 @@ class NovumAdapterTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
 
-    def invoke(self, directory, *, mode="complete", timeout="5", preset_id=None):
+    def invoke(self, directory, *, mode="complete", timeout="5", preset_id=None, approve_task=False):
         Handler.mode = mode
         Handler.calls = []
         env = {**os.environ, "ODYSSEUS_SESSION": "private-test-token"}
@@ -89,13 +131,15 @@ class NovumAdapterTests(unittest.TestCase):
         ]
         if preset_id is not None:
             command.extend(("--preset-id", preset_id))
+        if approve_task:
+            command.append("--approve-task")
         return subprocess.run(command, cwd=directory, env=env, text=True, capture_output=True, timeout=10)
 
     def test_stream_uses_explicit_mapping_and_reports_run_identity_without_output(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "TASK.md").write_text("Fix the arithmetic defect.\n")
             Path(directory, "calc.py").write_text("def add(a,b): return a-b\n")
-            result = self.invoke(directory)
+            result = self.invoke(directory, mode="verified")
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
         self.assertEqual((report["session_id"], report["run_id"], report["model"]), ("session-test", "run-test", "qwen3.5:9b"))
@@ -109,17 +153,57 @@ class NovumAdapterTests(unittest.TestCase):
         self.assertEqual(chat["selected_endpoint_id"], ["ep-test"])
         self.assertEqual(chat["workspace"], ["/mapped/workspace"])
         self.assertEqual(chat["mode"], ["agent"])
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["actual_route"]["model"], "served-model")
+        self.assertEqual(report["actual_route"]["endpoint_id"], "ep-actual")
+        self.assertEqual(report["verification_passed"], True)
+        self.assertIn("coding_work_packet", [event["type"] for event in report["evidence"]])
+        self.assertNotIn("DO NOT EMIT", result.stdout)
+
+    def test_done_without_outcome_evidence_is_unverified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "TASK.md").write_text("Fix defect.\n")
+            Path(directory, "calc.py").write_text("broken\n")
+            result = self.invoke(directory)
+        self.assertEqual(result.returncode, 2)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertTrue(report["stream_ended"])
+        self.assertIsNone(report["verification_passed"])
+
+    def test_provider_error_then_done_stays_failed_and_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "TASK.md").write_text("Fix defect.\n")
+            Path(directory, "calc.py").write_text("broken\n")
+            result = self.invoke(directory, mode="error_done")
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(report["stream_ended"])
+        self.assertEqual(report["evidence"], [{"type": "error", "status": 502}])
+        self.assertNotIn("PRIVATE BODY", result.stdout)
+
+    def test_unverified_terminal_then_done_is_not_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "TASK.md").write_text("Fix defect.\n")
+            Path(directory, "calc.py").write_text("broken\n")
+            result = self.invoke(directory, mode="unverified_done")
+        self.assertEqual(result.returncode, 2)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "unverified")
+        self.assertEqual(report["terminal"]["reason"], "completion_unverified")
+        self.assertNotIn("PRIVATE TERMINAL BODY", result.stdout)
 
     def test_preset_id_is_sent_and_reported_as_generation_settings_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "TASK.md").write_text("Fix the arithmetic defect.\n")
             Path(directory, "calc.py").write_text("def add(a,b): return a-b\n")
-            result = self.invoke(directory, preset_id="code_analyze")
+            result = self.invoke(directory, mode="verified", preset_id="code_analyze")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(Handler.calls[1][1]["preset_id"], ["code_analyze"])
         self.assertEqual(json.loads(result.stdout)["preset_id"], "code_analyze")
 
-    def test_approval_is_reported_without_granting_it(self):
+    def test_approval_is_reported_without_opt_in(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "TASK.md").write_text("Fix defect.\n")
             Path(directory, "calc.py").write_text("broken\n")
@@ -128,6 +212,35 @@ class NovumAdapterTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["status"], "approval_needed")
         self.assertEqual(len(Handler.calls), 2)
         self.assertFalse(any(path.endswith("stop/session-test") for path, *_ in Handler.calls))
+
+    def test_opt_in_approves_exact_pending_task_then_continues_same_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "TASK.md").write_text("Fix defect.\n")
+            Path(directory, "calc.py").write_text("broken\n")
+            result = self.invoke(directory, mode="approval_then_verified", approve_task=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["approval_count"], 1)
+        self.assertNotIn("approval-x", result.stdout)
+        self.assertEqual(len(Handler.calls), 3)
+        first = Handler.calls[1][1]
+        resumed = Handler.calls[2][1]
+        self.assertEqual(first["session"], resumed["session"])
+        self.assertEqual(first["workspace"], resumed["workspace"])
+        self.assertEqual(first["selected_endpoint_id"], resumed["selected_endpoint_id"])
+        self.assertEqual(resumed["tool_approval_id"], ["approval-x"])
+        self.assertEqual(resumed["tool_approval_decision"], ["approve_task"])
+
+    def test_opt_in_rejects_malformed_or_wrong_session_approval(self):
+        for mode in ("approval_malformed", "approval_wrong_session", "approval_valid_then_invalid"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                Path(directory, "TASK.md").write_text("Fix defect.\n")
+                Path(directory, "calc.py").write_text("broken\n")
+                result = self.invoke(directory, mode=mode, approve_task=True)
+            self.assertEqual(result.returncode, 4)
+            self.assertEqual(json.loads(result.stdout)["status"], "approval_invalid")
+            self.assertEqual(len([path for path, *_ in Handler.calls if path == "/api/chat_stream"]), 1)
 
     def test_bad_workspace_mapping_fails_before_network(self):
         Handler.calls = []

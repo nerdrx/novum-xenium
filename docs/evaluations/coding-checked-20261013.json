@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-13",
+  "scope": "Single deterministic repair; not a general coding benchmark",
+  "model": "qwen3.5:9b",
+  "serving_model": "nx-model-5",
+  "novum_revision": "4531671",
+  "aider_version": "0.86.2",
+  "temperature": 1.0,
+  "requested_output_ceiling": 16384,
+  "task": "Fix the `add` function in `calc.py` so it returns the sum for positive, negative, and zero values. Keep the change minimal.\n",
+  "fixture_sha256": "0cd0ff0557b5cefbf8c05ae87be6d5d3377098cc0163f98f09e8e0b03fbf7710",
+  "run_order": [
+    "aider",
+    "novum"
+  ],
+  "results": {
+    "aider": {
+      "seconds": 3.119,
+      "external_acceptance_passed": true,
+      "final_source": "def add(a, b):\n    return a + b\n",
+      "manual_code_edits": 0
+    },
+    "novum": {
+      "seconds": 50.587,
+      "external_acceptance_passed": true,
+      "final_source": "def add(a, b):\n    return a + b\n",
+      "manual_code_edits": 0
+    }
+  },
+  "novum_observed_stages": [
+    "reproduce",
+    "edit",
+    "verify",
+    "done"
+  ],
+  "novum_test_status": "passed",
+  "novum_review_status": "not_reviewed",
+  "novum_task_approvals": 1,
+  "novum_final_notice": "Stopped: the current coding slice has no passing check after its last edit. It remains unverified.",
+  "limits": [
+    "One task, one observed run; timing includes different orchestration overhead and is not a controlled speed benchmark.",
+    "Aider used whole-file editing with repository mapping disabled for this one-file fixture.",
+    "Novum emitted the same serving model ID throughout; no fallback was observed.",
+    "Context usage differs between agents; effective output capacity can be lower than the shared requested ceiling.",
+    "Novum task completion was not verified; its final notice contradicted its passing slice event.",
+    "No model-generated application or GUI was verified by this test."
+  ]
+}

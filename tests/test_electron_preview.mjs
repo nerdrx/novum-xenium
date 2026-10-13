@@ -184,6 +184,7 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
     const fs = require('node:fs');
     const path = require('node:path');
     const { spawn } = require('node:child_process');
+    process.stderr.write('DBus warning: routine fixture startup notice\\n');
     const profile = process.argv.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});
     fs.writeFileSync(path.join(profile, 'DevToolsActivePort'), '9222\\n/devtools/browser/fixture\\n');
@@ -280,6 +281,16 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   assert.equal(popupSummary.electronDiagnosticLeads.note, leads.note);
   assert.equal(popupSummary.electronDiagnosticLeads.runtimeBoundaries.length, 4);
   assert.match(popupSummary.errors.actualSourceFrames[0].stack, /popup-test\.mjs/);
+  assert.match(popupSummary.errors.examples[0], /popup renderer exploded/,
+    'renderer errors should outrank routine main-process stderr in examples');
+  const rendererLead = popupStdout.slice(0, popupStdout.indexOf('PREVIEW_RESULT: ')).trim().split(/\r?\n/).at(-1);
+  assert.match(rendererLead, /^RENDERER_ERROR: /,
+    'the compact output should lead with labeled renderer evidence');
+  const rendererDetails = JSON.parse(rendererLead.slice('RENDERER_ERROR: '.length));
+  assert.equal(rendererDetails.message, 'popup renderer exploded');
+  assert.ok(rendererDetails.sourceFrames.some(frame => /popup-test\.mjs/.test(frame)),
+    'the leading renderer evidence should include source frames');
+  assert.doesNotMatch(rendererLead, /DBus warning/);
   assert.deepEqual(popupSummary.errors.consoleLocations[0].location, {
     url: 'file:///fixture/popup.js', lineNumber: 23, columnNumber: 7,
   });

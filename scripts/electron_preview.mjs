@@ -350,7 +350,9 @@ try {
       requests: diagnostics.failedRequests.length,
       responses: diagnostics.badResponses.length,
       mainStderr: diagnostics.mainStderr.length,
-      examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors, ...diagnostics.mainStderr].slice(0, 3).map(value => String(value).slice(0, 180)),
+      examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors,
+        ...diagnostics.failedRequests, ...diagnostics.badResponses,
+        ...diagnostics.mainStderr].slice(0, 3).map(value => String(value).slice(0, 180)),
       actualSourceFrames: diagnostics.pageErrorDetails.slice(0, 2).map(detail => ({ message: detail.message, stack: detail.stack.slice(0, 800) })),
       consoleLocations: diagnostics.consoleErrorDetails.slice(0, 2),
     },
@@ -360,6 +362,13 @@ try {
     screenshots: [desktopPath, compactPath],
     report: reportPath,
   };
+  const firstRendererError = diagnostics.pageErrorDetails[0];
+  if (firstRendererError) {
+    console.log('RENDERER_ERROR: ' + JSON.stringify({
+      message: firstRendererError.message,
+      sourceFrames: firstRendererError.stack.split(/\r?\n/).slice(0, 5),
+    }));
+  }
   console.log('PREVIEW_RESULT: ' + JSON.stringify(summary));
   if (page.isClosed() || runtimeIssues) process.exitCode = 1;
 } catch (error) {

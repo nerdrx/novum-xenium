@@ -1,5 +1,6 @@
 """Content extraction behavior for the canonical services.search.content module."""
 
+import asyncio
 import httpx
 import json
 import pytest
@@ -112,6 +113,73 @@ def test_nested_semantic_wrappers_are_read_once_and_siblings_are_kept(tmp_path, 
     assert ["NestedNavigationOnly"] in result["lists"]
     assert [["Output format", "MP4"]] in result["tables"]
     assert "ffmpeg -i input.mp4 output.mp4" in result["code_blocks"]
+
+
+def test_web_fetch_preserves_html_headings_for_late_archive_sections(tmp_path, monkeypatch):
+    from bs4 import BeautifulSoup
+    from src import tool_result_store
+    from src.agent_tools.web_tools import WebFetchTool
+
+    padding = "introductory CommonJS text " * 220
+    html = f"""
+    <html><head><title>Modules: CommonJS modules</title></head><body>
+      <nav><h2>Navigation noise</h2></nav>
+      <main>
+        <h1>Modules: CommonJS modules</h1>
+        <p>{padding}</p>
+        <h3>The module wrapper</h3>
+        <p>Each module is wrapped before evaluation.</p>
+        <h4>__dirname</h4>
+        <p>The directory name of the current module.</p>
+      </main>
+    </body></html>
+    """
+    extracted = service_content._content_text(BeautifulSoup(html, "html.parser"))
+
+    monkeypatch.setattr(tool_result_store, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "src.search.content.fetch_webpage_content",
+        lambda url, **kwargs: {"content": extracted, "title": "Modules: CommonJS modules"},
+    )
+    fetched = asyncio.run(WebFetchTool().execute(
+        '{"url":"https://nodejs.org/api/modules.html"}', {},
+    ))
+    assert "# Modules: CommonJS modules" in fetched["output"]
+    assert "### The module wrapper" in fetched["output"]
+    assert "#### __dirname" in fetched["output"]
+    assert "Navigation noise" not in fetched["output"]
+
+    result_id = tool_result_store.archive_result(
+        "alice", "node-docs", "web_fetch", fetched["output"],
+    )
+    outline = tool_result_store.markdown_heading_outline("alice", "node-docs", result_id)
+    wrapper = next(item for item in outline["headings"] if item["text"] == "The module wrapper")
+    dirname = next(item for item in outline["headings"] if item["text"] == "__dirname")
+    assert wrapper["level"] == 3 and wrapper["offset"] > 0
+    assert dirname["level"] == 4 and dirname["offset"] > 0
+    exact_chunk = tool_result_store.search_results(
+        "alice", "node-docs", "", result_id, offset=wrapper["offset"],
+    )
+    assert "### The module wrapper" in exact_chunk
+    assert "Each module is wrapped before evaluation." in exact_chunk
+
+
+def test_heading_boundaries_survive_sibling_articles_and_plain_spacing_stays_flat():
+    from bs4 import BeautifulSoup
+
+    headed = service_content._content_text(BeautifulSoup(
+        "<article><p>First paragraph.</p></article>"
+        "<article><h2>Next section</h2><p>Second paragraph.</p></article>",
+        "html.parser",
+    ))
+    assert headed == "First paragraph.\n\n## Next section\nSecond paragraph."
+
+    plain = service_content._content_text(BeautifulSoup(
+        "<article><p>First paragraph.</p></article>"
+        "<article><p>Second paragraph.</p></article>",
+        "html.parser",
+    ))
+    assert plain == "First paragraph. Second paragraph."
 
 
 def test_thin_semantic_page_still_uses_cleaned_body_fallback(tmp_path, monkeypatch):

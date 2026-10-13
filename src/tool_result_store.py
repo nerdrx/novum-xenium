@@ -335,10 +335,8 @@ def markdown_heading_outline(
             chunk_ends.append(start + len(text))
             start += max(1, len(text) - _CHUNK_OVERLAP)
 
-        preferred = []
-        fallback = []
-        preferred_count = 0
-        fallback_count = 0
+        headings = []
+        heading_count = 0
         in_fence = None
         truncated = "archived result capped" in body
         fence_re = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -365,24 +363,17 @@ def markdown_heading_outline(
                             "level": len(match.group(1)),
                             "text": match.group(2).strip()[:180],
                         }
-                        if heading["level"] <= 2:
-                            preferred_count += 1
-                            if len(preferred) < max_headings + 1:
-                                preferred.append(heading)
-                        else:
-                            fallback_count += 1
-                            if len(fallback) < max_headings + 1:
-                                fallback.append(heading)
+                        heading_count += 1
+                        if len(headings) < max_headings + 1:
+                            headings.append(heading)
             position += len(line)
 
-        # Top-level sections carry the most useful navigation. Fall back to
-        # deeper headings only when the source has no top-level sections.
-        selected = preferred or fallback
-        selected_count = preferred_count or fallback_count
-        omitted = truncated or selected_count > max_headings
+        # Preserve document order and levels; deep HTML sections are useful
+        # navigation too, even when the source begins with a top-level title.
+        omitted = truncated or heading_count > max_headings
         output = []
         used = 0
-        for heading in selected[:max_headings]:
+        for heading in headings[:max_headings]:
             cost = len(heading["text"])
             if used + cost > max_chars:
                 omitted = True

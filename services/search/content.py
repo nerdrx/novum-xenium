@@ -6,6 +6,7 @@ import json
 import os
 import re
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import List
 
@@ -165,10 +166,26 @@ def _content_text(soup: BeautifulSoup) -> str:
             ["script", "style", "noscript", "template", "nav", "header", "footer", "aside"]
         ):
             noise.extract()
+        heading_markers = {}
+        source_text = root_copy.get_text()
+        for index, heading in enumerate(root_copy.find_all(re.compile(r"^h[1-6]$"))):
+            title = re.sub(r"\s+", " ", heading.get_text(separator=" ", strip=True)).strip()
+            if not title:
+                continue
+            marker = f"\ue000ODYSSEUS_HTML_HEADING_{uuid.uuid4().hex}_{index}\ue001"
+            while marker in source_text:
+                marker = f"\ue000ODYSSEUS_HTML_HEADING_{uuid.uuid4().hex}_{index}\ue001"
+            heading.replace_with(marker)
+            heading_markers[marker] = f"\n{'#' * int(heading.name[1])} {title}\n"
         text = re.sub(r"\s+", " ", root_copy.get_text(separator=" ", strip=True)).strip()
+        for marker, heading_line in heading_markers.items():
+            text = text.replace(marker, heading_line)
+        if heading_markers:
+            text = re.sub(r" *\n *", "\n", text).strip()
         if text:
-            parts.append(text)
-    return " ".join(parts)
+            parts.append((text, bool(heading_markers)))
+    separator = "\n\n" if any(has_headings for _, has_headings in parts) else " "
+    return separator.join(text for text, _ in parts)
 
 
 def _detect_js_frameworks(soup: BeautifulSoup) -> bool:

@@ -144,6 +144,7 @@ let profile = '';
 let runDirectory = '';
 let outputDir = '';
 let runId = '';
+let activePage = null;
 let phase = 'initializing';
 let workspace = '';
 let appEntry = '';
@@ -270,6 +271,7 @@ try {
     const timer = setTimeout(() => reject(new Error('Electron opened no renderer page')), Math.max(5000, (config.timeout - 15) * 1000));
     context.once('page', target => { clearTimeout(timer); resolve(target); });
   });
+  activePage = page;
   watchPage(page);
   phase = 'inspecting rendered page';
   // Revisit the initial document only after diagnostics are attached.
@@ -402,13 +404,35 @@ try {
   const reportPath = runDirectory ? path.join(runDirectory, 'report.json') : '';
   const workspaceTestFailed = phase === 'running workspace test';
   const errorSummary = String(error?.message || error).slice(0, 1000);
+  const testEvidence = {};
+  if (workspaceTestFailed && activePage && !activePage.isClosed()) {
+    try {
+      const bodyText = String(await activePage.locator('body').innerText({ timeout: 3000 }));
+      const marker = '\n...[visible text truncated]...\n';
+      const contentBudget = 5000 - marker.length;
+      const headLength = Math.floor(contentBudget / 2);
+      testEvidence.visibleText = bodyText.length <= 5000 ? bodyText
+        : bodyText.slice(0, headLength) + marker + bodyText.slice(-(contentBudget - headLength));
+    } catch (captureError) {
+      testEvidence.captureError = String(captureError?.message || captureError).slice(0, 300);
+    }
+    try {
+      testEvidence.screenshot = path.join(runDirectory, 'test-failure.png');
+      await activePage.screenshot({
+        path: testEvidence.screenshot, fullPage: false, animations: 'disabled', timeout: 5000,
+      });
+    } catch (captureError) {
+      delete testEvidence.screenshot;
+      testEvidence.screenshotError = String(captureError?.message || captureError).slice(0, 300);
+    }
+  }
   const failureReport = {
     status: 'failed',
     behavior: workspaceTestFailed
       ? 'workspace test failed; app behavior remains unverified'
       : 'unverified; preview failed before workspace tests',
     runId, workspace, appEntry, electron: electronPath, phase,
-    error: String(error?.stack || error).slice(0, 8000), diagnostics,
+    error: String(error?.stack || error).slice(0, 8000), diagnostics, testEvidence,
   };
   if (reportPath) {
     try { fs.writeFileSync(reportPath, JSON.stringify(failureReport, null, 2), { mode: 0o600 }); } catch {}
@@ -418,6 +442,7 @@ try {
     behavior: failureReport.behavior,
     test: workspaceTestFailed ? 'failed' : 'not run',
     error: errorSummary,
+    ...(Object.keys(testEvidence).length ? { testEvidence } : {}),
     errors: {
       page: diagnostics.pageErrors.length, console: diagnostics.consoleErrors.length,
       stderr: diagnostics.mainStderr.length,

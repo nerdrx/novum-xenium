@@ -168,9 +168,14 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
       url() { return this.pageUrl; }
       isClosed() { return false; }
       setDefaultTimeout(ms) { this.defaultTimeout = ms; }
-      locator(selector) { return { click: () => new Promise((resolve, reject) => {
-        if (this.defaultTimeout) setTimeout(() => reject(new Error('locator click timed out after ' + this.defaultTimeout + 'ms: ' + selector)), this.defaultTimeout);
-      }) }; }
+      locator(selector) { return {
+        innerText: async () => selector === 'body'
+          ? 'fixture visible banner '.repeat(350) + '\\nFFmpeg spawn error at end of visible log'
+          : '',
+        click: () => new Promise((resolve, reject) => {
+          if (this.defaultTimeout) setTimeout(() => reject(new Error('locator click timed out after ' + this.defaultTimeout + 'ms: ' + selector)), this.defaultTimeout);
+        }),
+      }; }
       async reload() {
         const config = JSON.parse(process.env.ODYSSEUS_PREVIEW_CONFIG || '{}');
         if (fs.existsSync(path.join(config.workspace, '.trigger-asset-failure'))) {
@@ -346,6 +351,13 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   const throwingReport = JSON.parse(await readFile(throwingSummary.report, 'utf8'));
   assert.equal(throwingReport.phase, 'running workspace test');
   assert.match(throwingReport.error, /fixture assertion: output was missing/);
+  assert.ok(throwingReport.testEvidence.visibleText.length <= 5000);
+  assert.match(throwingReport.testEvidence.visibleText, /fixture visible banner/);
+  assert.match(throwingReport.testEvidence.visibleText, /\[visible text truncated\]/);
+  assert.match(throwingReport.testEvidence.visibleText, /FFmpeg spawn error at end of visible log$/);
+  assert.equal(throwingSummary.testEvidence.visibleText, throwingReport.testEvidence.visibleText);
+  assert.equal(path.dirname(throwingReport.testEvidence.screenshot), path.dirname(throwingSummary.report));
+  assert.equal(await readFile(throwingReport.testEvidence.screenshot, 'utf8'), 'fixture screenshot');
 
   const hungActionScript = path.join(root, 'hung-action-test.mjs');
   await writeFile(hungActionScript, `

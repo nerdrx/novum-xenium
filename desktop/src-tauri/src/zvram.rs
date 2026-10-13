@@ -569,7 +569,10 @@ mod tests {
     fn installation_requires_manager_model_helper_and_wrapper() {
         let temp = tempfile::tempdir().unwrap();
         installation_fixture(temp.path());
-        assert_eq!(validate_installation(temp.path()).unwrap(), temp.path());
+        assert_eq!(
+            validate_installation(temp.path()).unwrap(),
+            fs::canonicalize(temp.path()).unwrap()
+        );
         fs::remove_file(temp.path().join("zvram_model.py")).unwrap();
         assert!(validate_installation(temp.path()).is_err());
     }
@@ -627,6 +630,7 @@ mod tests {
         assert_eq!(result["message"], "Choose an installation.");
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn appimage_library_path_filter_preserves_host_entries() {
         let appdir = Path::new("/tmp/test.AppDir");

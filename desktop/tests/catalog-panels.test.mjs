@@ -36,6 +36,7 @@ test('subagent module filters tasks and opens child chats through the sandbox br
     await panel.getByRole('heading', {name:'<img src=x onerror=alert(1)>', exact:true}).waitFor();
     assert.equal(await panel.locator('img').count(), 0, 'data is rendered as text');
     await panel.getByRole('button', {name:'Open chat', exact:true}).click();
+    await page.waitForFunction(() => window.opened?.session_id === 'child-123');
     assert.deepEqual(await page.evaluate(() => window.opened), {type:'novum:open',action:'session',session_id:'child-123'});
     await panel.getByRole('combobox').selectOption('finished');
     await panel.getByText('No matching agents. Try another name or status.', {exact:true}).waitFor();
@@ -43,6 +44,7 @@ test('subagent module filters tasks and opens child chats through the sandbox br
     await panel.getByRole('searchbox').fill('no-match');
     await panel.getByText('No matching agents. Try another name or status.', {exact:true}).waitFor();
     await panel.getByRole('button', {name:'Refresh', exact:true}).click();
+    await page.waitForFunction(() => window.requests.length === 2);
     assert.equal(await page.evaluate(() => window.requests.length), 2);
     assert.equal(await panel.locator('body').evaluate(body => body.scrollWidth <= innerWidth), true);
     assert.deepEqual(errors, [], manifest.id);

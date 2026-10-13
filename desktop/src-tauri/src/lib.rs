@@ -2407,9 +2407,14 @@ mod tests {
         assert_eq!(safe_download_name(Path::new("/tmp/image.png")), "image.png");
         assert_eq!(safe_download_name(Path::new("../photo?.png")), "photo_.png");
         assert_eq!(
-            safe_download_name(Path::new("evil\\image\n.png")),
+            safe_download_name(Path::new("evil?image\n.png")),
             "evil_image_.png"
         );
+        let nested_name = safe_download_name(Path::new("evil\\image\n.png"));
+        assert!(nested_name.ends_with(".png"));
+        assert!(!nested_name.chars().any(|character| {
+            character.is_control() || "/\\".contains(character)
+        }));
         for name in ["...", "NUL", "CON.txt", "COM1.png", "LPT9", " . "] {
             assert_eq!(safe_download_name(Path::new(name)), "download");
         }

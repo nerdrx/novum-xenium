@@ -7478,7 +7478,7 @@ async def stream_agent_loop(
                     "The agent did not complete the required documentation lookup; no implementation was verified."
                 )
                 full_response += "\n\n" + notice
-                yield f'data: {json.dumps({"delta": "\n\n" + notice})}\n\n'
+                yield "data: " + json.dumps({"delta": "\n\n" + notice}) + "\n\n"
                 reason = "completion_unverified" if _coding_verification_required else "research_incomplete"
                 yield f'data: {json.dumps({"type": "agent_terminal", "status": "failed", "reason": reason, "message": notice})}\n\n'
                 break
@@ -7631,7 +7631,7 @@ async def stream_agent_loop(
                 if hold_round_text and round_texts:
                     round_texts[-1] = ""
                 full_response += "\n\n" + notice
-                yield f'data: {json.dumps({"delta": "\n\n" + notice})}\n\n'
+                yield "data: " + json.dumps({"delta": "\n\n" + notice}) + "\n\n"
                 yield f'data: {json.dumps({"type": "agent_terminal", "status": "failed", "reason": "completion_unverified", "message": notice})}\n\n'
                 break
             if _verification_issues:
@@ -7639,7 +7639,7 @@ async def stream_agent_loop(
                 if hold_round_text and round_texts:
                     round_texts[-1] = notice
                 full_response += "\n\n" + notice
-                yield f'data: {json.dumps({"delta": "\n\n" + notice})}\n\n'
+                yield "data: " + json.dumps({"delta": "\n\n" + notice}) + "\n\n"
                 yield f'data: {json.dumps({"type": "agent_terminal", "status": "failed", "reason": "completion_unverified", "message": notice})}\n\n'
             break  # no tools — done
 

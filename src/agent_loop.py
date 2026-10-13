@@ -4096,7 +4096,11 @@ PLAN_MODE_DIRECTIVE = (
 AUTO_MILESTONE_DIRECTIVE = (
     "## Small verified milestones\n"
     "For a complex request with several dependent actions, inspect the relevant state first, "
-    "then use todowrite (when available) to save 3-7 concrete milestones before implementation. "
+    "then use todowrite (when available) to save the smallest useful checklist. "
+    "For coding, default to one concrete change and a real test. Keep inspection, implementation, "
+    "and testing within the same item, not separate milestones. Use multiple coding milestones "
+    "only for distinct outcomes needing separate acceptance checks. For noncoding work, use "
+    "multiple milestones when separate steps help track completion. "
     "Each milestone must include a completion check. Keep only one in_progress. "
     "Implement the smallest working result first; test it before adding polish or publishing. "
     "Mark a milestone completed only after its check passes; include brief evidence in its text. "

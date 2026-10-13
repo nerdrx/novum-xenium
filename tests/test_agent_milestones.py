@@ -55,3 +55,13 @@ def test_route_restores_current_list_and_respects_modes(monkeypatch, mode):
         assert any(al.AUTO_MILESTONE_DIRECTIVE in m.get("content", "") for m in requests[0])
     else:
         assert not reads
+
+
+def test_default_coding_guidance_does_not_require_artificial_phase_milestones():
+    directive = al.AUTO_MILESTONE_DIRECTIVE
+    assert "default to one concrete change and a real test" in directive
+    assert "within the same item, not separate milestones" in directive
+    assert "distinct outcomes needing separate acceptance checks" in directive
+    assert "For noncoding work" in directive
+    assert "3-7" not in directive
+    assert "existing permission rules still apply" in directive

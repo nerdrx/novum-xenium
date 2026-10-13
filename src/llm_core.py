@@ -2519,11 +2519,11 @@ async def llm_call_async(
     cache_key = _get_cache_key(
         url, model, messages_copy, temperature, max_tokens, headers=headers,
     )
-    cached_response = _get_cached_response(cache_key)
+    # Response strings do not retain provider metadata. Diagnostics callers
+    # must reach the provider so finish_reason/usage cannot be lost to a cache hit.
+    use_response_cache = response_diagnostics is None
+    cached_response = _get_cached_response(cache_key) if use_response_cache else None
     if cached_response:
-        if response_diagnostics is not None:
-            response_diagnostics.clear()
-            response_diagnostics.update(_verifier_response_diagnostics({}))
         logger.debug(f"Returning cached response for key: {cache_key}")
         if return_model_metadata:
             return cached_response, (_get_cached_response_model(cache_key) or model)
@@ -2557,11 +2557,12 @@ async def llm_call_async(
                     continue
                 if raw == "[DONE]":
                     response = "".join(parts)
-                    _set_cached_response(
-                        cache_key,
-                        response,
-                        actual_model=actual_model,
-                    )
+                    if use_response_cache:
+                        _set_cached_response(
+                            cache_key,
+                            response,
+                            actual_model=actual_model,
+                        )
                     return (
                         (response, actual_model)
                         if return_model_metadata
@@ -2588,7 +2589,8 @@ async def llm_call_async(
                 if isinstance(delta, str):
                     parts.append(delta)
         response = "".join(parts)
-        _set_cached_response(cache_key, response, actual_model=actual_model)
+        if use_response_cache:
+            _set_cached_response(cache_key, response, actual_model=actual_model)
         return (response, actual_model) if return_model_metadata else response
 
     if provider == "anthropic":
@@ -2691,11 +2693,12 @@ async def llm_call_async(
                             response = text_part or msg.get("reasoning_content") or ""
                     else:
                         response = content or msg.get("reasoning_content") or ""
-                _set_cached_response(
-                    cache_key,
-                    response,
-                    actual_model=actual_model,
-                )
+                if use_response_cache:
+                    _set_cached_response(
+                        cache_key,
+                        response,
+                        actual_model=actual_model,
+                    )
                 return (
                     (response, actual_model)
                     if return_model_metadata

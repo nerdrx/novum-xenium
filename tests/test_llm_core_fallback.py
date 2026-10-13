@@ -918,6 +918,62 @@ def test_nonstream_response_diagnostics_keep_only_finish_usage_and_lengths(monke
     assert "private generated reasoning" not in repr(diagnostics)
 
 
+def test_diagnostics_calls_bypass_text_only_response_cache(monkeypatch):
+    llm_core._response_cache.clear()
+    llm_core._response_model_cache.clear()
+    responses = [
+        {"choices": [{"finish_reason": "length", "message": {"content": "partial"}}],
+         "usage": {"completion_tokens": 128}},
+        {"choices": [{"finish_reason": "stop", "message": {"content": "complete"}}],
+         "usage": {"completion_tokens": 17}},
+    ]
+    calls = []
+
+    class _Response:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    async def fake_post(*_args, **_kwargs):
+        calls.append(True)
+        return _Response(responses.pop(0))
+
+    monkeypatch.setattr(llm_core, "_get_http_client", lambda: object())
+    monkeypatch.setattr(llm_core, "httpx_post_kimi_aware_async", fake_post)
+    monkeypatch.setattr(llm_core, "_is_host_dead", lambda _url: False)
+    monkeypatch.setattr(llm_core, "note_model_activity", lambda *_args, **_kwargs: None)
+
+    async def run():
+        kwargs = {
+            "url": "https://diagnostics-cache.example/v1",
+            "model": "verifier-diagnostics-cache-test",
+            "messages": [{"role": "user", "content": "same request"}],
+        }
+        first_diagnostics, second_diagnostics = {}, {}
+        first = await llm_core.llm_call_async(**kwargs, response_diagnostics=first_diagnostics)
+        second = await llm_core.llm_call_async(**kwargs, response_diagnostics=second_diagnostics)
+        return first, second, first_diagnostics, second_diagnostics
+
+    try:
+        first, second, first_diagnostics, second_diagnostics = asyncio.run(run())
+    finally:
+        llm_core._response_cache.clear()
+        llm_core._response_model_cache.clear()
+
+    assert first == "partial" and second == "complete"
+    assert len(calls) == 2
+    assert first_diagnostics["finish_reason"] == "length"
+    assert first_diagnostics["completion_tokens"] == 128
+    assert second_diagnostics["finish_reason"] == "stop"
+    assert second_diagnostics["completion_tokens"] == 17
+
+
 @pytest.mark.parametrize(
     ("url", "line"),
     [

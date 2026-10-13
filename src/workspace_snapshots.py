@@ -25,7 +25,10 @@ _MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_SNAPSHOTS = 20
 _MAX_PREVIEW_BYTES = 512 * 1024
 _SCOPE_FILE = ".scope.json"
-_EXCLUDED_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".cache", "dist", "build", "dist-build"}
+_EXCLUDED_DIRS = {
+    ".git", "node_modules", ".venv", "venv", "__pycache__", ".cache",
+    "dist", "build", "dist-build", ".odysseus-preview",
+}
 _EXCLUDED_NAMES = {
     ".env", ".netrc", ".npmrc", "id_rsa", "id_ed25519", "credentials.json",
     "secrets.json", "secret.json", "token.json", "tokens.json", "passwords.json",

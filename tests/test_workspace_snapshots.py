@@ -148,6 +148,12 @@ def test_nested_project_build_outputs_are_ignored_but_source_is_restored(ws, mon
     runtime_gui = project / "dist" / "renderer" / "index.html"
     runtime_gui.parent.mkdir(parents=True)
     runtime_gui.write_text("runtime UI")
+    preview_dir = project / ".odysseus-preview"
+    preview_dir.mkdir()
+    screenshot = preview_dir / "desktop.png"
+    report = preview_dir / "report.json"
+    screenshot.write_bytes(b"s" * 128)
+    report.write_bytes(b"r" * 128)
 
     saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
     root, key = snapshots._identity(str(ws), "alice", "chat-1")
@@ -160,6 +166,8 @@ def test_nested_project_build_outputs_are_ignored_but_source_is_restored(ws, mon
     dependency.write_bytes(b"d" * 128)
     appimage.write_bytes(b"b" * 128)
     runtime_gui.write_text("updated runtime UI")
+    screenshot.write_bytes(b"S" * 128)
+    report.write_bytes(b"R" * 128)
     preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
     snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
     assert source.read_text() == "before"
@@ -168,6 +176,8 @@ def test_nested_project_build_outputs_are_ignored_but_source_is_restored(ws, mon
     assert runtime_gui.read_text() == "updated runtime UI"
     assert dependency.read_bytes() == b"d" * 128
     assert appimage.read_bytes() == b"b" * 128
+    assert screenshot.read_bytes() == b"S" * 128
+    assert report.read_bytes() == b"R" * 128
 
     (ws / "oversized-source.bin").write_bytes(b"x" * 33)
     with pytest.raises(snapshots.SnapshotError, match="size limit"):

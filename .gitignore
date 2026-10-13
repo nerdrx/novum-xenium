@@ -137,3 +137,6 @@ desktop/src-tauri/gen/
 dist-desktop/
 
 !desktop/src-tauri/icons/icon.png
+
+# Android distribution output
+dist-android/

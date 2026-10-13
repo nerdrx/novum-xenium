@@ -1,0 +1,35 @@
+<resources>
+    <string name="app_name">Novum Xenium</string>
+    <string name="connection">Connection</string>
+    <string name="connection_prompt">Connect to your Novum server</string>
+    <string name="tailscale_sign_in">Sign in to Tailscale</string>
+    <string name="server_hint">http://my-server.tailnet.ts.net:7000</string>
+    <string name="server_title">Your Novum server</string>
+    <string name="server_explanation">Connect through this app\'s private Tailscale connection. Other apps keep their current network. Sign in to Novum after connecting.</string>
+    <string name="cancel">Cancel</string>
+    <string name="connect">Connect</string>
+    <string name="invalid_server">Invalid server address</string>
+    <string name="update_webview">Update Android System WebView to use the private connection.</string>
+    <string name="connection_starting">Starting private connection…</string>
+    <string name="connection_status_unavailable">Connection status unavailable</string>
+    <string name="private_proxy_unavailable">Private proxy is unavailable</string>
+    <string name="try_again">try again</string>
+    <string name="tailscale_login_needed">Sign in to Tailscale to connect this device</string>
+    <string name="machine_approval_needed">Approve this device in your Tailscale admin console</string>
+    <string name="disconnected">Disconnected · open Connection to reconnect</string>
+    <string name="connecting">Connecting…</string>
+    <string name="server_unavailable">Server unavailable · check the address or reconnect</string>
+    <string name="download_original">This download is not a server file. Open the original file link to save it.</string>
+    <string name="saving_file">Saving file…</string>
+    <string name="file_saved">File saved</string>
+    <string name="secure_links_only">Only secure external links can be opened</string>
+    <string name="no_browser">No browser available to open this link</string>
+    <string name="no_file_saver">No app is available to save this file.</string>
+    <string name="no_file_picker">No app is available to choose files.</string>
+    <string name="connection_failed">Connection failed: %1$s</string>
+    <string name="connection_ready">Private connection ready · %1$s</string>
+    <string name="download_failed">Download failed: %1$s</string>
+    <string name="download_response_error">Server returned %1$d; open the direct file link</string>
+    <string name="welcome_title">Your workspace, wherever you are</string>
+    <string name="welcome_body">Connect your server to continue your chats, files, and tools. The private connection stays inside Novum Xenium.</string>
+</resources>

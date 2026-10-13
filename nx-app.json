@@ -25,6 +25,14 @@
       "kind": "windows-zip",
       "binHint": "novum-xenium-desktop.exe",
       "postInstallNote": "Requires Docker Desktop in Linux-container mode, Git and Microsoft Edge WebView2. Select your backend checkout in the app."
+    },
+    {
+      "assetPattern": "Novum-Xenium-*-android.apk",
+      "label": "Android app",
+      "platform": "android",
+      "kind": "apk-adb",
+      "packageId": "com.novumxenium.app",
+      "postInstallNote": "Android 8+ and an existing Novum server required. Sign in to the app\u2019s private Tailscale connection; approve your router\u2019s subnet route to access a LAN server."
     }
   ]
 }

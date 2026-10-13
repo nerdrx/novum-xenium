@@ -1,0 +1,65 @@
+name: Android
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['android/**', 'nx-app.json', '.github/workflows/android.yml']
+  pull_request:
+    paths: ['android/**', 'nx-app.json', '.github/workflows/android.yml']
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build isolated toolchain
+        run: docker build -t novum-android-build -f android/tools/Dockerfile android/tools
+      - name: Test and build
+        run: |
+          docker run --rm --cpus=4 --memory=8g -e GOMAXPROCS=4 -v "$PWD:/workspace" novum-android-build bash -lc 'export PATH=/usr/local/go/bin:/root/go/bin:$PATH; ./bridge/build.sh; ./gradlew --no-daemon --max-workers=4 :app:testDebugUnitTest :app:lintDebug :app:assembleRelease'
+      - name: Sign release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          umask 077
+          trap 'rm -f "$RUNNER_TEMP/novum-android.jks"' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/novum-android.jks"
+          test -s "$RUNNER_TEMP/novum-android.jks"
+          docker run --rm -v "$PWD:/workspace" -v "$RUNNER_TEMP/novum-android.jks:/signing/release.jks:ro" -e ANDROID_KEYSTORE_FILE=/signing/release.jks -e ANDROID_KEYSTORE_PASSWORD -e ANDROID_KEY_ALIAS -e ANDROID_KEY_PASSWORD novum-android-build ./tools/sign-apk.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-build
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/reports/
+            dist-android/*
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: android-build
+          path: artifacts
+      - name: Attach signed APK and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release upload "$RELEASE_TAG" artifacts/dist-android/* --clobber

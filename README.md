@@ -11,7 +11,7 @@ Novum Xenium brings your models, tools, projects and chats together. The lightwe
 
 This started with [Odysseus](https://github.com/odysseus-dev/odysseus), then NX-Odysseus. We kept using it, fixing what got in the way and adding what was missing. Now it has its own desktop app, interface and way of working. The original history, credits and AGPL license stay with it.
 
-**[Get started](#get-started)** · [Desktop app](#the-desktop-app) · [See it work](#give-it-a-real-job) · [Workflow guide](docs/nx-workflows.md) · [What changed](FORK-CHANGES.md)
+**[Get started](#get-started)** · [Desktop app](#the-desktop-app) · [Android](#android-companion) · [See it work](#give-it-a-real-job) · [Workflow guide](docs/nx-workflows.md) · [What changed](FORK-CHANGES.md)
 
 ![Novum Xenium home dashboard](assets/branding/workspace-home.png)
 
@@ -68,7 +68,19 @@ npm run dev
 
 Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/).
 
+## Android companion
+
+Open the same workspace on your phone. The Android app includes its own Tailscale connection, so other phone apps keep their normal network. Enter your server address, sign in to Tailscale, then sign in to Novum. A router with an approved subnet route can provide access to your LAN server.
+
+Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. [Connection, build, and compatibility details](android/README.md).
+
 ## Built around doing the work
+
+### Clearer activity
+
+A compact task card separates the current coding step, observed file edits, checks, and review outcome. Repetitive successful tool reads fold together; failures remain visible. A workspace drawer collects received previews, file diffs, browser activity, and subagent links beside the chat. Its file list reflects observed edits, not a complete Git status.
+
+The model picker groups providers, searches full names, and preserves keyboard navigation. Availability labels use provider evidence; an unknown model state does not become a green “ready” claim.
 
 ### A project stays a project
 

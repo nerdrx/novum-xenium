@@ -20,9 +20,12 @@ and `review_status`. A passing command reports `test_status: passed` and
 certifies all requested functionality. The existing completion reviewer still
 runs independently when enabled.
 
-Evidence is currently local to one agent run. Checklist storage deliberately
-does not persist executable commands or restore prior test passes. The packet
-mechanism starts a fresh model context at each accepted packet: it retains human
+Server checkpoints preserve bounded packet evidence for the exact owner, chat,
+and run. Exact tool approval can restore that evidence; interrupted recovery
+reopens a previously completed slice for reproduction and testing. Malformed
+evidence resets the slice instead of granting a pass. Ordinary checklist storage
+does not supply execution evidence. The packet mechanism starts a fresh model
+context at each accepted or restored packet: it retains human
 instructions and trusted system constraints, drops earlier assistant/tool chatter,
 and preserves complete new tool-call/result pairs. Saved conversation history is
 unchanged. Compacted-away boundaries fail open to the original context rather
@@ -33,7 +36,12 @@ A run-scoped status card shows the objective, stage, test status, and review sta
 Reconnect replay can restore this card; saved history does not yet persist it.
 Settings → AI → Work in checked coding steps enables automatic packet selection
 for substantive coding tasks. It defaults off, alongside the existing experience.
+In this mode a new slice requires the packet in the same checklist call; a plain
+checklist is rejected with instructions to supply it. Existing active slices
+can still receive status-only checklist updates.
 The agent must retain the checklist item names, finish each slice with a passing
 check, and select a new packet for the next slice. A checklist cannot skip an
-unverified item merely by marking it complete. Cross-run packet continuation
-remains work; a new run must establish fresh evidence.
+unverified item merely by marking it complete. A passed slice with unfinished
+checklist items is reported as an incomplete task, separately from a slice whose
+acceptance check has not passed. Arbitrary new turns do not inherit packet
+evidence; continuation requires a scoped approval or recovery checkpoint.

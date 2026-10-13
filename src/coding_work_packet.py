@@ -369,9 +369,14 @@ class CodingWorkTracker:
         if not self.state or (self.enabled and self.state.stage == "done" and self.pending):
             return (
                 "Work in checked coding steps. Inspect the project using read tools, then call todowrite "
-                "with small implementation slices (not separate planning or research chores). "
-                "Keep checklist item names and order stable. Mark exactly one in_progress and attach "
-                "work_packet with objective, files, reproduce_command, acceptance_command, and acceptance_condition. "
+                "with one small implementation slice. Include both todos and work_packet in that same call, "
+                'for example: {"todos":[{"content":"<slice>","status":"in_progress"}],'
+                '"work_packet":{"objective":"<outcome>","files":["path/to/file.py"],'
+                '"reproduce_command":"<real baseline command>",'
+                '"acceptance_command":"<real post-edit command>",'
+                '"acceptance_condition":"<observable pass condition>"}}. '
+                "Replace every placeholder with a real value. A TodoWrite without work_packet is rejected. "
+                "Keep checklist item names and order stable. Mark exactly one in_progress. "
                 "Use an existing baseline check, then edit and run the acceptance check. "
                 "Only mark a slice completed after its real acceptance command passes. "
                 "Continue with a new packet for the next pending slice; do not ask for approval to continue. "
@@ -387,10 +392,11 @@ class CodingWorkTracker:
 
     def blocks(self, tool, content):
         import json
+        needs_packet = self.requires_packet
         if self.enabled and tool == "todowrite":
             try:
                 args = json.loads(content) if isinstance(content, str) else content
-                if not self.valid_todo_update(args):
+                if (needs_packet and (not isinstance(args, dict) or "work_packet" not in args)) or not self.valid_todo_update(args):
                     return True
             except (TypeError, ValueError):
                 return True
@@ -401,7 +407,6 @@ class CodingWorkTracker:
                     return CodingWorkPacket(**args["work_packet"]) != self.state.packet
             except (TypeError, ValueError):
                 return True
-        needs_packet = self.enabled and (not self.state or (self.state.stage == "done" and self.pending))
         if not needs_packet and (not self.state or self.state.stage != "reproduce"):
             return False
         from src.tool_capabilities import ToolEffect, capabilities_for_action
@@ -423,6 +428,10 @@ class CodingWorkTracker:
         reads = {ToolEffect.READ_CONTEXT, ToolEffect.READ_PUBLIC, ToolEffect.READ_WORKSPACE,
                  ToolEffect.READ_PRIVATE, ToolEffect.BROKERED_NETWORK_READ}
         return not capabilities.known or not capabilities.effects <= reads
+
+    @property
+    def requires_packet(self):
+        return self.enabled and (not self.state or (self.state.stage == "done" and self.pending))
 
 
     def event(self, round_number):

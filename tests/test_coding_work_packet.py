@@ -120,6 +120,10 @@ def test_checked_workflow_requires_each_slice_and_rejects_checklist_shortcuts(pa
     tracker = CodingWorkTracker(enabled=True)
     first = [{"content": "Fix refresh", "status": "in_progress"},
              {"content": "Fix logout", "status": "pending"}]
+    assert tracker.blocks("todowrite", {"todos": first})
+    assert not tracker.blocks("todowrite", {"todos": first, "work_packet": packet.to_dict()})
+    assert "work_packet" in tracker.instruction
+    assert "acceptance_condition" in tracker.instruction
     result = {"exit_code": 0, "todos": first, "work_packet": packet.to_dict()}
     assert tracker.pending and tracker.blocks("write_file", "{}")
     assert tracker.blocks("bash", "anything")

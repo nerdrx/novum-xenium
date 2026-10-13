@@ -219,7 +219,7 @@ def test_exactly_approved_write_uses_restored_reproduction_evidence(monkeypatch,
 
     monkeypatch.setattr(al, "stream_llm_with_fallback", stream)
     chunks = _collect(al.stream_agent_loop(
-        "http://x/v1", "gpt-4o", [{"role": "user", "content": "Fix auth refresh"}],
+        "http://x/v1", "gpt-4o", [{"role": "user", "content": "Fix the auth refresh bug in this workspace"}],
         workspace=str(tmp_path), owner="alice", session_id="approved-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="approved-resume",
         coding_work_checkpoint=checkpoint, max_rounds=2,
@@ -252,6 +252,78 @@ def test_stop_notice_distinguishes_passed_slice_from_failed_checklist(monkeypatc
     notice = al._coding_work_stop_notice(tracker)
     assert "passed its acceptance check" in notice
     assert "unfinished items" in notice
+
+
+def test_missing_work_packet_todowrite_gets_actionable_model_visible_error(monkeypatch, tmp_path):
+    _patch_common(monkeypatch)
+    monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "missing-packet.db"))
+    monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: True if key == "agent_milestone_workflow" else default)
+
+    class GroundedCodingTask(CodingGrounding):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.evidence.add("read_file")
+
+    monkeypatch.setattr("src.coding_grounding.CodingGrounding", GroundedCodingTask)
+    monkeypatch.setattr(coding_tools, "read_todos", lambda _ctx: [])
+    plain = {"todos": [{"content": "Fix refresh", "status": "in_progress"}]}
+    sealed = json.dumps(plain)
+    approvals = ToolApprovalStore()
+    pending = approvals.create(
+        owner="alice", session_id="missing-packet-test", origin_run_id="packet-origin",
+        tool_name="todowrite", content=sealed, workspace=str(tmp_path),
+        selected_tools={"todowrite"}, external_untrusted_context_seen=False,
+        capabilities=capabilities_for_action("todowrite", sealed),
+    )
+    grant = approvals.consume(
+        pending.approval_id, decision=TASK_APPROVAL_DECISION,
+        owner="alice", session_id="missing-packet-test",
+    )
+    assert grant is not None
+    packet_args = {"todos": plain["todos"], "work_packet": _packet()}
+    executed = []
+
+    async def execute(block, *args, **kwargs):
+        executed.append(block.tool_type)
+        data = json.loads(block.content)
+        result = {"exit_code": 0, "output": "saved", "todos": data["todos"]}
+        if "work_packet" in data:
+            result["work_packet"] = data["work_packet"]
+        return block.tool_type, result
+
+    monkeypatch.setattr(al, "execute_tool_block", execute)
+    turn = 0
+
+    async def stream(candidates, messages, **kwargs):
+        nonlocal turn
+        turn += 1
+        if turn == 2:
+            visible_history = json.dumps(messages)
+            assert "work_packet" in visible_history
+            assert "Replace every placeholder with a real value" in visible_history
+        args = plain if turn == 1 else packet_args
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        assert any(
+            "work_packet" in tool.get("function", {}).get("parameters", {}).get("required", [])
+            for tool in request["kwargs"]["tools"]
+            if tool.get("function", {}).get("name") == "todowrite"
+        )
+        call = {"id": f"missing-packet-{turn}", "name": "todowrite", "arguments": json.dumps(args)}
+        yield "data: " + json.dumps({"type": "tool_calls", "calls": [call]}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "stream_llm_with_fallback", stream)
+    chunks = _collect(al.stream_agent_loop(
+        "http://x/v1", "gpt-4o", [{"role": "user", "content": "Fix the auth refresh bug in this workspace"}],
+        workspace=str(tmp_path), owner="alice", session_id="missing-packet-test",
+        approval_mode="auto", exact_approval=grant, server_run_id="missing-packet-resume",
+        relevant_tools={"todowrite"}, max_rounds=2,
+    ))
+    events = _types(chunks)
+    assert any(event.get("policy") == "coding_work_packet" for event in events)
+    assert any(event.get("type") == "coding_work_packet" for event in events)
+    assert executed == ["todowrite"]
 
 
 def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_context(monkeypatch, tmp_path):

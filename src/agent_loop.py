@@ -6016,8 +6016,37 @@ async def stream_agent_loop(
         schemas = route_mcp_schemas if wants_mcp and route_mcp_schemas else []
         return _filter_route_tool_schemas(schemas)
 
+    def _checked_coding_tool_schemas(schemas):
+        if not _coding_work.enabled:
+            return schemas
+        checked = []
+        for schema in schemas or []:
+            if schema.get("function", {}).get("name") != "todowrite":
+                checked.append(schema)
+                continue
+            schema = copy.deepcopy(schema)
+            function = schema["function"]
+            function["description"] = (
+                "Create or update the checked coding checklist. "
+                + ("A new coding slice requires work_packet in this call. " if _coding_work.requires_packet else "")
+                + "When required, include objective, files, reproduce_command, acceptance_command, "
+                "and acceptance_condition."
+            )
+            params = function.get("parameters", {})
+            required = params.setdefault("required", [])
+            if _coding_work.requires_packet and "work_packet" not in required:
+                required.append("work_packet")
+            elif not _coding_work.requires_packet and "work_packet" in required:
+                required.remove("work_packet")
+            params["properties"]["work_packet"]["description"] = (
+                ("Required" if _coding_work.requires_packet else "Optional")
+                + " coding contract for the active slice. Commands must be exact real commands."
+            )
+            checked.append(schema)
+        return checked
+
     _t3 = time.time()
-    _initial_route_tools = _tool_schemas_for_route(_route_state)
+    _initial_route_tools = _checked_coding_tool_schemas(_tool_schemas_for_route(_route_state))
     _initial_route_request_messages = _trim_route_request_messages(
         endpoint_url,
         model,
@@ -6422,7 +6451,11 @@ async def stream_agent_loop(
             )
         if packet_blocked:
             approved_result = {
-                "error": "The checked work packet was reset to reproduction; rerun its recorded reproduction command before editing.",
+                "error": (
+                    _coding_work.instruction if _coding_work.state else
+                    "This action needs a checked work packet. Call todowrite with the full packet first. "
+                    + _coding_work.instruction
+                ),
                 "exit_code": 1,
                 "blocked": True,
                 "policy": "coding_work_packet",
@@ -6745,7 +6778,7 @@ async def stream_agent_loop(
         }
         if round_num == 1 and not _approved_result_injected:
             _active_route_state["tools"] = _route_state.get("tools", [])
-        all_tool_schemas = _tool_schemas_for_route(_active_route_state)
+        all_tool_schemas = _checked_coding_tool_schemas(_tool_schemas_for_route(_active_route_state))
         if round_num == 1 and not _approved_result_injected:
             _active_route_state["request_messages"] = _initial_route_request_messages
         agent_stream_timeout = int(get_setting("agent_stream_timeout_seconds", 300) or 300)
@@ -6799,7 +6832,7 @@ async def stream_agent_loop(
                     candidate_headers,
                     candidate_source_messages,
                 )
-            candidate_tools = _tool_schemas_for_route(state)
+            candidate_tools = _checked_coding_tool_schemas(_tool_schemas_for_route(state))
             request_messages = state.get("request_messages")
             if request_messages is None:
                 request_messages = _trim_route_request_messages(
@@ -7099,7 +7132,7 @@ async def stream_agent_loop(
                                     endpoint_url,
                                     model,
                                     answering_state["messages"],
-                                    _tool_schemas_for_route(answering_state),
+                                    _checked_coding_tool_schemas(_tool_schemas_for_route(answering_state)),
                                 )
                                 answering_state["context_length"] = _route_context_lengths.get(
                                     (endpoint_url, model),

@@ -34,7 +34,8 @@ def _todos():
 def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=None, todos=None,
                 pause_after_acceptance=False, teacher_event=None, checked_workflow=False,
                 attempt_shell_edit=False, registered_checks=False, disabled_bash=False,
-                malformed_check=False, no_packet_start=False):
+                malformed_check=False, no_packet_start=False,
+                stall_before_packet=False, fail_stall_reads=False):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -80,6 +81,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         ("write_file", {"path": "src/auth.py", "content": "too soon"}),
         ("bash", {"command": _packet()["reproduce_command"]}),
     ]
+    if stall_before_packet:
+        actions = [("read_file", {"path": "src/auth.py"}) for _ in range(4)] + actions
     if attempt_shell_edit:
         actions.append(("bash", {"command": "sed -i 's/old/new/' src/auth.py"}))
     actions.extend([
@@ -126,6 +129,11 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         if block.tool_type == "write_file":
             path = block.content.split("\n", 1)[0]
             return block.tool_type, {"exit_code": 0, "output": f"saved {path}"}
+        if block.tool_type == "read_file":
+            return block.tool_type, {
+                "exit_code": 1 if fail_stall_reads else 0,
+                "output": "permission denied" if fail_stall_reads else "same source contents",
+            }
         raise AssertionError(f"Unexpected tool: {block.tool_type}")
 
     monkeypatch.setattr(al, "execute_tool_block", execute)
@@ -134,7 +142,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
     async def stream(candidates, messages, **kwargs):
         nonlocal turn
         turn += 1
-        if no_packet_start:
+        if no_packet_start and not stall_before_packet:
             request = await kwargs["candidate_request_factory"](0, *candidates[0])
             requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
             yield 'data: {"delta":"I will inspect the workspace first."}\n\n'
@@ -144,7 +152,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
             tool, args = actions[turn - 1]
             request = await kwargs["candidate_request_factory"](0, *candidates[0])
             sent = json.dumps(request)
-            assert "obsolete implementation chatter" not in sent
+            if not no_packet_start:
+                assert "obsolete implementation chatter" not in sent
             assert "Preserve keyboard support" in sent
             requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
             call = {"id": f"packet-{turn}", "name": tool, "arguments": json.dumps(args)}
@@ -162,7 +171,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
         relevant_tools={"todowrite", "bash", "write_file", "edit_file", "apply_patch",
-                        "python", "read_file", "grep", "glob", "ls"}, max_rounds=10,
+                        "python", "read_file", "grep", "glob", "ls", "ask_user"}, max_rounds=10,
         disabled_tools={"bash"} if disabled_bash else set(),
     ))
     return _types(chunks), executed, requested
@@ -176,6 +185,30 @@ def test_initial_checked_schema_keeps_readers_and_hides_blocked_actions(monkeypa
     names = requested[0]
     assert {"todowrite", "read_file", "grep", "glob", "ls"} <= names
     assert not ({"bash", "python", "write_file", "edit_file", "apply_patch"} & names)
+
+
+def test_read_stall_recovers_to_truthful_packet_prompt(monkeypatch, tmp_path):
+    events, executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, no_packet_start=True,
+        stall_before_packet=True,
+    )
+
+    assert {"todowrite", "ask_user"} <= requested[4]
+    assert not ({"read_file", "grep", "glob", "ls", "bash", "write_file"} & requested[4])
+    assert requested[-1] == {"todowrite", "ask_user"}
+    # Packet creation remains subject to the ordinary approval boundary.
+    assert any("approval" in json.dumps(event).lower() for event in events)
+    assert [tool for tool, _content in executed][-1] == "read_file"
+
+
+def test_failed_reads_do_not_activate_packet_stall_recovery(monkeypatch, tmp_path):
+    events, _executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, no_packet_start=True,
+        stall_before_packet=True, fail_stall_reads=True,
+    )
+
+    assert "read_file" in requested[-1]
+    assert any("Agent paused" in event.get("delta", "") for event in events)
 
 
 def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monkeypatch, tmp_path):

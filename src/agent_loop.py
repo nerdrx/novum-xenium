@@ -4514,6 +4514,13 @@ async def stream_agent_loop(
         (_retrieval_query + "\n" + _last_user) if _use_coding_tools(_retrieval_query, workspace) else "",
         disabled_tools=disabled_tools, plan_mode=plan_mode, guide_mode=guide_only,
     )
+    from src.milestone_checkpoint import MilestoneCheckpoint
+    _milestone_checkpoint = MilestoneCheckpoint(bool(
+        _coding_grounding.required and workspace and owner and session_id
+        and not approved_plan and not incognito and not delegated_credential
+        and "todowrite" not in disabled_tools
+        and (relevant_tools is None or "todowrite" in relevant_tools)
+    ))
     if not _coding_grounding.web_allowed:
         disabled_tools.update({"web_search", "web_fetch"})
     # Only a sealed workspace mutation/code action counts as prior investigation.
@@ -5820,6 +5827,12 @@ async def stream_agent_loop(
                                and "todowrite" not in disabled_tools):
                 _prepend_agent_directive(route_messages, AUTO_MILESTONE_DIRECTIVE)
                 route_messages = _attach_milestones(route_messages, saved_todos)
+                if saved_todos:
+                    _milestone_checkpoint.restore(saved_todos)
+            if _milestone_checkpoint.pending and _coding_grounding.may_mutate:
+                _prepend_agent_directive(route_messages, _milestone_checkpoint.directive)
+                if route_tools is not None:
+                    route_tools.add("todowrite")
         if guide_only:
             _prepend_agent_directive(route_messages, GUIDE_ONLY_DIRECTIVE)
         for skill_name, reference in _skill_reference_messages_by_name.items():
@@ -5870,6 +5883,9 @@ async def stream_agent_loop(
         filtered = []
         for schema in schemas:
             tool_name = schema.get("function", {}).get("name") or schema.get("name", "")
+            if (_milestone_checkpoint.pending and _coding_grounding.may_mutate
+                    and tool_name not in {"todowrite", "ask_user"}):
+                continue
             if tool_name == "native_preview" and os.getenv("ODYSSEUS_EXECUTOR_URL", "").strip():
                 continue
             if (not tool_policy_names(tool_name).isdisjoint(disabled_tools)
@@ -7423,6 +7439,15 @@ async def stream_agent_loop(
             yield f'data: {json.dumps({"delta": cleaned_round})}\n\n'
 
         if not tool_blocks:
+            if _milestone_checkpoint.pending and _coding_grounding.may_mutate:
+                if _milestone_checkpoint.reject():
+                    notice = "Stopped: the model did not save an actionable task checklist after two attempts. No implementation was verified."
+                    full_response += "\n\n" + notice
+                    yield 'data: ' + json.dumps({"delta": notice}) + '\n\n'
+                    break
+                messages.append({"role": "system", "_protected": True,
+                                 "content": _milestone_checkpoint.directive})
+                continue
             if not _coding_grounding.may_mutate and not _force_answer:
                 if _research_nudges < 2:
                     _research_nudges += 1
@@ -7666,6 +7691,8 @@ async def stream_agent_loop(
             yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
             continue
 
+        # Count only rounds where the model actually had a planning opportunity.
+        _milestone_round_pending = _milestone_checkpoint.pending and _coding_grounding.may_mutate
         # Execute each tool block
         tool_results = []
         tool_result_texts = []  # plain text for native tool role messages
@@ -7830,6 +7857,11 @@ async def stream_agent_loop(
                 desc = f"{block.tool_type}: RESEARCH FIRST"
                 result = {"error": _coding_grounding.directive, "exit_code": 1,
                           "blocked": True, "policy": "coding_grounding"}
+            elif (_milestone_checkpoint.pending and _coding_grounding.may_mutate
+                  and block.tool_type not in {"todowrite", "ask_user"}):
+                desc = f"{block.tool_type}: PLAN FIRST"
+                result = {"error": _milestone_checkpoint.directive, "exit_code": 1,
+                          "blocked": True, "policy": "milestone_checkpoint"}
             elif not security_decision.allowed:
                 approval_document = (
                     active_document
@@ -8009,6 +8041,7 @@ async def stream_agent_loop(
                         except (asyncio.CancelledError, Exception):
                             pass
 
+            _milestone_checkpoint.observe(block.tool_type, result)
             run_security.observe_tool_result(block.tool_type, result, block.content)
             if (
                 hold_round_text
@@ -8628,6 +8661,13 @@ async def stream_agent_loop(
         if (_ody_notes_finetune_mode or _ody_qwen_finetune_model) and _ody_notes_tool_completed:
             logger.info("[agent] odysseus completed from deterministic tool output")
             break
+
+        if _milestone_round_pending and _milestone_checkpoint.pending:
+            if _milestone_checkpoint.reject():
+                notice = "Stopped: the model did not save an actionable task checklist after two attempts. No implementation was verified."
+                full_response += "\n\n" + notice
+                yield 'data: ' + json.dumps({"delta": notice}) + '\n\n'
+                break
 
         # Feed results back to LLM for next round
         # Pass the CONVERTED calls (aligned 1:1 with tool_result_texts), not the

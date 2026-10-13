@@ -104,6 +104,24 @@ class AiderAdapterTests(unittest.TestCase):
         self.assertEqual(command[command.index("--file") + 1], "calc.py")
         self.assertNotIn("--openai-api-key", command)
 
+    def test_source_files_are_validated_and_passed_to_aider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "core.py").write_text("def total(values): return sum(values)\n")
+            (root / "report.py").write_text("from core import total\n")
+            files = aider_adapter.source_files('["core.py", "report.py"]', root)
+            command = aider_adapter.build_command(
+                "/tmp/isolated/aider", "openai/qwen3.5:9b", root / "TASK.md",
+                root / "config.yml", root / "settings.yml", root / "empty.env", root, files,
+            )
+            self.assertEqual(
+                [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--file"],
+                ["core.py", "report.py"],
+            )
+            for raw in ('[]', '["../secret"]', '["missing.py"]', '["core.py", "core.py"]'):
+                with self.subTest(raw=raw), self.assertRaises(ValueError):
+                    aider_adapter.source_files(raw, root)
+
     def test_run_executes_fake_cli_without_model_request(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

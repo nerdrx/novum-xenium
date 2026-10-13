@@ -32,7 +32,27 @@ ACCEPTANCE = (
     "assert add(0, 0) == 0; "
     "assert add(-4, -6) == -10"
 )
+MULTIFILE_FIXTURE = {
+    "core.py": "def total(values):\n    return len(values)\n",
+    "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': total(values)}\n",
+    "TASK.md": (
+        "Repair this project: `core.total` must sum numeric values; "
+        "`report.summary` must return their sum and count, including empty input. "
+        "Change `core.py` and `report.py`, then verify the result.\n"
+    ),
+}
+MULTIFILE_ACCEPTANCE = (
+    "from report import summary; "
+    "assert summary([2, 3]) == {'total': 5, 'count': 2}; "
+    "assert summary([]) == {'total': 0, 'count': 0}; "
+    "assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+)
+CASES = {
+    "wiring": (FIXTURE, ACCEPTANCE),
+    "multifile": (MULTIFILE_FIXTURE, MULTIFILE_ACCEPTANCE),
+}
 AGENTS = ("novum", "aider")
+ACCEPTANCE_TIMEOUT = 15
 SECRET_ARG = re.compile(
     r"(?i)(?:--(?:api[-_]?key|access[-_]?token|token|password|secret|authorization|credential)(?:=|$)"
     r"|(?:api[-_]?key|access[-_]?token|password|secret|authorization|credential)\s*[=:])"
@@ -81,22 +101,24 @@ def parse_settings(value: str) -> dict:
     return settings
 
 
-def fixture_hash() -> str:
+def fixture_hash(fixture: dict[str, str] = FIXTURE) -> str:
     digest = hashlib.sha256()
-    for name, content in sorted(FIXTURE.items()):
+    for name, content in sorted(fixture.items()):
         digest.update(name.encode() + b"\0" + content.encode() + b"\0")
     return digest.hexdigest()
 
 
-def run_agent(name: str, template: str, run_dir: Path, model: str, endpoint: str, settings: dict, timeout: float) -> dict:
+def run_agent(name: str, template: str, run_dir: Path, model: str, endpoint: str, settings: dict, timeout: float,
+              fixture: dict[str, str] = FIXTURE, acceptance: str = ACCEPTANCE) -> dict:
     workspace = run_dir / name
     workspace.mkdir()
-    for filename, content in FIXTURE.items():
+    for filename, content in fixture.items():
         (workspace / filename).write_text(content, encoding="utf-8")
     values = {
         "workspace": str(workspace),
         "task_file": str(workspace / "TASK.md"),
-        "prompt": FIXTURE["TASK.md"].strip(),
+        "prompt": fixture["TASK.md"].strip(),
+        "source_files_json": json.dumps(sorted(set(fixture) - {"TASK.md"})),
         "model": model,
         "endpoint": endpoint,
         "settings_json": json.dumps(settings, sort_keys=True),
@@ -133,20 +155,28 @@ def run_agent(name: str, template: str, run_dir: Path, model: str, endpoint: str
         command_error = type(exc).__name__
         command_returncode = None
     seconds = round(time.monotonic() - started, 3)
-    check = subprocess.run(
-        [sys.executable, "-c", ACCEPTANCE], cwd=workspace,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
+    acceptance_timed_out = False
+    try:
+        check = subprocess.run(
+            [sys.executable, "-c", acceptance], cwd=workspace,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            timeout=ACCEPTANCE_TIMEOUT,
+        )
+        acceptance_returncode = check.returncode
+    except subprocess.TimeoutExpired:
+        acceptance_timed_out = True
+        acceptance_returncode = None
     return {
         "command_template": argv_display,
         "command_returncode": command_returncode,
         "command_error": command_error,
         "timed_out": timed_out,
         "seconds": seconds,
-        "acceptance_command": [sys.executable, "-c", ACCEPTANCE],
-        "acceptance_returncode": check.returncode,
-        "passed": check.returncode == 0,
+        "acceptance_command": [sys.executable, "-c", acceptance],
+        "acceptance_returncode": acceptance_returncode,
+        "acceptance_timed_out": acceptance_timed_out,
+        "passed": acceptance_returncode == 0,
         "manual_interventions": {"count": None, "notes": [], "operator_recorded": False},
         "workspace": str(workspace),
     }
@@ -159,10 +189,14 @@ def run_comparison(args) -> int:
         raise ValueError("timeout must be a positive finite number")
     endpoint = validate_endpoint(args.endpoint)
     settings = parse_settings(args.settings_json)
+    case_name = getattr(args, "case", "wiring")
+    if case_name not in CASES:
+        raise ValueError("case must be wiring or multifile")
+    fixture, acceptance = CASES[case_name]
     commands = {"novum": args.novum_command, "aider": args.aider_command}
     # Validate both templates before creating any run artifacts.
     for command in commands.values():
-        command_argv(command, {key: "placeholder" for key in ("workspace", "task_file", "prompt", "model", "endpoint", "settings_json")})
+        command_argv(command, {key: "placeholder" for key in ("workspace", "task_file", "prompt", "model", "endpoint", "settings_json", "source_files_json")})
     run_dir = Path(args.output_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=False)
     started_at = datetime.now(timezone.utc).isoformat()
@@ -172,16 +206,19 @@ def run_comparison(args) -> int:
         raise ValueError("order must be novum-first or aider-first")
     run_order = AGENTS if order == "novum-first" else tuple(reversed(AGENTS))
     for name in run_order:
-        results[name] = run_agent(name, commands[name], run_dir, args.model, endpoint, settings, args.timeout)
+        results[name] = run_agent(name, commands[name], run_dir, args.model, endpoint, settings, args.timeout,
+                                  fixture, acceptance)
         report = {
             "schema_version": 1,
             "started_at": started_at,
             "model": args.model,
             "endpoint": endpoint,
             "settings": settings,
+            "case": case_name,
             "run_order": list(run_order),
-            "fixture_sha256": fixture_hash(),
-            "task": FIXTURE["TASK.md"],
+            "fixture_sha256": fixture_hash(fixture),
+            "source_files": sorted(set(fixture) - {"TASK.md"}),
+            "task": fixture["TASK.md"],
             "results": results,
             "model_output_saved": False,
             "credentials_saved": False,
@@ -197,7 +234,9 @@ def main() -> int:
     parser.add_argument("--settings-json", required=True, help="Shared non-secret generation settings as JSON object")
     parser.add_argument("--order", choices=("novum-first", "aider-first"), default="novum-first",
                         help="Which agent runs first (default: novum-first)")
-    parser.add_argument("--novum-command", required=True, help="Quoted argv template; supports {workspace}, {task_file}, {prompt}, {model}, {endpoint}, {settings_json}")
+    parser.add_argument("--case", choices=tuple(CASES), default="wiring",
+                        help="Fixture to compare (default: wiring)")
+    parser.add_argument("--novum-command", required=True, help="Quoted argv template; supports {workspace}, {task_file}, {prompt}, {model}, {endpoint}, {settings_json}, {source_files_json}")
     parser.add_argument("--aider-command", required=True, help="Quoted argv template; same placeholders as --novum-command")
     parser.add_argument("--output-dir", required=True, help="New directory for isolated workspaces and report")
     parser.add_argument("--timeout", type=float, default=600, help="Maximum seconds per agent command (default: 600)")

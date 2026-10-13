@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 
@@ -76,14 +77,18 @@ def write_aider_config(directory: Path, model: str, settings: dict) -> tuple[Pat
 def build_command(
     aider: str, model: str, task_file: Path, config: Path,
     model_settings: Path, empty_env_file: Path, temp_dir: Path,
+    files: tuple[str, ...] = ("calc.py",),
 ) -> list[str]:
-    return [
+    command = [
         aider,
         "--config", str(config),
         "--env-file", str(empty_env_file),
         "--model-settings-file", str(model_settings),
         "--model", model,
-        "--file", "calc.py",
+    ]
+    for filename in files:
+        command.extend(("--file", filename))
+    command.extend([
         "--message-file", str(task_file),
         "--input-history-file", str(temp_dir / "input-history"),
         "--chat-history-file", str(temp_dir / "chat-history"),
@@ -93,7 +98,26 @@ def build_command(
         "--no-check-update",
         "--analytics-disable",
         "--no-pretty",
-    ]
+    ])
+    return command
+
+
+def source_files(raw: str | None, workspace: Path) -> tuple[str, ...]:
+    files = ["calc.py"] if raw is None else json.loads(raw)
+    if (not isinstance(files, list) or not files
+            or any(not isinstance(name, str) or not name for name in files)):
+        raise ValueError("source files must be a non-empty JSON string array")
+    checked = []
+    for name in files:
+        path = PurePosixPath(name)
+        if ("\\" in name or path.is_absolute() or path.as_posix() != name
+                or any(part in {"", ".", ".."} for part in path.parts)
+                or not (workspace / name).is_file()):
+            raise ValueError("source files must be existing workspace-relative paths")
+        checked.append(name)
+    if len(set(checked)) != len(checked):
+        raise ValueError("source files must be unique")
+    return tuple(checked)
 
 
 def child_environment(
@@ -126,12 +150,13 @@ def run(args) -> int:
     model = model_identifier(getattr(args, "endpoint_model", None) or args.model, args.provider)
     workspace = Path.cwd().resolve()
     task_file = Path(args.task_file).resolve()
+    files = source_files(getattr(args, "files_json", None), workspace)
     try:
         task_file.relative_to(workspace)
     except ValueError as exc:
         raise ValueError("task file must be inside the agent workspace") from exc
-    if not task_file.is_file() or not (workspace / "calc.py").is_file():
-        raise ValueError("expected TASK.md and calc.py in the agent workspace")
+    if not task_file.is_file():
+        raise ValueError("expected TASK.md in the agent workspace")
     aider = shutil.which(args.aider_bin)
     if not aider:
         raise ValueError("Aider executable not found; pass --aider-bin with its isolated path")
@@ -150,7 +175,7 @@ def run(args) -> int:
         env["XDG_CONFIG_HOME"] = str(temp_dir / "xdg")
         env["XDG_CACHE_HOME"] = str(temp_dir / "cache")
         config, model_settings = write_aider_config(temp_dir, model, settings)
-        command = build_command(aider, model, task_file, config, model_settings, empty_env_file, temp_dir)
+        command = build_command(aider, model, task_file, config, model_settings, empty_env_file, temp_dir, files)
         process = subprocess.Popen(command, cwd=workspace, env=env, start_new_session=(os.name == "posix"))
         try:
             returncode = process.wait(timeout=args.timeout)
@@ -175,6 +200,7 @@ def main() -> int:
     parser.add_argument("--endpoint-model", help="Model ID advertised by the shared HTTP endpoint")
     parser.add_argument("--endpoint", default=os.getenv("CODING_AGENT_COMPARISON_ENDPOINT", ""))
     parser.add_argument("--settings-json", default=os.getenv("CODING_AGENT_COMPARISON_SETTINGS_JSON", "{}"))
+    parser.add_argument("--files-json", help="JSON array of source files to expose to Aider")
     parser.add_argument("--provider", choices=("ollama", "openai-compatible"), default="ollama")
     parser.add_argument("--aider-bin", default="aider")
     parser.add_argument("--pass-env", action="append", default=[], metavar="NAME",

@@ -6,6 +6,8 @@ copy. The runner records the requested model, shared endpoint, declared
 settings, chosen run order, command durations, exit codes, actual acceptance-test results, and
 an operator-editable manual-intervention field. It does not save agent output
 or copy environment variables into the report.
+The external acceptance check is capped at 15 seconds; a timeout is recorded as
+a failed check so the comparison report is still written.
 
 ## Current host check
 
@@ -22,6 +24,13 @@ incorrectly subtracts. The fixed acceptance command checks positive, negative,
 zero, and negative-pair inputs. The initial fixture fails that command. A task
 counts as passing only when its real acceptance check passes; the adapter exit
 status is also recorded. The harness never patches generated code.
+
+Use `--case multifile` to select the paired `core.py` / `report.py` repair
+fixture from the existing same-model evaluation. Its task names both files and
+its fixed acceptance command checks sum and count for positive, negative, and
+empty inputs. The report records the selected case, source-file names, task,
+and fixture hash. The default `wiring` case remains the one-file `calc.py`
+repair.
 
 ## Configure and run
 
@@ -68,6 +77,13 @@ Use the bundled adapter for Aider by replacing the sample Aider command with:
 ```bash
 --aider-command '/tmp/nx-coding-agent-comparison-aider-venv/bin/python /run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_aider.py --task-file {task_file} --model {model} --endpoint {endpoint} --settings-json {settings_json} --provider ollama --aider-bin /tmp/nx-coding-agent-comparison-aider-venv/bin/aider'
 ```
+
+For the `multifile` case, add `--case multifile` to the runner and
+`--files-json '{source_files_json}'` to the bundled Aider command so Aider is
+given the same fixture source files named in the task. Novum receives the same
+isolated workspace, and its task identifies those same files. The runner still
+executes its fixed acceptance command after each agent; task text cannot change
+the checker.
 
 For OpenAI-compatible servers whose advertised model ID differs from the
 comparison's logical model name, pass `--endpoint-model ID` to the Aider

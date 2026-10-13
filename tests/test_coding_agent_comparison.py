@@ -8,6 +8,7 @@ import sys
 import tempfile
 import shlex
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 
@@ -27,6 +28,19 @@ class CodingAgentComparisonTests(unittest.TestCase):
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         self.assertNotEqual(result.returncode, 0)
+
+    def test_multifile_fixture_is_broken_and_has_trusted_acceptance(self):
+        fixture, acceptance = comparison.CASES["multifile"]
+        self.assertEqual(set(fixture) - {"TASK.md"}, {"core.py", "report.py"})
+        self.assertIn("core.py", fixture["TASK.md"])
+        self.assertIn("report.py", fixture["TASK.md"])
+        with tempfile.TemporaryDirectory() as directory:
+            for name, content in fixture.items():
+                Path(directory, name).write_text(content)
+            result = subprocess.run([sys.executable, "-c", acceptance], cwd=directory,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(comparison.fixture_hash(), comparison.fixture_hash(fixture))
 
     def test_command_templates_are_argv_and_reject_secrets(self):
         result = comparison.command_argv(
@@ -111,6 +125,62 @@ class CodingAgentComparisonTests(unittest.TestCase):
             report = json.loads((root / "run" / "report.json").read_text())
             self.assertEqual(order_file.read_text().splitlines(), ["aider", "novum"])
             self.assertEqual(report["run_order"], ["aider", "novum"])
+
+    def test_runner_pairs_multifile_sources_and_uses_fixed_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = root / "fix.py"
+            adapter.write_text(
+                "from pathlib import Path\n"
+                "Path('core.py').write_text('def total(values):\\n    return sum(values)\\n')\n"
+                "Path('report.py').write_text(\"from core import total\\ndef summary(values):\\n"
+                "    return {'total': total(values), 'count': len(values)}\\n\")\n"
+            )
+            command = f"{shlex.quote(sys.executable)} {shlex.quote(str(adapter))}"
+            args = SimpleNamespace(
+                endpoint="http://127.0.0.1:11434", settings_json="{}",
+                novum_command=command, aider_command=command,
+                output_dir=str(root / "run"), model="qwen3.5:9b", timeout=30,
+                order="novum-first", case="multifile",
+            )
+            self.assertEqual(comparison.run_comparison(args), 0)
+            report = json.loads((root / "run" / "report.json").read_text())
+            self.assertEqual(report["case"], "multifile")
+            self.assertEqual(report["source_files"], ["core.py", "report.py"])
+            self.assertNotEqual(report["fixture_sha256"], comparison.fixture_hash())
+            for name in comparison.AGENTS:
+                workspace = Path(report["results"][name]["workspace"])
+                self.assertTrue(report["results"][name]["passed"])
+                self.assertEqual(report["results"][name]["acceptance_command"][2],
+                                 comparison.MULTIFILE_ACCEPTANCE)
+                self.assertEqual((workspace / "TASK.md").read_text(), comparison.MULTIFILE_FIXTURE["TASK.md"])
+                self.assertIn("return sum(values)", (workspace / "core.py").read_text())
+                self.assertIn("len(values)", (workspace / "report.py").read_text())
+
+    def test_hung_external_acceptance_is_recorded_as_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            noop = root / "noop.py"
+            noop.write_text("pass\n")
+            command = f"{shlex.quote(sys.executable)} {shlex.quote(str(noop))}"
+            args = SimpleNamespace(
+                endpoint="http://127.0.0.1:11434", settings_json="{}",
+                novum_command=command, aider_command=command,
+                output_dir=str(root / "run"), model="qwen3.5:9b", timeout=30,
+                order="novum-first", case="wiring",
+            )
+            hanging_fixture = {
+                "calc.py": "import time\nwhile True: time.sleep(1)\ndef add(a, b): return a + b\n",
+                "TASK.md": "Fix calc.py.\n",
+            }
+            with patch.object(comparison, "CASES", {"wiring": (hanging_fixture, "from calc import add; assert add(1, 1) == 2")}), \
+                    patch.object(comparison, "ACCEPTANCE_TIMEOUT", 0.05):
+                self.assertEqual(comparison.run_comparison(args), 1)
+            report = json.loads((root / "run" / "report.json").read_text())
+            for result in report["results"].values():
+                self.assertTrue(result["acceptance_timed_out"])
+                self.assertIsNone(result["acceptance_returncode"])
+                self.assertFalse(result["passed"])
 
 
 if __name__ == "__main__":

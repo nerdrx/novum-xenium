@@ -1,0 +1,200 @@
+{
+  "model": "qwen3.5:9b",
+  "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/js-async-20261013-234359",
+  "results": {
+    "serial-map": {
+      "adapter_exit": 0,
+      "seconds": 72.53,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.mjs": true
+      },
+      "passed": true,
+      "source_changed": true,
+      "task": "Implement the named ES-module export async function mapSeries(items, worker) in solution.mjs. Change only solution.mjs. Use built-in JavaScript capabilities; no packages or setup required.\n\nitems is an array, and worker is a callable. No type validation is required. For each array element, invoke worker(item, index) exactly once, using its original zero-based index. Process elements strictly sequentially: wait for one worker result to settle successfully before calling the next worker. Workers may return ordinary synchronous values or promises.\n\nReturn a promise resolving to a new array of the worker results, in original input order. Preserve result identity and falsey results (including undefined). Do not mutate the input array or its elements. For empty input resolve to [] without calling worker.\n\nIf a worker throws synchronously or its promise rejects, stop immediately: never call any later worker, and reject mapSeries with that exact thrown/rejected error object, without wrapping it. Prior successfully completed work need not be undone. No parallel processing is allowed.\n\nRun python3 qa_check.py (or node --test test_solution.mjs). Do not modify the tests or runner. Tests use controlled deferred promises, without timing sleeps. The runner limits total test time to 15 seconds.\n",
+      "baseline_exit": 1,
+      "initial_hashes": {
+        "solution.mjs": "5be738e0df389488ef51850ea3643277349139989f578dfedac0ef36638761a8",
+        "test_solution.mjs": "982a5eb38c23d8a8016951d1f4d9ac06c8a6c02f082cdeaed6ce6179ec5dc471",
+        "qa_check.py": "ac3694fc2cd6674cfecd2c51b93f6e0056af515fe630c656481249e7d6a44501",
+        "TASK.md": "1f79cd6896ef3674d6d16f71c505b6ae8dc287263f279db4d005150500c36764"
+      },
+      "adapter": {
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 5
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "endpoint_id": "6865006e",
+        "evidence": [
+          {
+            "enabled": true,
+            "requested": true,
+            "type": "coding_workflow"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 14037,
+            "model": "nx-model-5",
+            "output_tokens": 310,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 14347,
+            "type": "metrics"
+          },
+          {
+            "decision": "approve_task",
+            "type": "approval_decision"
+          },
+          {
+            "enabled": true,
+            "requested": true,
+            "type": "coding_workflow"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 1,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 3,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 4,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 5,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "passed",
+            "round": 5,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 28394,
+            "model": "nx-model-5",
+            "output_tokens": 476,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 28870,
+            "type": "metrics"
+          },
+          {
+            "reason": "coding_work_verified",
+            "review_status": "passed",
+            "status": "completed",
+            "test_status": "passed",
+            "type": "agent_terminal"
+          }
+        ],
+        "model": "qwen3.5:9b",
+        "output_saved": false,
+        "preset_id": null,
+        "run_id": "4389e810d68343978f7d9cedf01de961",
+        "seconds": 72.486,
+        "session_id": "9a0fc96c-522f-42dc-a296-1a7dee70c413",
+        "source_files": [
+          "solution.mjs"
+        ],
+        "status": "complete",
+        "stream_ended": true,
+        "terminal": {
+          "reason": "coding_work_verified",
+          "review_status": "passed",
+          "status": "completed",
+          "test_status": "passed",
+          "type": "agent_terminal"
+        },
+        "verification_passed": null
+      },
+      "generated_solution": "export async function mapSeries(items, worker) {\n  const results = [];\n  for (let i = 0; i < items.length; i++) {\n    try {\n      const result = await worker(items[i], i);\n      results.push(result);\n    } catch (error) {\n      return Promise.reject(error);\n    }\n  }\n  return results;\n}\n",
+      "external_test_output": "\u2714 empty input resolves to an empty new array without calls (0.612553ms)\n\u2714 sync results preserve duplicates, index, and falsey values (3.635067ms)\n\u2714 mixed synchronous and promise workers preserve output identity (0.103031ms)\n\u2714 controlled promises never allow overlapping worker calls (0.233291ms)\n\u2714 synchronous throw stops later calls and preserves error identity (0.264381ms)\n\u2714 promise rejection stops later calls and preserves error identity (0.11533ms)\n\u2714 input array and objects remain unchanged (0.101891ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 34.21649\n",
+      "coding_work_packet": {
+        "failed_acceptance_checks": 0,
+        "version": 1,
+        "enabled": true,
+        "packet": {
+          "objective": "Implement async function mapSeries(items, worker) in solution.mjs that processes items sequentially, awaiting each worker result before proceeding, returning a promise of results in original order, stopping and rejecting immediately on first worker error or rejection",
+          "files": [
+            "solution.mjs"
+          ],
+          "reproduce_command": "node --test test_solution.mjs",
+          "acceptance_command": "node --test test_solution.mjs",
+          "acceptance_condition": "All tests pass (test count shown equals total expected tests)"
+        },
+        "stage": "done",
+        "reproduction_exit_code": 1,
+        "edit_tool": "write_file",
+        "acceptance_exit_code": 0,
+        "milestones": [
+          "Implement mapSeries function in solution.mjs"
+        ],
+        "completed": [
+          "Implement mapSeries function in solution.mjs"
+        ],
+        "current_milestone": "Implement mapSeries function in solution.mjs",
+        "review_status": "passed"
+      },
+      "last_output": "The tests are failing because solution.mjs appears to have a minimal or stub implementation. I need to read the current solution.mjs file, see what's there, and implement the full mapSeries function.\nThe file currently has a stub implementation that throws \"Not implemented\". I need to replace this with a proper implementation that:\n1. Returns a promise that resolves to a new array of results in original order\n2. Processes items sequentially (waits for each worker result before calling next)\n3. Handles both sync and async worker results (using await)\n4. Stops immediately on first error/rejection, rejecting with the exact error\n5. Preserves falsy results including undefined\n6. Doesn't mutate input array\n7. For empty input, resolves to [] without calling any worker\nThe tests all pass now. The implementation is complete and correct.\nAll 7 tests pass. The implementation is complete.\n\nThe `mapSeries` function:\n- Processes items sequentially (awaits each worker result before proceeding)\n- Returns a promise resolving to results in original input order\n- Stops immediately on first error/rejection without wrapping it\n- Preserves result identity including falsy values\n- Does not mutate input\n- Returns empty array for empty input without calling worker"
+    }
+  },
+  "limits": [
+    "Same original fixture bytes; only model edited solution.",
+    "Single bounded function trial, not complete GUI/app reliability.",
+    "Model tests ran on container Node20.19.2; independent checks ran on host Node26.10.0 using shared supported APIs."
+  ]
+}

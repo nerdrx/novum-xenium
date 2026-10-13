@@ -133,6 +133,11 @@ class CodingGrounding:
         # Parameter names such as dependencies in sort(dependencies) are code,
         # not prose requests to build or integrate those capabilities.
         classification_task = re.sub(r"(?<=\w)\([^()\n]*\)", "", self.task)
+        # "ES-module export" describes function syntax, not a module deliverable.
+        classification_task = re.sub(
+            r"\bES(?:-|\s+)module(?=\s+(?:(?:named\s+)?export\s+(?:async\s+)?function\b|syntax\b|format\b))",
+            "ECMAScript", classification_task, flags=re.IGNORECASE,
+        )
         self.required = bool(
             self.task and not plan_mode and not guide_mode
             and (

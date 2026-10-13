@@ -488,3 +488,17 @@ def test_skill_discovery_alone_cannot_trap_tasks_when_source_reads_disabled():
     gate = CodingGrounding('Build a GUI app', disabled_tools={'web_search', 'web_fetch', 'read_file'})
     assert 'manage_skills' in gate.research_tools
     assert gate.may_mutate
+
+
+def test_milestone_notes_available_during_research_without_unlocking_writes():
+    gate = CodingGrounding("Build a Python CLI tool")
+    assert not gate.may_mutate
+    assert "todowrite" in gate.phase_tools
+    assert gate.allows_tool("todowrite", '{"todos":[]}')
+    gate.observe("todowrite", {"exit_code": 0, "todos": [{"content": "research done", "status": "completed"}]})
+    assert not gate.may_mutate
+    assert not gate.has_evidence
+    assert not gate.allows_tool("write_file")
+    disabled = CodingGrounding("Build a Python CLI tool", disabled_tools={"todowrite"})
+    assert "todowrite" not in disabled.phase_tools
+    assert not disabled.allows_tool("todowrite")

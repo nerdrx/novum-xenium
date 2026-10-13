@@ -306,6 +306,9 @@ class CodingGrounding:
         if self.skill_preparation_required:
             return {"manage_skills"} & self.research_tools
         tools = set(self.research_tools)
+        # Task notes may be saved before research completes; they do not satisfy it.
+        if "todowrite" not in self.disabled_tools:
+            tools.add("todowrite")
         if not self.documentation_ready and self.skill_reviews_satisfied:
             tools.discard("manage_skills")
         return tools

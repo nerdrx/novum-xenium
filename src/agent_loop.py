@@ -6722,6 +6722,13 @@ async def stream_agent_loop(
                 input_budget=_route_input_budgets.get((candidate_url, candidate_model)),
             )
             _last_context_inspection["trimmed"] = _route_trim_info.get((candidate_url, candidate_model), {})
+            logger.info(
+                "[agent-milestones] round=%s plan_tool=%s guidance=%s restored=%s",
+                round_num,
+                any(t.get("function", {}).get("name") == "todowrite" for t in candidate_tools or []),
+                any(AUTO_MILESTONE_DIRECTIVE in str(m.get("content", "")) for m in request_messages),
+                any((m.get("metadata") or {}).get("source") == "saved task milestones" for m in request_messages),
+            )
             run_security.observe_messages(request_messages)
             state["tools"] = candidate_tools
             _candidate_request_states[index] = state

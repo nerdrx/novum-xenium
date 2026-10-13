@@ -1778,6 +1778,15 @@ async def _discover_tools(query: str, *, mcp_mgr, mcp_disabled_map, owner,
         for schema in mcp_schemas
         if schema.get("function", {}).get("name")
     }
+    # Semantic search can return stale or merely related records even when the
+    # user names a catalog tool exactly. Prioritize exact names, then apply the
+    # same owner, caller, plan, and disabled-tool filters below.
+    explicit_names = sorted(
+        name for name in known | visible_mcp
+        if re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", query, re.IGNORECASE)
+    )
+    if explicit_names:
+        matches = list(dict.fromkeys([*explicit_names, *matches]))
     if not matches:
         # No embedding service is required for basic recovery: rank available
         # schema names/descriptions locally using the query's meaningful words.

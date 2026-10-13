@@ -191,20 +191,22 @@ def test_native_preview_route_schemas_follow_bash_permission_and_executor(monkey
 
 
 def test_native_preview_discovery_honors_bash_and_executor_gates(monkeypatch):
-    index = SimpleNamespace(retrieve=lambda query, limit: ["native_preview"])
+    # Simulate stale semantic ranking: exact catalog-name mention must still
+    # surface the requested tool ahead of an unrelated index hit.
+    index = SimpleNamespace(retrieve=lambda query, limit: ["context_search"])
     monkeypatch.setattr("src.tool_index.get_tool_index", lambda: index)
     monkeypatch.setattr("src.tool_security.blocked_tools_for_owner", lambda owner: set())
 
     async def discover(disabled_tools=()):
         return await al._discover_tools(
-            "render Electron desktop preview", mcp_mgr=None, mcp_disabled_map={},
+            "native_preview", mcp_mgr=None, mcp_disabled_map={},
             owner=None, disabled_tools=set(disabled_tools), plan_mode=False,
             needs_admin=True,
         )
 
     monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
     accepted, _ = asyncio.run(discover())
-    assert "native_preview" in accepted
+    assert accepted[0] == "native_preview"
 
     accepted, _ = asyncio.run(discover({"bash"}))
     assert "native_preview" not in accepted

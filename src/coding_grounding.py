@@ -52,6 +52,13 @@ _DOC_BASENAMES = re.compile(
 )
 _RESEARCH_ATTEMPTS = frozenset({"web_search", "web_fetch", "read_file"})
 _URL = re.compile(r"https?://[^\s<>\]\[(){}\"']+", re.IGNORECASE)
+_LATEST_TASK_MARKER = "Latest user instruction:"
+_NARROW_SCOPE = re.compile(
+    r"^\s*(?:only|just)\s+(?:fix|repair|debug|address|change|test|verify|inspect|review)\b"
+    r"|\b(?:focus|limit)\s+(?:only\s+)?(?:this\s+)?(?:work|repair|change|scope)?\s*(?:on|to)\b"
+    r"|\b(?:fix|repair|debug|address|change|test|verify|inspect|review)\b.{0,80}\bonly\b",
+    re.IGNORECASE,
+)
 
 
 def _github_doc_coordinates(url):
@@ -117,6 +124,8 @@ class CodingGrounding:
     def __init__(self, task, *, disabled_tools=(), web_allowed=True,
                  plan_mode=False, guide_mode=False):
         self.task = str(task or "").strip()
+        self.latest_scope = self._latest_narrow_scope(self.task)
+        research_scope = self.latest_scope or self.task
         self.disabled_tools = set(disabled_tools or ())
         self.web_allowed = bool(web_allowed) and not _NO_WEB.search(self.task)
         self.required = bool(
@@ -129,12 +138,34 @@ class CodingGrounding:
         self.attempts = 0
         self.failures = 0
         self.evidence = set()
-        self.preferred_urls = {url.rstrip(".,;!") for url in _URL.findall(self.task)}
+        self.preferred_urls = {url.rstrip(".,;!") for url in _URL.findall(research_scope)}
         self.fetched_urls = set()
         self.skill_candidates = set()
         self.viewed_skills = set()
         self.skill_view_attempts = 0
         self.skill_review_skipped = False
+
+    @staticmethod
+    def _latest_narrow_scope(task):
+        """Return a user-authored, explicitly narrowed continuation scope.
+
+        The marker is emitted by the trusted task classifier. Do not infer a
+        scope from summaries, tool output, or arbitrary user text elsewhere in
+        the active task anchor.
+        """
+        if _LATEST_TASK_MARKER not in task:
+            return ""
+        latest = task.rsplit(_LATEST_TASK_MARKER, 1)[1].strip()
+        if not latest or not _NARROW_SCOPE.search(latest):
+            return ""
+        # The loop may append the latest user text again after the classifier's
+        # marker; duplicating it adds no relevance and can bias URL matching.
+        return latest[:2_000]
+
+    @property
+    def skill_matching_query(self):
+        """Return only an explicit latest-turn scope override, if present."""
+        return self.latest_scope
 
     def set_skill_candidates(self, names, *, available=True):
         """Require a view only for prompt-matched skills the caller can expose."""

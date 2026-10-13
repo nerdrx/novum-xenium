@@ -2836,6 +2836,9 @@ def setup_chat_routes(
                             and task_question_continuation.selected_tools
                             else None
                         ),
+                        relevant_tools_are_selection_only=bool(
+                            pending_tool_approval or task_question_continuation
+                        ),
                         forced_tools=_forced_tools,
                         uploaded_files=_agent_uploaded_files,
                         defer_context_shaping=_foreground_policy.enabled,

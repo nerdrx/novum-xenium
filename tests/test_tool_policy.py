@@ -216,6 +216,37 @@ def test_native_preview_discovery_honors_bash_and_executor_gates(monkeypatch):
     assert "native_preview" not in accepted
 
 
+def test_continuation_selection_does_not_expand_caller_allowlist(monkeypatch):
+    import src.tool_index as tool_index
+    import src.tool_security as tool_security
+
+    class Index:
+        def retrieve(self, query, limit):
+            return ["native_preview"]
+
+    monkeypatch.setattr(tool_index, "get_tool_index", lambda: Index())
+    monkeypatch.setattr(tool_security, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
+
+    async def discover(*, selection_only, disabled_tools=()):
+        selected_tools = {"search_tools"}
+        caller_tools = None if selection_only else selected_tools
+        return await al._discover_tools(
+            "native_preview", mcp_mgr=None, mcp_disabled_map={}, owner="alice",
+            disabled_tools=set(disabled_tools), plan_mode=False,
+            caller_tools=caller_tools,
+        )
+
+    accepted, _ = asyncio.run(discover(selection_only=True))
+    assert "native_preview" in accepted
+
+    accepted, _ = asyncio.run(discover(selection_only=False))
+    assert "native_preview" not in accepted
+
+    accepted, _ = asyncio.run(discover(selection_only=True, disabled_tools={"bash"}))
+    assert "native_preview" not in accepted
+
+
 def test_agent_loop_policy_blocks_disabled_web_tool_call_before_execution(monkeypatch):
     _patch_loop_basics(monkeypatch)
     called = False

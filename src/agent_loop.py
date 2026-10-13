@@ -3023,7 +3023,12 @@ def _build_system_prompt(
     if not suppress_local_context and not suppress_skills and "manage_skills" not in (disabled_tools or []):
         try:
             last_user = _extract_last_user_message(messages)
+            _scope_override = (
+                coding_grounding.skill_matching_query
+                if coding_grounding is not None else ""
+            )
             _skill_query = str(
+                _scope_override or
                 _classify_agent_request(messages, last_user).get("retrieval_query") or last_user
             ).strip()
             # Respect the user's skills-enabled toggle (mirrors memory_enabled).
@@ -3996,6 +4001,7 @@ async def stream_agent_loop(
     public_read_sources: Optional[List[Dict]] = None,
     exact_approval: Optional[ExactToolApproval] = None,
     task_continuation: Optional[TaskApprovalContinuation] = None,
+    relevant_tools_are_selection_only: bool = False,
     _is_teacher_run: bool = False,
     history_session=None,
     defer_context_shaping: bool = False,
@@ -4507,7 +4513,13 @@ async def stream_agent_loop(
 
     # RAG-based tool selection: retrieve relevant tools for this query.
     # If caller provided a pre-computed set (e.g. task_scheduler), use that.
-    _caller_relevant_tools = None if relevant_tools is None else set(relevant_tools)
+    # Most callers use relevant_tools as an explicit bound, so preserve it by
+    # default. A resumed chat can instead pass a prior route selection solely
+    # to shape schemas; that selection must not become a discovery allowlist.
+    _caller_relevant_tools = (
+        None if relevant_tools is None or relevant_tools_are_selection_only
+        else set(relevant_tools)
+    )
     _relevant_tools = relevant_tools
     _t1 = time.time()
     if _relevant_tools:
@@ -5017,8 +5029,8 @@ async def stream_agent_loop(
                 # schemas. Let their bounded set consume otherwise-unused prompt
                 # room, while keeping the ordinary schema cap for the rest.
                 budget_priority_names = set(_runtime_skill_tools) | _runtime_discovered_tools
-                if _caller_relevant_tools and len(_caller_relevant_tools) == 1:
-                    selected_relevant = set(_caller_relevant_tools) - WEB_TOOL_NAMES
+                if _relevant_tools and len(_relevant_tools) == 1:
+                    selected_relevant = set(_relevant_tools) - WEB_TOOL_NAMES
                     budget_priority_names.update(selected_relevant)
                 tool_names = {
                     schema.get("function", {}).get("name", "")

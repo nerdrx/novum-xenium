@@ -319,6 +319,29 @@ def test_skill_suggestions_clear_for_unrelated_task_or_untrusted_anchor(tmp_path
     assert "ffmpeg-gui-layout" not in _gui_skill_suggestions(untrusted)
 
 
+def test_explicit_repair_scope_does_not_retain_design_skill_suggestion(tmp_path, monkeypatch):
+    from src.agent_loop import _classify_agent_request, _build_system_prompt
+    from src.coding_grounding import CodingGrounding
+
+    data_dir = tmp_path / "data"
+    _seed_gui_skill(data_dir)
+    _patch_prefs(monkeypatch, data_dir)
+    messages = _gui_task_messages("Only repair the CommonJS startup and conversion path.")
+    latest = messages[-1]["content"]
+    intent = _classify_agent_request(messages, latest)
+    gate = CodingGrounding(str(intent["retrieval_query"]) + "\n" + latest)
+
+    output, _ = _build_system_prompt(
+        messages=messages, model="test-model", active_document=None,
+        mcp_mgr=None, owner="alice", coding_grounding=gate,
+    )
+
+    assert gate.required  # task remains active coding work
+    assert gate.skill_matching_query.startswith("Only repair the CommonJS")
+    assert not gate.skill_candidates
+    assert "ffmpeg-gui-layout" not in _gui_skill_suggestions(output)
+
+
 def test_coding_grounding_uses_exact_prompt_matched_skills_without_injecting_bodies(
     tmp_path, monkeypatch,
 ):

@@ -163,6 +163,54 @@ def test_substantive_gui_repair_and_restyling_require_grounding():
     assert CodingGrounding("Redesign the app interface and screen workflow.").required
 
 
+def test_explicit_latest_repair_scope_replaces_old_design_reference_for_lookup():
+    original = (
+        "Build a GUI app using https://vendor.example/docs/design. "
+        "Latest user instruction: Only repair the CommonJS startup and conversion path."
+    )
+    gate = CodingGrounding(original)
+
+    assert gate.required  # the active task is still substantive coding
+    assert gate.latest_scope == "Only repair the CommonJS startup and conversion path."
+    assert gate.skill_matching_query == gate.latest_scope
+    assert not gate.preferred_urls  # old design URL is no longer forced on this repair
+    assert not gate.requested_url_phase
+
+    current_docs = (
+        original + " Read https://electron.example/docs/latest before changing the API."
+    )
+    current = CodingGrounding(current_docs)
+    assert current.preferred_urls == {"https://electron.example/docs/latest"}
+    assert current.requested_url_phase
+
+
+def test_latest_scope_requires_classifier_marker_and_explicit_narrowing():
+    unmarked = CodingGrounding(
+        "Build a GUI app using https://vendor.example/docs/design. "
+        "Only repair the CommonJS startup path."
+    )
+    assert not unmarked.latest_scope
+    assert unmarked.preferred_urls == {"https://vendor.example/docs/design"}
+
+    ordinary_followup = CodingGrounding(
+        "Build a GUI app using https://vendor.example/docs/design. "
+        "Latest user instruction: Continue with the original task."
+    )
+    assert not ordinary_followup.latest_scope
+    assert ordinary_followup.preferred_urls == {"https://vendor.example/docs/design"}
+
+    for instruction in (
+        "Only use local project documentation for this task.",
+        "I just noticed the startup warning; keep working on the original request.",
+    ):
+        gate = CodingGrounding(
+            "Build a GUI app using https://vendor.example/docs/design. "
+            f"Latest user instruction: {instruction}"
+        )
+        assert not gate.latest_scope
+        assert gate.preferred_urls == {"https://vendor.example/docs/design"}
+
+
 def test_gui_copy_edits_and_plan_or_guide_mode_stay_out_of_repair_gate():
     for text in (
         "Fix the button copy in the GUI.",

@@ -114,7 +114,10 @@ def _configure(monkeypatch, schemas, request_capture):
     monkeypatch.setattr(loop, "stream_llm_with_fallback", fake_stream)
 
 
-def test_search_tools_refreshes_the_next_round_schema_set(monkeypatch):
+@pytest.mark.parametrize("selection_only", [False, True])
+def test_search_tools_refreshes_next_round_without_conflating_selection_and_allowlist(
+    monkeypatch, selection_only,
+):
     search_schema = next(
         schema for schema in loop.FUNCTION_TOOL_SCHEMAS
         if schema["function"]["name"] == "search_tools"
@@ -124,8 +127,10 @@ def test_search_tools_refreshes_the_next_round_schema_set(monkeypatch):
         if schema["function"]["name"] == "manage_calendar"
     )
     requests = []
+    discovery_calls = []
     _configure(monkeypatch, [search_schema, calendar_schema], requests)
     async def fake_discover(*args, **kwargs):
+        discovery_calls.append(kwargs)
         return ["manage_calendar"], "Matching tools: manage_calendar"
 
     monkeypatch.setattr(loop, "_discover_tools", fake_discover)
@@ -151,12 +156,16 @@ def test_search_tools_refreshes_the_next_round_schema_set(monkeypatch):
             "https://local.test/v1", "test-model",
             [{"role": "user", "content": "Help me with this request."}],
             relevant_tools={"search_tools"},
+            relevant_tools_are_selection_only=selection_only,
             max_rounds=2,
             _is_teacher_run=True,
         )]
 
     asyncio.run(run())
     assert len(requests) == 2
+    assert discovery_calls[0]["caller_tools"] == (
+        None if selection_only else {"search_tools"}
+    )
 
 
 def test_search_tools_uses_local_schema_search_when_index_is_missing(monkeypatch):

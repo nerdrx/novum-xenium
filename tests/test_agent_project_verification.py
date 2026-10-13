@@ -27,7 +27,8 @@ def _events(chunks):
 
 
 def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, incognito=False,
-                      cancel_during_verification=False, verifier_issues=None):
+                      cancel_during_verification=False, verifier_issues=None,
+                      force_answer_after_recovery=False):
     monkeypatch.setattr(agent_loop, "get_setting",
                         lambda key, default=None: True if key == "agent_verifier_subagent" and verifier_issues is not None else default,
                         raising=False)
@@ -49,16 +50,27 @@ def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, 
     async def fake_provider(_candidates, _messages, **_kwargs):
         nonlocal llm_round
         llm_round += 1
-        if llm_round == 1:
+        if llm_round == 1 or (force_answer_after_recovery and llm_round in (3, 4)):
+            path = "result.txt" if llm_round == 1 else "repair.txt"
+            content = "verified" if llm_round == 1 else "repaired"
             yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
-                "id": "write-1", "name": "write_file",
-                "arguments": json.dumps({"path": "result.txt", "content": "verified"}),
+                "id": f"write-{llm_round}", "name": "write_file",
+                "arguments": json.dumps({"path": path, "content": content}),
             }]}) + "\n\n"
+        elif force_answer_after_recovery and llm_round in (2, 5):
+            yield 'data: {"delta":"Everything is ready."}\n\n'
         else:
             yield 'data: {"delta":"Work finished."}\n\n'
         yield "data: [DONE]\n\n"
 
     monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_provider)
+    if force_answer_after_recovery:
+        runaway_checks = 0
+        def detect_runaway(_calls):
+            nonlocal runaway_checks
+            runaway_checks += 1
+            return "write_file" if runaway_checks == 3 else None
+        monkeypatch.setattr(agent_loop, "_detect_runaway_call", detect_runaway)
     if verifier_issues is not None:
         async def review(*_args, **_kwargs):
             return list(verifier_issues)
@@ -95,9 +107,9 @@ def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, 
         return []
 
     events = _events(asyncio.run(collect_or_cancel()))
-    assert len(writes) == 1, events
+    assert len(writes) == (2 if force_answer_after_recovery else 1), events
     assert (Path(workspace) / "result.txt").read_text(encoding="utf-8") == "verified"
-    return events, verified
+    return events, verified, writes
 
 
 @pytest.mark.parametrize("report,passed", [
@@ -107,7 +119,7 @@ def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, 
       "results": [{"name": "tests", "required": True, "passed": False}]}, False),
 ])
 def test_native_file_write_emits_required_verification_result(monkeypatch, tmp_path, report, passed):
-    events, calls = _run_native_write(monkeypatch, tmp_path, report)
+    events, calls, _writes = _run_native_write(monkeypatch, tmp_path, report)
     assert calls == [("alice", str(tmp_path), "session-1", "run-verification")]
     event = next(event for event in events if event.get("type") == "verification")
     assert event["passed"] is passed
@@ -119,22 +131,22 @@ def test_native_file_write_emits_required_verification_result(monkeypatch, tmp_p
 
 
 def test_incognito_turn_skips_project_gate(monkeypatch, tmp_path):
-    events, calls = _run_native_write(monkeypatch, tmp_path,
-                                      {"managed": True, "configured": True, "complete": True},
-                                      incognito=True)
+    events, calls, _writes = _run_native_write(monkeypatch, tmp_path,
+                                               {"managed": True, "configured": True, "complete": True},
+                                               incognito=True)
     assert calls == []
     assert not any(event.get("type") == "verification" for event in events)
 
 
 def test_ordinary_workspace_remains_unverified_without_false_pass(monkeypatch, tmp_path):
-    events, calls = _run_native_write(monkeypatch, tmp_path, None)
+    events, calls, _writes = _run_native_write(monkeypatch, tmp_path, None)
     assert calls == [("alice", str(tmp_path), "session-1", "run-verification")]
     assert not any(event.get("type") == "verification" for event in events)
 
 
 def test_stop_cancellation_interrupts_the_verification_await(monkeypatch, tmp_path):
-    events, calls = _run_native_write(monkeypatch, tmp_path, None,
-                                      cancel_during_verification=True)
+    events, calls, _writes = _run_native_write(monkeypatch, tmp_path, None,
+                                                cancel_during_verification=True)
     assert events == []
     assert calls == [("alice", str(tmp_path), "session-1", "run-verification")]
 
@@ -184,7 +196,7 @@ def test_group_runner_fails_required_verification_and_marks_manual_unverified(mo
 
 
 def test_unresolved_completion_verifier_emits_failed_terminal(monkeypatch, tmp_path):
-    events, _calls = _run_native_write(
+    events, _calls, _writes = _run_native_write(
         monkeypatch, tmp_path, {"managed": True, "configured": True, "complete": True},
         verifier_issues=["Unverified: no functional test evidence"],
     )
@@ -192,6 +204,107 @@ def test_unresolved_completion_verifier_emits_failed_terminal(monkeypatch, tmp_p
     assert terminal["status"] == "failed"
     assert terminal["reason"] == "completion_unverified"
     assert "no functional test evidence" in terminal["message"]
+    assert not any("Work finished." in event.get("delta", "") for event in events)
+    metrics = next(event["data"] for event in events if event.get("type") == "metrics")
+    assert "Work finished." not in " ".join(metrics.get("round_texts", []))
+    assert "**Incomplete — completion not verified:**" in " ".join(metrics.get("round_texts", []))
+
+
+def test_failed_review_remains_held_during_force_answer_round(monkeypatch, tmp_path):
+    events, _calls, _writes = _run_native_write(
+        monkeypatch, tmp_path, {"managed": True, "configured": True, "complete": True},
+        verifier_issues=["Unverified: functional check missing"],
+        force_answer_after_recovery=True,
+    )
+    terminal = next(event for event in events if event.get("type") == "agent_terminal")
+    deltas = "".join(event.get("delta", "") for event in events)
+    metrics = next(event["data"] for event in events if event.get("type") == "metrics")
+    assert terminal["status"] == "failed"
+    assert "Everything is ready." not in deltas
+    assert "Everything is ready." not in " ".join(metrics.get("round_texts", []))
+    assert "Incomplete — completion not verified" in deltas
+
+
+def test_held_completion_requires_real_action_not_plan_update():
+    assert agent_loop._completion_action_succeeded(
+        "write_file", {"output": "saved", "exit_code": 0},
+    )
+    assert agent_loop._completion_action_succeeded(
+        "bash", {"output": "tests passed", "exit_code": 0},
+    )
+    assert not agent_loop._completion_action_succeeded(
+        "update_plan", {"output": "Plan updated", "exit_code": 0},
+    )
+    assert not agent_loop._completion_action_succeeded(
+        "write_file", {"error": "blocked", "blocked": True, "exit_code": 1},
+    )
+    assert not agent_loop._completion_action_succeeded(
+        "bash", {"approval_required": True, "exit_code": None},
+    )
+
+
+def test_completion_recovery_text_waits_for_tool_and_passing_review(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_loop, "get_setting",
+                        lambda key, default=None: True if key == "agent_verifier_subagent" else default,
+                        raising=False)
+    monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
+    monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *_a, **_k: 10, raising=False)
+    monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda _owner: set())
+    monkeypatch.setattr(agent_runs, "get_run_id", lambda _sid: "run-verification-recovery")
+    writes = []
+
+    async def execute(block, *args, **kwargs):
+        writes.append(block)
+        path, content = block.content.split("\n", 1)
+        (Path(tmp_path) / path).write_text(content, encoding="utf-8")
+        return block.tool_type, {"output": "file saved", "exit_code": 0}
+
+    monkeypatch.setattr(agent_loop, "execute_tool_block", execute)
+    provider_round = 0
+
+    async def provider(_candidates, _messages, **_kwargs):
+        nonlocal provider_round
+        provider_round += 1
+        if provider_round in (1, 3):
+            progress = "Initial write starting.\n" if provider_round == 1 else "Repair action executed.\n"
+            yield 'data: ' + json.dumps({"delta": progress}) + "\n\n"
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
+                "id": f"write-{provider_round}", "name": "write_file",
+                "arguments": json.dumps({
+                    "path": "result.txt" if provider_round == 1 else "repair.txt",
+                    "content": "verified" if provider_round == 1 else "repaired",
+                }),
+            }]}) + "\n\n"
+        elif provider_round == 2:
+            yield 'data: {"delta":"Everything is ready."}\n\n'
+        else:
+            yield 'data: {"delta":"Verified complete."}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", provider)
+    review_calls = 0
+
+    async def review(*_args, **_kwargs):
+        nonlocal review_calls
+        review_calls += 1
+        return ["Functional check missing"] if review_calls == 1 else []
+
+    monkeypatch.setattr(agent_loop, "_run_verifier_subagent", review)
+    import src.project_workflows as workflows
+    async def check(*_args, **_kwargs):
+        return {"managed": True, "configured": True, "complete": True}
+    monkeypatch.setattr(workflows, "run_workspace_verification", check)
+
+    events = _events(asyncio.run(_collect_agent(
+        [{"role": "user", "content": "Write and verify the result file"}], tmp_path,
+    )))
+    deltas = "".join(event.get("delta", "") for event in events)
+    assert len(writes) == 2
+    assert "Everything is ready." not in deltas
+    assert "Initial write starting." in deltas
+    assert "Repair action executed." in deltas
+    assert "Verified complete." in deltas
+    assert not any(event.get("type") == "agent_terminal" for event in events)
 
 
 def test_completion_verifier_keeps_original_task_after_short_name_answer(monkeypatch, tmp_path):

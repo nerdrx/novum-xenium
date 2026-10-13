@@ -140,6 +140,7 @@ def test_detached_resume_surfaces_fallback_then_provider_alias_before_reload():
         "const documentModule = null; const chatRenderer = { recordSessionMetricsCost() {}, addMessage() {} };",
         "const _resumingStreams = new Set(); const _resumeStreams = new Map(); const _streamRunIds = new Map(); const API_BASE = '';",
         "function hasActiveStream() { return false; } function _shortModel(v) { return v; } function _applyModelColor() {}",
+        "function updateBrowserPreview() {}",
         "function _setRoleModelLabel(role, requested, actual) { labels.push({requested, actual}); role.textContent = requested + ' -> ' + actual; }",
         "function _streamDisplayText(v) { return v; } function _showDocumentWritingStatus() {} function _finishDocumentWritingStatus() {} function _metricsCostRecordId() { return 'run'; }",
         "const events = [",
@@ -199,6 +200,7 @@ def test_detached_resume_renders_preoutput_error_without_empty_reload():
         "const chatRenderer = { recordSessionMetricsCost() {}, addMessage() {} };",
         "const _resumingStreams = new Set(); const _resumeStreams = new Map(); const _streamRunIds = new Map(); const API_BASE = '';",
         "function hasActiveStream() { return false; } function _shortModel(v) { return v; } function _applyModelColor() {}",
+        "function updateBrowserPreview() {}",
         "function _streamDisplayText(v) { return v; } function _showDocumentWritingStatus() {} function _finishDocumentWritingStatus() {} function _metricsCostRecordId() { return 'run'; }",
         "const encoded = new TextEncoder().encode('event: error\\ndata: {\"status\":401,\"error\":\"invalid key <img src=x>\"}\\n\\n');",
         "let reads = 0; const reader = { async read() { return reads++ === 0 ? {done:false, value:encoded} : {done:true}; }, async cancel() {} };",
@@ -233,6 +235,23 @@ def test_terminal_then_session_switch_preserves_completed_background_state():
     assert "terminalSaved ? 'completed' : 'running'" in detach
     assert "!terminalSaved && sessionModule && sessionModule.markStreaming" in detach
     assert "_terminalSavedStreams.has(streamSessionId)" in background_catch
+
+
+def test_failed_terminal_remains_failed_and_is_visible_to_user():
+    terminal = CHAT_JS.split(
+        "json.type === 'agent_terminal' || json.type === 'chat_terminal'", 1
+    )[1].split("json.type === 'metrics'", 1)[0]
+    final_render = CHAT_JS.split("const footerTarget =", 1)[1].split(
+        "if (!footerTarget.querySelector('.msg-footer'))", 1
+    )[0]
+    background_catch = CHAT_JS.split("if (_isBgCatch)", 1)[1].split(
+        "} else if (accumulated)", 1
+    )[0]
+
+    assert "json.status === 'failed'" in terminal
+    assert "bgTerminal.status = terminalFailed ? 'error' : 'completed'" in terminal
+    assert "Incomplete — ${_completionTerminalFailure}" in final_render
+    assert "if (bgTerminal.status !== 'error') bgTerminal.status = 'completed'" in background_catch
 
 
 def test_detached_run_identity_is_attached_to_live_metrics():

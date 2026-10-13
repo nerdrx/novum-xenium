@@ -42,7 +42,12 @@ from src.tool_security import (
     tool_policy_names,
     plan_mode_disabled_tools,
 )
-from src.tool_policy import GUIDE_ONLY_DIRECTIVE, WEB_TOOL_NAMES, ToolPolicy
+from src.tool_policy import (
+    GUIDE_ONLY_DIRECTIVE,
+    WEB_TOOL_NAMES,
+    ToolPolicy,
+    github_visibility_conflict,
+)
 from src.tool_capabilities import (
     ResultIntegrity,
     ToolEffect,
@@ -1723,6 +1728,7 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
                 # its tools, and later follow-ups should retain this request.
                 anchor = text
                 active_domains = set()
+    result["task_anchor"] = anchor[:4_000]
     return result
 
 
@@ -3657,6 +3663,17 @@ _VERIFIER_EFFECTFUL_TOOLS = {
 _VERIFIER_MAX_ROUNDS = 2  # cap re-verify cycles per turn — never loop forever
 
 
+def _completion_action_succeeded(tool_name: str, result: dict) -> bool:
+    """Only real artifact/check actions release held completion prose."""
+    return (
+        tool_name in _VERIFIER_EFFECTFUL_TOOLS
+        and not result.get("blocked")
+        and not result.get("error")
+        and not result.get("approval_required")
+        and result.get("exit_code", 0) in (None, 0)
+    )
+
+
 def _build_actions_snapshot(tool_events: list, limit: int = 8000) -> str:
     """Keep bounded recent execution evidence for the completion reviewer."""
     from src.completion_verification import compact_action_evidence
@@ -4105,6 +4122,13 @@ async def stream_agent_loop(
         temperature = _ody_qwen_temperature_cap(temperature)
     _ody_memory_identity_turn = _looks_like_memory_identity_turn(_last_user)
     _intent = _classify_agent_request(messages, _last_user)
+    _trusted_task_anchor = str(_intent.get("task_anchor") or "")
+    if (isinstance(task_continuation, TaskApprovalContinuation)
+            and task_continuation.continuation_query):
+        _trusted_task_anchor = task_continuation.continuation_query
+    elif (exact_approval is not None
+          and exact_approval.pending.continuation_query):
+        _trusted_task_anchor = exact_approval.pending.continuation_query
     _low_signal_turn = bool(_intent.get("low_signal"))
     _casual_low_signal_turn = _is_casual_low_signal(_last_user)
     _existing_conversation = _user_turn_count(messages) > 1
@@ -5668,7 +5692,16 @@ async def stream_agent_loop(
             content=approved.content,
             workspace=workspace,
         )
-        if approval_matches:
+        approved_alignment_reason = (
+            github_visibility_conflict(
+                approved.tool_name,
+                approved.content,
+                task_anchor=_trusted_task_anchor,
+                latest_user_request=_last_user,
+            )
+            if approval_matches else None
+        )
+        if approval_matches and not approved_alignment_reason:
             yield (
                 "data: "
                 + json.dumps(
@@ -5683,55 +5716,64 @@ async def stream_agent_loop(
                 )
                 + "\n\n"
             )
-        approved_progress_q: asyncio.Queue = asyncio.Queue()
+        if approved_alignment_reason:
+            desc = f"{approved.tool_name}: BLOCKED"
+            approved_result = {
+                "error": approved_alignment_reason,
+                "exit_code": 1,
+                "blocked": True,
+                "policy": "task_intent_alignment",
+            }
+        else:
+            approved_progress_q: asyncio.Queue = asyncio.Queue()
 
-        async def _push_approved_progress(payload):
-            await approved_progress_q.put(payload)
+            async def _push_approved_progress(payload):
+                await approved_progress_q.put(payload)
 
-        async def _run_approved_tool():
-            try:
-                return await execute_tool_block(
-                    approved_block,
-                    session_id=session_id,
-                    disabled_tools=disabled_tools,
-                    tool_policy=tool_policy,
-                    owner=owner,
-                    progress_cb=_push_approved_progress,
-                    workspace=workspace,
-                    security_context=run_security,
-                    exact_approval=exact_approval,
-                    uploaded_files=uploaded_files,
-                )
-            finally:
-                await approved_progress_q.put(None)
-
-        approved_tool_task = asyncio.create_task(_run_approved_tool())
-        try:
-            while True:
-                progress_event = await approved_progress_q.get()
-                if progress_event is None:
-                    break
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {
-                            "type": "tool_progress",
-                            "tool": approved.tool_name,
-                            "round": 0,
-                            "approved": True,
-                            **progress_event,
-                        }
-                    )
-                    + "\n\n"
-                )
-            desc, approved_result = await approved_tool_task
-        finally:
-            if not approved_tool_task.done():
-                approved_tool_task.cancel()
+            async def _run_approved_tool():
                 try:
-                    await approved_tool_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                    return await execute_tool_block(
+                        approved_block,
+                        session_id=session_id,
+                        disabled_tools=disabled_tools,
+                        tool_policy=tool_policy,
+                        owner=owner,
+                        progress_cb=_push_approved_progress,
+                        workspace=workspace,
+                        security_context=run_security,
+                        exact_approval=exact_approval,
+                        uploaded_files=uploaded_files,
+                    )
+                finally:
+                    await approved_progress_q.put(None)
+
+            approved_tool_task = asyncio.create_task(_run_approved_tool())
+            try:
+                while True:
+                    progress_event = await approved_progress_q.get()
+                    if progress_event is None:
+                        break
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "tool_progress",
+                                "tool": approved.tool_name,
+                                "round": 0,
+                                "approved": True,
+                                **progress_event,
+                            }
+                        )
+                        + "\n\n"
+                    )
+                desc, approved_result = await approved_tool_task
+            finally:
+                if not approved_tool_task.done():
+                    approved_tool_task.cancel()
+                    try:
+                        await approved_tool_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
         total_tool_calls += 1
         # The sealed action has already been authorized and executed. Record
         # any actual read evidence it returned, but keep the remaining-turn
@@ -5792,6 +5834,9 @@ async def stream_agent_loop(
             "exit_code": approved_result.get("exit_code"),
             "approved": True,
         }
+        if approved_result.get("policy"):
+            approved_event["policy"] = approved_result["policy"]
+            approved_event["blocked"] = bool(approved_result.get("blocked"))
         for key in (
             "image_url",
             "image_id",
@@ -5875,6 +5920,9 @@ async def stream_agent_loop(
             "approved": True,
             "approval_digest": approved.digest[:16],
         }
+        if approved_result.get("policy"):
+            approved_tool_event["policy"] = approved_result["policy"]
+            approved_tool_event["blocked"] = bool(approved_result.get("blocked"))
         for key in (
             "image_url",
             "image_prompt",
@@ -5916,6 +5964,15 @@ async def stream_agent_loop(
     for round_num in range(1, max_rounds + 1):
         round_response = ""
         round_reasoning = ""  # reasoning_content deltas (DeepSeek-thinking, vLLM --reasoning-parser)
+        # Delay completion prose until review passes. After a failed review,
+        # also withhold recovery prose until a real tool action executes.
+        hold_round_text = bool(_verification_issues) or (
+            not _force_answer
+            and _effectful_used
+            and _verifier_rounds < _VERIFIER_MAX_ROUNDS
+            and get_setting("agent_verifier_subagent", False)
+        )
+        held_round_deltas = []
         native_tool_calls = []  # populated if model uses function calling
 
         _active_route_state = {
@@ -6362,8 +6419,11 @@ async def stream_agent_loop(
                             if _ody_qwen_finetune_model:
                                 _delta_text = _normalize_ody_qwen_text_artifacts(_delta_text)
                             round_response += _delta_text
-                            full_response += _delta_text
                             data["delta"] = _delta_text
+                            if hold_round_text:
+                                held_round_deltas.append(_delta_text)
+                            else:
+                                full_response += _delta_text
                             if (
                                 _coding_turn
                                 and not native_tool_calls
@@ -6372,7 +6432,8 @@ async def stream_agent_loop(
                                 _coding_narration_loop = True
                                 break
                         if not _ody_qwen_finetune_model or data.get("thinking"):
-                            yield f"data: {json.dumps(data)}\n\n"
+                            if not hold_round_text or data.get("thinking"):
+                                yield f"data: {json.dumps(data)}\n\n"
                     elif data.get("error"):
                         err_msg = data.get("error", "unknown")
                         logger.error(f"Agent round {round_num}: stream error: {err_msg}")
@@ -6592,7 +6653,13 @@ async def stream_agent_loop(
         # answer. If it ignored that and emitted a (possibly DSML) tool
         # call anyway, discard it — don't execute, don't re-loop. Keep
         # only the prose; if there's none, emit a graceful fallback.
-        if _force_answer:
+        if _force_answer and _verification_issues:
+            # A forced prose-only round cannot clear a failed review. Keep its
+            # draft hidden and skip synthesis; the terminal notice below names
+            # the unresolved work instead.
+            tool_blocks = []
+            round_response = ""
+        elif _force_answer:
             if tool_blocks:
                 logger.info(f"[agent] force-answer round {round_num}: discarding {len(tool_blocks)} ignored tool call(s)")
             tool_blocks = []
@@ -6685,7 +6752,7 @@ async def stream_agent_loop(
         round_models.append(_round_actual_model)
         round_endpoint_ids.append(_round_actual_endpoint_id)
         round_endpoint_labels.append(_round_actual_endpoint_label)
-        if _ody_qwen_finetune_model and not tool_blocks and cleaned_round:
+        if _ody_qwen_finetune_model and not tool_blocks and cleaned_round and not hold_round_text:
             yield f'data: {json.dumps({"delta": cleaned_round})}\n\n'
 
         if not tool_blocks:
@@ -6739,6 +6806,8 @@ async def stream_agent_loop(
                 _verification_issues = _vfail
                 if _vfail:
                     _verifier_rounds += 1
+                    if hold_round_text and round_texts:
+                        round_texts[-1] = ""
                     logger.info(f"[agent] verifier flagged {len(_vfail)} issue(s) on round {round_num}: {_vfail}")
                     _note = "\n\n_Completion review found missing work or evidence; checking again._\n\n"
                     yield f'data: {json.dumps({"delta": _note})}\n\n'
@@ -6756,6 +6825,11 @@ async def stream_agent_loop(
                     # never re-verify an unchanged state in a loop.
                     _effectful_used = False
                     continue
+                if held_round_deltas:
+                    for held_delta in held_round_deltas:
+                        full_response += held_delta
+                        yield f'data: {json.dumps({"delta": held_delta})}\n\n'
+                    held_round_deltas.clear()
             # ── Intent-without-action supervisor ─────────────────────
             # Catch "Let me tail the output" / "I'll check the logs" /
             # "Let me investigate" patterns where the model announces an
@@ -6835,7 +6909,9 @@ async def stream_agent_loop(
                 )
                 break
             if _verification_issues:
-                notice = "Completion remains unverified: " + "; ".join(_verification_issues)
+                notice = "**Incomplete — completion not verified:** " + "; ".join(_verification_issues)
+                if hold_round_text and round_texts:
+                    round_texts[-1] = notice
                 full_response += "\n\n" + notice
                 yield f'data: {json.dumps({"delta": "\n\n" + notice})}\n\n'
                 yield f'data: {json.dumps({"type": "agent_terminal", "status": "failed", "reason": "completion_unverified", "message": notice})}\n\n'
@@ -6928,10 +7004,17 @@ async def stream_agent_loop(
             blocked_by_disabled_tools = bool(
                 disabled_tools and not policy_names.isdisjoint(disabled_tools)
             )
+            task_alignment_reason = github_visibility_conflict(
+                block.tool_type,
+                block.content,
+                task_anchor=_trusted_task_anchor,
+                latest_user_request=_last_user,
+            )
             judge_review = None
             action = None
             if (not security_decision.allowed and not blocked_by_tool_policy
-                    and not blocked_by_disabled_tools and not plan_mode
+                    and not blocked_by_disabled_tools and not task_alignment_reason
+                    and not plan_mode
                     and approval_mode == "auto" and not delegated_credential
                     and _coding_grounding.allows_tool(block.tool_type, block.content)):
                 action = candidate_action(block.tool_type, block.content, workspace)
@@ -6964,29 +7047,35 @@ async def stream_agent_loop(
                         security_decision = type(security_decision)(
                             False, "Auto review: " + judge_review["reason"],
                         )
-            if (
+            if task_alignment_reason or (
                 (blocked_by_tool_policy or blocked_by_disabled_tools)
                 and not _ody_clamped_tool_allowed
             ):
-                if blocked_by_tool_policy:
+                if task_alignment_reason:
+                    reason = task_alignment_reason
+                    block_policy = "task_intent_alignment"
+                elif blocked_by_tool_policy:
                     blocked_name = next(
                         name for name in policy_names if tool_policy.blocks(name)
                     )
                     reason = tool_policy.reason_for(blocked_name)
+                    block_policy = "current_tool_policy"
                 else:
                     reason = (
                         f"Tool '{block.tool_type}' is disabled by the current "
                         "request policy."
                     )
+                    block_policy = "current_tool_policy"
                 desc = f"{block.tool_type}: BLOCKED"
                 result = {
                     "error": reason,
                     "exit_code": 1,
                     "blocked": True,
-                    "policy": "current_tool_policy",
+                    "policy": block_policy,
                 }
                 logger.info(
-                    "Tool blocked before approval by current policy: %s",
+                    "Tool blocked before approval by policy %s: %s",
+                    block_policy,
                     block.tool_type,
                 )
             elif not _coding_grounding.allows_tool(block.tool_type, block.content):
@@ -7165,6 +7254,15 @@ async def stream_agent_loop(
                             pass
 
             run_security.observe_tool_result(block.tool_type, result, block.content)
+            if (
+                hold_round_text
+                and held_round_deltas
+                and _completion_action_succeeded(block.tool_type, result)
+            ):
+                for held_delta in held_round_deltas:
+                    full_response += held_delta
+                    yield f'data: {json.dumps({"delta": held_delta})}\n\n'
+                held_round_deltas.clear()
             _grounding_was_open = _coding_grounding.may_mutate
             _coding_grounding.observe(block.tool_type, result, block.content)
             if (
@@ -7636,6 +7734,9 @@ async def stream_agent_loop(
                 "output": output_text,
                 "exit_code": result.get("exit_code"),
             }
+            if result.get("policy"):
+                tool_event["policy"] = result["policy"]
+                tool_event["blocked"] = bool(result.get("blocked"))
             if isinstance(result.get("subagent"), dict):
                 card = result["subagent"]
                 tool_event["subagent"] = {key: str(card[key])[:120] for key in ("session_id", "title", "icon", "status") if isinstance(card.get(key), str)}
@@ -7689,6 +7790,11 @@ async def stream_agent_loop(
                 # An approval card is a turn boundary.  Never execute a later
                 # model-supplied call from the same batch after this request.
                 break
+
+        if hold_round_text and held_round_deltas and round_texts:
+            # This round never completed a qualifying action. Keep its
+            # withheld narration out of the history/replay metadata too.
+            round_texts[-1] = ""
 
         # If budget was hit, stop the loop
         if budget_hit:

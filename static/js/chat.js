@@ -1698,6 +1698,7 @@ import { updateBrowserPreview } from './browserPreview.js';
     let holder = null;
     let finalMeta = null;
     let _canonicalTerminalSaved = false;
+    let _completionTerminalFailure = null;
     let spinner = null;
     let timedOut = false;
     let processingProbeTimer = null;
@@ -3652,6 +3653,15 @@ import { updateBrowserPreview } from './browserPreview.js';
                 // event. The terminal catch below reloads that exact record.
                 _canonicalTerminalSaved = true;
                 _terminalSavedStreams.add(streamSessionId);
+                const terminalFailed = json.status === 'failed' || (json.data && json.data.failed === true);
+                if (terminalFailed) {
+                  _completionTerminalFailure = String(
+                    json.message || json.data?.failure?.message || 'This response remains unverified.'
+                  ).slice(0, 600);
+                  if (!_isBg) {
+                    uiModule.showToast(`Incomplete — ${_completionTerminalFailure}`, 8000);
+                  }
+                }
                 const priorMetrics = metrics;
                 metrics = json.data || metrics;
                 if (metrics && streamRunId) {
@@ -3674,7 +3684,8 @@ import { updateBrowserPreview } from './browserPreview.js';
                       metrics._costRecorded = true;
                     }
                     bgTerminal.metrics = metrics;
-                    bgTerminal.status = 'completed';
+                    bgTerminal.status = terminalFailed ? 'error' : 'completed';
+                    if (terminalFailed) bgTerminal.error = _completionTerminalFailure;
                     if (metrics) {
                       chatRenderer.recordSessionMetricsCost(metrics, streamSessionId);
                     }
@@ -4472,6 +4483,14 @@ import { updateBrowserPreview } from './browserPreview.js';
 
         // Attach footer to the last visible bubble (roundHolder for multi-round agent, holder for single)
         const footerTarget = (roundHolder && roundHolder !== holder && roundHolder.style.display !== 'none') ? roundHolder : holder;
+        if (_completionTerminalFailure) {
+          const terminalNotice = document.createElement('div');
+          terminalNotice.className = 'agent-terminal-failure';
+          terminalNotice.setAttribute('role', 'alert');
+          terminalNotice.style.cssText = 'color:var(--color-error);font-weight:600;border-left:3px solid var(--color-error);padding:6px 10px;margin-top:8px;';
+          terminalNotice.textContent = `Incomplete — ${_completionTerminalFailure}`;
+          (footerTarget.querySelector('.body') || footerTarget).appendChild(terminalNotice);
+        }
         if (!footerTarget.querySelector('.msg-footer')) {
           footerTarget.appendChild(createMsgFooter(footerTarget));
         }
@@ -4596,7 +4615,7 @@ import { updateBrowserPreview } from './browserPreview.js';
         // running/error stream.
         const bgTerminal = _backgroundStreams.get(streamSessionId);
         if (bgTerminal && _terminalSavedStreams.has(streamSessionId)) {
-          bgTerminal.status = 'completed';
+          if (bgTerminal.status !== 'error') bgTerminal.status = 'completed';
           if (sessionModule && sessionModule.clearStreaming) {
             sessionModule.clearStreaming(streamSessionId);
           }
@@ -4622,7 +4641,7 @@ import { updateBrowserPreview } from './browserPreview.js';
         if (bgErr && (
           bgErr.status === 'completed' || _terminalSavedStreams.has(streamSessionId)
         )) {
-          bgErr.status = 'completed';
+          if (bgErr.status !== 'error') bgErr.status = 'completed';
           // [DONE] was already processed — this error is benign (e.g. reader.read() after close)
           // Don't override the completed status; just ensure the completed dot stays
           if (sessionModule && sessionModule.clearStreaming) {
@@ -5448,6 +5467,12 @@ import { updateBrowserPreview } from './browserPreview.js';
             // finalize replayed deltas as a successful local-only answer.
             rich = true;
             canonicalTerminalSeen = true;
+            if (json.status === 'failed' || (json.data && json.data.failed === true)) {
+              const failureText = String(
+                json.message || json.data?.failure?.message || 'This response remains unverified.'
+              ).slice(0, 600);
+              uiModule.showToast(`Incomplete — ${failureText}`, 8000);
+            }
             metricsData = json.data || metricsData;
             if (metricsData && resumeRunId) {
               metricsData._costRecordId = _metricsCostRecordId(resumeRunId, json);

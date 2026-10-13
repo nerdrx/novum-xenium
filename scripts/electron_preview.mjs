@@ -121,6 +121,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
+const WORKSPACE_ACTION_TIMEOUT_MS = 5000;
 const fail = (message) => { console.error('PREVIEW_ERROR: ' + message); process.exitCode = 1; };
 let electronProcess;
 let browser;
@@ -308,6 +309,9 @@ try {
     const run = typeof mod.default === 'function' ? mod.default : mod.run;
     if (typeof run !== 'function') throw new Error('test script must export a default function or named run function');
     phase = 'running workspace test';
+    // Bound implicit locator/action waits so a selector failure is reported
+    // before the outer helper timeout; explicit per-call waits can override it.
+    page.setDefaultTimeout(WORKSPACE_ACTION_TIMEOUT_MS);
     const value = await run({
       app: { pid: electronProcess.pid, executablePath: config.electronPath, exitCode: electronProcess.exitCode },
       page, context, artifacts: { outputDir, desktopPath, compactPath },

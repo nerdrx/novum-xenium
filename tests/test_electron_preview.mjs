@@ -146,9 +146,13 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
     const fs = require('node:fs');
     const path = require('node:path');
     class Page extends EventEmitter {
-      constructor(url = 'file:///fixture/index.html') { super(); this.pageUrl = url; }
+      constructor(url = 'file:///fixture/index.html') { super(); this.pageUrl = url; this.defaultTimeout = 0; }
       url() { return this.pageUrl; }
       isClosed() { return false; }
+      setDefaultTimeout(ms) { this.defaultTimeout = ms; }
+      locator(selector) { return { click: () => new Promise((resolve, reject) => {
+        if (this.defaultTimeout) setTimeout(() => reject(new Error('locator click timed out after ' + this.defaultTimeout + 'ms: ' + selector)), this.defaultTimeout);
+      }) }; }
       async reload() {
         const config = JSON.parse(process.env.ODYSSEUS_PREVIEW_CONFIG || '{}');
         if (fs.existsSync(path.join(config.workspace, '.trigger-asset-failure'))) {
@@ -316,12 +320,30 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   assert.equal(throwingReport.phase, 'running workspace test');
   assert.match(throwingReport.error, /fixture assertion: output was missing/);
 
+  const hungActionScript = path.join(root, 'hung-action-test.mjs');
+  await writeFile(hungActionScript, `
+    export default async ({page}) => { await page.locator('#missing').click(); };
+  `);
+  const hungActionRun = spawn(node, [helper, '--workspace', root, '--test-script', 'hung-action-test.mjs', '--timeout', '15'], {
+    stdio: ['ignore', 'pipe', 'ignore'], env,
+  });
+  let hungActionStdout = '';
+  hungActionRun.stdout.setEncoding('utf8').on('data', chunk => { hungActionStdout += chunk; });
+  const hungActionStarted = Date.now();
+  const hungActionResult = await new Promise(resolve => hungActionRun.once('close', code => resolve({ code })));
+  assert.equal(hungActionResult.code, 1, 'a stalled workspace locator must fail with its own timeout');
+  assert.ok(Date.now() - hungActionStarted < 10000, 'locator timeout should precede the outer 15-second helper timeout');
+  const hungActionSummary = JSON.parse(hungActionStdout.split('PREVIEW_RESULT: ')[1]);
+  assert.equal(hungActionSummary.phase, 'running workspace test');
+  assert.equal(hungActionSummary.test, 'failed');
+  assert.match(hungActionSummary.error, /locator click timed out after 5000ms: #missing/);
+
   await writeFile(path.join(root, '.trigger-asset-failure'), '1');
   const failedAssetRun = spawn(node, [helper, '--workspace', root, '--timeout', '15'], { stdio: 'ignore', env });
   const failedAssetResult = await new Promise(resolve => failedAssetRun.once('close', code => resolve({ code })));
   assert.equal(failedAssetResult.code, 1, 'failed requests and HTTP errors must fail the preview');
   const allRuns = (await readdir(outputDir)).filter(name => name.startsWith('run-'));
-  assert.equal(allRuns.length, 5);
+  assert.equal(allRuns.length, 6);
   const reportsAfterAssetFailure = await Promise.all(allRuns.map(async name => {
     try { return JSON.parse(await readFile(path.join(outputDir, name, 'report.json'), 'utf8')); } catch { return null; }
   }));

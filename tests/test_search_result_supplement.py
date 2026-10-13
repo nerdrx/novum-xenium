@@ -128,6 +128,27 @@ def test_full_but_lexically_weak_batch_is_supplemented(core, monkeypatch):
     assert "https://electronjs.org/docs" in [item["url"] for item in results]
 
 
+def test_supplement_discards_zero_match_noise_and_invalid_urls(core, monkeypatch):
+    query = "Electron FFmpeg GUI apps examples features"
+    primary = [_row("https://docs.example/primary", "Electron framework", "")]
+    fallback = [
+        _row("https://irrelevant.example/video", "Unrelated video", "Enjoy videos and music"),
+        _row("javascript:alert(1)", "Electron GUI examples", "FFmpeg features"),
+        _row("https://[bad", "Electron GUI examples", "FFmpeg features"),
+        _row("https://docs.example/relevant", "Electron GUI examples", "FFmpeg features"),
+    ]
+    monkeypatch.setattr(core, "_call_provider", lambda provider, *args: fallback)
+
+    results, status = core._supplement_weak_results(
+        query, primary, 5, None, ["searxng", "duckduckgo"],
+    )
+
+    assert [item["url"] for item in results] == [
+        "https://docs.example/primary", "https://docs.example/relevant",
+    ]
+    assert status == ("duckduckgo", "ok (4 returned; 1 relevant; 2 unique)")
+
+
 def test_strong_primary_batch_does_not_call_fallback(core, monkeypatch):
     calls = []
     primary = [_row(f"https://docs.example/{i}", "Electron FFmpeg desktop app",
@@ -167,7 +188,7 @@ def test_disabled_and_custom_fallback_chains_are_respected(core, monkeypatch):
 
 def test_simple_search_ignores_old_weak_cache_namespace(core, monkeypatch):
     query = "Electron FFmpeg desktop app"
-    old_key = generate_cache_key(f"{query}|3|None")
+    old_key = generate_cache_key(f"search-v2:{query}|3|None")
     (core.SEARCH_CACHE_DIR / f"{old_key}.cache").write_text(json.dumps({
         "expiry": (datetime.now() + timedelta(hours=1)).isoformat(),
         "data": [_row("https://stale.example/", "Old weak result", "")],

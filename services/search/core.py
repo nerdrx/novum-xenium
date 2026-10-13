@@ -21,7 +21,11 @@ from .cache import (
     cleanup_cache,
 )
 from .query import _cache_duration_for_query
-from .ranking import needs_search_supplement, rank_search_results
+from .ranking import (
+    best_query_token_coverage,
+    needs_search_supplement,
+    rank_search_results,
+)
 from .providers import (
     searxng_search_api,
     brave_search,
@@ -149,9 +153,25 @@ def _supplement_weak_results(query, primary_results, count, time_filter, provide
         logger.info("Search supplement via %s returned no results", fallback)
         return primary_results, (fallback, status)
 
+    accepted_extra = []
+    for result in extra:
+        if not isinstance(result, dict):
+            continue
+        url = str(result.get("url") or "").strip()
+        try:
+            parsed_url = urlparse(url)
+            hostname = parsed_url.hostname
+        except ValueError:
+            continue
+        if parsed_url.scheme not in {"http", "https"} or not hostname:
+            continue
+        if best_query_token_coverage(query, [result]) < 0.5:
+            continue
+        accepted_extra.append(result)
+
     merged = []
     seen_urls = set()
-    for result in [*primary_results, *extra]:
+    for result in [*primary_results, *accepted_extra]:
         if not isinstance(result, dict):
             continue
         url = str(result.get("url") or "").strip()
@@ -160,7 +180,7 @@ def _supplement_weak_results(query, primary_results, count, time_filter, provide
         if url:
             seen_urls.add(url)
         merged.append(result)
-    status = f"ok ({len(extra)} returned; {len(merged)} unique)"
+    status = f"ok ({len(extra)} returned; {len(accepted_extra)} relevant; {len(merged)} unique)"
     logger.info("Search supplement via %s: %s", fallback, status)
     return merged, (fallback, status)
 
@@ -177,7 +197,7 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
     if count == 10:
         count = result_count
 
-    cache_key = generate_cache_key(f"search-v2:{query}|{count}|{time_filter}")
+    cache_key = generate_cache_key(f"search-v3:{query}|{count}|{time_filter}")
     cache_file = SEARCH_CACHE_DIR / f"{cache_key}.cache"
 
     # Check cache
@@ -273,7 +293,7 @@ def invalidate_search_cache(query: Optional[str] = None) -> None:
         # Match the key the write path stores: searxng_search_results replaces
         # the caller's default count with the configured _get_result_count()
         # (default 5), so a hardcoded "|10|None" never matched a real entry.
-        cache_key = generate_cache_key(f"search-v2:{query}|{_get_result_count()}|None")
+        cache_key = generate_cache_key(f"search-v3:{query}|{_get_result_count()}|None")
         cache_file = SEARCH_CACHE_DIR / f"{cache_key}.cache"
         if cache_file.exists():
             try:

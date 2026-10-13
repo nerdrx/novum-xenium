@@ -55,6 +55,8 @@ def test_prompt_requires_request_derived_functional_and_external_evidence():
     assert "matching authorized tool" in prompt
     assert "untrusted tool data" in prompt
     assert "A successful file write proves only that content was written" in prompt
+    assert "A later retry failure applies only to that attempt" in prompt
+    assert "This verifier has no tools" in prompt
     assert "<user_request>" in prompt and "<actions_taken>" in prompt
 
 
@@ -77,7 +79,8 @@ def test_compaction_keeps_latest_validation_after_long_earlier_writes():
     assert "python -m pytest -q tests/test_app.py" in snapshot
     assert "exit_code=0" in snapshot
     assert "TAIL: 4 passed" in snapshot
-    assert "Some action details omitted" in snapshot
+    assert "All 14 recorded actions are represented" in snapshot
+    assert "fields may be abbreviated" in snapshot
 
 
 def test_compaction_shows_selected_events_in_chronological_order_and_bounds_fields():
@@ -130,8 +133,10 @@ def test_compaction_preserves_distinct_early_file_writes_with_latest_checks():
     assert "src/main.js" in snapshot and "WROTE_MAIN" in snapshot
     assert "public/index.html" in snapshot and "WROTE_UI" in snapshot
     assert "FUNCTIONAL_CHECK: 8 passed" in snapshot
+    assert "[63/76]" in snapshot
+    assert "mcp__github__create_repository" in snapshot
     assert "EXTERNAL_ACTION: repository created" in snapshot
-    assert "WROTE_DOC_59" not in snapshot
+    assert "[76/76]" in snapshot
 
 
 def test_compaction_uses_latest_write_status_per_target_path():
@@ -147,8 +152,78 @@ def test_compaction_uses_latest_write_status_per_target_path():
     snapshot = compact_action_evidence(events)
 
     assert "LATEST_WRITE_FAILED" in snapshot
-    assert "INITIAL_WRITE" not in snapshot
+    assert "INITIAL_WRITE" in snapshot
     assert "CHECK_RESULT" in snapshot
+
+
+def test_actual_sized_history_keeps_early_success_with_later_retry_failure_and_push():
+    events = [
+        {"tool": "bash", "command": f"printf setup-{i}", "exit_code": 0,
+         "output": f"setup result {i}"}
+        for i in range(10)
+    ]
+    events.extend([
+        {"tool": "bash",
+         "command": 'cd /workspace/project && gh repo create nerdrx/nflix --private --description="Modern FFmpeg GUI"',
+         "exit_code": 0, "output": "https://github.com/nerdrx/nflix"},
+    ])
+    events.extend(
+        {"tool": "write_file", "command": json.dumps({"path": f"src/file-{i}.js", "content": "source"}),
+         "exit_code": 0, "output": f"Wrote file {i}"}
+        for i in range(18)
+    )
+    events.extend([
+        {"tool": "bash", "command": 'cd /workspace/project && gh repo create nflix --private',
+         "exit_code": 1, "output": "STDERR: GraphQL: Name already exists on this account (createRepository)"},
+    ])
+    events.extend(
+        {"tool": "bash", "command": f"printf build-{i}", "exit_code": 0,
+         "output": f"build result {i}"}
+        for i in range(12)
+    )
+    events.append({
+        "tool": "bash", "command": "cd /workspace/project && git push origin main",
+        "exit_code": 0, "output": "To https://github.com/nerdrx/nflix.git\n * [new branch] main -> main",
+    })
+    assert len(events) == 43
+
+    snapshot = compact_action_evidence(events, limit=8000)
+
+    assert len(snapshot) <= 8000
+    assert "[1/43]" in snapshot and "[43/43]" in snapshot
+    assert "gh repo create nerdrx/nflix --private" in snapshot
+    assert "exit_code=0" in snapshot and "https://github.com/nerdrx/nflix" in snapshot
+    assert "GraphQL: Name already exists" in snapshot
+    assert "git push origin main" in snapshot
+    prompt = build_completion_verification_prompt("Create a private GitHub repository", snapshot)
+    assert "Historical success does not prove current external state" in prompt
+    assert "report conflicting attempts separately" in prompt
+
+
+def test_compaction_labels_action_gaps_when_synopses_cannot_fit():
+    events = [
+        {"tool": "bash", "command": f"action-{i} " + "x" * 100, "exit_code": i % 2,
+         "output": f"result-{i} " + "y" * 200}
+        for i in range(400)
+    ]
+
+    snapshot = compact_action_evidence(events, limit=1000)
+
+    assert len(snapshot) <= 1000
+    assert "Action summaries omitted" in snapshot
+    assert "[1/400]" in snapshot and "[400/400]" in snapshot
+
+
+def test_shell_command_truncation_keeps_verbatim_head_and_tail_without_reconstruction():
+    command = "cd '/workspace/my && path' && bash -lc 'first --mode=one && " + "x" * 500 + " || last --mode=two'"
+    snapshot = compact_action_evidence([
+        {"tool": "bash", "command": command, "exit_code": 0, "output": "done"},
+    ], limit=600)
+
+    assert "cd '/workspace/my && path' && bash -lc 'first --mode=one" in snapshot
+    assert "|| last --mode=two'" in snapshot
+    assert "middle omitted" in snapshot
+    assert "<value>" not in snapshot
 
 
 def test_write_path_containing_build_or_test_is_not_a_validation():

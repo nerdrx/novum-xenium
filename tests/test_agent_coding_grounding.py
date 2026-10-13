@@ -50,8 +50,12 @@ def test_agent_prompt_keeps_latest_scope_rule_in_both_tool_modes():
 
 
 def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_tools=None,
-         exact_approval=None, schema_details=None, server_run_id=None):
+         exact_approval=None, schema_details=None, server_run_id=None,
+         checked_workflow=False):
     _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: (
+        True if checked_workflow and key == "agent_milestone_workflow" else default
+    ))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     requests, histories, executed = [], [], []
@@ -253,6 +257,47 @@ def test_research_can_load_owned_skill_but_cannot_edit_it(monkeypatch, tmp_path)
     assert not ({'bash', 'write_file'} & requests[1])
     assert executed == ['manage_skills', 'web_fetch']
     assert any(event.get('type') == 'coding_research' and event.get('status') == 'sources_read' for event in events)
+
+
+def test_checked_workflow_preserves_required_skill_view_schema(monkeypatch, tmp_path):
+    from services.memory.skills import SkillsManager
+
+    skill = {
+        "name": "ui-design", "description": "Build a GUI app", "status": "published",
+        "category": "design", "tags": ["gui"], "procedure": [],
+        "when_to_use": "Build GUI apps with the framework documentation.",
+    }
+    monkeypatch.setattr(SkillsManager, "load", lambda self, owner=None: [skill])
+    from src.coding_grounding import CodingGrounding
+    set_candidates = CodingGrounding.set_skill_candidates
+
+    def seed_candidate(gate, _names, *, available=True):
+        set_candidates(gate, ["ui-design"], available=available)
+
+    monkeypatch.setattr(CodingGrounding, "set_skill_candidates", seed_candidate)
+    url = "https://vendor.example/docs/gui"
+    schema_details = []
+    events, requests, _, executed = _run(
+        monkeypatch, tmp_path, f"Build a GUI app following {url}.",
+        ([_call("web_fetch", {"url": url}, "fetch"),
+          _call("manage_skills", {"action": "view", "name": "ui-design"}, "view")]
+         + ['data: {"delta":"The required procedure and documentation are read."}\n\n'] * 4),
+        {"web_fetch": [{"output": "Official GUI framework documentation", "exit_code": 0}],
+         "manage_skills": [{"results": "Use the established NX design tokens."}]},
+        schema_details=schema_details, checked_workflow=True,
+    )
+
+    assert "manage_skills" in requests[1]
+    skill_schema = next(
+        schema for schema in schema_details[1]
+        if schema.get("function", {}).get("name") == "manage_skills"
+    )
+    params = skill_schema["function"]["parameters"]
+    assert params["properties"]["action"]["enum"] == ["view"]
+    assert params["properties"]["name"]["enum"] == ["ui-design"]
+    assert executed == ["web_fetch", "manage_skills"]
+    assert any(event.get("type") == "coding_research" and event.get("status") == "sources_read"
+               for event in events)
 
 
 def test_read_only_skill_approval_keeps_research_gate(monkeypatch, tmp_path):

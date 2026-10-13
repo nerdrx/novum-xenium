@@ -6040,9 +6040,9 @@ async def stream_agent_loop(
             tool_name = schema.get("function", {}).get("name")
             if tool_name == "run_coding_check":
                 continue
-            if (_coding_work.requires_packet
-                    and tool_name not in {"todowrite", "ask_user"}
-                    and _coding_work.blocks(tool_name, "{}")):
+            if (_coding_work.requires_packet and tool_name in {
+                "bash", "python", "write_file", "edit_file", "apply_patch",
+            }):
                 continue
             if (_coding_work.state and _coding_work.state.stage == "edit"
                     and tool_name in {"bash", "python"}):

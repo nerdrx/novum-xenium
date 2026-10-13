@@ -487,7 +487,9 @@ class CodingWorkTracker:
             except ValueError:
                 return True
             return command != self.state.packet.reproduce_command
-        if tool in {"todowrite", "ask_user"}:
+        # Fetch is a read, but its capability also records network egress.
+        # Keep URL validation and network approval in the normal dispatcher.
+        if tool in {"todowrite", "ask_user", "web_fetch"}:
             return False
         capabilities = capabilities_for_action(tool, content)
         reads = {ToolEffect.READ_CONTEXT, ToolEffect.READ_PUBLIC, ToolEffect.READ_WORKSPACE,

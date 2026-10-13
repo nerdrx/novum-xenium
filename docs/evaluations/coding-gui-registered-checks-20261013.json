@@ -180,5 +180,91 @@
   },
   "gui_conversion_verified": false,
   "observed_failure": "Model repeatedly chose shell actions blocked before packet creation, then paused on unchanged reads. No packet or GUI test was run.",
-  "manual_application_edits": 0
+  "manual_application_edits": 0,
+  "schema_retest": {
+    "revision": "da282e2",
+    "model_metadata": {
+      "actual_route": {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 6
+      },
+      "approval_count": 0,
+      "endpoint_id": "6865006e",
+      "evidence": [
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 1,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 2,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 3,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 4,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 5,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 6,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "input_tokens": 43011,
+          "model": "nx-model-5",
+          "output_tokens": 1020,
+          "requested_model": "qwen3.5:9b",
+          "total_tokens": 44031,
+          "type": "metrics"
+        }
+      ],
+      "model": "qwen3.5:9b",
+      "output_saved": false,
+      "preset_id": null,
+      "run_id": "c044e35a8974438eabc69deb28e7a0af",
+      "seconds": 18.553,
+      "session_id": "56fd55cd-679d-410b-a3c8-24026c690265",
+      "source_files": [
+        "nflix/dist/main/index.js",
+        "nflix/dist/renderer/renderer.js",
+        "nflix/.odysseus-preview/qa-conversion-flow.mjs"
+      ],
+      "status": "incomplete",
+      "stream_ended": true,
+      "terminal": null,
+      "verification_passed": null
+    },
+    "result": "incomplete",
+    "gui_conversion_verified": false,
+    "observed_failure": "Model reached required skill lookup, but the generic schema filter rejected the argument-sensitive skill tool using empty arguments. No packet was created.",
+    "test_unchanged": true,
+    "manual_application_edits": 0
+  }
 }

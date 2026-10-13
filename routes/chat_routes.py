@@ -2957,6 +2957,11 @@ def setup_chat_routes(
                                     yield f'data: {json.dumps(data)}\n\n'
                                 elif data.get("type") == "agent_terminal":
                                     terminal_metadata = dict(data.get("data") or {})
+                                    terminal_status = data.get("status") or terminal_metadata.get("status")
+                                    if (terminal_status in {"complete", "completed", "success", "passed"}
+                                            and not data.get("failed") and not terminal_metadata.get("failed")):
+                                        yield chunk
+                                        continue
                                     last_metrics = terminal_metadata
                                     failure = terminal_metadata.get("failure") or {}
                                     safe_failure = describe_stream_failure(

@@ -1026,6 +1026,34 @@ async def test_chat_stream_route_does_not_save_or_postprocess_terminal_agent_err
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_route_forwards_success_terminal_without_failure_notice(monkeypatch):
+    captured = {}
+    terminal = {"type": "agent_terminal", "status": "completed",
+                "reason": "coding_work_verified"}
+    endpoint = _chat_stream_endpoint(
+        monkeypatch,
+        "agent",
+        captured,
+        agent_chunks=[
+            'data: {"delta": "The checked coding work passed."}\n\n',
+            f'data: {json.dumps(terminal)}\n\n',
+            'data: {"type": "metrics", "data": {"tool_events": []}}\n\n',
+            "data: [DONE]\n\n",
+        ],
+        capture_completion=True,
+    )
+
+    response = await endpoint(_RouteRequest("agent"))
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert f'data: {json.dumps(terminal)}\n\n' in chunks
+    assert len(captured["saved"]) == 1
+    saved_args = captured["saved"][0][0]
+    assert saved_args[3] == "The checked coding work passed."
+    assert "Agent stopped" not in saved_args[3]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider_status", "expected_status", "expected_message"),
     [

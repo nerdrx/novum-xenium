@@ -31,17 +31,38 @@ def _todos():
     ]
 
 
-def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=None):
+def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=None, todos=None,
+                pause_after_acceptance=False, teacher_event=None, checked_workflow=False):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
     monkeypatch.setattr(al, "get_setting", lambda key, default=None: (
-        True if verifier_issues is not None and key == "agent_verifier_subagent" else default
+        True if ((checked_workflow and key == "agent_milestone_workflow")
+                 or (verifier_issues is not None and key == "agent_verifier_subagent")) else default
     ))
     if verifier_issues is not None:
         async def verify(*_args, **_kwargs):
             return list(verifier_issues)
         monkeypatch.setattr(al, "_run_verifier_subagent", verify)
+    if pause_after_acceptance:
+        original_guard = al._ToolProgressGuard
+
+        class PausingGuard(original_guard):
+            def observe(self, records):
+                if any(record["tool_name"] == "bash" and
+                       record["content"] == _packet()["acceptance_command"] for record in records):
+                    return {"tools": ["bash"], "read_repeats": 1, "failed_retries": 0,
+                            "repeated_rounds": 1}
+                return super().observe(records)
+
+        monkeypatch.setattr(al, "_ToolProgressGuard", PausingGuard)
+    if teacher_event:
+        import src.teacher_escalation as teacher_escalation
+
+        async def escalate(**_kwargs):
+            yield "data: " + json.dumps({"type": teacher_event}) + "\n\n"
+
+        monkeypatch.setattr(teacher_escalation, "run_teacher_inline", escalate)
 
     class GroundedCodingTask(CodingGrounding):
         def __init__(self, *args, **kwargs):
@@ -50,8 +71,9 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
 
     monkeypatch.setattr("src.coding_grounding.CodingGrounding", GroundedCodingTask)
     monkeypatch.setattr(coding_tools, "read_todos", lambda _ctx: [])
+    todos = _todos() if todos is None else todos
     actions = [
-        ("todowrite", {"todos": _todos(), "work_packet": _packet()}),
+        ("todowrite", {"todos": todos, "work_packet": _packet()}),
         # Must be rejected by the packet guard before the executor sees it.
         ("write_file", {"path": "src/auth.py", "content": "too soon"}),
         ("bash", {"command": _packet()["reproduce_command"]}),
@@ -140,6 +162,31 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
     assert "write_file" in requested[1]
 
 
+def test_reviewed_completed_packet_emits_success_terminal(monkeypatch, tmp_path):
+    events, _executed, _requested = _run_packet(
+        monkeypatch, tmp_path, verifier_issues=[],
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+        checked_workflow=True,
+    )
+
+    terminal = [event for event in events if event.get("type") == "agent_terminal"]
+    assert terminal == [{"type": "agent_terminal", "status": "completed",
+                         "reason": "coding_work_verified"}]
+
+
+def test_teacher_takeover_suppresses_checked_work_success_terminal(monkeypatch, tmp_path):
+    events, _executed, _requested = _run_packet(
+        monkeypatch, tmp_path, verifier_issues=[],
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+        teacher_event="escalation_started",
+        checked_workflow=True,
+    )
+    assert any(event.get("type") == "escalation_started" for event in events)
+    completed = any(event.get("type") == "agent_terminal" and event.get("status") == "completed"
+                    for event in events)
+    assert not completed
+
+
 @pytest.mark.parametrize(("issues", "status"), [
     ([], "passed"),
     (["Failed: acceptance condition was not met"], "failed"),
@@ -148,11 +195,43 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
 def test_packet_reports_actual_independent_review_result(monkeypatch, tmp_path, issues, status):
     events, _executed, _requested = _run_packet(
         monkeypatch, tmp_path, verifier_issues=issues,
+        checked_workflow=True,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
     )
 
     packet_events = [event for event in events if event.get("type") == "coding_work_packet"]
     done_events = [event for event in packet_events if event["stage"] == "done"]
     assert [event["review_status"] for event in done_events] == ["not_reviewed", status]
+    completed = any(event.get("type") == "agent_terminal" and event.get("status") == "completed"
+                    for event in events)
+    assert completed is (status == "passed")
+
+
+def test_unreviewed_packet_does_not_emit_success_terminal(monkeypatch, tmp_path):
+    events, _executed, _requested = _run_packet(
+        monkeypatch, tmp_path,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+        checked_workflow=True,
+    )
+    assert not any(event.get("type") == "agent_terminal" and event.get("status") == "completed"
+                   for event in events)
+
+
+def test_paused_or_unfinished_packet_does_not_emit_success_terminal(monkeypatch, tmp_path):
+    paused, _executed, _requested = _run_packet(
+        monkeypatch, tmp_path, pause_after_acceptance=True,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+        checked_workflow=True,
+    )
+    assert any("Agent paused" in event.get("delta", "") for event in paused)
+    assert not any(event.get("type") == "agent_terminal" and event.get("status") == "completed"
+                   for event in paused)
+
+    unfinished, _executed, _requested = _run_packet(
+        monkeypatch, tmp_path, verifier_issues=[], checked_workflow=True,
+    )
+    assert not any(event.get("type") == "agent_terminal" and event.get("status") == "completed"
+                   for event in unfinished)
 
 
 def test_failed_acceptance_cannot_mark_packet_done_or_finish_as_verified(monkeypatch, tmp_path):

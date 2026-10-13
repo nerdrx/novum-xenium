@@ -6102,6 +6102,7 @@ async def stream_agent_loop(
     actual_endpoint_cost_tracked = requested_endpoint_cost_tracked
     usage_buckets = []
     total_tool_calls = 0  # for budget enforcement
+    _coding_work_budget_exceeded = False
     _ody_notes_tool_completed = False
     _pinned_fallback_candidate = None
     _pinned_fallback_route = None
@@ -7842,6 +7843,7 @@ async def stream_agent_loop(
             if max_tool_calls > 0 and total_tool_calls >= max_tool_calls:
                 yield f'data: {json.dumps({"type": "budget_exceeded", "limit": max_tool_calls, "used": total_tool_calls})}\n\n'
                 budget_hit = True
+                _coding_work_budget_exceeded = True
                 break
 
             total_tool_calls += 1
@@ -9059,6 +9061,7 @@ async def stream_agent_loop(
     # gets a turn (with its own tool calls forwarded to the user) and
     # a skill is saved ONLY if the teacher actually succeeds. Skipped
     # when we ARE the teacher to avoid recursion.
+    _teacher_escalation_intervened = False
     if not _is_teacher_run and not guide_only and not _awaiting_user and not _progress_paused:
         try:
             from src.teacher_escalation import run_teacher_inline
@@ -9079,8 +9082,26 @@ async def stream_agent_loop(
                 ),
                 delegated_credential=delegated_credential,
             ):
+                _teacher_escalation_intervened = True
                 yield evt
         except Exception as _esc_err:
+            _teacher_escalation_intervened = True
             logger.warning(f"teacher escalation hook failed: {_esc_err}", exc_info=True)
+
+    if (
+        _coding_work.enabled
+        and _coding_work.state
+        and _coding_work.state.stage == "done"
+        and not _coding_work.pending
+        and _coding_work.review_status == "passed"
+        and _completion_review_passed
+        and not _awaiting_user
+        and not _progress_paused
+        and not _exhausted_rounds
+        and not _coding_work_budget_exceeded
+        and not _teacher_escalation_intervened
+        and (_project_verification is None or _project_verification.get("complete") is True)
+    ):
+        yield f'data: {json.dumps({"type": "agent_terminal", "status": "completed", "reason": "coding_work_verified"})}\n\n'
 
     yield "data: [DONE]\n\n"

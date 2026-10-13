@@ -59,6 +59,22 @@ test('main-process stderr summary prioritizes exception with nearby source locat
   assert.deepEqual(summarizeMainStderr(['first notice', 'second notice']), ['first notice', 'second notice']);
 });
 
+test('main-process summary retains rejected IPC object fields before startup noise', () => {
+  const summary = summarizeMainStderr([
+    'DBus warning: startup notice', 'DBus warning: more startup noise',
+    "Error occurred in handler for 'export-file': {",
+    "  message: 'Target is a directory',", "  output: '/workspace/exports',",
+    '  exitCode: 1', '}', 'DBus warning: later notice',
+  ]);
+  assert.match(summary[0], /handler for 'export-file'/);
+  assert.match(summary[0], /output: '\/workspace\/exports'/);
+  assert.match(summary[0], /exitCode: 1/);
+  assert.doesNotMatch(summary[0], /DBus warning/);
+  assert.ok(summary[0].length <= 740);
+  assert.ok(summarizeMainStderr(["Error occurred in handler for 'export-file': {",
+    ...Array(30).fill('  detail: ' + 'x'.repeat(4000)), '}'])[0].length <= 740);
+});
+
 test('preview output is locally ignored without replacing an existing user ignore file', async t => {
   const root = await fixture(t);
   const gitInit = spawnSync('git', ['init', '-q', root]);
@@ -213,6 +229,9 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
     const { spawn } = require('node:child_process');
     process.stderr.write('DBus warning: routine fixture startup notice\\n');
     process.stderr.write('App threw an error during load\\n/workspace/dist/main/index.js:14\\nSyntaxError: duplicate __dirname declaration\\n/workspace/dist/main/index.js:14\\n');
+    if (fs.existsSync(${JSON.stringify(path.join(root, "ipc-error-fixture"))})) {
+      process.stderr.write("Error occurred in handler for 'export-file': {\\n  message: 'Target is a directory',\\n  output: '/workspace/exports',\\n  exitCode: 1\\n}\\n");
+    }
     process.stdout.write('FFmpeg console error: decoder failed\\n');
     process.stdout.write('x'.repeat(16000));
     const profile = process.argv.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
@@ -344,6 +363,7 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   await writeFile(throwingScript, `
     export default async () => { throw new Error('fixture assertion: output was missing'); };
   `);
+  await writeFile(path.join(root, 'ipc-error-fixture'), '1');
   const throwingRun = spawn(node, [helper, '--workspace', root, '--test-script', 'throwing-test.mjs', '--timeout', '15'], {
     stdio: ['ignore', 'pipe', 'ignore'], env,
   });
@@ -351,11 +371,19 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   throwingRun.stdout.setEncoding('utf8').on('data', chunk => { throwingStdout += chunk; });
   const throwingResult = await new Promise(resolve => throwingRun.once('close', code => resolve({ code })));
   assert.equal(throwingResult.code, 1, 'a thrown workspace test must fail the preview');
+  await rm(path.join(root, 'ipc-error-fixture'));
   const throwingSummary = JSON.parse(throwingStdout.split('PREVIEW_RESULT: ')[1]);
   assert.equal(throwingSummary.phase, 'running workspace test');
   assert.equal(throwingSummary.behavior, 'workspace test failed; app behavior remains unverified');
   assert.equal(throwingSummary.test, 'failed');
   assert.match(throwingSummary.error, /fixture assertion: output was missing/);
+  const summaryLead = throwingStdout.split('PREVIEW_RESULT: ')[1].slice(0, 4000);
+  assert.ok(summaryLead.includes(JSON.stringify(throwingSummary.report)), 'report path precedes bulky page logs');
+  assert.match(summaryLead, /handler for 'export-file'/);
+  assert.match(summaryLead, /exitCode: 1/);
+  assert.match(summaryLead, /\/workspace\/exports/);
+  assert.ok(summaryLead.indexOf('"errors"') < summaryLead.indexOf('"testEvidence"') || !summaryLead.includes('"testEvidence"'));
+
   assert.ok(throwingSummary.sourceFrames.some(frame => /throwing-test\.mjs:\d+:\d+/.test(frame)),
     'failed test summary should identify the assertion source before visible page logs');
   assert.ok(throwingSummary.sourceFrames.length <= 5);

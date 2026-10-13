@@ -22,6 +22,18 @@ export function ensureOutputIgnore(fsApi, outputDir) {
 
 export function summarizeMainStderr(lines) {
   const values = Array.isArray(lines) ? lines.map(value => String(value)) : [];
+  const handlerIndex = values.findIndex(value => /Error occurred in handler for\b/.test(value));
+  if (handlerIndex >= 0) {
+    // Electron can log a rejected IPC value as a multi-line object rather than
+    // an Error stack. Keep its bounded diagnostic fields ahead of startup noise.
+    const block = [values[handlerIndex].slice(0, 300)];
+    for (const value of values.slice(handlerIndex + 1, handlerIndex + 8)) {
+      if (!/^\s+|^\s*}/.test(value)) break;
+      block.push(value.slice(0, 240));
+      if (/^\s*}/.test(value)) break;
+    }
+    return [block.join('\n').slice(0, 740)];
+  }
   const errorIndex = values.findIndex(value => /\b(?:[A-Za-z]*Error|Exception):/.test(value));
   if (errorIndex >= 0) {
     const location = values.slice(Math.max(0, errorIndex - 8), errorIndex)
@@ -459,10 +471,10 @@ try {
     status: 'failed', phase, appEntry,
     behavior: failureReport.behavior,
     test: workspaceTestFailed ? 'failed' : 'not run',
+    report: reportPath || null,
     error: errorSummary,
     sourceFrames: String(error?.stack || '').split(/\r?\n/).slice(0, 5)
       .map(frame => frame.slice(0, 300)),
-    ...(Object.keys(testEvidence).length ? { testEvidence } : {}),
     errors: {
       page: diagnostics.pageErrors.length, console: diagnostics.consoleErrors.length,
       mainStdout: diagnostics.mainStdout.length,
@@ -470,10 +482,10 @@ try {
       examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors,
         ...summarizeMainStderr(diagnostics.mainStderr),
         ...diagnostics.mainStdout.slice(-3)].slice(0, 3).map(value => String(value).slice(0, 180)),
-      mainStdoutExamples: diagnostics.mainStdout.slice(-3),
       mainStderrExamples: summarizeMainStderr(diagnostics.mainStderr),
+      mainStdoutExamples: diagnostics.mainStdout.slice(-3),
     },
-    report: reportPath || null,
+    ...(Object.keys(testEvidence).length ? { testEvidence } : {}),
   }));
 } finally {
   if (browser) { try { await browser.close(); } catch { /* close CDP connection */ } }

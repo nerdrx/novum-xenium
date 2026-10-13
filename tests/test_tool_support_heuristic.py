@@ -75,6 +75,18 @@ class TestDeepSeekToolSupport:
             "qwen3.5:4b", "http://localhost:11434/v1"
         ) is False
 
+    def test_qwen_zvram_llama_server_is_not_assumed_ollama(self, monkeypatch):
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        assert _compute_is_api_model(
+            "qwen3.5:9b", "http://127.0.0.1:8097/v1"
+        ) is True
+
+    def test_configured_custom_ollama_still_uses_fenced_tools(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11435")
+        assert _compute_is_api_model(
+            "qwen3.5:9b", "http://127.0.0.1:11435/v1"
+        ) is False
+
     def test_gemma_local_ollama_defaults_to_fenced_tools(self):
         assert _compute_is_api_model(
             "gemma4:e4b", "http://host.docker.internal:11434/v1"

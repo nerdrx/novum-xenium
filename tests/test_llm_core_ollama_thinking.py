@@ -76,7 +76,7 @@ def _capture_payload(monkeypatch, url, model):
 class TestIsOllamaOpenAICompatUrl:
     """Unit tests for the URL classifier that gates think-suppression."""
 
-    # Positive cases — should be True
+    # Positive cases — standard Ollama port is provider-specific.
     def test_default_port_v1_root(self):
         assert llm_core._is_ollama_openai_compat_url("http://127.0.0.1:11434/v1")
 
@@ -93,12 +93,19 @@ class TestIsOllamaOpenAICompatUrl:
         # IPv6 addresses in URLs require square brackets per RFC 3986
         assert llm_core._is_ollama_openai_compat_url("http://[::1]:11434/v1")
 
-    def test_any_local_non_default_port(self):
-        """Localhost on a non-default port (custom OLLAMA_HOST) must also match."""
+    def test_custom_ollama_host_matches_exactly(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11435")
         assert llm_core._is_ollama_openai_compat_url("http://127.0.0.1:11435/v1")
+        assert not llm_core._is_ollama_openai_compat_url("http://127.0.0.1:8097/v1")
 
-    def test_localhost_non_default_port(self):
-        assert llm_core._is_ollama_openai_compat_url("http://localhost:8080/v1/chat/completions")
+    def test_loopback_openai_compatible_server_is_not_assumed_ollama(self, monkeypatch):
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        assert not llm_core._is_ollama_openai_compat_url("http://localhost:8080/v1/chat/completions")
+        assert not llm_core._is_ollama_openai_compat_url("http://127.0.0.1:8097/v1")
+
+    def test_custom_ollama_host_without_scheme_uses_default_port(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "ollama.internal")
+        assert llm_core._is_ollama_openai_compat_url("http://ollama.internal:11434/v1")
 
     def test_zero_dot_zero_host(self):
         assert llm_core._is_ollama_openai_compat_url("http://0.0.0.0:11434/v1")
@@ -157,14 +164,20 @@ class TestThinkSuppression:
         )
         assert "think" not in payload
 
-    def test_think_false_for_non_default_port_thinking_model(self, monkeypatch):
-        """Custom-port localhost Ollama (e.g. OLLAMA_HOST=0.0.0.0:11435) must
-        also receive think:false — this is the regression guarded by the
-        host-set check added in this fix."""
+    def test_think_false_for_configured_custom_ollama_host(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11435")
         payload = _capture_payload(
             monkeypatch, "http://127.0.0.1:11435/v1/chat/completions", "qwen3:14b"
         )
         assert payload.get("think") is False
+
+    def test_qwen35_zvram_llama_alias_gets_no_ollama_only_flags(self, monkeypatch):
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        payload = _capture_payload(
+            monkeypatch, "http://127.0.0.1:8097/v1/chat/completions", "qwen3.5:9b"
+        )
+        assert "think" not in payload
+        assert "reasoning_effort" not in payload
 
 
 @pytest.mark.parametrize("model", ["qwen3.5:9b", "huihui-qwen3.8:27b-local"])

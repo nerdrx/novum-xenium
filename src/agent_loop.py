@@ -25,6 +25,7 @@ from src.llm_core import (
     stream_llm,
     stream_llm_with_fallback,
     _is_ollama_native_url,
+    _is_ollama_openai_compat_url,
     _normalize_http_status,
     _normalize_usage_counts,
 )
@@ -947,21 +948,6 @@ _ADMIN_SCHEMA_NAMES = frozenset([
     "ask_teacher", "list_models", "search_chats",
 ])
 _TOOL_SELECTION_TIMEOUT_SECONDS = 1.5
-
-
-def _is_ollama_openai_compat_url(endpoint_url: str) -> bool:
-    """Return True for local Ollama's OpenAI-compatible /v1 surface.
-
-    Ollama's /v1 endpoint accepts the OpenAI chat shape, but model-level tool
-    streaming is uneven. Some local models terminate after a token when schemas
-    are present. Keep native schemas opt-in via ModelEndpoint.supports_tools.
-    """
-    try:
-        parsed = urlparse(endpoint_url or "")
-    except Exception:
-        return False
-    path = (parsed.path or "").rstrip("/")
-    return parsed.port == 11434 and (path == "/v1" or path.startswith("/v1/"))
 
 
 def _is_local_openai_compat_url(endpoint_url: str) -> bool:

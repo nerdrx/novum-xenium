@@ -611,21 +611,38 @@ def _is_ollama_native_url(url: str) -> bool:
 
 
 def _is_ollama_openai_compat_url(url: str) -> bool:
-    """Return True for local Ollama's OpenAI-compatible /v1 surface.
+    """Return True for Ollama's OpenAI-compatible /v1 surface.
 
-    Mirrors the host detection used by ``_is_ollama_native_url`` so that the
-    two helpers stay in lockstep: a localhost Ollama on a non-default port
-    (custom ``OLLAMA_HOST``, reverse proxy, container port remap) is treated
-    the same way here as it is on the native ``/api`` path.
+    Loopback alone is not provider metadata: local llama.cpp and other
+    OpenAI-compatible servers also commonly use it. Accept Ollama's standard
+    port, or an exact custom host declared by OLLAMA_HOST.
     """
     try:
         parsed = urlparse(url or "")
+        port = parsed.port
     except Exception:
         return False
     host = parsed.hostname or ""
     path = (parsed.path or "").rstrip("/")
-    local_ollama_host = host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"} or parsed.port == 11434
-    return local_ollama_host and (path == "/v1" or path.startswith("/v1/"))
+    if path != "/v1" and not path.startswith("/v1/"):
+        return False
+    if port == 11434:
+        return True
+
+    # Ollama supports custom bind addresses/ports through OLLAMA_HOST. Only
+    # treat a configured endpoint as Ollama when both host and effective port
+    # match; arbitrary loopback OpenAI servers remain provider-neutral.
+    configured = os.environ.get("OLLAMA_HOST", "").strip()
+    if not configured:
+        return False
+    try:
+        configured_url = configured if "://" in configured else f"http://{configured}"
+        configured_endpoint = urlparse(configured_url)
+        configured_host = configured_endpoint.hostname or ""
+        configured_port = configured_endpoint.port or 11434
+    except Exception:
+        return False
+    return host.lower() == configured_host.lower() and (port or 80) == configured_port
 
 
 def _ollama_api_root(url: str) -> str:

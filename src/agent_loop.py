@@ -4520,6 +4520,9 @@ async def stream_agent_loop(
         (_retrieval_query + "\n" + _last_user) if _use_coding_tools(_retrieval_query, workspace) else "",
         disabled_tools=disabled_tools, plan_mode=plan_mode, guide_mode=guide_only,
     )
+    from src.coding_work_packet import CodingWorkTracker
+    _coding_work = CodingWorkTracker()
+    _coding_work_nudges = 0
     from src.milestone_checkpoint import MilestoneCheckpoint
     _milestone_checkpoint = MilestoneCheckpoint(bool(
         _coding_grounding.required and workspace and owner and session_id
@@ -6423,6 +6426,12 @@ async def stream_agent_loop(
         # mutation gate active for separate calls.
         _coding_grounding.observe(approved.tool_name, approved_result, approved.content)
         _milestone_checkpoint.observe(approved.tool_name, approved_result)
+        if _coding_work.observe(approved.tool_name, approved.content, approved_result):
+            packet_event = _coding_work.event(0)
+            yield f'data: {json.dumps(packet_event)}\n\n'
+            messages.append(untrusted_context_message(
+                "current coding work packet", json.dumps(packet_event), arm_tool_gate=False,
+            ))
 
         if tool_result_is_successful(approved_result):
             for doc_event in _document_stream_events(approved_block):
@@ -6637,7 +6646,7 @@ async def stream_agent_loop(
         round_reasoning = ""  # reasoning_content deltas (DeepSeek-thinking, vLLM --reasoning-parser)
         # Delay completion prose until review passes. After a failed review,
         # also withhold recovery prose until a real tool action executes.
-        hold_round_text = bool(_verification_issues) or (
+        hold_round_text = _coding_work.pending or bool(_verification_issues) or (
             _coding_verification_required and not _completion_review_passed
         ) or (
             not _force_answer
@@ -7435,7 +7444,7 @@ async def stream_agent_loop(
         # on reload (#3222 follow-up).
         cleaned_round = strip_tool_blocks(round_response, skip_fenced=(_is_api_model and not used_native and not guide_only)).strip()
         round_texts.append(cleaned_round)
-        if _coding_verification_required and not _completion_review_passed:
+        if _coding_work.pending or (_coding_verification_required and not _completion_review_passed):
             # Keep candidate coding prose out of persisted history too. It may
             # be restored only after the independent review passes.
             round_texts[-1] = ""
@@ -7446,6 +7455,15 @@ async def stream_agent_loop(
             yield f'data: {json.dumps({"delta": cleaned_round})}\n\n'
 
         if not tool_blocks:
+            if _coding_work.pending:
+                if _coding_work_nudges >= 2 or _force_answer:
+                    notice = "Stopped: the current coding slice has no passing check after its last edit. It remains unverified."
+                    full_response += "\n\n" + notice
+                    yield 'data: ' + json.dumps({"delta": notice}) + '\n\n'
+                    break
+                _coding_work_nudges += 1
+                _prepend_agent_directive(messages, _coding_work.instruction)
+                continue
             if _milestone_checkpoint.pending and _coding_grounding.may_mutate:
                 if _milestone_checkpoint.reject():
                     notice = "Stopped: the model did not save an actionable task checklist after two attempts. No implementation was verified."
@@ -7869,6 +7887,10 @@ async def stream_agent_loop(
                 desc = f"{block.tool_type}: PLAN FIRST"
                 result = {"error": _milestone_checkpoint.directive, "exit_code": 1,
                           "blocked": True, "policy": "milestone_checkpoint"}
+            elif _coding_work.blocks(block.tool_type, block.content):
+                desc = f"{block.tool_type}: REPRODUCE FIRST"
+                result = {"error": _coding_work.instruction, "exit_code": 1,
+                          "blocked": True, "policy": "coding_work_packet"}
             elif not security_decision.allowed:
                 approval_document = (
                     active_document
@@ -8049,11 +8071,18 @@ async def stream_agent_loop(
                             pass
 
             _milestone_checkpoint.observe(block.tool_type, result)
+            if _coding_work.observe(block.tool_type, block.content, result):
+                packet_event = _coding_work.event(round_num)
+                yield f'data: {json.dumps(packet_event)}\n\n'
+                messages.append(untrusted_context_message(
+                    "current coding work packet", json.dumps(packet_event), arm_tool_gate=False,
+                ))
             run_security.observe_tool_result(block.tool_type, result, block.content)
             if (
                 hold_round_text
                 and held_round_deltas
                 and not _coding_verification_required
+                and not _coding_work.pending
                 and _completion_action_succeeded(block.tool_type, result)
             ):
                 for held_delta in held_round_deltas:

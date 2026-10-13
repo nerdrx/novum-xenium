@@ -299,6 +299,25 @@ FUNCTION_TOOL_SCHEMAS = [
                             },
                             "required": ["content", "status"]
                         }
+                    },
+                    "work_packet": {
+                        "type": "object",
+                        "description": "Optional bounded coding task contract. Returned with this result but not persisted.",
+                        "additionalProperties": False,
+                        "properties": {
+                            "objective": {"type": "string", "minLength": 1, "maxLength": 1000},
+                            "files": {
+                                "type": "array", "minItems": 1, "maxItems": 32,
+                                "items": {"type": "string", "minLength": 1, "maxLength": 300},
+                            },
+                            "reproduce_command": {"type": "string", "minLength": 1, "maxLength": 1000},
+                            "acceptance_command": {"type": "string", "minLength": 1, "maxLength": 1000},
+                            "acceptance_condition": {"type": "string", "minLength": 1, "maxLength": 1000},
+                        },
+                        "required": [
+                            "objective", "files", "reproduce_command",
+                            "acceptance_command", "acceptance_condition",
+                        ],
                     }
                 },
                 "required": ["todos"]

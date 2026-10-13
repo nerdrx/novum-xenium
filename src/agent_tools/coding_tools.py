@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from src.constants import DATA_DIR
+from src.coding_work_packet import CodingWorkPacket
 
 
 _TODO_DIR = os.path.join(DATA_DIR, "agent_todos")
@@ -59,6 +60,27 @@ class TodoWriteTool:
             args = json.loads(content) if (content or "").strip().startswith("{") else {"todos": []}
         except (json.JSONDecodeError, TypeError):
             return {"error": "todowrite: JSON object required", "exit_code": 1}
+        if not isinstance(args, dict):
+            return {"error": "todowrite: JSON object required", "exit_code": 1}
+        work_packet = None
+        if "work_packet" in args:
+            raw_packet = args["work_packet"]
+            expected = {
+                "objective", "files", "reproduce_command", "acceptance_command",
+                "acceptance_condition",
+            }
+            if not isinstance(raw_packet, dict) or set(raw_packet) != expected:
+                return {
+                    "error": (
+                        "todowrite: work_packet must contain exactly objective, files, "
+                        "reproduce_command, acceptance_command, acceptance_condition"
+                    ),
+                    "exit_code": 1,
+                }
+            try:
+                work_packet = CodingWorkPacket.create(**raw_packet).to_dict()
+            except (TypeError, ValueError) as exc:
+                return {"error": f"todowrite: invalid work_packet ({exc})", "exit_code": 1}
         todos = args.get("todos")
         if not isinstance(todos, list):
             return {"error": "todowrite: todos must be a list", "exit_code": 1}
@@ -99,7 +121,10 @@ class TodoWriteTool:
                 if owner and ctx.get("session_id") else
                 os.path.join(_TODO_DIR, f"{session_id}.json"))
         if ctx.get("incognito"):
-            return {"output": "Todo list kept for this turn only.", "exit_code": 0, "todos": normalized}
+            result = {"output": "Todo list kept for this turn only.", "exit_code": 0, "todos": normalized}
+            if work_packet is not None:
+                result["work_packet"] = work_packet
+            return result
         os.makedirs(_TODO_DIR, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"todos": normalized}, f, ensure_ascii=False, indent=2)
@@ -108,8 +133,11 @@ class TodoWriteTool:
         for item in normalized:
             marker = {"pending": " ", "in_progress": ">", "completed": "x"}[item["status"]]
             lines.append(f"[{marker}] {item['content']} ({item['priority']})")
-        return {
+        result = {
             "output": "Updated todo list:\n" + ("\n".join(lines) if lines else "(empty)"),
             "exit_code": 0,
             "todos": normalized,
         }
+        if work_packet is not None:
+            result["work_packet"] = work_packet
+        return result

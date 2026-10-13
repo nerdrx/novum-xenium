@@ -187,12 +187,17 @@ class SkillsManager:
     # Disk scan
     # ----------------------------------------------------------------------
 
-    def _iter_skill_files(self) -> Iterable[str]:
+    def _iter_skill_files(self, *, include_nested: bool = False) -> Iterable[str]:
         if not os.path.isdir(self.skills_root):
             return
         for root, _dirs, files in os.walk(self.skills_root, followlinks=False):
-            if "SKILL.md" in files:
-                yield os.path.join(root, "SKILL.md")
+            if "SKILL.md" not in files:
+                continue
+            path = os.path.join(root, "SKILL.md")
+            relative_dir = os.path.relpath(root, self.skills_root)
+            depth = 0 if relative_dir == "." else len(relative_dir.split(os.sep))
+            if include_nested or depth <= 2:
+                yield path
 
     def _read_skill(self, path: str) -> Optional[Skill]:
         try:
@@ -224,7 +229,7 @@ class SkillsManager:
             return 0
         valid_owners = set(valid_owners or [])
         changed = 0
-        for path in self._iter_skill_files():
+        for path in self._iter_skill_files(include_nested=True):
             sk = self._read_skill(path)
             if not sk:
                 continue
@@ -235,7 +240,11 @@ class SkillsManager:
                 continue
             sk.owner = primary_owner
             try:
-                self._write_skill(sk)
+                # A recursive scan can find legacy/nested SKILL.md files.
+                # Write ownership back to that file, never the canonical
+                # category/name path, which may contain a newer skill.
+                from core.atomic_io import atomic_write_text
+                atomic_write_text(path, sk.to_markdown())
                 changed += 1
             except Exception as e:
                 logger.warning("Failed to backfill owner for skill %s: %s", sk.name, e)
@@ -524,6 +533,7 @@ class SkillsManager:
         if not files:
             raise SkillImportError("empty bundle")
         _rel, skill_md = pick_skill_md(files)
+        skill_md_rel = _safe_relpath(_rel)
         sk = Skill.from_markdown(skill_md)
         nm = slugify(sk.name or _rel.split("/")[-2] or "skill")
         cat = slugify(category or sk.category or "imported", fallback="imported")
@@ -541,6 +551,10 @@ class SkillsManager:
         # Preserve bundle layout (templates/, references/, etc.) under the skill dir.
         for rel, content in files.items():
             safe = _safe_relpath(rel)
+            # SKILL.md is stored canonically below; copying it at its source
+            # bundle path creates a stale nested duplicate that startup scans.
+            if safe == skill_md_rel:
+                continue
             dest = os.path.join(skill_dir, safe)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             atomic_write_text(dest, content)

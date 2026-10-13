@@ -217,6 +217,64 @@ def test_read_skill_md_and_references_are_owner_scoped(tmp_path):
     assert sm.read_skill_reference("login-flow", "references/notes.txt", owner="alice") is None
 
 
+def test_backfill_owner_keeps_nested_legacy_copy_off_canonical_skill(tmp_path):
+    sm = SkillsManager(str(tmp_path))
+    sm.add_skill(
+        owner="admin", name="ui-design", category="design",
+        description="Current design procedure", version="1.0.3",
+        procedure=["Current procedure"], source="taught",
+    )
+    canonical = Path(sm._skill_file("design", "ui-design"))
+    before = canonical.read_text(encoding="utf-8")
+
+    stale = canonical.parent / "agent-skills" / "ui-design" / "SKILL.md"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(Skill(
+        name="ui-design", description="Stale bundled copy", version="1.0.0",
+        category="design", procedure=["Stale procedure"],
+    ).to_markdown(), encoding="utf-8")
+
+    assert sm.backfill_owner("admin", {"admin"}) == 1
+    assert canonical.read_text(encoding="utf-8") == before
+    updated_legacy = Skill.from_markdown(stale.read_text(encoding="utf-8"))
+    assert updated_legacy.owner == "admin"
+    assert updated_legacy.version == "1.0.0"
+    assert updated_legacy.procedure == ["Stale procedure"]
+    assert [item["version"] for item in sm.load_all()] == ["1.0.3"]
+    restarted = SkillsManager(str(tmp_path))
+    assert "Current procedure" in restarted.read_skill_md("ui-design", owner="admin")
+
+
+def test_bundle_import_stores_selected_skill_markdown_only_at_canonical_path(tmp_path):
+    sm = SkillsManager(str(tmp_path))
+    source = Skill(
+        name="ui-design", description="Design", version="1.0.3",
+        category="design", procedure=["Use the source procedure"],
+    ).to_markdown()
+    imported = sm.import_bundle_from_files(
+        {
+            "agent-skills/ui-design/SKILL.md": source,
+            "agent-skills/ui-design/references/layout.md": "Layout reference",
+            "agent-skills/ui-design/references/example/SKILL.md": Skill(
+                name="example", description="Bundled example",
+            ).to_markdown(),
+        },
+        owner="admin", category="design",
+    )
+
+    skill_dir = Path(sm._skill_dir("design", imported["name"]))
+    skill_files = list(skill_dir.rglob("SKILL.md"))
+    canonical = Path(sm._skill_file("design", imported["name"]))
+    assert canonical in skill_files
+    assert len(skill_files) == 2  # reference asset retained; selected source not duplicated
+    assert list(sm._iter_skill_files()) == [str(canonical)]
+    assert "Use the source procedure" in canonical.read_text(encoding="utf-8")
+    assert (skill_dir / "agent-skills/ui-design/references/layout.md").read_text(
+        encoding="utf-8",
+    ) == "Layout reference"
+    assert [item["name"] for item in sm.load_all()] == [imported["name"]]
+
+
 def test_update_skill_positive_scoping(tmp_path):
     """Alice CAN update her own skill. Two users with the same slug;
     update_skill(owner='alice') modifies only Alice's file."""
@@ -291,8 +349,8 @@ def test_usage_sidecar_is_owner_scoped(tmp_path):
     sm.set_audit("shared-flow", "pass", by_teacher=False, owner="bob")
     sm.set_necessity("shared-flow", False, ["other-flow"], "redundant", owner="bob")
 
-    alice = sm.load(owner="alice")[0]
-    bob = sm.load(owner="bob")[0]
+    alice = next(skill for skill in sm.load(owner="alice") if skill["name"] == "shared-flow")
+    bob = next(skill for skill in sm.load(owner="bob") if skill["name"] == "shared-flow")
 
     assert alice["uses"] == 1
     assert alice["audit_verdict"] is None

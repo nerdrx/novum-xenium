@@ -489,7 +489,10 @@ class CodingWorkTracker:
         if not self.state or (self.enabled and self.state.stage == "done" and self.pending):
             return (
                 "Work in checked coding steps. Inspect the project using read tools, then call todowrite "
-                "with one small implementation slice. Include both todos and work_packet in that same call, "
+                "with one concrete change and a real test as the default: one checklist item and one work packet. "
+                "Keep inspection, implementation, and testing within that item; do not create separate milestones "
+                "for these workflow phases. Use multiple milestones only when the task needs distinct outcomes "
+                "with separate acceptance checks. Include both todos and work_packet in that same call, "
                 'for example: {"todos":[{"content":"<slice>","status":"in_progress"}],'
                 '"work_packet":{"objective":"<outcome>","files":["path/to/file.py"],'
                 '"reproduce_command":"<real baseline command>",'

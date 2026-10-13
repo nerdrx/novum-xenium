@@ -509,3 +509,19 @@ def test_next_slice_guidance_preserves_names_and_requires_fresh_checks(packet):
     tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
     assert tracker.completed == set(names[:2])
     assert tracker.pending  # The remaining integration slice was not silently credited.
+
+
+def test_initial_guidance_defaults_to_one_outcome_without_forbidding_multiple(packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    assert "one concrete change and a real test as the default" in tracker.instruction
+    assert "Keep inspection, implementation, and testing within that item" in tracker.instruction
+    assert "distinct outcomes with separate acceptance checks" in tracker.instruction
+    for todos in (
+        [{"content": "Fix refresh", "status": "in_progress"}],
+        [{"content": "Fix refresh", "status": "in_progress"},
+         {"content": "Fix logout", "status": "pending"}],
+    ):
+        assert not tracker.blocks("todowrite", {"todos": todos, "work_packet": packet.to_dict()})
+    assert tracker.blocks("edit_file", "{}")  # Guidance cannot bypass the baseline gate.

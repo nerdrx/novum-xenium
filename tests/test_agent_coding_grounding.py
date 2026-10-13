@@ -400,6 +400,14 @@ def test_viewed_skill_reference_is_reattached_after_route_rebuild_and_duplicate_
         assert retained[0]['role'] == 'user'
         assert retained[0]['metadata']['trusted'] is False
         assert retained[0]['_required_skill_reference'] == 'ui-design'
+        # The provider sanitizer removes Novum-only metadata, not message text;
+        # the exact untrusted reference remains in the payload-bound list.
+        from src.llm_core import _sanitize_llm_messages
+        provider_messages = _sanitize_llm_messages(history)
+        provider_refs = [message for message in provider_messages
+                         if skill_body in str(message.get('content') or '')]
+        assert len(provider_refs) == 1
+        assert provider_refs[0]['role'] == 'user'
     assert executed == ['web_fetch', 'manage_skills', 'read_file', 'manage_skills', 'write_file']
 
 

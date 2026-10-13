@@ -1,0 +1,697 @@
+{
+  "runtime_revision": "f670a2b",
+  "scope": "Two-file same-model repair after excluding the legacy plan editor from checked mode",
+  "trials": [
+    {
+      "report": {
+        "schema_version": 1,
+        "started_at": "2026-10-13T17:17:56.883798+00:00",
+        "model": "qwen3.5:9b",
+        "endpoint": "http://127.0.0.1:8097/v1",
+        "settings": {
+          "temperature": 1.0,
+          "max_tokens": 16384
+        },
+        "case": "multifile",
+        "run_order": [
+          "novum",
+          "aider"
+        ],
+        "fixture_sha256": "d4de77f937e8717993891f3f27b4f1bb5567bc6977487342167704aebdd6ef8a",
+        "source_files": [
+          "core.py",
+          "report.py"
+        ],
+        "task": "Repair this project: `core.total` must sum numeric values; `report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. Change `core.py` and `report.py`, then verify the result.\n",
+        "results": {
+          "novum": {
+            "command_template": [
+              "python3",
+              "/run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py",
+              "--task-file",
+              "{task_file}",
+              "--host-workspace",
+              "{workspace}",
+              "--container-workspace",
+              "/workspace/.nx-evaluations/same-model-multifile-20261013-191756/novum",
+              "--api-base",
+              "http://127.0.0.1:7000",
+              "--endpoint-id",
+              "6865006e",
+              "--model",
+              "{model}",
+              "--files-json",
+              "{source_files_json}",
+              "--approve-task",
+              "--timeout",
+              "240"
+            ],
+            "command_returncode": 0,
+            "command_error": null,
+            "timed_out": false,
+            "seconds": 73.191,
+            "acceptance_command": [
+              "/usr/bin/python3",
+              "-c",
+              "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+            ],
+            "acceptance_returncode": 0,
+            "acceptance_timed_out": false,
+            "passed": true,
+            "manual_interventions": {
+              "count": null,
+              "notes": [],
+              "operator_recorded": false
+            },
+            "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/same-model-multifile-20261013-191756/novum"
+          },
+          "aider": {
+            "command_template": [
+              "/tmp/nx-coding-agent-comparison-aider-venv/bin/python",
+              "/run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_aider.py",
+              "--task-file",
+              "{task_file}",
+              "--model",
+              "{model}",
+              "--endpoint-model",
+              "nx-model-5",
+              "--endpoint",
+              "{endpoint}",
+              "--settings-json",
+              "{settings_json}",
+              "--provider",
+              "openai-compatible",
+              "--files-json",
+              "{source_files_json}",
+              "--aider-bin",
+              "/tmp/nx-coding-agent-comparison-aider-venv/bin/aider",
+              "--timeout",
+              "240"
+            ],
+            "command_returncode": 0,
+            "command_error": null,
+            "timed_out": false,
+            "seconds": 4.371,
+            "acceptance_command": [
+              "/usr/bin/python3",
+              "-c",
+              "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+            ],
+            "acceptance_returncode": 0,
+            "acceptance_timed_out": false,
+            "passed": true,
+            "manual_interventions": {
+              "count": null,
+              "notes": [],
+              "operator_recorded": false
+            },
+            "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/same-model-multifile-20261013-191756/aider"
+          }
+        },
+        "model_output_saved": false,
+        "credentials_saved": false
+      },
+      "novum_metadata": {
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 8
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "endpoint_id": "6865006e",
+        "evidence": [
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 14001,
+            "model": "nx-model-5",
+            "output_tokens": 593,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 14594,
+            "type": "metrics"
+          },
+          {
+            "decision": "approve_task",
+            "type": "approval_decision"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 4,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 4,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 5,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 5,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 5,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 6,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 6,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 7,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 8,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "passed",
+            "round": 8,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 72891,
+            "model": "nx-model-5",
+            "output_tokens": 1097,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 73988,
+            "type": "metrics"
+          },
+          {
+            "reason": "coding_work_verified",
+            "review_status": "passed",
+            "status": "completed",
+            "test_status": "passed",
+            "type": "agent_terminal"
+          }
+        ],
+        "model": "qwen3.5:9b",
+        "output_saved": false,
+        "preset_id": null,
+        "run_id": "5bbc691aa1b64f97b5d4da072ff0918e",
+        "seconds": 73.116,
+        "session_id": "cad2810e-d881-47e4-87a9-1a92429664e3",
+        "source_files": [
+          "core.py",
+          "report.py"
+        ],
+        "status": "complete",
+        "stream_ended": true,
+        "terminal": {
+          "reason": "coding_work_verified",
+          "review_status": "passed",
+          "status": "completed",
+          "test_status": "passed",
+          "type": "agent_terminal"
+        },
+        "verification_passed": null
+      },
+      "packet": {
+        "version": 1,
+        "enabled": true,
+        "packet": {
+          "objective": "Repair core.total to sum numeric values (not len) and fix report.summary to use len for count field, including handling empty input",
+          "files": [
+            "core.py",
+            "report.py"
+          ],
+          "reproduce_command": "python3 -c \"from core import total; from report import summary; print('total([1,2,3]):', total([1,2,3])); print('summary([]):', summary([]))\"",
+          "acceptance_command": "python3 -c \"from core import total; from report import summary; assert total([1,2,3]) == 6, 'total failed'; assert total([]) == 0, 'total empty failed'; assert summary([1,2,3]) == {'total': 6, 'count': 3}, 'summary failed'; assert summary([]) == {'total': 0, 'count': 0}, 'summary empty failed'; print('All tests passed')\"",
+          "acceptance_condition": "core.total([1,2,3]) returns 6, core.total([]) returns 0, report.summary([1,2,3]) returns {'total':6, 'count':3}, report.summary([]) returns {'total':0, 'count':0}"
+        },
+        "stage": "done",
+        "reproduction_exit_code": 0,
+        "edit_tool": "write_file",
+        "acceptance_exit_code": 0,
+        "milestones": [
+          "Fix core.total to sum numeric values and fix report.summary to return correct count"
+        ],
+        "completed": [
+          "Fix core.total to sum numeric values and fix report.summary to return correct count"
+        ],
+        "current_milestone": "Fix core.total to sum numeric values and fix report.summary to return correct count",
+        "review_status": "passed"
+      },
+      "final_sources": {
+        "novum": {
+          "core.py": "def total(values):\n    return sum(values)\n",
+          "report.py": "from core import total\n\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+        },
+        "aider": {
+          "core.py": "def total(values):\n    return sum(values)\n",
+          "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+        }
+      }
+    },
+    {
+      "report": {
+        "schema_version": 1,
+        "started_at": "2026-10-13T17:19:56.869399+00:00",
+        "model": "qwen3.5:9b",
+        "endpoint": "http://127.0.0.1:8097/v1",
+        "settings": {
+          "temperature": 1.0,
+          "max_tokens": 16384
+        },
+        "case": "multifile",
+        "run_order": [
+          "aider",
+          "novum"
+        ],
+        "fixture_sha256": "d4de77f937e8717993891f3f27b4f1bb5567bc6977487342167704aebdd6ef8a",
+        "source_files": [
+          "core.py",
+          "report.py"
+        ],
+        "task": "Repair this project: `core.total` must sum numeric values; `report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. Change `core.py` and `report.py`, then verify the result.\n",
+        "results": {
+          "aider": {
+            "command_template": [
+              "/tmp/nx-coding-agent-comparison-aider-venv/bin/python",
+              "/run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_aider.py",
+              "--task-file",
+              "{task_file}",
+              "--model",
+              "{model}",
+              "--endpoint-model",
+              "nx-model-5",
+              "--endpoint",
+              "{endpoint}",
+              "--settings-json",
+              "{settings_json}",
+              "--provider",
+              "openai-compatible",
+              "--files-json",
+              "{source_files_json}",
+              "--aider-bin",
+              "/tmp/nx-coding-agent-comparison-aider-venv/bin/aider",
+              "--timeout",
+              "240"
+            ],
+            "command_returncode": 0,
+            "command_error": null,
+            "timed_out": false,
+            "seconds": 5.874,
+            "acceptance_command": [
+              "/usr/bin/python3",
+              "-c",
+              "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+            ],
+            "acceptance_returncode": 0,
+            "acceptance_timed_out": false,
+            "passed": true,
+            "manual_interventions": {
+              "count": null,
+              "notes": [],
+              "operator_recorded": false
+            },
+            "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/same-model-multifile-20261013-191956/aider"
+          },
+          "novum": {
+            "command_template": [
+              "python3",
+              "/run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py",
+              "--task-file",
+              "{task_file}",
+              "--host-workspace",
+              "{workspace}",
+              "--container-workspace",
+              "/workspace/.nx-evaluations/same-model-multifile-20261013-191956/novum",
+              "--api-base",
+              "http://127.0.0.1:7000",
+              "--endpoint-id",
+              "6865006e",
+              "--model",
+              "{model}",
+              "--files-json",
+              "{source_files_json}",
+              "--approve-task",
+              "--timeout",
+              "240"
+            ],
+            "command_returncode": 2,
+            "command_error": null,
+            "timed_out": false,
+            "seconds": 58.255,
+            "acceptance_command": [
+              "/usr/bin/python3",
+              "-c",
+              "from report import summary; assert summary([2, 3]) == {'total': 5, 'count': 2}; assert summary([]) == {'total': 0, 'count': 0}; assert summary([-1, 4]) == {'total': 3, 'count': 2}"
+            ],
+            "acceptance_returncode": 0,
+            "acceptance_timed_out": false,
+            "passed": true,
+            "manual_interventions": {
+              "count": null,
+              "notes": [],
+              "operator_recorded": false
+            },
+            "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/same-model-multifile-20261013-191956/novum"
+          }
+        },
+        "model_output_saved": false,
+        "credentials_saved": false
+      },
+      "novum_metadata": {
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 15
+        },
+        "allow_web_search": false,
+        "approval_count": 1,
+        "endpoint_id": "6865006e",
+        "evidence": [
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 13986,
+            "model": "nx-model-5",
+            "output_tokens": 571,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 14557,
+            "type": "metrics"
+          },
+          {
+            "decision": "approve_task",
+            "type": "approval_decision"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 0,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 3,
+            "stage": "edit",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 4,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 4,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 5,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 5,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 6,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 6,
+            "stage": "done",
+            "test_status": "passed",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 7,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 8,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 8,
+            "stage": "reproduce",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 9,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 10,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 11,
+            "type": "model_actual"
+          },
+          {
+            "review_status": "not_reviewed",
+            "round": 11,
+            "stage": "verify",
+            "test_status": "not_verified",
+            "type": "coding_work_packet"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 12,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 13,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 14,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 15,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 133681,
+            "model": "nx-model-5",
+            "output_tokens": 2173,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 135854,
+            "type": "metrics"
+          }
+        ],
+        "model": "qwen3.5:9b",
+        "output_saved": false,
+        "preset_id": null,
+        "run_id": "448702236fe64411885076bae4e7f3b8",
+        "seconds": 58.187,
+        "session_id": "fe418bba-5b1f-4be8-8a3e-cd8e75419066",
+        "source_files": [
+          "core.py",
+          "report.py"
+        ],
+        "status": "incomplete",
+        "stream_ended": true,
+        "terminal": null,
+        "verification_passed": null
+      },
+      "packet": {
+        "version": 1,
+        "enabled": true,
+        "packet": {
+          "mode": "verify_existing",
+          "objective": "Repair report.summary to return a dict with 'total' (sum) and 'count' (number of values), handling empty input correctly.",
+          "files": [
+            "report.py"
+          ],
+          "reproduce_command": "python -c \"from report import summary; print('summary([1,2,3]):', summary([1,2,3])); print('summary([]):', summary([]))\"",
+          "acceptance_command": "python -c \"from report import summary; assert summary([1,2,3]) == {'total': 6, 'count': 3}; assert summary([]) == {'total': 0, 'count': 0}; print('All assertions passed')\"",
+          "acceptance_condition": "summary([1,2,3]) returns {'total': 6, 'count': 3}, summary([]) returns {'total': 0, 'count': 0}"
+        },
+        "stage": "verify",
+        "reproduction_exit_code": 0,
+        "edit_tool": null,
+        "acceptance_exit_code": null,
+        "milestones": [
+          "Fix core.total to sum numeric values (currently returns len(values))",
+          "Fix report.summary to use correct total and count logic"
+        ],
+        "completed": [
+          "Fix core.total to sum numeric values (currently returns len(values))"
+        ],
+        "current_milestone": "Fix report.summary to use correct total and count logic",
+        "review_status": "not_reviewed"
+      },
+      "final_sources": {
+        "aider": {
+          "core.py": "def total(values):\n    return sum(values)\n",
+          "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+        },
+        "novum": {
+          "core.py": "def total(values):\n    return sum(values)\n",
+          "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': len(values)}\n"
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "One stochastic trial per order; not a general quality or speed benchmark.",
+    "Identical task and starting files with the same serving model and requested settings; prompts and context overhead differ.",
+    "External test result, registered slice test status, and model reviewer outcome are separate evidence. A passing model review is not proof of arbitrary application correctness.",
+    "No manual fixture source repairs. FFmpeg GUI conversion remains unverified.",
+    "Single-slice completion does not exercise transition to a second work packet."
+  ]
+}

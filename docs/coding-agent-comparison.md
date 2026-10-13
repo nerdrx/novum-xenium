@@ -174,7 +174,7 @@ the reported model/settings; confirm those in the serving agent and model
 endpoint. Larger claims need a predeclared task suite, repeated trials, and
 separate review of tool-use behavior. No larger evaluation is included here.
 
-## Latest checked-workflow comparison
+## Earlier checked-workflow comparison
 
 The two-order trial at runtime revision `f6c44b2` is recorded in
 [`coding-multifile-current-20261013.json`](evaluations/coding-multifile-current-20261013.json).
@@ -188,5 +188,16 @@ Both used the same qwen3.5:9b serving model, explicit task, initial files, and
 requested sampling settings, with web disabled. Agent prompts and overhead
 differ. One trial per order is insufficient for a general speed or reliability
 claim; the report retains timings as observations only.
+
+## Latest checked-workflow comparison
+
+The `f670a2b` two-order trial is recorded in
+[`coding-plan-tool-20261013.json`](evaluations/coding-plan-tool-20261013.json).
+Both agents passed the external tests in both orders. Novum completed its
+single-slice run with tests and model review passed. In the reverse order it
+successfully selected a second `verify_existing` packet, ran its baseline,
+but omitted its registered acceptance check and returned incomplete. That
+second result is correct code with an unfinished workflow, not a completed
+task. These two trials do not establish repeatability or general app quality.
 
 The first checked-mode live result is recorded in `evaluations/coding-checked-20261013.json`. Both agents produced the correct one-line repair and passed the external assertions, but Novum did not verify overall completion and emitted a misleading final notice. This result demonstrates the narrow test flow, not reliable application development.

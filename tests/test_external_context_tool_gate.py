@@ -543,6 +543,16 @@ def test_external_context_blocks_high_impact_capabilities(tool_name, effect):
     assert context.decision_for(tool_name).allowed is False
 
 
+def test_run_coding_check_has_bash_execution_and_result_capabilities():
+    capability = capabilities_for_tool("run_coding_check")
+
+    assert capability == capabilities_for_tool("bash")
+    assert capability.effects == frozenset({ToolEffect.EXECUTE_CODE})
+    assert capability.result_integrity is ResultIntegrity.WORKSPACE_UNTRUSTED
+    context = ToolRunSecurityContext(external_untrusted_context_seen=True)
+    assert context.decision_for("run_coding_check").allowed is False
+
+
 @pytest.mark.parametrize(
     "tool_name",
     ["read_file", "grep", "web_search", "ask_user", "update_plan"],

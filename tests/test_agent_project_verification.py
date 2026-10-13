@@ -33,7 +33,8 @@ def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, 
                       force_answer_after_recovery=False, coding_prompt=None,
                       scenario=None, exact_approval=None, review_calls=None):
     monkeypatch.setattr(agent_loop, "get_setting",
-                        lambda key, default=None: True if key == "agent_verifier_subagent" and verifier_issues is not None else default,
+                        lambda key, default=None: (False if key == "agent_milestone_workflow" else
+                                                   True if key == "agent_verifier_subagent" and verifier_issues is not None else default),
                         raising=False)
     monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
     monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *_a, **_k: 10, raising=False)
@@ -416,7 +417,8 @@ def test_completion_verifier_keeps_original_task_after_short_name_answer(monkeyp
     monkeypatch.setattr(
         agent_loop, "get_setting",
         lambda key, default=None: (
-            True if key == "agent_verifier_subagent"
+            False if key == "agent_milestone_workflow"
+            else True if key == "agent_verifier_subagent"
             else False if key == "agent_coding_grounding"
             else default
         ),

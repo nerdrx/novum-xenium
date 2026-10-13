@@ -16,7 +16,7 @@ def test_candidate_budget_includes_tools_on_first_and_later_rounds(monkeypatch, 
         "parameters": {"type": "object", "properties": {"plan": {"type": "string"}}},
     }}
     monkeypatch.setattr(loop, "FUNCTION_TOOL_SCHEMAS", [schema])
-    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: False if key == "agent_milestone_workflow" else default)
     monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
     monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
     monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *args, **kwargs: 6000)
@@ -88,7 +88,7 @@ def _browser_schemas(count=42):
 def _configure(monkeypatch, schemas, request_capture):
     import src.model_context as model_context
 
-    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: False if key == "agent_milestone_workflow" else default)
     monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
     monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
     monkeypatch.setattr(
@@ -273,7 +273,7 @@ def test_exact_user_tool_name_is_selected_when_initial_rag_misses(monkeypatch):
     monkeypatch.setattr(tool_index, "get_tool_index", lambda: Index())
     import src.tool_security as tool_security
     monkeypatch.setattr(tool_security, "blocked_tools_for_owner", lambda owner: set())
-    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: False if key == "agent_milestone_workflow" else default)
     monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
     monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
     monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
@@ -374,7 +374,7 @@ def test_default_web_permission_does_not_block_workspace_tools_when_budget_is_ti
     monkeypatch.setattr(
         loop,
         "get_setting",
-        lambda key, default=None: 6000 if key == "agent_input_token_budget" else default,
+        lambda key, default=None: 6000 if key == "agent_input_token_budget" else False if key == "agent_milestone_workflow" else default,
     )
 
     question = "Fix add in probe.py and run assertions."
@@ -545,7 +545,7 @@ def test_browser_workspace_request_does_not_starve_browser_actions(monkeypatch):
     monkeypatch.setattr(
         loop,
         "get_setting",
-        lambda key, default=None: 6000 if key == "agent_input_token_budget" else default,
+        lambda key, default=None: 6000 if key == "agent_input_token_budget" else False if key == "agent_milestone_workflow" else default,
     )
     disabled = {"bash", "python", "web_search", "web_fetch"}
     message = (

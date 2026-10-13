@@ -818,7 +818,7 @@ def _sent_tool_names(monkeypatch, *, workspace, message="look at the local proje
     import asyncio
     import src.agent_loop as al
 
-    monkeypatch.setattr(al, "get_setting", lambda key, default=None: default, raising=False)
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: False if key == "agent_milestone_workflow" else default, raising=False)
     monkeypatch.setattr(al, "get_mcp_manager", lambda: None, raising=False)
     monkeypatch.setattr(al, "estimate_tokens", lambda *a, **k: 10, raising=False)
     # Isolate the selection logic from owner gating (tested separately).

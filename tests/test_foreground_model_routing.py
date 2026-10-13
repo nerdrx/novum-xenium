@@ -3085,9 +3085,17 @@ def test_direct_low_signal_configuration_error_surfaces_without_fake_success(mon
         _is_teacher_run=True,
     ))
 
-    assert len(chunks) == 1
-    assert chunks[0].startswith("event: error")
-    payload = json.loads(chunks[0].split("data: ", 1)[1])
+    workflow = [
+        chunk for chunk in chunks
+        if chunk.startswith("data: ") and '"type": "coding_workflow"' in chunk
+    ]
+    assert len(workflow) == 1
+    assert json.loads(workflow[0][6:]) == {
+        "type": "coding_workflow", "requested": True, "enabled": False,
+    }
+    errors = [chunk for chunk in chunks if chunk.startswith("event: error")]
+    assert len(errors) == 1
+    payload = json.loads(errors[0].split("data: ", 1)[1])
     assert payload == {
         "error": "Model request failed",
         "status": 500,
@@ -3127,8 +3135,17 @@ def test_direct_low_signal_empty_completion_surfaces_without_fake_success(monkey
         _is_teacher_run=True,
     ))
 
-    assert len(chunks) == 1
-    payload = json.loads(chunks[0].split("data: ", 1)[1])
+    workflow = [
+        chunk for chunk in chunks
+        if chunk.startswith("data: ") and '"type": "coding_workflow"' in chunk
+    ]
+    assert len(workflow) == 1
+    assert json.loads(workflow[0][6:]) == {
+        "type": "coding_workflow", "requested": True, "enabled": False,
+    }
+    errors = [chunk for chunk in chunks if chunk.startswith("event: error")]
+    assert len(errors) == 1
+    payload = json.loads(errors[0].split("data: ", 1)[1])
     assert payload["error"] == "Model returned an empty response"
     assert payload["fallback_eligible"] is False
     assert not any('"delta": "Hey."' in chunk for chunk in chunks)

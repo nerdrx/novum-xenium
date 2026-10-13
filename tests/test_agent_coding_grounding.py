@@ -54,7 +54,7 @@ def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_to
          checked_workflow=False):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "get_setting", lambda key, default=None: (
-        True if checked_workflow and key == "agent_milestone_workflow" else default
+        (checked_workflow if key == "agent_milestone_workflow" else default)
     ))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
@@ -630,6 +630,7 @@ def test_exact_approval_resume_restores_only_its_archived_requested_docs(monkeyp
 
     _no_suggested_skills(monkeypatch)
     _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: False if key == "agent_milestone_workflow" else default)
     monkeypatch.setattr(al, 'blocked_tools_for_owner', lambda _owner: set())
     monkeypatch.setattr(tool_result_store, 'DATA_DIR', str(tmp_path / 'archive'))
     checkpoint_store = run_checkpoints.CheckpointStore(str(tmp_path / 'runs.db'))

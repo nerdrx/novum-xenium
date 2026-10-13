@@ -13,7 +13,7 @@ from test_agent_rounds_exhausted import _collect, _patch_common, _types
 def test_first_write_waits_for_successful_checkpoint(monkeypatch, tmp_path, save_plan):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
-    monkeypatch.setattr(al, "get_setting", lambda key, default=None: False if key == "agent_coding_grounding" else default)
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: False if key in {"agent_coding_grounding", "agent_milestone_workflow"} else default)
     monkeypatch.setattr(coding_tools, "read_todos", lambda ctx: [])
     requests, executed = [], []
     todos = [{"content": "Implement parser; check quoted CSV", "status": "in_progress"},
@@ -54,6 +54,7 @@ def test_first_write_waits_for_successful_checkpoint(monkeypatch, tmp_path, save
 
 def test_fresh_exact_approved_todowrite_unlocks_primary_route(monkeypatch, tmp_path):
     _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: False if key == "agent_milestone_workflow" else default)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
 
     class GroundedCodingTask(CodingGrounding):

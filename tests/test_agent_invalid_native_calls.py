@@ -5,7 +5,7 @@ import src.agent_loop as al
 from test_agent_rounds_exhausted import _patch_common, _collect, _types
 
 
-def _run(monkeypatch, recover):
+def _run(monkeypatch, recover, invalid_preview=False):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
     executed = []
@@ -28,7 +28,9 @@ def _run(monkeypatch, recover):
         else:
             yield 'data: ' + json.dumps({"type": "tool_calls", "calls": [
                 {"id": "good", "name": "update_plan", "arguments": '{"plan":"work"}'},
-                {"id": "bad", "name": "write_file", "arguments": '{"path":"style.css","content":"body {'},
+                {"id": "bad", "name": "native_preview" if invalid_preview else "write_file",
+                 "arguments": '{"project_path":"/private/sensitive-project"}' if invalid_preview
+                 else '{"path":"style.css","content":"body {'},
             ]}) + '\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -56,3 +58,16 @@ def test_invalid_calls_stop_with_explanation_after_two_retries(monkeypatch):
     assert any('Stopped because the model' in e.get('delta', '') for e in events)
     assert any('at most 2000' in m.get('content', '') for m in requests[1])
     assert any('at most 1000' in m.get('content', '') for m in requests[2])
+
+
+def test_preview_retry_supplies_schema_without_untrusted_arguments(monkeypatch, caplog):
+    monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
+    _, requests, executed = _run(monkeypatch, True, invalid_preview=True)
+    guidance = next(m["content"] for m in requests[1]
+                    if "NONE of that batch was executed" in m.get("content", ""))
+    schema = next(s["function"] for s in al.FUNCTION_TOOL_SCHEMAS
+                  if s["function"]["name"] == "native_preview")
+    assert json.dumps(schema) in guidance
+    assert "/private/sensitive-project" not in guidance
+    assert "/private/sensitive-project" not in caplog.text
+    assert executed == ["write_file"]

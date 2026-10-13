@@ -684,8 +684,8 @@ async def test_todowrite_persists_session_list(tmp_path, monkeypatch, admin):
     )
     assert r["exit_code"] == 0
     assert "[>] Patch code" in r["output"]
-    saved = json.load(open(tmp_path / "chat_one.json", encoding="utf-8"))
-    assert saved["todos"][1]["status"] == "in_progress"
+    saved = coding_tools.read_todos({"owner": "a", "session_id": "chat/one"})
+    assert saved[1]["status"] == "in_progress"
 
 
 @pytest.mark.asyncio

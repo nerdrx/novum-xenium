@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 import subprocess
 import sys
@@ -184,6 +186,97 @@ def test_nested_project_build_outputs_are_ignored_but_source_is_restored(ws, mon
         snapshots.create_snapshot(str(ws), "alice", "chat-2")
 
 
+def test_nested_git_repo_tracks_safe_build_sources_only(ws, tmp_path, monkeypatch):
+    monkeypatch.setattr(snapshots, "_MAX_FILE_BYTES", 64)
+    monkeypatch.setattr(snapshots, "_MAX_TOTAL_BYTES", 256)
+    project = ws / "nflix"
+    source = project / "dist" / "renderer" / "app.js"
+    secret = project / "dist" / "secrets" / "token.json"
+    link = project / "dist" / "renderer" / "outside.js"
+    hidden = project / "dist" / ".generated" / "private.js"
+    source.parent.mkdir(parents=True)
+    secret.parent.mkdir(parents=True)
+    hidden.parent.mkdir(parents=True)
+    source.write_text("before")
+    secret.write_text("secret-before")
+    hidden.write_text("hidden-before")
+    outside = tmp_path / "outside.js"
+    outside.write_text("outside sentinel")
+    link.symlink_to(outside)
+    artifact = source.parent / "untracked-output.bin"
+    artifact.write_bytes(b"a" * 128)
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "add", "dist/renderer/app.js",
+                    "dist/secrets/token.json", "dist/renderer/outside.js",
+                    "dist/.generated/private.js"], check=True)
+
+    saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    root, key = snapshots._identity(str(ws), "alice", "chat-1")
+    record = snapshots._read_manifest(snapshots._store(root, "alice", "chat-1"), saved["id"], key)
+    assert set(record["files"]) == {"nflix/dist/renderer/app.js"}
+
+    source.write_text("after")
+    secret.write_text("secret-after")
+    hidden.write_text("hidden-after")
+    artifact.write_bytes(b"b" * 128)
+    preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
+    assert [change["path"] for change in preview["changes"]] == ["nflix/dist/renderer/app.js"]
+    snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
+    assert source.read_text() == "before"
+    assert secret.read_text() == "secret-after"
+    assert hidden.read_text() == "hidden-after"
+    assert artifact.read_bytes() == b"b" * 128
+    assert link.is_symlink() and outside.read_text() == "outside sentinel"
+
+    large_tracked = source.parent / "large.js"
+    large_tracked.write_bytes(b"x" * 65)
+    subprocess.run(["git", "-C", str(project), "add", "dist/renderer/large.js"], check=True)
+    with pytest.raises(snapshots.SnapshotError, match="size limit"):
+        snapshots.create_snapshot(str(ws), "alice", "chat-2")
+
+
+def test_tracked_build_file_symlink_swap_invalidates_preview(ws, tmp_path):
+    project = ws / "nested-project"
+    source = project / "dist" / "app.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("saved")
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "add", "dist/app.js"], check=True)
+    saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    source.write_text("current")
+    preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
+    outside = tmp_path / "outside.js"
+    outside.write_text("outside sentinel")
+    source.unlink()
+    source.symlink_to(outside)
+
+    with pytest.raises(snapshots.SnapshotError, match="changed after preview"):
+        snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
+    assert source.is_symlink() and outside.read_text() == "outside sentinel"
+
+
+def test_restore_rejects_manifest_path_untracked_in_build_dir(ws):
+    project = ws / "nested-project"
+    source = project / "dist" / "app.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("saved")
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "add", "dist/app.js"], check=True)
+    saved = snapshots.create_snapshot(str(ws), "alice", "chat-1")
+    root, key = snapshots._identity(str(ws), "alice", "chat-1")
+    directory = snapshots._store(root, "alice", "chat-1")
+    manifest_path = directory / f"{saved['id']}.json"
+    record = json.loads(manifest_path.read_text())
+    record["files"]["nested-project/dist/untracked.js"] = base64.b64encode(b"injected").decode()
+    record["modes"]["nested-project/dist/untracked.js"] = 0o644
+    snapshots._write_json(manifest_path, record)
+    preview = snapshots.preview_snapshot(str(ws), "alice", "chat-1", saved["id"])
+
+    with pytest.raises(snapshots.SnapshotError, match="excluded snapshot path"):
+        snapshots.restore_snapshot(str(ws), "alice", "chat-1", saved["id"], preview["revision"])
+    assert not (project / "dist" / "untracked.js").exists()
+
+
 def test_stale_preview_rejected(ws):
     path = ws / "a.txt"
     path.write_text("one")
@@ -322,9 +415,9 @@ def test_restore_parent_swap_does_not_follow_symlink(ws, tmp_path, monkeypatch):
     open_parent = snapshots._open_parent_fd
     calls = 0
 
-    def swap_after_parent_open(root_fd, rel, *, create=False):
+    def swap_after_parent_open(root_fd, rel, *, create=False, tracked_build_paths=frozenset()):
         nonlocal calls
-        parent_fd, leaf = open_parent(root_fd, rel, create=create)
+        parent_fd, leaf = open_parent(root_fd, rel, create=create, tracked_build_paths=tracked_build_paths)
         if rel == "nested/file.txt":
             calls += 1
             if calls == 2:

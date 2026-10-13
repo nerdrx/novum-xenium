@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import shutil
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -29,6 +30,8 @@ _EXCLUDED_DIRS = {
     ".git", "node_modules", ".venv", "venv", "__pycache__", ".cache",
     "dist", "build", "dist-build", ".odysseus-preview",
 }
+_BUILD_DIRS = {"dist", "build"}
+_HARD_EXCLUDED_DIRS = _EXCLUDED_DIRS - _BUILD_DIRS
 _EXCLUDED_NAMES = {
     ".env", ".netrc", ".npmrc", "id_rsa", "id_ed25519", "credentials.json",
     "secrets.json", "secret.json", "token.json", "tokens.json", "passwords.json",
@@ -163,25 +166,114 @@ def delete_session_snapshots(owner: str, session_id: str) -> int:
         return deleted
 
 
-def _safe_rel(path: str) -> str:
+def _safe_rel(path: str, tracked_build_paths: set[str] | frozenset[str] = frozenset()) -> str:
     if not isinstance(path, str) or not path or os.path.isabs(path):
         raise SnapshotError("invalid snapshot path")
     parts = Path(path).parts
-    if any(p in {"", ".", ".."} for p in parts) or _excluded_rel(path):
+    if any(p in {"", ".", ".."} for p in parts) or _excluded_rel(path, tracked_build_paths):
         raise SnapshotError("excluded snapshot path")
     return Path(*parts).as_posix()
 
 
-def _excluded_rel(path: str) -> bool:
+def _excluded_rel(path: str, tracked_build_paths: set[str] | frozenset[str] = frozenset()) -> bool:
     parts = Path(path).parts
     leaf = parts[-1].lower() if parts else ""
-    return leaf.endswith((".pem", ".p12", ".pfx", ".key", ".keystore")) or any(
-        part.lower() in _EXCLUDED_NAMES
-        or part.lower().startswith(".env")
-        or part.lower() in {"secrets", "credentials", "private_keys"}
-        or part.lower() in _EXCLUDED_DIRS
-        for part in parts
-    )
+    if leaf.endswith((".pem", ".p12", ".pfx", ".key", ".keystore")):
+        return True
+    normalized = Path(*parts).as_posix()
+    for index, part in enumerate(parts):
+        lowered = part.lower()
+        if (part.startswith(".") and index < len(parts) - 1
+                or lowered in _EXCLUDED_NAMES or lowered.startswith(".env")
+                or lowered in {"secrets", "credentials", "private_keys"}
+                or lowered in _HARD_EXCLUDED_DIRS):
+            return True
+        if lowered in _BUILD_DIRS and normalized not in tracked_build_paths:
+            return True
+    return False
+
+
+def _path_is_within(root: str, target: str) -> bool:
+    try:
+        return os.path.commonpath((root, target)) == root
+    except ValueError:
+        return False
+
+
+def _tracked_build_paths(root: str) -> set[str]:
+    """Return exact tracked files below dist/build in this workspace or nested repos."""
+    root = os.path.realpath(root)
+    repo_roots: set[str] = set()
+    git_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GIT_OPTIONAL_LOCKS": "0",
+               "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+
+    def onerror(exc: OSError) -> None:
+        raise SnapshotError("workspace could not be read during snapshot") from exc
+
+    def repo_root(cwd: str) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "-c", "core.fsmonitor=false", "-C", cwd, "rev-parse", "--show-toplevel"],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=3, check=False, env=git_env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode:
+            return None
+        candidate = os.path.realpath(os.fsdecode(result.stdout).strip())
+        related = _path_is_within(root, candidate) or _path_is_within(candidate, root)
+        return candidate if os.path.isdir(candidate) and related else None
+
+    top = repo_root(root)
+    if top:
+        repo_roots.add(top)
+    # A workspace may contain a separate project checkout rather than be inside its repo.
+    for current, dirs, names in os.walk(root, topdown=True, onerror=onerror, followlinks=False):
+        if ".git" in dirs or ".git" in names:
+            marker = os.path.join(current, ".git")
+            try:
+                if not stat.S_ISLNK(os.lstat(marker).st_mode):
+                    nested = repo_root(current)
+                    if nested:
+                        repo_roots.add(nested)
+            except OSError:
+                pass
+        dirs[:] = sorted(d for d in dirs if d.lower() not in _EXCLUDED_DIRS and not d.startswith("."))
+
+    tracked: set[str] = set()
+    for repo in repo_roots:
+        try:
+            result = subprocess.run(
+                ["git", "-c", "core.fsmonitor=false", "-C", repo, "ls-files", "--cached", "--full-name", "-z"],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=False, env=git_env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode:
+            continue
+        for raw in result.stdout.split(b"\0"):
+            if not raw:
+                continue
+            git_path = os.fsdecode(raw)
+            absolute = os.path.abspath(os.path.join(repo, *Path(git_path).parts))
+            if not _path_is_within(root, absolute):
+                continue
+            rel = Path(os.path.relpath(absolute, root)).as_posix()
+            parts = Path(rel).parts
+            if any(part.lower() in _BUILD_DIRS for part in parts) and not _excluded_rel(rel, {rel}):
+                tracked.add(rel)
+    return tracked
+
+
+def _skip_directory(rel: str, tracked_build_paths: set[str]) -> bool:
+    leaf = Path(rel).name
+    lowered = leaf.lower()
+    if leaf.startswith(".") or lowered in _HARD_EXCLUDED_DIRS:
+        return True
+    if lowered in _BUILD_DIRS:
+        prefix = rel.rstrip("/") + "/"
+        return not any(path.startswith(prefix) for path in tracked_build_paths)
+    return False
 
 
 def _supports_safe_restore() -> bool:
@@ -209,8 +301,9 @@ def _open_root_fd(root: str) -> int:
         raise
 
 
-def _open_parent_fd(root_fd: int, rel: str, *, create: bool = False) -> tuple[int, str]:
-    parts = _safe_rel(rel).split("/")
+def _open_parent_fd(root_fd: int, rel: str, *, create: bool = False,
+                    tracked_build_paths: set[str] | frozenset[str] = frozenset()) -> tuple[int, str]:
+    parts = _safe_rel(rel, tracked_build_paths).split("/")
     fd = os.dup(root_fd)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
@@ -263,7 +356,8 @@ def _read_regular_at(parent_fd: int, name: str) -> bytes | None:
         os.close(fd)
 
 
-def _tree_and_modes(root: str, root_fd: int | None = None) -> tuple[dict[str, bytes], dict[str, int]]:
+def _tree_and_modes(root: str, root_fd: int | None = None,
+                    tracked_build_paths: set[str] | None = None) -> tuple[dict[str, bytes], dict[str, int]]:
     """Read a workspace tree without following links when dir-fd APIs exist."""
     from src.tool_execution import _is_sensitive_path
 
@@ -273,14 +367,20 @@ def _tree_and_modes(root: str, root_fd: int | None = None) -> tuple[dict[str, by
     files: dict[str, bytes] = {}
     modes: dict[str, int] = {}
     total = 0
+    tracked_build_paths = tracked_build_paths if tracked_build_paths is not None else _tracked_build_paths(root)
     if not _supports_safe_restore():
         for current, dirs, names in os.walk(root, topdown=True, onerror=onerror, followlinks=False):
-            dirs[:] = sorted(d for d in dirs if d.lower() not in _EXCLUDED_DIRS and not d.startswith("."))
+            prefix = os.path.relpath(current, root)
+            prefix = "" if prefix == "." else prefix
+            dirs[:] = sorted(
+                d for d in dirs
+                if not _skip_directory(f"{prefix}/{d}" if prefix else d, tracked_build_paths)
+            )
             for name in sorted(names):
                 raw_rel = os.path.relpath(os.path.join(current, name), root)
-                if _excluded_rel(raw_rel):
+                if _excluded_rel(raw_rel, tracked_build_paths):
                     continue
-                rel = _safe_rel(raw_rel)
+                rel = _safe_rel(raw_rel, tracked_build_paths)
                 full = os.path.join(current, name)
                 if _is_sensitive_path(full):
                     continue
@@ -314,13 +414,16 @@ def _tree_and_modes(root: str, root_fd: int | None = None) -> tuple[dict[str, by
         for current, dirs, names, dir_fd in os.fwalk(
             ".", topdown=True, onerror=onerror, follow_symlinks=False, dir_fd=root_fd
         ):
-            dirs[:] = sorted(d for d in dirs if d.lower() not in _EXCLUDED_DIRS and not d.startswith("."))
             prefix = "" if current == "." else current.removeprefix("./")
+            dirs[:] = sorted(
+                d for d in dirs
+                if not _skip_directory(f"{prefix}/{d}" if prefix else d, tracked_build_paths)
+            )
             for name in sorted(names):
                 raw_rel = f"{prefix}/{name}" if prefix else name
-                if _excluded_rel(raw_rel):
+                if _excluded_rel(raw_rel, tracked_build_paths):
                     continue
-                rel = _safe_rel(raw_rel)
+                rel = _safe_rel(raw_rel, tracked_build_paths)
                 full = os.path.join(root, *rel.split("/"))
                 if _is_sensitive_path(full):
                     continue
@@ -552,44 +655,45 @@ def restore_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: s
         directory = _store(root, owner, session_id)
         record = _read_manifest(directory, snapshot_id, key)
         root_fd = _open_root_fd(root)
+        tracked_build_paths = _tracked_build_paths(root)
         try:
-            current, current_modes = _tree_and_modes(root, root_fd)
+            current, current_modes = _tree_and_modes(root, root_fd, tracked_build_paths)
             revision = _digest(current, current_modes)
             if not expected_revision or revision != expected_revision:
                 raise SnapshotError("workspace changed after preview; review again")
             target = {
-                _safe_rel(name): base64.b64decode(value, validate=True)
+                _safe_rel(name, tracked_build_paths): base64.b64decode(value, validate=True)
                 for name, value in record.get("files", {}).items()
             }
             target_modes = {
-                _safe_rel(name): int(mode) & 0o777
+                _safe_rel(name, tracked_build_paths): int(mode) & 0o777
                 for name, mode in record.get("modes", {}).items()
             }
             removals = sorted(current.keys() - target.keys(), reverse=True)
             writes = sorted(target.items())
             # Open or create every parent without following links before mutation.
             for name in removals:
-                parent_fd, leaf = _open_parent_fd(root_fd, name)
+                parent_fd, leaf = _open_parent_fd(root_fd, name, tracked_build_paths=tracked_build_paths)
                 try:
                     if _read_regular_at(parent_fd, leaf) != current[name]:
                         raise SnapshotError("workspace changed after preview; review again")
                 finally:
                     os.close(parent_fd)
             for name, _ in writes:
-                parent_fd, leaf = _open_parent_fd(root_fd, name, create=True)
+                parent_fd, leaf = _open_parent_fd(root_fd, name, create=True, tracked_build_paths=tracked_build_paths)
                 try:
                     if _read_regular_at(parent_fd, leaf) != current.get(name):
                         raise SnapshotError("workspace changed after preview; review again")
                 finally:
                     os.close(parent_fd)
-            fresh, fresh_modes = _tree_and_modes(root, root_fd)
+            fresh, fresh_modes = _tree_and_modes(root, root_fd, tracked_build_paths)
             if _digest(fresh, fresh_modes) != expected_revision:
                 raise SnapshotError("workspace changed after preview; review again")
             rollback = _save_snapshot(directory, key, current, current_modes, "Before restore")
 
             try:
                 for name in removals:
-                    parent_fd, leaf = _open_parent_fd(root_fd, name)
+                    parent_fd, leaf = _open_parent_fd(root_fd, name, tracked_build_paths=tracked_build_paths)
                     try:
                         if _read_regular_at(parent_fd, leaf) != current[name]:
                             raise SnapshotError("workspace changed during restore; review again")
@@ -597,7 +701,7 @@ def restore_snapshot(workspace: str, owner: str, session_id: str, snapshot_id: s
                     finally:
                         os.close(parent_fd)
                 for name, data in writes:
-                    parent_fd, leaf = _open_parent_fd(root_fd, name, create=True)
+                    parent_fd, leaf = _open_parent_fd(root_fd, name, create=True, tracked_build_paths=tracked_build_paths)
                     try:
                         if _read_regular_at(parent_fd, leaf) != current.get(name):
                             raise SnapshotError("workspace changed during restore; review again")

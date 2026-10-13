@@ -19,6 +19,12 @@ for both sides when comparing coding behavior without outside research.
 
 ## Latest measured result (2026-10-13)
 
+A subsequent same-model GUI repair trial failed after 419 seconds. The model
+changed one import but did not repair the output filename contract. A separate
+headless check using preserved pre-run test bytes failed too; no operator edited
+the app. This limits the successful small-fixture result above: reliable GUI
+repair is not established. See [fixed GUI check](evaluations/coding-fixed-gui-check-20261013.json).
+
 After phase tool-schema alignment (`6d59181`), one fresh Aider-first trial
 completed both Novum milestones, test and review gates, and external acceptance.
 Both adapters exited 0. Novum took 112.072 seconds; Aider took 6.525 seconds.

@@ -113,3 +113,24 @@ def test_registered_everywhere():
     assert "ask_user" in names
     # Not admin/public-gated — any user can be asked
     assert is_public_blocked_tool("ask_user") is False
+
+
+def test_ask_user_guidance_prefers_project_defaults_for_routine_choices():
+    from src.agent_loop import _build_system_prompt
+    from src.tool_schemas import FUNCTION_TOOL_SCHEMAS
+
+    messages, _ = _build_system_prompt(
+        messages=[{"role": "user", "content": "Fix the app."}],
+        model="test-model", active_document=None, mcp_mgr=None,
+        relevant_tools={"ask_user"}, suppress_local_context=True, suppress_skills=True,
+    )
+    prompt = "\n".join(str(message.get("content") or "") for message in messages)
+    ask_user_schema = next(
+        item["function"]["description"] for item in FUNCTION_TOOL_SCHEMAS
+        if item["function"]["name"] == "ask_user"
+    )
+
+    for guidance in (prompt, ask_user_schema):
+        assert "routine, reversible implementation choices" in guidance
+        assert "follow its existing conventions" in guidance or "follow its conventions" in guidance
+        assert "required approval" in guidance

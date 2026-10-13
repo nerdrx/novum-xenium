@@ -26,6 +26,38 @@ def test_packet_is_bounded_and_json_friendly(packet):
         CodingWorkPacket.create("x", ["a.py"], "run\ntest", "test", "pass")
 
 
+def test_tracker_normalizes_initial_and_repeated_absolute_path_proposals(tmp_path, packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    absolute = packet.to_dict()
+    absolute["files"] = [str(workspace / file) for file in packet.files]
+    todos = [{"content": "Fix token refresh handling", "status": "in_progress"}]
+    tracker = CodingWorkTracker(enabled=True, workspace=str(workspace))
+
+    assert not tracker.blocks("todowrite", {"todos": todos, "work_packet": absolute})
+    assert tracker.observe("todowrite", "{}", {"exit_code": 0, "todos": todos, "work_packet": absolute})
+    assert tracker.state.packet == packet
+    assert not tracker.blocks("todowrite", {"todos": todos, "work_packet": absolute})
+    assert not tracker.observe("todowrite", "{}", {"exit_code": 0, "todos": todos, "work_packet": absolute})
+
+
+def test_tracker_rejects_absolute_paths_outside_workspace(tmp_path, packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = packet.to_dict()
+    outside["files"] = [str(tmp_path / "outside.py")]
+    tracker = CodingWorkTracker(enabled=True, workspace=str(workspace))
+    todos = [{"content": "Fix token refresh handling", "status": "in_progress"}]
+
+    assert tracker.blocks("todowrite", {"todos": todos, "work_packet": outside})
+    assert not tracker.observe("todowrite", "{}", {"exit_code": 0, "todos": todos, "work_packet": outside})
+    assert tracker.state is None
+
+
 def test_failed_reproduction_is_valid_evidence_and_exact_command_is_required(packet):
     state = CodingWorkState(packet)
     with pytest.raises(ValueError):

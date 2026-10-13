@@ -6,7 +6,7 @@ tool-result dictionaries; prose claims cannot advance the workflow.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 _MAX_OBJECTIVE = 1_000
@@ -18,6 +18,45 @@ _EDIT_TOOLS = frozenset({"write_file", "edit_file", "apply_patch"})
 _NON_EXECUTION_STATES = frozenset({
     "pending", "blocked", "approval_required", "awaiting_approval", "running", "queued",
 })
+
+
+def normalize_work_packet_paths(packet: Any, workspace: str | None) -> dict[str, Any]:
+    """Copy packet data and canonicalize workspace-contained file paths."""
+    if not isinstance(packet, dict) or not isinstance(packet.get("files"), (list, tuple)):
+        raise ValueError("work_packet files must be a list")
+    root = None
+    if workspace:
+        try:
+            root = Path(workspace).resolve(strict=True)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError("workspace is unavailable") from exc
+        if not root.is_dir():
+            raise ValueError("workspace must be a directory")
+    files = []
+    for raw in packet["files"]:
+        raw = _text(raw, "file path", _MAX_FILE_PATH)
+        if "\\" in raw:
+            raise ValueError("file paths must be valid POSIX paths")
+        parts = raw.split("/")
+        if raw.startswith("/"):
+            parts = parts[1:]
+        if (not parts or any(part in {"", ".", ".."} for part in parts)
+                or PurePosixPath(raw).as_posix() != raw):
+            raise ValueError("file paths must not contain traversal components")
+        if raw.startswith("/") and root is None:
+            raise ValueError("absolute file paths require an explicit workspace")
+        if root is not None:
+            try:
+                relative = (Path(raw) if raw.startswith("/") else root / raw).resolve(
+                    strict=False
+                ).relative_to(root).as_posix()
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise ValueError("file path is outside the workspace") from exc
+            raw = relative
+        files.append(raw)
+    normalized = dict(packet)
+    normalized["files"] = files
+    return normalized
 
 
 def _text(value: Any, field_name: str, limit: int) -> str:
@@ -169,8 +208,9 @@ class CodingWorkState:
 class CodingWorkTracker:
     """Run-local packet evidence. Tool proposals never count as execution."""
 
-    def __init__(self, enabled=False):
+    def __init__(self, enabled=False, workspace=None):
         self.enabled = bool(enabled)
+        self.workspace = workspace
         self.state = None
         self.review_status = "not_reviewed"
         self.milestones = ()
@@ -365,7 +405,7 @@ class CodingWorkTracker:
                     return False
                 if not self.valid_todo_update(result):
                     return False
-                packet = CodingWorkPacket(**result["work_packet"])
+                packet = CodingWorkPacket(**normalize_work_packet_paths(result["work_packet"], self.workspace))
                 if self.state and self.state.packet == packet:
                     return False  # Repeated checklist writes cannot erase evidence.
                 if self.state and self.state.stage != "done":
@@ -520,13 +560,15 @@ class CodingWorkTracker:
                 args = json.loads(content) if isinstance(content, str) else content
                 if (needs_packet and (not isinstance(args, dict) or "work_packet" not in args)) or not self.valid_todo_update(args):
                     return True
+                if isinstance(args, dict) and "work_packet" in args:
+                    CodingWorkPacket(**normalize_work_packet_paths(args["work_packet"], self.workspace))
             except (TypeError, ValueError):
                 return True
         if self.state and self.state.stage != "done" and tool == "todowrite":
             try:
                 args = json.loads(content) if isinstance(content, str) else content
                 if isinstance(args, dict) and "work_packet" in args:
-                    packet = CodingWorkPacket(**args["work_packet"])
+                    packet = CodingWorkPacket(**normalize_work_packet_paths(args["work_packet"], self.workspace))
                     return packet != self.state.packet and not self._can_revise_failed_acceptance(packet)
             except (TypeError, ValueError):
                 return True

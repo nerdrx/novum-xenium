@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from src.constants import DATA_DIR
-from src.coding_work_packet import CodingWorkPacket
+from src.coding_work_packet import CodingWorkPacket, normalize_work_packet_paths
 
 
 _TODO_DIR = os.path.join(DATA_DIR, "agent_todos")
@@ -79,6 +79,7 @@ class TodoWriteTool:
                     "exit_code": 1,
                 }
             try:
+                raw_packet = normalize_work_packet_paths(raw_packet, ctx.get("workspace"))
                 work_packet = CodingWorkPacket.create(**raw_packet).to_dict()
             except (TypeError, ValueError) as exc:
                 return {"error": f"todowrite: invalid work_packet ({exc})", "exit_code": 1}

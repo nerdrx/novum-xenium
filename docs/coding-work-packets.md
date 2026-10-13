@@ -4,6 +4,10 @@ A coding agent can attach an optional `work_packet` to `todowrite` to describe
 one small change. The existing checklist interface still works without it.
 The packet contains `objective`, project-relative `files`, an exact single-line
 `reproduce_command`, an exact `acceptance_command`, and `acceptance_condition`.
+With an explicit workspace, TodoWrite also accepts absolute file paths inside
+that workspace and returns canonical relative paths. Paths outside it, including
+symlink escapes and traversal components, are rejected. Submitted approval
+arguments and command strings are unchanged; normalization grants no access.
 An optional `mode` defaults to `change`. Use `verify_existing` for work already
 implemented or a verification-only checklist item: a successful baseline moves
 directly to verification, while a failed baseline still requires repair. The

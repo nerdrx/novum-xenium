@@ -21,6 +21,24 @@ def _packet():
     }
 
 
+def test_dispatcher_passes_selected_workspace_to_packet_validation(monkeypatch, tmp_path):
+    from src.agent_tools import ToolBlock
+    from src.tool_execution import execute_tool_block, NO_TOOL_SECURITY_CONTEXT
+
+    monkeypatch.setattr(coding_tools, "_TODO_DIR", str(tmp_path / "todos"))
+    packet = _packet()
+    packet["files"] = [str(tmp_path / "src/auth.py")]
+    content = json.dumps({"todos": [{"content": "Fix auth", "status": "in_progress"}],
+                          "work_packet": packet})
+    _, result = asyncio.run(execute_tool_block(
+        ToolBlock("todowrite", content), workspace=str(tmp_path), owner="alice",
+        session_id="dispatch", security_context=NO_TOOL_SECURITY_CONTEXT,
+    ))
+    assert result["exit_code"] == 0, result
+    assert result["work_packet"]["files"] == ["src/auth.py"]
+    assert packet["files"] == [str(tmp_path / "src/auth.py")]
+
+
 def test_invalid_work_packet_does_not_persist_todos(monkeypatch, tmp_path):
     monkeypatch.setattr(coding_tools, "_TODO_DIR", str(tmp_path))
     invalid = _packet()
@@ -78,3 +96,33 @@ def test_verification_packet_roundtrip_and_unknown_fields_rejected(monkeypatch, 
     assert result["work_packet"] == packet
     packet["skip_checks"] = True
     assert _run(args, ctx)["exit_code"] == 1
+
+
+def test_absolute_workspace_paths_return_canonical_packet_without_mutating_input(monkeypatch, tmp_path):
+    monkeypatch.setattr(coding_tools, "_TODO_DIR", str(tmp_path / "todos"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    packet = _packet()
+    packet["files"] = [str(workspace / "src/auth.py"), str(workspace / "tests/test_auth.py")]
+    original = json.loads(json.dumps(packet))
+
+    result = _run({"todos": [{"content": "fix auth"}], "work_packet": packet},
+                  {"owner": "alice", "session_id": "absolute", "workspace": str(workspace)})
+
+    assert result["exit_code"] == 0
+    assert result["work_packet"]["files"] == ["src/auth.py", "tests/test_auth.py"]
+    assert packet == original
+
+
+def test_absolute_outside_workspace_and_symlink_escape_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(coding_tools, "_TODO_DIR", str(tmp_path / "todos"))
+    workspace, outside = tmp_path / "workspace", tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    (workspace / "escape").symlink_to(outside, target_is_directory=True)
+    for file_path in (str(outside / "secret.py"), "escape/secret.py", "../outside/secret.py"):
+        packet = dict(_packet(), files=[file_path])
+        result = _run({"todos": [{"content": "inspect"}], "work_packet": packet},
+                      {"owner": "alice", "session_id": file_path, "workspace": str(workspace)})
+        assert result["exit_code"] == 1
+        assert "work_packet" in result["error"]

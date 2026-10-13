@@ -4563,7 +4563,7 @@ async def stream_agent_loop(
         and coding_work_checkpoint.get("enabled") is True
         and isinstance(coding_work_checkpoint.get("packet"), dict)
     )
-    _coding_work = CodingWorkTracker(enabled=bool(
+    _coding_work = CodingWorkTracker(workspace=workspace, enabled=bool(
         get_setting("agent_milestone_workflow", False)
         and (_use_coding_tools(_retrieval_query or _last_user, workspace) or _resume_coding_work)
         and workspace and not plan_mode and not guide_only

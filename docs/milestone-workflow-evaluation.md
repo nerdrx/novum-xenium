@@ -281,3 +281,12 @@ A seven-test ES-module function task initially stopped unchanged after 26.531 se
 After two idle checks covering 102 chats, the fix was deployed with runtime backups and canonical/runtime/live/image parity verified (`e7bbd8825d85`). The same qwen3.5:9b model then implemented the unchanged task and completed in 72.530 seconds. All seven independent tests passed, including deferred-promise sequencing, synchronous and asynchronous error identity, no later work after rejection, result order/identity, and preserved input. Protected test/runner hashes matched. No operator solution edits occurred. This is one bounded async-function success, not evidence the earlier full GUI is repaired.
 
 Evidence: `evaluations/coding-serial-map-before-20261013.json` and `coding-serial-map-after-20261013.json`; original fixture: `evaluations/fixtures/diverse/serial-map`.
+
+
+### Abort handling and documentation-assisted repair
+
+A new nine-case JavaScript cancellation task exposed a model implementation failure. The first run stopped after two failed acceptance checks in 93.417 seconds. Independent tests passed seven cases but failed two and reported an unhandled source rejection. The abort handler returned a disconnected rejected promise instead of rejecting the wrapper promise; the already-aborted path also left source rejection unobserved. Protected test/runner hashes matched. This is not a successful implementation.
+
+A separate repair started from that unchanged model-generated candidate and explicitly requested official Node.js documentation before editing. Tool records confirm web searches and successful documentation fetches, including AbortSignal guidance. The model correctly identified the disconnected rejection, but continued reasoning and searching without editing. The bounded 240-second trial was stopped by the adapter, source remained unchanged, and the independent suite still failed. Settings were restored. This coached research trial does not show that documentation alone improves delivery, and no platform defect was established by these two results. No operator repaired the candidate.
+
+Evidence: `evaluations/coding-abortable-20261013.json` and `coding-abortable-research-20261013.json`; reproducible fixtures: `evaluations/fixtures/diverse/abortable` and `abortable-research`. Earlier references to scheduling being paused are historical: the user subsequently authorized overnight evaluation until 06:00 UTC on 14 October 2026.

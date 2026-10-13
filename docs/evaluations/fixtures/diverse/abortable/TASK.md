@@ -1,0 +1,9 @@
+Implement the named ES-module export async function abortable(promise, signal) in solution.mjs. Change only solution.mjs. Use Node 20-compatible built-in JavaScript capabilities; no packages.
+
+The arguments are a genuine Promise and a genuine AbortSignal. Return a promise that follows the input promise's fulfillment or rejection, preserving the exact value or error object, unless the signal aborts first. On abort reject with the exact signal.reason (which need not be an Error). If the signal is already aborted at invocation, abort takes precedence, even if the source promise has already settled.
+
+For a signal not already aborted, the first settlement notification observed by abortable wins: input promise notifications run in microtasks; an abort event dispatches synchronously. After abortable has settled, later input settlement or abort must not change it. You must attach rejection handling to the source promise even when the signal is already aborted or aborts later, so a later source rejection never becomes unhandled. Do not attempt to cancel or alter the source promise or any underlying work.
+
+Use signal.addEventListener and signal.removeEventListener for this invocation's abort listener. Preserve all existing listeners and the signal.onabort handler; never overwrite or remove them. Clean up any abort listener installed by this invocation when the returned promise settles by fulfillment, rejection, or abort. There must be no remaining abort listener belonging to the invocation after callers await its settlement. Avoid installing a listener for an already-aborted signal. Calls must remain independent, including multiple calls sharing one signal.
+
+Run python3 qa_check.py (or node --test test_solution.mjs). Do not edit tests or runner. Tests use deferred promises, microtasks, and bounded timeouts without timing sleeps. The runner has a 15-second total timeout.

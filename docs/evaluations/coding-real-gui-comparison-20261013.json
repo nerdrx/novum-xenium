@@ -1,0 +1,188 @@
+{
+  "model": "qwen3.5:9b",
+  "endpoint_model": "nx-model-5",
+  "settings": {
+    "temperature": 1.0,
+    "max_tokens": 16384
+  },
+  "order": [
+    "aider",
+    "novum"
+  ],
+  "task": "Repair this existing Electron FFmpeg GUI so selecting the fixture test_input.mp4, choosing an output directory and converted.mp4, and pressing Start creates a valid video and restores Start afterward. Inspect the renderer/main/preload contract and repair source code. Use the existing real GUI check: python3 qa_check.py. Do not edit qa_check.py, the QA test, input fixture, assertions, or dependencies; do not rebuild, install, publish, or change styling. Fix the smallest coherent change, then run the real check. Source files: dist/main/index.js, dist/main/preload.js, dist/renderer/renderer.js, dist/renderer/index.html, package.json. The test is .odysseus-preview/qa-conversion-flow.mjs. Web access is disabled. You are authorized to edit and test this isolated app. Stop when the check passes or report a concrete blocker.\n",
+  "fixture_hashes": {
+    "dist/main/index.js": "38883d3b055b72d81ca07486dfed68a2040cd9b6068de5ebb866a456413ed7b6",
+    "dist/main/preload.js": "4abaab9202a0a691fc96ecdbec51b30153d4e7fdf4937994eeaa2518fa0dbfbe",
+    "dist/renderer/renderer.js": "869aff5ded6237d5b14e6337b6042d223a0170561a6c0619ce4e35ae10cd7ccb",
+    "dist/renderer/index.html": "4916deec3ea22cb5b8a86fe85a9091b11b672eccd1add648993d1d98d65524b8",
+    "package.json": "d9377b67a71c84711688c491e6586d161eef47200775575c51cad7c4392b88a0",
+    "test_input.mp4": "3c0242daa7688bfe7cb19ade2588060e211141b2898541bd34260d0d4009e93d",
+    ".odysseus-preview/qa-conversion-flow.mjs": "5c7375586bd1e010114350660676e981c3bd08c43780ab3582f083a01b94dd50",
+    "qa_check.py": "52f66afc26c27e48acbedcbbb32f4e7f620b899406637dfc0f1d5d1528af8cca",
+    "TASK.md": "45c65e901f16e287654f151af718ddc7050081237fa853c45b8bb167b90cdef4"
+  },
+  "baseline_exit": 1,
+  "results": {
+    "aider": {
+      "adapter_exit": 0,
+      "seconds": 439.264,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        ".odysseus-preview/qa-conversion-flow.mjs": true,
+        "test_input.mp4": true
+      },
+      "passed": false,
+      "manual_interventions": 0,
+      "external_check": {
+        "status": "failed",
+        "error": "Start must recover after completion\n\nfalse !== true\n",
+        "report": "/workspace/.nx-evaluations/gui-comparison-20261013-205646/aider/.odysseus-preview/run-4cd68379-a3d7-45bc-a169-339ed161b2b1/report.json",
+        "behavior": "workspace test failed; app behavior remains unverified"
+      },
+      "finding": "Automatic test feedback was consumed across three edit/test attempts. Conversion created nonempty video, but Start remained disabled after completion."
+    },
+    "novum": {
+      "adapter_exit": 2,
+      "seconds": 102.657,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        ".odysseus-preview/qa-conversion-flow.mjs": true,
+        "test_input.mp4": true
+      },
+      "passed": false,
+      "manual_interventions": 0,
+      "external_check": {
+        "status": "failed",
+        "error": "page.waitForFunction: Timeout 15000ms exceeded.",
+        "report": "/workspace/.nx-evaluations/gui-comparison-20261013-205646/novum/.odysseus-preview/run-76688209-89f6-4fa7-bdad-910fbe4407da/report.json",
+        "behavior": "workspace test failed; app behavior remains unverified"
+      },
+      "adapter_metadata": {
+        "actual_route": {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 11
+        },
+        "allow_web_search": false,
+        "approval_count": 0,
+        "endpoint_id": "6865006e",
+        "evidence": [
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 1,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 2,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 3,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 4,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 5,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 6,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 7,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 8,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 9,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 10,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "model": "nx-model-5",
+            "requested_model": "qwen3.5:9b",
+            "round": 11,
+            "type": "model_actual"
+          },
+          {
+            "endpoint_id": "6865006e",
+            "input_tokens": 165446,
+            "model": "nx-model-5",
+            "output_tokens": 2237,
+            "requested_model": "qwen3.5:9b",
+            "total_tokens": 167683,
+            "type": "metrics"
+          }
+        ],
+        "model": "qwen3.5:9b",
+        "output_saved": false,
+        "preset_id": null,
+        "run_id": "f03099019a95439dbbb68e26044035cb",
+        "seconds": 102.6,
+        "session_id": "52da7587-dff8-4779-8f46-3436f510a8e6",
+        "source_files": [
+          "dist/main/index.js",
+          "dist/main/preload.js",
+          "dist/renderer/renderer.js",
+          "dist/renderer/index.html",
+          "package.json"
+        ],
+        "status": "incomplete",
+        "stream_ended": true,
+        "terminal": null,
+        "verification_passed": null
+      },
+      "finding": "After 11 rounds of inspection, asked the user whether to proceed with already-authorized analysis. No repair or acceptance completion. External conversion check timed out."
+    }
+  },
+  "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/gui-comparison-20261013-205646",
+  "limits": [
+    "One GUI repair case in one order, not a general reliability or speed benchmark.",
+    "Agent prompts/context/tool protocols differ. Both can run the same check; Aider auto-test enabled.",
+    "External acceptance uses preserved checker bytes; final protected hashes do not prove no temporary test edits."
+  ],
+  "decision": "Do not introduce Aider as a production backend on this evidence. Both failed this bounded GUI task; Aider made more progress but did not satisfy acceptance."
+}

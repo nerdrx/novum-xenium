@@ -83,3 +83,36 @@ headless run against the same preserved checker. It now reports
 agent completion and review. Image `37cd19b69d33` includes the correction. The
 standalone helper was updated without a backend restart. The live report is
 recorded under `preview_status_recheck` in the assisted recovery evidence.
+
+## Simpler defaults and realistic comparison
+
+Coding now defaults to one concrete change and one real test. Inspection, editing,
+and testing share one checklist item; separate milestones are reserved for distinct
+outcomes. This applies to checked coding (`d32ae63`, 72 focused tests) and ordinary
+coding (`4d9694b`, 41 focused tests). The Aider evaluation adapter can explicitly
+run an operator-supplied test command with automatic feedback (`1520b36`, 10 tests).
+
+The [real GUI comparison](evaluations/coding-real-gui-comparison-20261013.json)
+used separate byte-identical broken copies, qwen3.5:9b, the same task/source-file
+list, and an independently preserved GUI checker. Neither received diagnostic
+coaching or operator application edits. Aider ran first with automatic test feedback,
+then Novum with checked coding enabled; settings were restored afterward.
+
+- Aider: 439.264 seconds; produced a video but failed Start-button recovery after
+  three edit/test attempts. Adapter exit zero did not mean acceptance passed.
+- Novum: 102.657 seconds, 11 model rounds; inspected files then asked whether to
+  proceed with already-authorized analysis. Adapter reported incomplete; the
+  external conversion check timed out. This was not a token/time-budget exhaustion.
+- Protected test/input files matched their original hashes at the end. This does
+  not prove there were no temporary edits. Internal prompts and editing protocols
+  differ; one case/order is not a general benchmark.
+
+Aider made more progress here, but neither completed the task autonomously. This
+does not justify adding a second production coding backend yet. Retain the simpler
+defaults and the fixed acceptance test; do not count retries or prompted recovery
+as an autonomous success. No generated application source was manually repaired.
+
+The ordinary-coding default was deployed with two authenticated all-idle checks
+covering 101 chats, a runtime backup, and an in-place update preserving customized
+files. The running source matches canonical `4d9694b`; the app returned HTTP 200
+after restart. The checked-mode default was already deployed before this trial.

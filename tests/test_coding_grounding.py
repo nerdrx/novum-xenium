@@ -321,8 +321,18 @@ def test_skill_view_must_match_a_suggested_candidate_and_failure_escape_is_bound
 def test_documentation_ready_pending_skill_exposes_only_skill_phase_tools():
     gate = CodingGrounding(task())
     gate.set_skill_candidates(["gui-workflow"])
+    assert gate.allows_tool("read_file")  # source inspection remains available during docs lookup
     assert gate.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
-    assert gate.phase_tools == {"manage_skills", "ask_user", "search_tools"}
+    assert gate.phase_tools == {
+        "manage_skills", "ask_user", "search_tools",
+        "get_workspace", "ls", "glob", "grep", "read_file",
+    }
+    assert gate.allows_tool("read_file")
+    assert not gate.observe("read_file", {"output": "Existing renderer source", "exit_code": 0}, "src/renderer.js")
+    assert not gate.may_mutate
+    for tool in ("write_file", "edit_file", "apply_patch", "bash"):
+        assert not gate.allows_tool(tool)
+    assert not gate.allows_tool("manage_skills", '{"action":"edit","name":"gui-workflow"}')
     assert not gate.allows_tool("web_fetch", '{"url":"https://example.test"}')
     assert not gate.observe("web_fetch", {"error": "phase blocked", "exit_code": 1}, "https://example.test")
     assert gate.attempts == 1 and gate.failures == 0

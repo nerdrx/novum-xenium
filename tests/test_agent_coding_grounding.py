@@ -41,6 +41,14 @@ def test_selected_workspace_routes_substantive_gui_repairs_into_grounding_gate()
     assert not CodingGrounding(copy_edit).required
 
 
+def test_agent_prompt_keeps_latest_scope_rule_in_both_tool_modes():
+    for compact in (False, True):
+        prompt = al._assemble_prompt({"ask_user", "read_file"}, compact=compact)
+        assert "Follow the latest user turn's scope and corrections" in prompt
+        assert "choose the routine diagnostic order yourself" in prompt
+        assert "follow required approval flows" in prompt
+
+
 def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_tools=None,
          exact_approval=None, schema_details=None, server_run_id=None):
     _patch_common(monkeypatch)
@@ -336,8 +344,8 @@ def test_documentation_ready_schema_focuses_on_pending_skill(monkeypatch, tmp_pa
     focused = requests[1]
     assert 'manage_skills' in focused
     assert 'ask_user' in focused
-    assert not ({'web_search', 'web_fetch', 'read_file', 'grep', 'glob', 'ls',
-                 'get_workspace', 'write_file', 'bash'} & focused)
+    assert not ({'web_search', 'web_fetch', 'write_file', 'bash'} & focused)
+    assert {'read_file', 'grep', 'glob', 'ls', 'get_workspace'} <= focused
     assert 'write_file' in requests[2]
     assert executed == ['web_fetch', 'manage_skills', 'write_file']
 

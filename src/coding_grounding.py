@@ -226,7 +226,13 @@ class CodingGrounding:
     def phase_tools(self):
         """Expose only tools that can advance an outstanding research gate."""
         if self.documentation_ready and self.skill_review_pending:
-            return {"manage_skills", "ask_user", "search_tools"} & self.research_tools
+            # Skill consultation gates writes, not read-only source inspection.
+            # Keep workspace orientation and bounded file reads available so
+            # the agent can understand the existing project before changing it.
+            return {
+                "manage_skills", "ask_user", "search_tools",
+                "get_workspace", "ls", "glob", "grep", "read_file",
+            } & self.research_tools
         tools = set(self.research_tools)
         if not self.documentation_ready and self.skill_reviews_satisfied:
             tools.discard("manage_skills")
@@ -356,6 +362,10 @@ class CodingGrounding:
                 return True
             return False
         if not self.required or tool_name not in self.phase_tools:
+            return False
+        if self.documentation_ready and self.skill_review_pending and tool_name in {
+            "get_workspace", "ls", "glob", "grep", "read_file",
+        }:
             return False
         if tool_name == "ask_user" or tool_name not in _RESEARCH_ATTEMPTS:
             return False

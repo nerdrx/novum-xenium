@@ -19,7 +19,13 @@ execution resume after an edit, for verification. Shell edits are not accepted
 as packet edit evidence.
 After a successful file-tool edit (or a passing `verify_existing` baseline),
 only a successful exact acceptance command marks the slice done. Later edits or shell actions invalidate that pass.
-An unfinished packet cannot be replaced by another checklist write.
+An unfinished packet cannot be replaced by another checklist write. After an
+acceptance command actually runs and fails, the agent may correct only
+`acceptance_command` if the command itself was malformed; all other packet
+fields, the acceptance condition, and the current milestone stay fixed. It must
+then rerun the registered acceptance check. A real behavior failure requires a
+source fix and the same acceptance check; weakening assertions or the pass
+condition is not a repair.
 
 In checked mode, `run_coding_check {}` runs the registered command for the current
 reproduction or verification stage. It accepts no replacement command and is

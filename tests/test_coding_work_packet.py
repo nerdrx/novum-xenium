@@ -190,6 +190,108 @@ def test_registered_check_resolves_only_packet_commands_and_rejects_arguments(pa
     assert tracker.check_command("not-json")[0] is None
 
 
+def test_failed_acceptance_allows_only_registered_command_correction(packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Fix token refresh handling", "status": "in_progress"}]
+    tracker.observe("todowrite", "{}", {
+        "exit_code": 0, "todos": todos, "work_packet": packet.to_dict(),
+    })
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0, "output": "saved"})
+    revised_data = dict(packet.to_dict(), acceptance_command="pytest -q tests/test_auth.py -v")
+    assert tracker.blocks("todowrite", {
+        "todos": todos, "work_packet": revised_data,
+    })
+    tracker.observe("bash", packet.acceptance_command, {
+        "exit_code": 1, "output": "SyntaxError: invalid syntax",
+    })
+    assert "revise only work_packet.acceptance_command" in tracker.instruction
+
+    revised = CodingWorkPacket(**revised_data)
+    update = {"todos": todos, "work_packet": revised.to_dict()}
+    assert not tracker.blocks("todowrite", update)
+    assert tracker.observe("todowrite", "{}", {"exit_code": 0, **update})
+    assert tracker.state.stage == "verify"
+    assert tracker.state.packet == revised
+    assert tracker.state.reproduction_result == {"exit_code": 1}
+    assert tracker.state.edit_result["output"] == "saved"
+    assert tracker.state.acceptance_result is None
+    assert tracker.review_status == "not_reviewed"
+    assert "run_coding_check {}" in tracker.instruction
+    assert tracker.check_command("{}") == (revised.acceptance_command, None)
+    assert tracker.observe("bash", revised.acceptance_command, {"exit_code": 0})
+    assert tracker.state.stage == "done"
+
+
+@pytest.mark.parametrize("result", [
+    {"blocked": True, "exit_code": 1},
+    {"pending": True, "exit_code": 1},
+    {"approval_required": True, "exit_code": 1},
+    {"status": "queued", "exit_code": 1},
+    {"error": "executor failed", "exit_code": 1},
+])
+def test_nonexecuted_acceptance_cannot_unlock_command_correction(packet, result):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Fix token refresh handling", "status": "in_progress"}]
+    tracker.observe("todowrite", "{}", {
+        "exit_code": 0, "todos": todos, "work_packet": packet.to_dict(),
+    })
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    assert not tracker.observe("bash", packet.acceptance_command, result)
+    revised = dict(packet.to_dict(), acceptance_command="pytest -q tests/test_auth.py -v")
+    assert tracker.blocks("todowrite", {"todos": todos, "work_packet": revised})
+
+
+@pytest.mark.parametrize("change", [
+    {"objective": "Change the task"},
+    {"files": ["src/other.py"]},
+    {"reproduce_command": "true"},
+    {"acceptance_condition": "Ignore the test"},
+    {"mode": "verify_existing"},
+])
+def test_failed_acceptance_revision_cannot_change_other_packet_fields(packet, change):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Fix token refresh handling", "status": "in_progress"}]
+    tracker.observe("todowrite", "{}", {
+        "exit_code": 0, "todos": todos, "work_packet": packet.to_dict(),
+    })
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 1})
+    revised = dict(packet.to_dict(), acceptance_command="pytest -q tests/test_auth.py -v", **change)
+    assert tracker.blocks("todowrite", {"todos": todos, "work_packet": revised})
+
+
+def test_failed_acceptance_revision_keeps_milestone_lock_and_cannot_rewrite_after_pass(packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Fix token refresh handling", "status": "in_progress"}]
+    tracker.observe("todowrite", "{}", {
+        "exit_code": 0, "todos": todos, "work_packet": packet.to_dict(),
+    })
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 1})
+    revised = dict(packet.to_dict(), acceptance_command="pytest -q tests/test_auth.py -v")
+    wrong_todos = [{"content": "Different milestone", "status": "in_progress"}]
+    assert tracker.blocks("todowrite", {"todos": wrong_todos, "work_packet": revised})
+    update = {"todos": todos, "work_packet": revised}
+    assert tracker.observe("todowrite", "{}", {"exit_code": 0, **update})
+    tracker.observe("bash", revised["acceptance_command"], {"exit_code": 0})
+    assert tracker.state.stage == "done"
+    assert tracker._can_revise_failed_acceptance(CodingWorkPacket(**dict(
+        revised, acceptance_command="pytest -q tests/test_auth.py --maxfail=1",
+    ))) is False
+
+
 def test_checkpoint_restores_only_server_observed_stage_and_checklist(packet):
     from src.coding_work_packet import CodingWorkTracker
 

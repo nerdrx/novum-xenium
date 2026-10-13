@@ -1,0 +1,76 @@
+{
+  "date": "2026-10-13",
+  "scope": "Single-file repair after required packet fix; not general coding ability",
+  "novum_revision": "896d0b2",
+  "model": "qwen3.5:9b",
+  "serving_model": "nx-model-5",
+  "aider_version": "0.86.2",
+  "settings": {
+    "temperature": 1.0,
+    "max_tokens": 16384
+  },
+  "run_order": [
+    "aider",
+    "novum"
+  ],
+  "fixture_sha256": "0cd0ff0557b5cefbf8c05ae87be6d5d3377098cc0163f98f09e8e0b03fbf7710",
+  "results": {
+    "aider": {
+      "seconds": 2.919,
+      "external_acceptance_passed": true,
+      "final_source": "def add(a, b):\n    return a + b\n",
+      "manual_code_edits": 0
+    },
+    "novum": {
+      "seconds": 56.815,
+      "external_acceptance_passed": true,
+      "final_source": "def add(a, b):\n    return a + b\n",
+      "manual_code_edits": 0
+    }
+  },
+  "novum_packet_events": [
+    {
+      "review_status": "not_reviewed",
+      "round": 1,
+      "stage": "reproduce",
+      "test_status": "not_verified",
+      "type": "coding_work_packet"
+    },
+    {
+      "review_status": "not_reviewed",
+      "round": 4,
+      "stage": "edit",
+      "test_status": "not_verified",
+      "type": "coding_work_packet"
+    },
+    {
+      "review_status": "not_reviewed",
+      "round": 5,
+      "stage": "verify",
+      "test_status": "not_verified",
+      "type": "coding_work_packet"
+    },
+    {
+      "review_status": "not_reviewed",
+      "round": 6,
+      "stage": "done",
+      "test_status": "passed",
+      "type": "coding_work_packet"
+    },
+    {
+      "review_status": "passed",
+      "round": 8,
+      "stage": "done",
+      "test_status": "passed",
+      "type": "coding_work_packet"
+    }
+  ],
+  "novum_task_approvals": 1,
+  "adapter_status": "incomplete",
+  "explicit_terminal_event": null,
+  "limits": [
+    "External assertions and independent reviewer passed; adapter retains incomplete because the route emitted no explicit completion event.",
+    "One stochastic trial; timings are observations, not a speed benchmark.",
+    "No GUI application was verified."
+  ]
+}

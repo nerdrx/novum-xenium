@@ -151,7 +151,7 @@ def test_source_archive_preserves_literal_newlines_and_quotes_for_exact_chunks(m
     monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
     monkeypatch.setattr(loop, "_build_system_prompt", lambda messages, *args, **kwargs: (list(messages), []))
     monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *args, **kwargs: 20000)
-    source = "start\n" + ("padding words here. " * 65) + 'const exact = "quoted";\nnextLine();\n' + ("end words. " * 650)
+    source = "start\n" + ("padding words here. " * 65) + 'const exact = "quoted";\nnextLine();\n' + ("end words. " * 1300)
     exact = 'const exact = "quoted";\nnextLine();'
     requests = []
 
@@ -276,7 +276,8 @@ def test_subprocess_failure_archive_keeps_error_and_both_streams(monkeypatch, tm
 
 
 @pytest.mark.parametrize("low_budget", [False, True])
-def test_skill_view_keeps_procedure_middle_when_fits_and_archives_when_budget_low(monkeypatch, tmp_path, low_budget):
+@pytest.mark.parametrize("tool_name", ["manage_skills", "read_file"])
+def test_requested_text_keeps_middle_when_fits_and_archives_when_budget_low(monkeypatch, tmp_path, low_budget, tool_name):
     import src.tool_result_store as store
 
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
@@ -291,13 +292,14 @@ def test_skill_view_keeps_procedure_middle_when_fits_and_archives_when_budget_lo
     requests = []
 
     async def execute(block, **kwargs):
-        return "view", {"results": skill}
+        return "view", ({"results": skill} if tool_name == "manage_skills" else {"output": skill, "exit_code": 0})
 
     async def stream(candidates, messages, **kwargs):
         request = await kwargs["candidate_request_factory"](0, *candidates[0])
         requests.append(request["messages"])
         if len(requests) == 1:
-            calls = [{"id": "skill", "name": "manage_skills", "arguments": '{"action":"view","name":"ui-design"}'}]
+            arguments = '{"action":"view","name":"ui-design"}' if tool_name == "manage_skills" else '{"path":"renderer.js"}'
+            calls = [{"id": "requested-text", "name": tool_name, "arguments": arguments}]
         else:
             tool = next(m for m in reversed(request["messages"]) if m["role"] == "tool")
             if low_budget:
@@ -320,7 +322,7 @@ def test_skill_view_keeps_procedure_middle_when_fits_and_archives_when_budget_lo
     async def run():
         return [event async for event in loop.stream_agent_loop(
             "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Read the UI design procedure."}],
-            owner="alice", session_id=f"chat-skill-{low_budget}", relevant_tools={"manage_skills"},
+            owner="alice", session_id=f"chat-requested-text-{tool_name}-{low_budget}", relevant_tools={tool_name},
             max_tokens=512, max_rounds=2, _is_teacher_run=True,
         )]
 

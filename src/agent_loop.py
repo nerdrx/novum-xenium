@@ -5712,7 +5712,11 @@ async def stream_agent_loop(
             remaining_tokens is not None
             and estimate_tokens([{"role": "tool", "content": formatted}]) > remaining_tokens
         )
-        if selected_skill_view and len(formatted) <= 12000 and not exceeds_remaining_budget:
+        # A modest file explicitly requested by the model is working context,
+        # not bulk data. Keep its middle intact when the input budget allows it;
+        # large files and tight contexts still use the searchable archive.
+        requested_file_read = tool_name == "read_file" and isinstance(result.get("output"), str)
+        if (selected_skill_view or requested_file_read) and len(formatted) <= 12000 and not exceeds_remaining_budget:
             return _account_preview(formatted, exchange_tokens)
         if len(raw_context) <= 6000 and not exceeds_remaining_budget:
             return _account_preview(formatted, exchange_tokens)

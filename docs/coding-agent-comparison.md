@@ -19,6 +19,12 @@ for both sides when comparing coding behavior without outside research.
 
 ## Latest measured result (2026-10-13)
 
+A second assisted repair passed the preserved external GUI test: a valid
+5.000-second H.264/AAC output, no page errors, and Start restored after completion.
+The agent itself timed out at 300 seconds, so this is an assisted functional pass,
+not autonomous completion or a reviewer pass. No operator edited app code. See
+[assisted recovery evidence](evaluations/coding-assisted-recovery-20261013.json).
+
 A clearly assisted follow-up produced a valid 5-second video after operator
 feedback directed the model to compare IPC payload fields. The unchanged external
 check still failed because Start remained disabled. The 300-second run timed out.

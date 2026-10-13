@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { ELECTRON_WORKER_SOURCE, ensureOutputIgnore, resolveWorkspaceProject, runOwnedCommand, summarizeMainStderr } from '../scripts/electron_preview.mjs';
+import { ELECTRON_WORKER_SOURCE, previewStatus, ensureOutputIgnore, resolveWorkspaceProject, runOwnedCommand, summarizeMainStderr } from '../scripts/electron_preview.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const node = process.execPath;
@@ -450,4 +450,13 @@ test('embedded Electron worker parses as an ES module', () => {
     input: ELECTRON_WORKER_SOURCE, encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('preview status distinguishes completed workspace tests without overruling runtime issues', () => {
+  const completed = { configured: true, status: 'completed' };
+  assert.equal(previewStatus(true, false, completed), 'rendered; workspace test completed');
+  assert.equal(previewStatus(true, false, { configured: false }), 'rendered; behavior unverified');
+  assert.equal(previewStatus(true, false, { configured: true, status: 'pending' }), 'rendered; behavior unverified');
+  assert.equal(previewStatus(true, true, completed), 'runtime issues observed');
+  assert.equal(previewStatus(false, false, completed), 'runtime issues observed');
 });

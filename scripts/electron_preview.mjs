@@ -136,8 +136,15 @@ function parseArgs(argv) {
   return out;
 }
 
+export function previewStatus(rendererConnected, runtimeIssues, test) {
+  if (!rendererConnected || runtimeIssues) return 'runtime issues observed';
+  return test?.configured && test.status === 'completed'
+    ? 'rendered; workspace test completed' : 'rendered; behavior unverified';
+}
+
 export const ELECTRON_WORKER_SOURCE = String.raw`
 const ensureOutputIgnore = ${ensureOutputIgnore.toString()};
+const previewStatus = ${previewStatus.toString()};
 const summarizeMainStderr = ${summarizeMainStderr.toString()};
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -381,7 +388,7 @@ try {
     ],
   } : undefined;
   const report = {
-    status: !page.isClosed() && !runtimeIssues ? 'rendered; behavior unverified' : 'runtime issues observed',
+    status: previewStatus(!page.isClosed(), runtimeIssues, test),
     runId, workspace, appEntry: config.entryPath, electron: config.electronPath,
     rendererConnected: !page.isClosed(),
     viewportMode: 'Playwright renderer viewport emulation; native BrowserWindow bounds/resize unverified',
@@ -391,7 +398,7 @@ try {
   };
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
   const summary = {
-    status: !page.isClosed() && !runtimeIssues ? 'rendered; behavior unverified' : 'runtime issues observed',
+    status: previewStatus(!page.isClosed(), runtimeIssues, test),
     appEntry,
     rendererConnected: !page.isClosed(),
     viewports: [desktop.viewport, compact.viewport],

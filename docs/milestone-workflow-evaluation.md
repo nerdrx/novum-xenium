@@ -1,0 +1,76 @@
+# Milestone workflow implementation and evaluation
+
+Audit date: 2026-10-13. This records the optional checked coding workflow and its
+validation boundaries. It does not certify general model reliability or completion
+of the original full-featured FFmpeg application. No new tests or live trials were
+run for this document.
+
+## Requirement coverage
+
+| Requirement | Implementation | Focused regression coverage | Recorded live evidence and limit |
+| --- | --- | --- | --- |
+| Compact repository context | `src/repository_context.py`, integrated by `src/project_workflows.py`: bounded file/symbol map, private/generated paths excluded, untrusted context | `tests/test_repository_context.py`, `tests/test_repository_prompt.py` | Small workspace trials below exercise coding integration; they do not establish large-repository navigation quality. |
+| On-demand skills | `src/agent_loop.py`: skill index, `manage_skills` reads, bounded references; fresh packet context replaces full catalog with discovery | `tests/test_agent_design_skills.py`, `tests/test_agent_coding_grounding.py`, `tests/test_coding_grounding_resume.py` | [Approval recovery](evaluations/coding-grounding-resume-20261013.json) follows research recovery changes. Source/skill success is never inferred from a skipped lookup. |
+| Fresh reproduce/edit/test work packets | `src/coding_work_packet.py`, `src/agent_loop.py`: scoped packet, fresh model context, real baseline, file edit, exact acceptance; deterministic registered checks; phase schemas match dispatch policy | `tests/test_coding_work_packet.py`, `tests/test_agent_coding_work_packet.py`, `tests/test_todowrite_work_packet.py` | [Phase-schema trial](evaluations/coding-phase-schemas-20261013.json) completed both milestones and external acceptance. Earlier output-correct but internally incomplete runs remain recorded. |
+| Distinct completion reviewer | `src/agent_loop.py::_run_verifier_subagent`, `src/completion_verification.py`: separate same-model request and strict verdict; unavailable evidence cannot pass | `tests/test_completion_verification.py`, `tests/test_agent_project_verification.py`, `tests/test_agent_coding_work_packet.py` | Phase-schema trial passed the review gate. A test pass alone stays `not_reviewed` when the optional reviewer is disabled; separate context is not a guarantee of independent correctness. |
+| Targeted research | `src/coding_grounding.py`: bounded local/documentation lookup, successful source evidence, relevant skills, explicit uncertainty fallback; exact approval restoration binds owner/chat/origin/workspace | `tests/test_coding_grounding.py`, `tests/test_agent_coding_grounding.py`, `tests/test_coding_grounding_resume.py` | [Targeted research trial](evaluations/coding-targeted-research-20261013.json) fetched official Python documentation and repaired `urlencode` sequence handling (`doseq`). It was a separate same-model trial, not an Aider comparison or causal proof of learning; reviewer disabled. Controlled comparisons disable web for both agents. |
+| Existing default experience retained | `agent_milestone_workflow` defaults off; packet/check/status integration remains optional; existing permissions, approval, execution budgets and history apply | `tests/test_agent_coding_work_packet.py`, `tests/test_coding_work_packet_ui_js.py` | Trial workflow settings were restored. See [packet behavior](coding-work-packets.md) for recovery and UI limits. |
+| Fair same-model comparison | `scripts/coding_agent_comparison.py` and bundled Novum/Aider adapters: separate identical fixtures, declared shared endpoint/settings, fixed external checks | `tests/test_coding_agent_comparison.py`, `tests/test_coding_comparison_aider.py`, `tests/test_coding_comparison_novum.py` | Phase-schema trial used `qwen3.5:9b`; both passed the small multifile fixture. Agent prompts/context/edit protocols differ. |
+
+The phase-schema change's recorded focused run passed **72 tests** across
+`test_agent_coding_work_packet.py`, `test_agent_coding_grounding.py`, and
+`test_coding_grounding_resume.py` in a disposable container. Other test paths
+above identify coverage, not newly claimed executions or a fresh full-suite run.
+The executed command was:
+
+```sh
+rtk docker run --rm --network none -e ODYSSEUS_RUN_CHECKPOINTS_DB=/tmp/test-run-checkpoints.db -v /run/media/nerdrx/Lex/novum-xenium:/workspace:ro -w /workspace --entrypoint python odysseus-local-odysseus -m pytest -q -p no:cacheprovider --basetemp=/tmp/nx-phase-schemas3 tests/test_agent_coding_work_packet.py tests/test_agent_coding_grounding.py tests/test_coding_grounding_resume.py
+```
+
+## Outcome evidence
+
+- [Phase-schema comparison](evaluations/coding-phase-schemas-20261013.json):
+  Novum completed its internal milestones, test and review gates, and fixed external
+  acceptance; Aider also passed. This Aider-first trial took 112.072 seconds for
+  Novum and 6.525 seconds for Aider. It supports working completion in one small
+  trial, not improved speed or a reliable success rate.
+- [Earlier registered-check comparisons](evaluations/coding-registered-checks-comparison-20261013.json):
+  both orders passed external acceptance, but one Novum run lacked internal
+  completion. Older raw reports leave intervention fields null/unrecorded; that
+  is not evidence of zero intervention.
+- [Fixed GUI evaluation](evaluations/coding-fixed-gui-check-20261013.json):
+  autonomous same-model repair failed. Model edits repaired an import and a
+  button identifier, but the output filename contract remained wrong. Preserved
+  pre-run test bytes also failed the separate headless check. No operator app
+  edits supplied a passing implementation.
+- [Assisted GUI follow-up](evaluations/coding-assisted-contract-20261013.json):
+  one operator diagnostic intervention guided IPC-field inspection; the model
+  produced a valid 5.000-second video. The unchanged external test still failed
+  because Start remained disabled, and the run timed out. This is assisted partial
+  conversion, not autonomous GUI completion or a controlled Aider comparison.
+
+The [second assisted recovery trial](evaluations/coding-assisted-recovery-20261013.json)
+passed the preserved external GUI test: actual 5.000-second H.264/AAC output,
+no page errors, and Start restored. The model run itself timed out at 300 seconds;
+no internal completion or independent review pass is claimed for that run. Two
+operator diagnostic interventions were used across the assisted sequence; no
+operator edited application code. This proves one conversion interaction, not
+progress reporting, cancellation, repeat conversions, attractive design, or the
+original full-featured application. Intermediate test edits remain instruction
+violations even when final test bytes are restored.
+
+## Runtime and delivery boundary
+
+Canonical changes live in `/run/media/nerdrx/Lex/novum-xenium`; the customized
+runtime remains `/run/media/nerdrx/Lex/Odysseus`. The recorded phase-schema
+Python deployment is `6d59181`; its documentation followed in `1657b5d` and
+subsequent evidence commits. Deployment used runtime backups and in-place updates,
+with two all-idle checks covering 103 chats before backend restart, as recorded in
+[the comparison notes](coding-agent-comparison.md). Trial settings were restored;
+user chats were preserved. This audit did not restart services or inspect live chats.
+
+The requested platform mechanisms are implemented and the bounded comparison is
+recorded. Autonomous GUI completion remains unproven; the assisted conversion pass does
+not establish dependable general app generation or prove another framework
+feature is required. Preserve this
+separation when reporting completion, pushing new evidence, or deciding further work.

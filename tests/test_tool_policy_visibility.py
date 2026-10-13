@@ -146,7 +146,7 @@ def test_recursive_delete_of_nested_git_project_is_blocked_during_repair(tmp_pat
 
 @pytest.mark.parametrize("command", [
     "rm -rf .",
-    "rm -R nflix",
+    "rm -R .",
     "rm --recursive --force -- .",
     "cd .. && sudo rm -rf -- workspace",
 ])

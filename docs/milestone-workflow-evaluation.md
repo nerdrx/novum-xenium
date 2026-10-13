@@ -290,3 +290,10 @@ A new nine-case JavaScript cancellation task exposed a model implementation fail
 A separate repair started from that unchanged model-generated candidate and explicitly requested official Node.js documentation before editing. Tool records confirm web searches and successful documentation fetches, including AbortSignal guidance. The model correctly identified the disconnected rejection, but continued reasoning and searching without editing. The bounded 240-second trial was stopped by the adapter, source remained unchanged, and the independent suite still failed. Settings were restored. This coached research trial does not show that documentation alone improves delivery, and no platform defect was established by these two results. No operator repaired the candidate.
 
 Evidence: `evaluations/coding-abortable-20261013.json` and `coding-abortable-research-20261013.json`; reproducible fixtures: `evaluations/fixtures/diverse/abortable` and `abortable-research`. Earlier references to scheduling being paused are historical: the user subsequently authorized overnight evaluation until 06:00 UTC on 14 October 2026.
+
+
+### UTF-8 line decoding
+
+A fresh qwen3.5:9b trial implemented a small standard-library line decoder, then stopped after two failed acceptance checks in 78.729 seconds. Independent original tests passed seven of eight cases; the implementation used `rstrip('\r')`, removing preserved carriage returns and more than the single CR allowed before LF. Source review additionally found that it joined every byte chunk before decoding, contrary to the incremental-decoding requirement. The original test suite covers boundary correctness but does not enforce incremental consumption; this is an explicit coverage limitation.
+
+Protected test/runner hashes matched, settings were restored, and no operator repaired the generated source. This trial demonstrates a model implementation failure, not a new platform defect. Evidence: `evaluations/coding-utf8-lines-20261014.json`; fixture: `evaluations/fixtures/diverse/utf8-lines`.

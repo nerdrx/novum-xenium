@@ -19,6 +19,7 @@ def describe_stream_failure(
     error: Any = None,
     status: Any = None,
     timeout_seconds: Any = None,
+    failure_kind: Any = None,
 ) -> dict:
     """Return only an allowlisted message and normalized HTTP status."""
     status = _status(status)
@@ -35,7 +36,9 @@ def describe_stream_failure(
             timeout = int(match.group(1))
 
     is_read_timeout = "read timeout" in hint or "idle read timeout" in hint
-    if hint.startswith("agent context budget cannot fit"):
+    if failure_kind == "degenerate_generation":
+        reason = "degenerate_generation"
+    elif hint.startswith("agent context budget cannot fit"):
         reason = "context_budget"
     elif is_read_timeout:
         reason = "read_timeout"
@@ -62,7 +65,12 @@ def describe_stream_failure(
     else:
         reason = "unknown"
 
-    if reason == "context_budget":
+    if reason == "degenerate_generation":
+        message = (
+            "Model generation repeated output and was stopped. Incomplete model tool calls were not executed. "
+            "Retry once or choose another model."
+        )
+    elif reason == "context_budget":
         status = 400
         message = (
             "Agent context budget cannot fit the current request and tool exchange. "
@@ -127,6 +135,7 @@ def describe_sse_failure(chunk: str) -> dict:
         payload.get("error") or payload.get("text"),
         payload.get("status"),
         payload.get("timeout_seconds"),
+        payload.get("failure_kind"),
     )
 
 

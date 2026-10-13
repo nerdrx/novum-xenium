@@ -1065,7 +1065,9 @@ def test_degenerate_stream_error_is_not_availability_evidence():
     chunk = guard.check("repeat " * 100)
 
     assert chunk is not None
-    assert json.loads(chunk.split("data: ", 1)[1])["fallback_eligible"] is False
+    payload = json.loads(chunk.split("data: ", 1)[1])
+    assert payload["fallback_eligible"] is False
+    assert payload["failure_kind"] == "degenerate_generation"
 
 
 @pytest.mark.parametrize("punctuation", ["/", "\\"])

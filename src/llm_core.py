@@ -454,7 +454,7 @@ class _DegenerateStreamGuard:
             f"Stopped generation: {self.model} started repeating output "
             f"({reason}). Try a different model or lower temperature."
         )
-        return f'event: error\ndata: {json.dumps({"status": 502, "text": message, "error": message, "fallback_eligible": False})}\n\n'
+        return f'event: error\ndata: {json.dumps({"status": 502, "text": message, "error": message, "failure_kind": "degenerate_generation", "fallback_eligible": False})}\n\n'
 
 
 def _model_activity_key(url: str, model: str) -> str:

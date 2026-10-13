@@ -26,12 +26,26 @@ def test_http_statuses_get_safe_actionable_reasons():
         403: "Check account permissions",
         404: "requested model or endpoint",
         429: "rate limit reached",
+        502: "service failed (HTTP 502)",
         503: "service failed (HTTP 503)",
     }
     for status, reason in expected.items():
         failure = describe_stream_failure("opaque provider response", status)
         assert failure["status"] == status
         assert reason.lower() in failure["message"].lower()
+
+
+def test_degenerate_generation_marker_overrides_generic_502_server_category():
+    from src.llm_core import _DegenerateStreamGuard
+
+    event = _DegenerateStreamGuard("looping-model").check("repeat " * 100)
+    failure = describe_sse_failure(event)
+
+    assert failure["status"] == 502
+    assert failure["category"] == "degenerate_generation"
+    assert "repeated output" in failure["message"]
+    assert "Incomplete model tool calls were not executed" in failure["message"]
+    assert "looping-model" not in failure["message"]
 
 
 def test_unknown_provider_body_is_never_returned_or_persisted():

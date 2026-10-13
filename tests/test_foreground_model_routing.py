@@ -2538,6 +2538,45 @@ def test_agent_terminal_first_round_error_has_no_success_completion(monkeypatch,
     assert not any("empty response" in chunk.lower() for chunk in chunks)
 
 
+def test_degenerate_stream_error_stops_before_partial_native_calls_run(monkeypatch):
+    from src.llm_core import _DegenerateStreamGuard
+
+    executed = []
+    monkeypatch.setattr(agent_loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(agent_loop, "execute_tool_block", lambda *args, **kwargs: executed.append(args))
+
+    async def fake_stream(candidates, messages, **kwargs):
+        yield 'data: ' + json.dumps({"delta": "I will create the file now."}) + "\n\n"
+        yield 'data: ' + json.dumps({
+            "type": "tool_calls",
+            "calls": [{"id": "partial", "type": "function", "function": {
+                "name": "write_file", "arguments": '{"path":"x","content":"x"}',
+            }}],
+        }) + "\n\n"
+        guard = _DegenerateStreamGuard("looping-model")
+        yield guard.check("repeat " * 100)
+
+    monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_stream)
+    chunks = _collect(agent_loop.stream_agent_loop(
+        "https://selected.example/v1",
+        "selected-model",
+        [{"role": "user", "content": "create a file"}],
+        max_rounds=3,
+        relevant_tools={"write_file"},
+        _is_teacher_run=True,
+    ))
+
+    terminal = json.loads(next(
+        chunk[6:] for chunk in chunks if '"type": "agent_terminal"' in chunk
+    ))["data"]
+    assert terminal["failed"] is True
+    assert terminal["failure"]["category"] == "degenerate_generation"
+    assert executed == []
+    assert "data: [DONE]\n\n" not in chunks
+
+
 @pytest.mark.parametrize(
     ("provider_status", "expected_status", "expected_message"),
     [

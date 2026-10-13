@@ -60,7 +60,12 @@ Server checkpoints preserve bounded packet evidence for the exact owner, chat,
 and run. Exact tool approval can restore that evidence; interrupted recovery
 reopens a previously completed slice for reproduction and testing. Malformed
 evidence resets the slice instead of granting a pass. Ordinary checklist storage
-does not supply execution evidence. The packet mechanism starts a fresh model
+does not supply execution evidence. Exact approval resumes also recover bounded,
+server-recorded successful documentation reads and skill views from the same
+owner, chat, origin run, and workspace. Current tool restrictions and skill
+requirements still apply. Failed lookups, retry counters, and skipped preparation
+never become successful research evidence. Retained reference text remains
+untrusted; unrelated turns cannot inherit this evidence. The packet mechanism starts a fresh model
 context at each accepted or restored packet: it retains human
 instructions and trusted system constraints, drops earlier assistant/tool chatter,
 and preserves complete new tool-call/result pairs. Saved conversation history is

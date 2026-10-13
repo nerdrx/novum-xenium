@@ -145,6 +145,67 @@ class CodingGrounding:
         self.viewed_skills = set()
         self.skill_view_attempts = 0
         self.skill_review_skipped = False
+        self._successful_evidence = []
+
+    def _remember_evidence(self, tool, content, result):
+        # Keep complete skill procedures; truncated skill text must be reread.
+        key = "results" if tool == "manage_skills" else "output"
+        body = result.get(key)
+        limit = 20_000 if key == "results" else 12_000
+        if (not isinstance(content, str) or len(content) > 4_000
+                or not isinstance(body, str) or not body.strip()
+                or (key == "results" and len(body) > limit)):
+            return
+        if len(body) > limit:
+            marker = "\n[Earlier documentation excerpt truncated.]"
+            body = body[:limit - len(marker)] + marker
+        record = {"tool": tool, "content": content,
+                  "result": {key: body, "exit_code": result.get("exit_code")}}
+        if record in self._successful_evidence:
+            return
+        records = [*self._successful_evidence, record]
+        skills = [entry for entry in records if entry["tool"] == "manage_skills"]
+        if (len(skills) <= 2 and sum(len(entry["result"]["results"]) for entry in skills) <= 20_000
+                and len(records) <= 8 and len(json.dumps(records)) <= 56_000):
+            self._successful_evidence = records
+
+    def checkpoint_evidence(self):
+        return {"version": 1, "records": copy.deepcopy(self._successful_evidence)}
+
+    def restore_evidence(self, data):
+        """Replay server-owned successes against the current task's requirements."""
+        if not isinstance(data, dict) or data.get("version") != 1:
+            return []
+        records = data.get("records")
+        if not isinstance(records, list) or len(records) > 8 or len(json.dumps(records)) > 56_000:
+            return []
+        restored = []
+        skill_chars = 0
+        skill_count = 0
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            tool, content, result = record.get("tool"), record.get("content"), record.get("result")
+            if (not isinstance(tool, str) or tool not in {"read_file", "web_fetch", "manage_skills"}
+                    or tool not in self.research_tools or not isinstance(content, str)
+                    or len(content) > 4_000 or not tool_result_is_successful(result)):
+                continue
+            key = "results" if tool == "manage_skills" else "output"
+            body = result.get(key)
+            if not isinstance(body, str) or not body.strip() or len(body) > (20_000 if key == "results" else 12_000):
+                continue
+            if tool == "manage_skills":
+                if skill_count >= 2 or skill_chars + len(body) > 20_000:
+                    continue
+                skill_count += 1
+                skill_chars += len(body)
+            # Evidence replay must never satisfy a gate by exhausting retries.
+            counters = self.attempts, self.failures, self.skill_view_attempts
+            accepted = self.observe(tool, result, content)
+            self.attempts, self.failures, self.skill_view_attempts = counters
+            if accepted:
+                restored.append(record)
+        return restored
 
     @staticmethod
     def _latest_narrow_scope(task):
@@ -463,6 +524,7 @@ class CodingGrounding:
                 self.skill_view_attempts += 1
             if successful_view:
                 self.viewed_skills.add(name)
+                self._remember_evidence(tool_name, content, result)
                 return True
             return False
         if not self.required or tool_name not in self.phase_tools:
@@ -514,6 +576,7 @@ class CodingGrounding:
                 )
         if evidence:
             self.evidence.add(tool_name)
+            self._remember_evidence(tool_name, content, result)
             return True
         # Navigation and successful search results are progress, not failed
         # lookups. Only unsuccessful reads/searches/fetches consume the escape.

@@ -1241,6 +1241,29 @@ async def _restore_approved_coding_source(
     return None
 
 
+async def _restore_approved_grounding(exact_approval, owner, session_id, workspace):
+    """Load only server-recorded evidence from this sealed approval's workspace."""
+    if exact_approval is None or not session_id or not workspace:
+        return None
+    pending = exact_approval.pending
+    source_owner = str(owner or "").strip().casefold()
+    if (not pending.origin_run_id or pending.owner != source_owner
+            or pending.session_id != str(session_id)
+            or pending.workspace != workspace):
+        return None
+    from src import run_checkpoints
+    checkpoint = await asyncio.to_thread(
+        run_checkpoints.get_run_checkpoint, pending.origin_run_id, str(session_id), source_owner,
+    )
+    if (not isinstance(checkpoint, dict) or checkpoint.get("run_id") != pending.origin_run_id
+            or checkpoint.get("owner") != source_owner
+            or checkpoint.get("session_id") != str(session_id)
+            or not isinstance(checkpoint.get("context"), dict)
+            or checkpoint["context"].get("workspace") != workspace):
+        return None
+    return checkpoint.get("coding_grounding")
+
+
 async def _restore_approved_read_context(exact_approval, owner, session_id):
     """Restore a small set of successful read results from this sealed run."""
     if exact_approval is None or not session_id:
@@ -4557,6 +4580,17 @@ async def stream_agent_loop(
         (_retrieval_query + "\n" + _last_user) if _use_coding_tools(_retrieval_query, workspace) else "",
         disabled_tools=disabled_tools, plan_mode=plan_mode, guide_mode=guide_only,
     )
+    def _observe_coding_grounding(tool, result, content):
+        accepted = _coding_grounding.observe(tool, result, content)
+        if accepted and server_run_id and session_id:
+            from src.run_checkpoints import record_coding_grounding
+            record_coding_grounding(server_run_id, session_id, owner,
+                                    _coding_grounding.checkpoint_evidence())
+        return accepted
+
+    _restored_grounding = await _restore_approved_grounding(
+        exact_approval, owner, session_id, workspace,
+    )
     from src.coding_work_packet import CodingWorkTracker, fresh_packet_context
     _resume_coding_work = bool(
         isinstance(coding_work_checkpoint, dict)
@@ -5319,6 +5353,34 @@ async def stream_agent_loop(
     # history. Keep exact successful skill views separately so each rebuilt
     # route can reattach them as untrusted reference data before budget trim.
     _skill_reference_messages_by_name = {}
+    _skill_reference_names = set()
+    _skill_reference_warned = set()
+    _skill_reference_chars = 0
+
+    def _make_skill_reference(name, body):
+        nonlocal _skill_reference_chars
+        if not name or name in _skill_reference_names or name in _skill_reference_warned:
+            return None
+        if (len(_skill_reference_names) < 2 and isinstance(body, str)
+                and _skill_reference_chars + len(body) <= 20_000):
+            _skill_reference_names.add(name)
+            _skill_reference_chars += len(body)
+            label = f"required skill procedure: {name}"
+            content = body
+        else:
+            _skill_reference_warned.add(name)
+            label = "skill reference availability"
+            content = (
+                f"The full procedure {name} exceeds the bounded retained-reference size. "
+                "Its complete body is not included here; retrieve it again if needed and do not "
+                "claim to have applied its unavailable steps."
+            )
+        message = untrusted_context_message(label, content, arm_tool_gate=False)
+        message["_agent_injected"] = "context"
+        message["_required_skill_reference"] = name
+        _skill_reference_messages_by_name[name] = message
+        return message
+
 
     def _trim_route_request_messages(candidate_url, candidate_model, route_messages, route_tools=None):
         """Apply the candidate route's own context budget to its request."""
@@ -5870,6 +5932,23 @@ async def stream_agent_loop(
                 is_api and not _is_odysseus_qwen_model(candidate_model)
             ),
         )
+        # Skill matching is now current. Replay only saved successful evidence;
+        # no saved retry/skip counters can open the new task's grounding gate.
+        for record in _coding_grounding.restore_evidence(_restored_grounding):
+            if record["tool"] == "manage_skills":
+                args = json.loads(record["content"])
+                _make_skill_reference(str(args.get("name") or args.get("skill_id") or "").strip(),
+                                      record["result"]["results"])
+            elif not any(message.get("_grounding_reference") == record["content"]
+                         for message in route_messages):
+                route_messages.append(untrusted_context_message(
+                    "successful documentation read from this approved task run",
+                    record["result"]["output"], provenance_origin="approved_run_grounding",
+                ) | {"_grounding_reference": record["content"]})
+        if _restored_grounding and server_run_id and session_id:
+            from src.run_checkpoints import record_coding_grounding
+            record_coding_grounding(server_run_id, session_id, owner,
+                                    _coding_grounding.checkpoint_evidence())
         # A route's ordinary retrieval may narrow its schemas after the prompt
         # found relevant skills. Keep their read-only view tool available while
         # the grounding gate is waiting for that exact procedure lookup.
@@ -6230,34 +6309,6 @@ async def stream_agent_loop(
 
     _context_preview_accounted_round = None
     _context_preview_accounted_tokens = 0
-    _skill_reference_names = set()
-    _skill_reference_warned = set()
-    _skill_reference_chars = 0
-
-    def _make_skill_reference(name, body):
-        nonlocal _skill_reference_chars
-        if not name or name in _skill_reference_names or name in _skill_reference_warned:
-            return None
-        if (len(_skill_reference_names) < 2 and isinstance(body, str)
-                and _skill_reference_chars + len(body) <= 20_000):
-            _skill_reference_names.add(name)
-            _skill_reference_chars += len(body)
-            label = f"required skill procedure: {name}"
-            content = body
-        else:
-            _skill_reference_warned.add(name)
-            label = "skill reference availability"
-            content = (
-                f"The full procedure {name} exceeds the bounded retained-reference size. "
-                "Its complete body is not included here; retrieve it again if needed and do not "
-                "claim to have applied its unavailable steps."
-            )
-        message = untrusted_context_message(label, content, arm_tool_gate=False)
-        message["_agent_injected"] = "context"
-        message["_required_skill_reference"] = name
-        _skill_reference_messages_by_name[name] = message
-        return message
-
     async def _context_result_preview(
         tool_name, description, result, formatted, event, *,
         tool_index=-1, native_tool_calls=None,
@@ -6595,7 +6646,7 @@ async def stream_agent_loop(
         # The sealed action has already been authorized and executed. Record
         # any actual read evidence it returned, but keep the remaining-turn
         # mutation gate active for separate calls.
-        _coding_grounding.observe(approved.tool_name, approved_result, approved.content)
+        _observe_coding_grounding(approved.tool_name, approved_result, approved.content)
         _milestone_checkpoint.observe(approved.tool_name, approved_result)
         _previous_packet = _coding_work.state.packet if _coding_work.state else None
         _previous_packet_stage = _coding_work.state.stage if _coding_work.state else None
@@ -6778,7 +6829,7 @@ async def stream_agent_loop(
             _effectful_used = True
         approved_skill_reference = None
         if approved.tool_name == "manage_skills":
-            approved_skill_view = _coding_grounding.observe(
+            approved_skill_view = _observe_coding_grounding(
                 approved.tool_name, approved_result, approved.content,
             )
             if approved_skill_view:
@@ -8349,7 +8400,7 @@ async def stream_agent_loop(
                     yield f'data: {json.dumps({"delta": held_delta})}\n\n'
                 held_round_deltas.clear()
             _grounding_was_open = _coding_grounding.may_mutate
-            successful_skill_view = _coding_grounding.observe(
+            successful_skill_view = _observe_coding_grounding(
                 block.tool_type, result, block.content,
             )
             skill_reference_message = None

@@ -232,7 +232,13 @@ class CheckpointStore:
             )
 
     def record_coding_work(self, run_id: str, session_id: str, owner: Optional[str], state: dict) -> bool:
-        """Save server-observed packet evidence in its exact run/session scope."""
+        return self._record_coding_state(run_id, session_id, owner, state, "coding_work_packet")
+
+    def record_coding_grounding(self, run_id: str, session_id: str, owner: Optional[str], state: dict) -> bool:
+        return self._record_coding_state(run_id, session_id, owner, state, "coding_grounding")
+
+    def _record_coding_state(self, run_id, session_id, owner, state, field):
+        """Save server-observed evidence in its exact run/session scope."""
         if not all(isinstance(value, str) and value.strip() for value in (run_id, session_id)):
             return False
         try:
@@ -256,7 +262,7 @@ class CheckpointStore:
                     return False
             except (ValueError, TypeError):
                 return False
-            payload["coding_work_packet"] = json.loads(encoded_state)
+            payload[field] = json.loads(encoded_state)
             db.execute(
                 "UPDATE agent_run_checkpoints SET payload=?, updated=? "
                 "WHERE run_id=? AND session_id=? AND owner=?",
@@ -393,6 +399,14 @@ def record_coding_work(run_id: str, session_id: str, owner: Optional[str], state
         return _STORE.record_coding_work(run_id, session_id, owner, state)
     except Exception:
         logger.exception("Could not checkpoint coding work packet")
+        return False
+
+
+def record_coding_grounding(run_id: str, session_id: str, owner: Optional[str], state: dict) -> bool:
+    try:
+        return _STORE.record_coding_grounding(run_id, session_id, owner, state)
+    except Exception:
+        logger.exception("Could not checkpoint coding grounding")
         return False
 
 

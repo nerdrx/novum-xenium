@@ -249,3 +249,9 @@ The CSV/Decimal aggregation task stopped after 21.748 seconds with no source edi
 Reproducible starters/tests are in `evaluations/fixtures/diverse`; full evidence is `evaluations/coding-diverse-tasks-20261013.json`.
 
 The comparison adapter now reports unresolved clarification as `waiting_user` (non-success exit 2), with redacted event metadata. It does not answer the question or treat it as tool approval. All 17 adapter tests pass, including approval followed by clarification and resolved-card handling. This fixes evaluation reporting; it does not fix the model's unnecessary question or retroactively pass the CSV trial.
+
+### False research gates on small standard-library functions
+
+Two new same-model tasks (bounded retries and stable topological ordering) stopped without edits. Runtime tool logs showed only reading/planning tools, with no registered check action. The substantive-task classifier mistakenly treated “standard library” as dependency integration and the parameter name in `stable_toposort(dependencies)` as a prose dependency request. The research gate consequently withheld the baseline check and editing tools. These failures cannot be attributed solely to the model. Pre-fix evidence: `evaluations/coding-diverse-round2-before-20261013.json`.
+
+Classification now ignores standard-library wording as a dependency cue and simple adjacent function parameter lists, while retaining callable names and surrounding prose. App/GUI requests and actual external library/framework integration still require research. All 34 grounding tests pass; the full original three affected task prompts no longer trigger the gate. Deployment preserved runtime backups and confirmed all 111 chats idle before restart; canonical, runtime, live container and rebuilt image source match. Image: `7139e425c98d`.

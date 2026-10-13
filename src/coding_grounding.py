@@ -14,12 +14,13 @@ from src.tool_capabilities import ToolEffect, capabilities_for_action, tool_resu
 
 
 _SUBSTANTIVE_CODE_TASK = re.compile(
+    # A standard-library constraint is not a request to integrate a dependency.
     r"\b(?:build|create|implement|integrate|migrate|upgrade|replace|add)\b"
     r".{0,100}\b(?:app(?:lication)?s?|gui|website|websites|cli|tool|tools|"
-    r"module|modules|libraries|library|frameworks?|dependencies|packages?|"
+    r"module|modules|(?<!standard )libraries|(?<!standard )library|frameworks?|dependencies|packages?|"
     r"sdk|apis?|plugins?|services?)\b"
     r"|\b(?:integrate|migrate|upgrade|replace)\b.{0,80}"
-    r"\b(?:library|framework|dependency|package|sdk|api|plugin|service)\b",
+    r"\b(?:(?<!standard )library|framework|dependency|package|sdk|api|plugin|service)\b",
     re.IGNORECASE | re.DOTALL,
 )
 _SUBSTANTIVE_GUI_REPAIR = re.compile(
@@ -129,10 +130,13 @@ class CodingGrounding:
         research_scope = self.latest_scope or self.task
         self.disabled_tools = set(disabled_tools or ())
         self.web_allowed = bool(web_allowed) and not _NO_WEB.search(self.task)
+        # Parameter names such as dependencies in sort(dependencies) are code,
+        # not prose requests to build or integrate those capabilities.
+        classification_task = re.sub(r"(?<=\w)\([^()\n]*\)", "", self.task)
         self.required = bool(
             self.task and not plan_mode and not guide_mode
             and (
-                _SUBSTANTIVE_CODE_TASK.search(self.task)
+                _SUBSTANTIVE_CODE_TASK.search(classification_task)
                 or _SUBSTANTIVE_GUI_REPAIR.search(self.task)
             )
         )

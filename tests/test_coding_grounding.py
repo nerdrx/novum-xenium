@@ -151,6 +151,32 @@ def test_trivial_edits_and_guidance_skip_gate_but_no_web_keeps_local_gate():
     assert "local project documentation only" in offline.directive
 
 
+def test_stdlib_function_requests_do_not_require_dependency_research():
+    for text in (
+        "Implement retry_call(operation, attempts, retry_on) in solution.py using only the standard library.",
+        "Implement stable_toposort(dependencies) in solution.py using only Python's standard library.",
+        "Implement totals(csv_text) using only Python's STANDARD LIBRARY.",
+        "Implement stable_toposort(dependencies) in solution.py.",
+        "Replace the parser function using the standard library.",
+    ):
+        gate = CodingGrounding(text)
+        assert not gate.required, text
+        assert gate.may_mutate
+
+
+def test_stdlib_mention_does_not_disable_substantive_task_research():
+    for text in (
+        "Build a desktop app using only the standard library.",
+        "Implement a GUI using Python's standard library.",
+        "Integrate this third-party library alongside the standard library.",
+        "Implement a parser with the standard library and an external framework.",
+        "Implement stable_toposort(dependencies) using a third-party library.",
+    ):
+        gate = CodingGrounding(text)
+        assert gate.required, text
+        assert not gate.may_mutate
+
+
 def test_substantive_gui_repair_and_restyling_require_grounding():
     repair_request = (
         "Continue the original task in this workspace: a working FFmpeg desktop GUI. "

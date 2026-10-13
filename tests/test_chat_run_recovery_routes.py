@@ -268,7 +268,15 @@ def test_group_approval_stream_saves_reloadable_gate_before_runner_returns(tmp_p
     assert reopened["metadata"]["tool_events"][-1]["ask_user"]["approval_id"] == "approval-1"
 
 
-def test_chat_stream_forwards_coding_work_packet_events(tmp_path, monkeypatch):
+@pytest.mark.parametrize("event", [
+    {"type": "coding_work_packet", "round": 2, "stage": "done",
+     "test_status": "passed", "review_status": "passed",
+     "packet": {"objective": "Fix refresh behavior"}},
+    {"type": "coding_workflow", "requested": True, "enabled": True},
+    {"type": "coding_workflow", "requested": True, "enabled": False},
+    {"type": "coding_workflow", "requested": False, "enabled": False},
+])
+def test_chat_stream_forwards_coding_work_packet_events(tmp_path, monkeypatch, event):
     workspace = str(tmp_path / "workspace")
     (tmp_path / "workspace").mkdir()
     store = _interrupted_store(
@@ -277,12 +285,6 @@ def test_chat_stream_forwards_coding_work_packet_events(tmp_path, monkeypatch):
     client, _captured = _recovery_post_client(
         monkeypatch, checkpoint_store=store, workspace=workspace,
     )
-    event = {
-        "type": "coding_work_packet", "round": 2, "stage": "done",
-        "test_status": "passed", "review_status": "passed",
-        "packet": {"objective": "Fix refresh behavior"},
-    }
-
     async def packet_loop(*_args, **_kwargs):
         yield "data: " + json.dumps(event) + "\n\n"
         yield "data: [DONE]\n\n"

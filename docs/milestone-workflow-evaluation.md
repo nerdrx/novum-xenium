@@ -149,3 +149,19 @@ to test first or repair directly. It made no edits and executed no test. The ext
 check failed. No operator coaching or application edits occurred; settings were
 restored. Thus this guidance alignment did not solve the redundant-question failure
 in the observed run. Do not present the passing guidance tests as model success.
+
+## Effective workflow state and bounded execution
+
+Startup telemetry now records requested and effective checked-mode state before
+a packet exists; the comparison adapter retains these booleans. The initial
+implementation passed 53 tests plus 10 subtests, but the live route filtered out
+the event. The route forwarding allowlist and route-level regression test were
+corrected afterward. This is an evidence fix, not a model-behavior change.
+
+The [diagnostic GUI run](evaluations/coding-workflow-state-20261013.json) confirmed
+checked mode through its saved enabled packet. The model registered a work item,
+edited the application, and produced a video without operator coaching. It failed
+the final Start-recovery assertion and reached the 600-second limit. Only the owned
+QA run was stopped. Protected test/input hashes matched; the original setting was
+restored. No autonomous completion is claimed. The differing progress in these
+single runs is not evidence that telemetry made the model better.

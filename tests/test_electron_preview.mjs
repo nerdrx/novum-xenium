@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { ELECTRON_WORKER_SOURCE, previewStatus, ensureOutputIgnore, resolveWorkspaceProject, runOwnedCommand, summarizeMainStderr } from '../scripts/electron_preview.mjs';
+import { ELECTRON_WORKER_SOURCE, appendControlTimelineEvent, deriveControlStateChanges, previewStatus, ensureOutputIgnore, resolveWorkspaceProject, runOwnedCommand, summarizeMainStderr } from '../scripts/electron_preview.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const node = process.execPath;
@@ -73,6 +73,25 @@ test('main-process summary retains rejected IPC object fields before startup noi
   assert.ok(summary[0].length <= 740);
   assert.ok(summarizeMainStderr(["Error occurred in handler for 'export-file': {",
     ...Array(30).fill('  detail: ' + 'x'.repeat(4000)), '}'])[0].length <= 740);
+});
+
+test('control timeline reconstructs same-batch disabled transitions and stays bounded', () => {
+  const attributes = new Map();
+  const target = { getAttribute: name => attributes.get(name) ?? null };
+  const changes = deriveControlStateChanges([
+    { type: 'attributes', target, attributeName: 'disabled', oldValue: null },
+    { type: 'attributes', target, attributeName: 'disabled', oldValue: '' },
+  ]);
+  assert.deepEqual(changes.map(({ field, from, to }) => ({ field, from, to })), [
+    { field: 'disabled', from: false, to: true },
+    { field: 'disabled', from: true, to: false },
+  ]);
+
+  const events = [];
+  for (let index = 0; index < 45; index++) appendControlTimelineEvent(events, { index });
+  assert.equal(events.length, 40);
+  assert.equal(events[0].index, 5);
+  assert.equal(events.at(-1).index, 44);
 });
 
 test('preview output is locally ignored without replacing an existing user ignore file', async t => {

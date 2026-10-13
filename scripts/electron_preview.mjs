@@ -142,6 +142,27 @@ export function previewStatus(rendererConnected, runtimeIssues, test) {
     ? 'rendered; workspace test completed' : 'rendered; behavior unverified';
 }
 
+export function deriveControlStateChanges(records) {
+  const attributeValue = (attributeName, value) => attributeName === 'disabled'
+    ? value !== null : String(value ?? '').slice(0, 32);
+  return records.flatMap((record, index) => {
+    if (record.type !== 'attributes'
+        || !['disabled', 'aria-disabled'].includes(record.attributeName)) return [];
+    const next = records.slice(index + 1).find(candidate =>
+      candidate.type === 'attributes' && candidate.target === record.target
+      && candidate.attributeName === record.attributeName);
+    const from = attributeValue(record.attributeName, record.oldValue);
+    const to = attributeValue(record.attributeName,
+      next ? next.oldValue : record.target.getAttribute(record.attributeName));
+    return from === to ? [] : [{ target: record.target, field: record.attributeName, from, to }];
+  });
+}
+
+export function appendControlTimelineEvent(events, event) {
+  if (events.length >= 40) events.shift();
+  events.push(event);
+}
+
 export const ELECTRON_WORKER_SOURCE = String.raw`
 const ensureOutputIgnore = ${ensureOutputIgnore.toString()};
 const previewStatus = ${previewStatus.toString()};
@@ -363,6 +384,47 @@ try {
     // Bound implicit locator/action waits so a selector failure is reported
     // before the outer helper timeout; explicit per-call waits can override it.
     page.setDefaultTimeout(WORKSPACE_ACTION_TIMEOUT_MS);
+    await page.evaluate(() => {
+      const deriveChanges = ${deriveControlStateChanges.toString()};
+      const appendEvent = ${appendControlTimelineEvent.toString()};
+      const events = [];
+      const selector = 'button,input,select,textarea,a,[role="button"]';
+      const targetInfo = element => ({
+        tag: String(element.tagName || '').toLowerCase().slice(0, 24),
+        id: String(element.id || '').slice(0, 80),
+      });
+      for (const element of document.querySelectorAll(selector)) {
+        const ariaDisabled = element.getAttribute('aria-disabled');
+        if (element.disabled || ariaDisabled !== null) appendEvent(events, {
+          kind: 'state', observedMs: Math.round(performance.now()),
+          target: targetInfo(element), field: 'snapshot',
+          disabled: !!element.disabled, ariaDisabled: ariaDisabled?.slice(0, 32) ?? null,
+        });
+      }
+      const observeRecords = records => {
+        for (const { target, ...change } of deriveChanges(records.slice(-80))) {
+          appendEvent(events, {
+            kind: 'state', observedMs: Math.round(performance.now()),
+            target: targetInfo(target), ...change,
+          });
+        }
+      };
+      const observer = new MutationObserver(observeRecords);
+      observer.observe(document.documentElement, {
+        subtree: true, attributes: true, attributeOldValue: true,
+        attributeFilter: ['disabled', 'aria-disabled'],
+      });
+      document.addEventListener('click', event => {
+        const clicked = event.target instanceof Element ? event.target.closest(selector) : null;
+        if (clicked) appendEvent(events, {
+          kind: 'click', observedMs: Math.round(performance.now()), target: targetInfo(clicked),
+        });
+      }, true);
+      window.__odysseusControlTimeline = {
+        events,
+        drain() { observeRecords(observer.takeRecords()); return events; },
+      };
+    });
     const value = await run({
       app: { pid: electronProcess.pid, executablePath: config.electronPath, exitCode: electronProcess.exitCode },
       page, context, artifacts: { outputDir, desktopPath, compactPath },
@@ -439,9 +501,17 @@ try {
   flushMainOutput();
   const reportPath = runDirectory ? path.join(runDirectory, 'report.json') : '';
   const workspaceTestFailed = phase === 'running workspace test';
-  const errorSummary = String(error?.message || error).slice(0, 1000);
+  const errorSummary = String(error?.message || error).slice(0, 300);
   const testEvidence = {};
   if (workspaceTestFailed && activePage && !activePage.isClosed()) {
+    try {
+      testEvidence.controlTimeline = await activePage.evaluate(() => {
+        const timeline = window.__odysseusControlTimeline;
+        return timeline ? timeline.drain() : [];
+      });
+    } catch (captureError) {
+      testEvidence.controlTimelineError = String(captureError?.message || captureError).slice(0, 200);
+    }
     try {
       const bodyText = String(await activePage.locator('body').innerText({ timeout: 3000 }));
       const marker = '\n...[visible text truncated]...\n';
@@ -480,6 +550,13 @@ try {
     test: workspaceTestFailed ? 'failed' : 'not run',
     report: reportPath || null,
     error: errorSummary,
+    ...(testEvidence.controlTimeline?.length ? {
+      controlTimeline: testEvidence.controlTimeline.slice(-8).map(event => ({
+        ...event, target: { ...event.target, id: event.target.id.slice(0, 24) },
+        ...(typeof event.from === 'string' ? { from: event.from.slice(0, 24) } : {}),
+        ...(typeof event.to === 'string' ? { to: event.to.slice(0, 24) } : {}),
+      })),
+    } : {}),
     sourceFrames: String(error?.stack || '').split(/\r?\n/).slice(0, 5)
       .map(frame => frame.slice(0, 300)),
     errors: {

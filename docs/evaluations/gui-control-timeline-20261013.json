@@ -1,0 +1,131 @@
+{
+  "assertion": "Start must recover after completion\n\nfalse !== true\n",
+  "control_timeline": [
+    {
+      "kind": "state",
+      "observedMs": 786,
+      "target": {
+        "tag": "input",
+        "id": "inputPath"
+      },
+      "field": "snapshot",
+      "disabled": true,
+      "ariaDisabled": null
+    },
+    {
+      "kind": "state",
+      "observedMs": 786,
+      "target": {
+        "tag": "button",
+        "id": "startBtn"
+      },
+      "field": "snapshot",
+      "disabled": true,
+      "ariaDisabled": null
+    },
+    {
+      "kind": "state",
+      "observedMs": 786,
+      "target": {
+        "tag": "button",
+        "id": "cancelBtn"
+      },
+      "field": "snapshot",
+      "disabled": true,
+      "ariaDisabled": null
+    },
+    {
+      "kind": "state",
+      "observedMs": 791,
+      "target": {
+        "tag": "input",
+        "id": "inputPath"
+      },
+      "field": "disabled",
+      "from": true,
+      "to": false
+    },
+    {
+      "kind": "state",
+      "observedMs": 791,
+      "target": {
+        "tag": "button",
+        "id": "startBtn"
+      },
+      "field": "disabled",
+      "from": true,
+      "to": false
+    },
+    {
+      "kind": "click",
+      "observedMs": 863,
+      "target": {
+        "tag": "button",
+        "id": "startBtn"
+      }
+    },
+    {
+      "kind": "state",
+      "observedMs": 905,
+      "target": {
+        "tag": "button",
+        "id": "startBtn"
+      },
+      "field": "disabled",
+      "from": false,
+      "to": true
+    },
+    {
+      "kind": "state",
+      "observedMs": 905,
+      "target": {
+        "tag": "input",
+        "id": "inputFile"
+      },
+      "field": "disabled",
+      "from": false,
+      "to": true
+    },
+    {
+      "kind": "state",
+      "observedMs": 905,
+      "target": {
+        "tag": "input",
+        "id": "inputPath"
+      },
+      "field": "disabled",
+      "from": false,
+      "to": true
+    },
+    {
+      "kind": "state",
+      "observedMs": 905,
+      "target": {
+        "tag": "input",
+        "id": "outputPath"
+      },
+      "field": "disabled",
+      "from": false,
+      "to": true
+    },
+    {
+      "kind": "state",
+      "observedMs": 905,
+      "target": {
+        "tag": "textarea",
+        "id": "argsInput"
+      },
+      "field": "disabled",
+      "from": false,
+      "to": true
+    }
+  ],
+  "model_probe": "coding-causal-diagnosis-20261013.json",
+  "script_sha256": "3fae9d63ad5bf7b2e40f5c1b33e1496e13009ae10fe0289d1921e00af24bbab4",
+  "test_count": 12,
+  "limits": [
+    "Observation timestamps are observer callback times, not exact source write times.",
+    "Records attributes and click targets only; no source stack or full application lifecycle tracing.",
+    "This proves diagnostic capture, not improved model repair success."
+  ]
+}

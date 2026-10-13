@@ -714,5 +714,272 @@
       "nflix/.odysseus-preview/qa-conversion-flow.mjs": true
     },
     "manual_application_edits": 0
+  },
+  "read_history_retest": {
+    "revision": "b753112",
+    "model_metadata": {
+      "actual_route": {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 66
+      },
+      "approval_count": 1,
+      "endpoint_id": "6865006e",
+      "evidence": [
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 38,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 39,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 40,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 41,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 42,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 43,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 44,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 45,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 46,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 47,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 48,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 49,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 50,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 51,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 52,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 53,
+          "type": "model_actual"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 53,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 54,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 55,
+          "type": "model_actual"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 55,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 56,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 57,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 58,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 59,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 60,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 61,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 62,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 63,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 64,
+          "type": "model_actual"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 65,
+          "type": "model_actual"
+        },
+        {
+          "review_status": "not_reviewed",
+          "round": 65,
+          "stage": "verify",
+          "test_status": "not_verified",
+          "type": "coding_work_packet"
+        },
+        {
+          "endpoint_id": "6865006e",
+          "model": "nx-model-5",
+          "requested_model": "qwen3.5:9b",
+          "round": 66,
+          "type": "model_actual"
+        }
+      ],
+      "model": "qwen3.5:9b",
+      "output_saved": false,
+      "preset_id": null,
+      "run_id": "9d88400154e6400e887162d8d81013e6",
+      "seconds": 600.017,
+      "session_id": "2574bafa-4e44-4c8d-a496-9f35560ccf1d",
+      "source_files": [
+        "nflix/dist/main/index.js",
+        "nflix/dist/renderer/renderer.js",
+        "nflix/.odysseus-preview/qa-conversion-flow.mjs"
+      ],
+      "status": "timeout",
+      "stopped_exact_run": true,
+      "stream_ended": false,
+      "terminal": null,
+      "verification_passed": null
+    },
+    "result": "timeout",
+    "gui_conversion_verified": false,
+    "observed_failure": "Run reached600second QA deadline after66model rounds. It registered a nonexistent npm script as baseline despite the supplied GUI check; then created a check wrapper and ran the actual GUI test unsuccessfully. Renderer change references startButton although the existing variable is startBtn. No passing registered acceptance. Unlike previous trial it continued beyond the first three post-packet reads.",
+    "source_unchanged": {
+      "nflix/dist/main/index.js": false,
+      "nflix/dist/renderer/renderer.js": false,
+      "nflix/.odysseus-preview/qa-conversion-flow.mjs": true
+    },
+    "manual_application_edits": 0,
+    "owned_run_stopped": true,
+    "test_unchanged": true,
+    "limitation": "No successful model-generated application claim. The schema change f6c44b2 was not deployed during this trial."
   }
 }

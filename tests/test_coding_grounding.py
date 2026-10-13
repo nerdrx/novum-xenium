@@ -195,6 +195,50 @@ def test_matched_skill_view_and_documentation_are_independent_requirements():
     assert gate.may_mutate
 
 
+def test_ui_design_requires_visual_verification_when_both_skills_match():
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["ui-design", "visual-verification"])
+    assert gate.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
+
+    assert gate.observe("manage_skills", {"results": "Design procedure"},
+                        '{"action":"view","name":"ui-design"}')
+    assert gate.skill_review_pending
+    assert not gate.may_mutate
+    assert gate.pending_required_skill_names == ["visual-verification"]
+    assert "`visual-verification`" in gate.directive
+    assert "`ui-design`" not in gate.directive
+
+    assert gate.observe("manage_skills", {"results": "Render and critique procedure"},
+                        '{"action":"view","name":"visual-verification"}')
+    assert not gate.skill_review_pending
+    assert gate.may_mutate
+
+
+def test_visual_skill_pair_unavailable_or_failed_still_uses_bounded_escape():
+    unavailable = CodingGrounding(task())
+    assert unavailable.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
+    unavailable.set_skill_candidates(["ui-design", "visual-verification"], available=False)
+    assert not unavailable.skill_candidates
+    assert unavailable.may_mutate
+
+    failed = CodingGrounding(task())
+    failed.set_skill_candidates(["ui-design", "visual-verification"])
+    assert failed.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
+    assert failed.observe(
+        "manage_skills", {"results": "Design procedure"},
+        '{"action":"view","name":"ui-design"}',
+    )
+    assert not failed.observe(
+        "manage_skills", {"error": "skill unavailable", "exit_code": 1},
+        '{"action":"view","name":"visual-verification"}',
+    )
+    assert failed.skill_review_skipped is False
+    assert failed.skill_view_attempts == failed.max_skill_view_attempts
+    assert failed.may_mutate
+    assert "procedure was not consulted" in failed.directive
+    assert "Still unread: visual-verification" in failed.directive
+
+
 def test_skill_view_must_match_a_suggested_candidate_and_failure_escape_is_bounded():
     gate = CodingGrounding(task())
     gate.set_skill_candidates(["gui-workflow"])
@@ -206,7 +250,7 @@ def test_skill_view_must_match_a_suggested_candidate_and_failure_escape_is_bound
     assert not gate.observe("manage_skills", {"error": "not found", "exit_code": 1},
                             '{"action":"view","name":"gui-workflow"}')
     assert gate.may_mutate  # two completed, unsuccessful lookups release the gate
-    assert "do not claim that its procedure was consulted" in gate.directive
+    assert "do not claim all required procedures were consulted" in gate.directive
 
 
 def test_documentation_ready_pending_skill_exposes_only_skill_phase_tools():

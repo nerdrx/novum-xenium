@@ -62,3 +62,34 @@ def test_find_info_online_forces_web_search_tools():
     tools = ti.get_tools_for_query("find info online about crow box designs")
     assert "web_search" in tools
     assert "web_fetch" in tools
+
+
+def test_named_tool_identifier_outranks_unrelated_semantic_results():
+    class Lane:
+        name = "custom"
+
+        def __init__(self):
+            self.collection = self
+
+        def count(self):
+            return 1
+
+        def encode(self, texts):
+            return [[0.0] for _ in texts]
+
+        def query(self, **kwargs):
+            return {
+                "metadatas": [[{"tool_name": "web_search"}]],
+                "distances": [[0.01]],
+            }
+
+    ti = ToolIndex.__new__(ToolIndex)
+    ti._lanes = [Lane()]
+    assert ti.retrieve("native_preview tool invocation")[0] == "native_preview"
+    assert ti.retrieve("native_preview tool invocation")[:2] == ["native_preview", "web_search"]
+    for query in ("mynative_preview tool", "native_preview_extra tool"):
+        assert "native_preview" not in ti.retrieve(query), query
+
+    unavailable = ToolIndex.__new__(ToolIndex)
+    unavailable._lanes = []
+    assert unavailable.retrieve("please use native_preview tool invocation") == ["native_preview"]

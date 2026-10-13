@@ -333,7 +333,15 @@ class ToolIndex:
             except Exception as e:
                 logger.warning("Tool retrieval failed in %s lane: %s", lane.name, e)
         rows.sort(key=lambda row: (-row["score"], lane_priority.get(row["embedding_lane"], 99)))
-        return [row["tool_name"] for row in dedupe_results(rows, id_key="tool_name", limit=k)]
+        retrieved = [row["tool_name"] for row in dedupe_results(rows, id_key="tool_name", limit=k)]
+        # A tool identifier embedded in a natural-language query is stronger
+        # evidence than semantic ranking. Keep its schema discoverable without
+        # changing the later owner, plan, or disabled-tool filters.
+        explicit = [
+            name for name in BUILTIN_TOOL_DESCRIPTIONS
+            if re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", query, re.IGNORECASE)
+        ]
+        return list(dict.fromkeys([*explicit, *retrieved]))[:k]
 
     # Structural recurring-schedule intent. Typo-resilient (matches "every dya"
     # via "every <word>"), and catches bare clock times ("at 7:30 am", "7am").

@@ -293,17 +293,20 @@ try {
             label: (el.getAttribute('aria-label') || (el.labels ? [...el.labels].map(label => label.innerText.trim()).filter(Boolean).join(' ') : '') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().slice(0, 120),
             disabled: !!el.disabled,
             rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+            belowViewport: rect.bottom > innerHeight,
             color: style.color, background: style.backgroundColor, fontSize: style.fontSize,
             borderRadius: style.borderRadius, boxShadow: style.boxShadow,
           };
         });
       const htmlStyle = getComputedStyle(document.documentElement);
       const bodyStyle = getComputedStyle(document.body);
+      const documentWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
+      const documentHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
       return {
         title: document.title, url: location.href,
         viewport: { width: innerWidth, height: innerHeight },
-        document: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight,
-          horizontalOverflow: document.documentElement.scrollWidth > innerWidth },
+        document: { width: documentWidth, height: documentHeight,
+          horizontalOverflow: documentWidth > innerWidth },
         html: { background: htmlStyle.backgroundColor, backgroundImage: htmlStyle.backgroundImage },
         body: { background: bodyStyle.backgroundColor, backgroundImage: bodyStyle.backgroundImage,
           color: bodyStyle.color, fontFamily: bodyStyle.fontFamily,
@@ -311,7 +314,7 @@ try {
         controls,
       };
     });
-    await page.screenshot({ path: screenshot, fullPage: true, animations: 'disabled', timeout: 10000 });
+    await page.screenshot({ path: screenshot, fullPage: false, animations: 'disabled', timeout: 10000 });
     return { ...baseline, screenshot };
   };
   const desktop = await inspect(1280, 800, desktopPath);

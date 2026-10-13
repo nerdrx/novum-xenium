@@ -208,6 +208,138 @@ def test_search_tools_preserves_plan_disabled_and_caller_allowlist(monkeypatch):
     assert names == ["web_search"]
 
 
+def test_exact_catalog_name_wins_when_search_index_misses(monkeypatch):
+    import src.tool_index as tool_index
+    import src.tool_security as tool_security
+
+    class Index:
+        def retrieve(self, query, k):
+            return ["read_file"]
+
+    monkeypatch.setattr(tool_index, "get_tool_index", lambda: Index())
+    monkeypatch.setattr(tool_security, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
+
+    async def run():
+        return await loop._discover_tools(
+            "Use native_preview to inspect the running interface.",
+            mcp_mgr=None, mcp_disabled_map={}, owner="admin", disabled_tools=set(),
+            plan_mode=False, needs_admin=True,
+        )
+
+    names, _ = asyncio.run(run())
+    assert names[0] == "native_preview"
+
+
+def test_explicit_tool_discovery_keeps_existing_visibility_limits(monkeypatch):
+    import src.tool_security as tool_security
+
+    monkeypatch.setattr(tool_security, "blocked_tools_for_owner", lambda owner: {"native_preview"})
+    assert "native_preview" not in loop._filter_available_tool_names(
+        ["native_preview"], known={"native_preview"}, visible_mcp=set(), owner="limited",
+        disabled_tools=set(),
+    )
+    assert "native_preview" not in loop._filter_available_tool_names(
+        ["native_preview"], known={"native_preview"}, visible_mcp=set(), owner="admin",
+        disabled_tools={"native_preview"},
+    )
+    assert "native_preview" not in loop._filter_available_tool_names(
+        ["native_preview"], known={"native_preview"}, visible_mcp=set(), owner="admin",
+        disabled_tools=set(), caller_tools={"read_file"},
+    )
+
+    monkeypatch.setattr(tool_security, "blocked_tools_for_owner", lambda owner: set())
+    from src.tool_security import PLAN_MODE_READONLY_TOOLS
+    assert "native_preview" not in PLAN_MODE_READONLY_TOOLS
+    monkeypatch.setenv("ODYSSEUS_EXECUTOR_URL", "https://executor.example")
+    assert loop._filter_available_tool_names(
+        ["native_preview"], known={"native_preview"}, visible_mcp=set(), owner="admin",
+        disabled_tools=set(),
+    ) == []
+
+    names, _, _ = loop._available_tool_name_catalog(
+        mcp_mgr=None, mcp_disabled_map={}, plan_mode=True,
+    )
+    assert "native_preview" not in names
+
+
+def test_exact_user_tool_name_is_selected_when_initial_rag_misses(monkeypatch):
+    import src.tool_index as tool_index
+
+    class Index:
+        def get_tools_for_query(self, query, k):
+            return set()
+
+    monkeypatch.setattr(tool_index, "get_tool_index", lambda: Index())
+    import src.tool_security as tool_security
+    monkeypatch.setattr(tool_security, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
+    monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
+    seen = []
+
+    def build_prompt(messages, *args, relevant_tools=None, **kwargs):
+        seen.append(set(relevant_tools or ()))
+        schemas = [schema for schema in loop.FUNCTION_TOOL_SCHEMAS
+                   if schema["function"]["name"] in (relevant_tools or ())]
+        return list(messages), schemas
+
+    monkeypatch.setattr(loop, "_build_system_prompt", build_prompt)
+    requests = []
+
+    async def fake_stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        requests.append(request)
+        yield 'data: {"delta":"ok"}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(loop, "stream_llm_with_fallback", fake_stream)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "test-model",
+            [{"role": "user", "content": "Use native_preview to capture the current screen."}],
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert "native_preview" in seen[0], seen
+    sent = {schema["function"]["name"] for schema in requests[0]["kwargs"]["tools"]}
+    assert "native_preview" in sent
+
+
+def test_explicit_tool_schema_outranks_workspace_core_under_tight_schema_budget(monkeypatch):
+    import src.model_context as model_context
+
+    schemas = [
+        {"type": "function", "function": {"name": "read_file", "description": "large"}},
+        {"type": "function", "function": {"name": "native_preview", "description": "small"}},
+    ]
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    monkeypatch.delenv("ODYSSEUS_EXECUTOR_URL", raising=False)
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: 6000 if key == "agent_input_token_budget" else default)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 6000)
+    monkeypatch.setattr(model_context, "estimate_tool_schema_tokens", lambda tools: sum(
+        1300 if tool["function"]["name"] == "read_file" else 100 for tool in tools
+    ))
+    monkeypatch.setattr(loop, "estimate_tokens", lambda messages: 100)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "test-model",
+            [{"role": "user", "content": "Use native_preview to capture the current screen."}],
+            workspace="/workspace", relevant_tools={"read_file", "native_preview"},
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    selected = {tool["function"]["name"] for tool in requests[0]["kwargs"]["tools"]}
+    assert "native_preview" in selected
+
+
 def test_unlimited_agent_output_uses_standard_4096_token_budget(monkeypatch):
     requests = []
     _configure(monkeypatch, [], requests)

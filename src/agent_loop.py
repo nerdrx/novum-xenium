@@ -1764,33 +1764,13 @@ async def _discover_tools(query: str, *, mcp_mgr, mcp_disabled_map, owner,
     except Exception as exc:
         logger.info("Tool discovery index unavailable; using lexical catalog search: %s", exc)
 
-    from src.tool_security import blocked_tools_for_owner, delegated_credential_blocked_tools
-    from src.tool_policy import known_tool_names
-    denied = set(disabled_tools or ()) | blocked_tools_for_owner(owner)
-    if os.getenv("ODYSSEUS_EXECUTOR_URL", "").strip():
-        denied.add("native_preview")
-    if delegated_credential:
-        denied |= delegated_credential_blocked_tools()
-    known = known_tool_names()
-    if plan_mode:
-        from src.tool_security import PLAN_MODE_READONLY_TOOLS
-        known &= set(PLAN_MODE_READONLY_TOOLS)
-    mcp_schemas = (
-        mcp_mgr.get_all_openai_schemas(mcp_disabled_map or {})
-        if mcp_mgr and not plan_mode else []
+    known, visible_mcp, mcp_schemas = _available_tool_name_catalog(
+        mcp_mgr=mcp_mgr, mcp_disabled_map=mcp_disabled_map, plan_mode=plan_mode,
     )
-    visible_mcp = {
-        schema.get("function", {}).get("name")
-        for schema in mcp_schemas
-        if schema.get("function", {}).get("name")
-    }
     # Semantic search can return stale or merely related records even when the
     # user names a catalog tool exactly. Prioritize exact names, then apply the
     # same owner, caller, plan, and disabled-tool filters below.
-    explicit_names = sorted(
-        name for name in known | visible_mcp
-        if re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", query, re.IGNORECASE)
-    )
+    explicit_names = _explicit_tool_names(query, known | visible_mcp)
     if explicit_names:
         matches = list(dict.fromkeys([*explicit_names, *matches]))
     if not matches:
@@ -1809,26 +1789,73 @@ async def _discover_tools(query: str, *, mcp_mgr, mcp_disabled_map, owner,
             if name and hits:
                 scored.append((hits, name))
         matches = [name for _, name in sorted(scored, key=lambda item: (-item[0], item[1]))[:8]]
-    accepted = []
-    details = []
-    for name in matches:
-        if name == "search_tools":
-            continue
-        if name not in known and name not in visible_mcp:
-            continue
-        if caller_tools is not None and name not in caller_tools:
-            continue
-        if tool_policy_names(name) & denied:
-            continue
-        if name in _ADMIN_TOOLS and not needs_admin:
-            continue
-        accepted.append(name)
-        details.append(f"- {name}")
-        if len(accepted) >= 5:
-            break
+    accepted = _filter_available_tool_names(
+        matches,
+        known=known,
+        visible_mcp=visible_mcp,
+        owner=owner,
+        disabled_tools=disabled_tools,
+        caller_tools=caller_tools,
+        delegated_credential=delegated_credential,
+        needs_admin=needs_admin,
+        limit=5,
+    )
+    details = [f"- {name}" for name in accepted]
     if not accepted:
         return [], "No additional permitted tools matched. Continue with the tools already available."
     return accepted, "Matching tools (available next model turn):\n" + "\n".join(details)
+
+
+def _available_tool_name_catalog(*, mcp_mgr, mcp_disabled_map, plan_mode):
+    from src.tool_policy import known_tool_names
+
+    known = known_tool_names()
+    if plan_mode:
+        from src.tool_security import PLAN_MODE_READONLY_TOOLS
+        known &= set(PLAN_MODE_READONLY_TOOLS)
+    schemas = mcp_mgr.get_all_openai_schemas(mcp_disabled_map or {}) if mcp_mgr and not plan_mode else []
+    visible_mcp = {
+        schema.get("function", {}).get("name")
+        for schema in schemas
+        if schema.get("function", {}).get("name")
+    }
+    return known, visible_mcp, schemas
+
+
+def _explicit_tool_names(query, catalog_names):
+    query = str(query or "")
+    return sorted(
+        name for name in catalog_names
+        if isinstance(name, str)
+        and name
+        and re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", query, re.IGNORECASE)
+    )
+
+
+def _filter_available_tool_names(
+    names, *, known, visible_mcp, owner, disabled_tools,
+    caller_tools=None, delegated_credential=False, needs_admin=False, limit=None,
+):
+    """Apply search_tools' existing visibility policy to proposed catalog names."""
+    from src.tool_security import blocked_tools_for_owner, delegated_credential_blocked_tools
+
+    denied = set(disabled_tools or ()) | blocked_tools_for_owner(owner)
+    if os.getenv("ODYSSEUS_EXECUTOR_URL", "").strip():
+        denied.add("native_preview")
+    if delegated_credential:
+        denied |= delegated_credential_blocked_tools()
+    allowed = set(known) | set(visible_mcp)
+    accepted = []
+    for name in names:
+        if (name == "search_tools" or name not in allowed
+                or (caller_tools is not None and name not in caller_tools)
+                or tool_policy_names(name) & denied
+                or (name in _ADMIN_TOOLS and not needs_admin)):
+            continue
+        accepted.append(name)
+        if limit is not None and len(accepted) >= limit:
+            break
+    return accepted
 
 
 def _turn_targets_active_document(intent: Dict[str, object], last_user: str, active_document) -> bool:
@@ -4844,6 +4871,39 @@ async def stream_agent_loop(
         except Exception as _e:
             logger.debug(f"[tool-rag] skill-aware tool include skipped: {_e}")
 
+    # RAG can miss a tool whose exact catalog name the user supplied. Seed
+    # only names from the trusted task query, then apply the same visibility
+    # filter as search_tools; this affects discovery, never execution authority.
+    _explicit_requested_tools: Set[str] = set()
+    if not guide_only and _retrieval_query:
+        try:
+            _known_tool_names, _visible_mcp_names, _ = _available_tool_name_catalog(
+                mcp_mgr=mcp_mgr,
+                mcp_disabled_map=_mcp_disabled_map,
+                plan_mode=plan_mode,
+            )
+            _explicit_requested_tools = set(_filter_available_tool_names(
+                _explicit_tool_names(
+                    _retrieval_query, _known_tool_names | _visible_mcp_names,
+                ),
+                known=_known_tool_names,
+                visible_mcp=_visible_mcp_names,
+                owner=owner,
+                disabled_tools=disabled_tools,
+                caller_tools=_caller_relevant_tools,
+                delegated_credential=delegated_credential,
+                needs_admin=_needs_admin,
+            ))
+            if _explicit_requested_tools:
+                if _relevant_tools is not None:
+                    _relevant_tools.update(_explicit_requested_tools)
+                logger.info(
+                    "[tool-rag] Exact user-requested tools selected: %s",
+                    sorted(_explicit_requested_tools),
+                )
+        except Exception as exc:
+            logger.debug("Exact requested tool selection skipped: %s", exc)
+
     _intent_domains = set(_intent.get("domains") or set())
     _base_relevant_tools = None if _relevant_tools is None else set(_relevant_tools)
     _runtime_skill_tools: Set[str] = set()
@@ -5153,7 +5213,10 @@ async def stream_agent_loop(
                 # Route-selected tools are more useful than optional discovery
                 # schemas. Let their bounded set consume otherwise-unused prompt
                 # room, while keeping the ordinary schema cap for the rest.
-                budget_priority_names = set(_runtime_skill_tools) | _runtime_discovered_tools
+                budget_priority_names = (
+                    set(_runtime_skill_tools) | _runtime_discovered_tools
+                    | _explicit_requested_tools
+                )
                 if _relevant_tools and len(_relevant_tools) == 1:
                     selected_relevant = set(_relevant_tools) - WEB_TOOL_NAMES
                     budget_priority_names.update(selected_relevant)
@@ -5194,7 +5257,11 @@ async def stream_agent_loop(
                         function = call.get("function") if isinstance(call, dict) else None
                         if isinstance(function, dict) and function.get("name"):
                             used_names.add(function["name"])
-                priority_names = set(forced_tools or ()) | _runtime_skill_tools | _runtime_discovered_tools | {"search_tools"}
+                priority_names = (
+                    set(forced_tools or ()) | _runtime_skill_tools
+                    | _runtime_discovered_tools | _explicit_requested_tools
+                    | {"search_tools"}
+                )
                 if relevant_tools and len(relevant_tools) <= 16:
                     priority_names.update(relevant_tools)
                 if any(
@@ -5281,6 +5348,8 @@ async def stream_agent_loop(
 
                 def schema_priority(schema):
                     name = schema.get("function", {}).get("name", "")
+                    if name in _explicit_requested_tools:
+                        return (-1, 0, name)
                     if coding_requested and name in coding_core:
                         return (0, coding_core[name], name)
                     if workspace and not browser_requested and not coding_requested and name in workspace_core:

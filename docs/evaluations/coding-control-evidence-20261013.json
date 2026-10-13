@@ -320,5 +320,11 @@
       "duration": "5.000000",
       "size": "74347"
     }
+  },
+  "follow_up_review": {
+    "status": "repair_invalid",
+    "finding": "Generated main-process code removed successful promise settlement. Conversion and Start assertion pass while spawnFFmpeg stays pending.",
+    "verified_by": "independent qa-completion-contract.mjs run; completed video existed but five-second settlement assertion failed",
+    "prior_result_scope": "Original narrow checker passed; not a valid full repair."
   }
 }

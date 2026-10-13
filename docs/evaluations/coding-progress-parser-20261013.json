@@ -1,0 +1,154 @@
+{
+  "model": "qwen3.5:9b",
+  "endpoint_model": "nx-model-5",
+  "settings": {
+    "temperature": 1.0,
+    "max_tokens": 16384
+  },
+  "order": [
+    "novum"
+  ],
+  "task": "Implement `parse_progress(lines: Iterable[str]) -> list[dict]` in progress.py using only Python's standard library. The input is FFmpeg `-progress` output, one text line per iterable item; accept generators as well as lists. Do not modify the public tests or qa_check.py.\n\nEach record ends at `progress=continue` or `progress=end`. Emit exactly one dictionary with these four keys for each terminator:\n- `time_seconds`: the `out_time_us` integer microsecond value divided by 1,000,000, as a float; missing or invalid means None.\n- `speed`: a finite nonnegative float parsed from a value with a trailing `x`, such as `1.5x`; missing, `N/A`, absent suffix, malformed, negative, NaN, or infinite means None.\n- `frame`: a nonnegative integer; missing or invalid means None.\n- `done`: False for `continue`, True for `end`.\n\nFor frame and out_time_us, valid input is decimal digits only, optionally preceded by a plus sign. Negative values, decimal fractions, exponent notation, empty strings, N/A, NaN, infinity, and other malformed values are invalid. Treat time values whose conversion to seconds cannot produce a finite float as invalid. Zero is valid for all numeric fields.\n\nStrip surrounding whitespace from each line, key, and value; split on the first `=` only. Ignore blank lines, lines without `=`, unknown keys, and unrecognized progress values. A later recognized numeric key replaces its earlier value within the same record, even when the later value is invalid. Every terminated record is independent: reset all fields after emitting, never carry previous values forward. An empty terminated record has all numeric fields None. Do not emit an unterminated final record. Continue parsing later records even after an end marker.\n\nRun `python3 qa_check.py` to validate. Keep the implementation small and readable.\n",
+  "fixture_hashes": {
+    "progress.py": "8250e6c26d4e8d146f16178a44ab6a695b5b6534fc48606cb544f147ac7cc130",
+    "test_progress.py": "f60396e839af9e029084e40867fc6de2b8df36700276cfb031a61cdc3d288ac8",
+    "qa_check.py": "ab21dc1b49ff1caa675d936426bc3b372313391b4add2402d6acf918568b159e",
+    "TASK.md": "6e092fda7a82c08b0974b84032d73d910ca5c08997f6e78e89f1bf8762430443"
+  },
+  "baseline_exit": 1,
+  "results": {
+    "novum": {
+      "adapter_exit": 2,
+      "seconds": 92.597,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_progress.py": true
+      },
+      "passed": false,
+      "manual_interventions": 1
+    }
+  },
+  "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/progress-parser-20261013-224330",
+  "limits": [
+    "One smaller independent task, same qwen3.5:9b model.",
+    "Model stopped to ask whether to implement the already authorized function; source remained unimplemented.",
+    "No mid-run coaching or operator code edits.",
+    "Protected tests and wrapper unchanged."
+  ],
+  "adapter": {
+    "actual_route": {
+      "endpoint_id": "6865006e",
+      "model": "nx-model-5",
+      "requested_model": "qwen3.5:9b",
+      "round": 4
+    },
+    "allow_web_search": false,
+    "approval_count": 1,
+    "endpoint_id": "6865006e",
+    "evidence": [
+      {
+        "enabled": true,
+        "requested": true,
+        "type": "coding_workflow"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 1,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 2,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 3,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "input_tokens": 22724,
+        "model": "nx-model-5",
+        "output_tokens": 614,
+        "requested_model": "qwen3.5:9b",
+        "total_tokens": 23338,
+        "type": "metrics"
+      },
+      {
+        "decision": "approve_task",
+        "type": "approval_decision"
+      },
+      {
+        "enabled": true,
+        "requested": true,
+        "type": "coding_workflow"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 0,
+        "stage": "reproduce",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 1,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 2,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 3,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 4,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "input_tokens": 37848,
+        "model": "nx-model-5",
+        "output_tokens": 7055,
+        "requested_model": "qwen3.5:9b",
+        "total_tokens": 44903,
+        "type": "metrics"
+      }
+    ],
+    "model": "qwen3.5:9b",
+    "output_saved": false,
+    "preset_id": null,
+    "run_id": "c65d25a30daf468aa288257d9399aa35",
+    "seconds": 92.547,
+    "session_id": "8dd79186-1bc0-4940-bf0c-fc2d892b62ac",
+    "source_files": [
+      "progress.py"
+    ],
+    "status": "incomplete",
+    "stream_ended": true,
+    "terminal": null,
+    "verification_passed": null
+  },
+  "decision": "Independent implementation reliability not demonstrated."
+}

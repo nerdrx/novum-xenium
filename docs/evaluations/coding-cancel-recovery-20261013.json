@@ -1,0 +1,410 @@
+{
+  "model": "qwen3.5:9b",
+  "endpoint_model": "nx-model-5",
+  "settings": {
+    "temperature": 1.0,
+    "max_tokens": 16384
+  },
+  "order": [
+    "novum"
+  ],
+  "task": "Complete the remaining cancellation and error-recovery slice in this Electron FFmpeg GUI. Independent checks now pass real short conversion, Start recovery, successful invoke settlement, and failed invoke settlement: preserve these. Remaining failures are GUI Cancel never enabling during paced conversion, Start not disabled while busy, cancellation event not received, and unhandled renderer errors on invalid FFmpeg arguments. Repeat conversion cannot be accepted until cancellation works. The full checker uses valid '-vf realtime -c:v libx264 -preset ultrafast' options to keep conversion active; your backend must not append '-c copy' after explicit codec choices. Run python3 qa_check.py as baseline and acceptance. Inspect main/preload/renderer state and asynchronous completion, fix only application source, then verify all phases. Do not edit tests, qa_check.py, fixtures or dependencies; no installs, rebuild, web, publication or styling changes. Handle success, error and cancellation with settled promises and recover controls on each path. This is authorized work; implement and test without asking permission. At most two failed acceptance checks. Files: dist/main/index.js, dist/main/preload.js, dist/renderer/renderer.js, dist/renderer/index.html, package.json.\n",
+  "fixture_hashes": {
+    "dist/main/index.js": "d5c68d0533f8e086861730054498afdf82ef6481aca85aa3de60978fac384013",
+    "dist/main/preload.js": "8e1dd5ce2cabf1114d4e41f72a8dff8b202f3ad8e02c20ab365f0c89f68a8afc",
+    "dist/renderer/renderer.js": "2ac9baa50f3e501fd5644dda60f3a59f1b5eac5576e5e8cd1022aa2b9c64f9d6",
+    "dist/renderer/index.html": "4916deec3ea22cb5b8a86fe85a9091b11b672eccd1add648993d1d98d65524b8",
+    "package.json": "d9377b67a71c84711688c491e6586d161eef47200775575c51cad7c4392b88a0",
+    "test_input.mp4": "3c0242daa7688bfe7cb19ade2588060e211141b2898541bd34260d0d4009e93d",
+    ".odysseus-preview/qa-conversion-flow.mjs": "68076f41108aa67d242c7c67516434a286e9e084dbff55f23c41055a089b56e2",
+    "qa_check.py": "af4261cb37dc1b790e6668ccaa2eb62849666c6b5a7903c9a997884015cc5f4b",
+    "TASK.md": "83cf2cb37859a370369c289771a6dde02b1535f11728ff18f78aca507cd0b460"
+  },
+  "baseline_exit": 1,
+  "results": {
+    "novum": {
+      "adapter_exit": 1,
+      "seconds": 136.166,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        ".odysseus-preview/qa-conversion-flow.mjs": true,
+        "test_input.mp4": true
+      },
+      "passed": false,
+      "manual_interventions": 1
+    }
+  },
+  "workspace": "/run/media/nerdrx/Lex/Odysseus/data/agent_workspace/workspace/.nx-evaluations/gui-cancel-recovery-20261013-224748",
+  "limits": [
+    "Focused follow-up with explicit failing-phase feedback; not unassisted original-task completion.",
+    "No operator app edits or test weakening; protected final hashes unchanged.",
+    "Model exhausted two failed acceptance checks; overall app remains rejected."
+  ],
+  "external_phases": {
+    "phases": [
+      {
+        "phase": "success: GUI conversion produces playable output",
+        "passed": true,
+        "assertions": [
+          {
+            "assertion": "output file is non-empty",
+            "passed": true
+          },
+          {
+            "assertion": "output contains a video stream",
+            "passed": true
+          },
+          {
+            "assertion": "output preserves the test clip duration",
+            "passed": true
+          },
+          {
+            "assertion": "Start recovers after completion",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "phase": "success contract: invoke promise settles",
+        "passed": true,
+        "assertions": [
+          {
+            "assertion": "spawnFFmpeg promise settles after FFmpeg exits",
+            "passed": true
+          },
+          {
+            "assertion": "settled result reports success ({\"settled\":true,\"value\":{\"success\":true,\"output\":\"/tmp/nx-full-flow-95z1gp/settlement/settlement.mp4\",\"exitCode\":0}})",
+            "passed": true
+          },
+          {
+            "assertion": "invoke output exists",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "phase": "failure: invalid FFmpeg arguments and UI recovery",
+        "passed": true,
+        "assertions": [
+          {
+            "assertion": "GUI reports FFmpeg failure",
+            "passed": true
+          },
+          {
+            "assertion": "Start remains available after FFmpeg failure",
+            "passed": true
+          },
+          {
+            "assertion": "arguments remain editable after FFmpeg failure",
+            "passed": true
+          },
+          {
+            "assertion": "invalid arguments produce no completed output",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "phase": "failure contract: invoke settles with failure",
+        "passed": true,
+        "assertions": [
+          {
+            "assertion": "spawnFFmpeg promise settles after FFmpeg rejects invalid args",
+            "passed": true
+          },
+          {
+            "assertion": "settled result reports failure ({\"settled\":true,\"error\":\"Error: Error invoking remote method 'ffmpeg:spawn': [object Object]\"})",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "phase": "cancellation: GUI control and state recovery",
+        "passed": false,
+        "assertions": [
+          {
+            "assertion": "GUI Cancel enables during an active conversion",
+            "passed": false
+          },
+          {
+            "assertion": "Start disables during active conversion",
+            "passed": false
+          },
+          {
+            "assertion": "Start recovers after cancel",
+            "passed": true
+          },
+          {
+            "assertion": "Output field recovers after cancel",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "phase": "cancellation contract: both requests settle",
+        "passed": true,
+        "assertions": [
+          {
+            "assertion": "Conversion and cancel promises both settle after cancellation",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "phase": "repeat: GUI conversion succeeds after failure and cancellation",
+        "passed": true,
+        "assertions": [
+          {
+            "assertion": "repeat output is non-empty",
+            "passed": true
+          },
+          {
+            "assertion": "Start remains available after repeat conversion",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "phase": "runtime errors",
+        "passed": false,
+        "assertions": [
+          {
+            "assertion": "no page or console errors: pageerror: Error invoking remote method 'ffmpeg:spawn': [object Object] | pageerror: Error invoking remote method 'ffmpeg:getProgress': ReferenceError: stdoutBuffer is not defined | pageerror: Error invoking remote method 'ffmpeg:getProgress': ReferenceError: stdoutBuffer is not defined | pageerror: Error invoking remote method 'ffmpeg:spawn': [object Object] | pageerror: Error invoking remote method 'ffmpeg:getProgress': ReferenceError: stdoutBuffer is not defined",
+            "passed": false
+          }
+        ]
+      }
+    ],
+    "passed": false,
+    "limitations": [
+      "Cancellation falls back to the exposed API only when the disabled GUI Cancel control is unavailable; this fallback is reported as a failed UI assertion.",
+      "Invoke settlement checks observe the actual preload API; no behavior is mocked or replaced."
+    ]
+  },
+  "adapter": {
+    "actual_route": {
+      "endpoint_id": "6865006e",
+      "model": "nx-model-5",
+      "requested_model": "qwen3.5:9b",
+      "round": 12
+    },
+    "allow_web_search": false,
+    "approval_count": 1,
+    "endpoint_id": "6865006e",
+    "evidence": [
+      {
+        "enabled": true,
+        "requested": true,
+        "type": "coding_workflow"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 1,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 2,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 3,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 4,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 5,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 6,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "input_tokens": 61035,
+        "model": "nx-model-5",
+        "output_tokens": 937,
+        "requested_model": "qwen3.5:9b",
+        "total_tokens": 61972,
+        "type": "metrics"
+      },
+      {
+        "decision": "approve_task",
+        "type": "approval_decision"
+      },
+      {
+        "enabled": true,
+        "requested": true,
+        "type": "coding_workflow"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 0,
+        "stage": "reproduce",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 1,
+        "stage": "edit",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 2,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 3,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 4,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 5,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 6,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 7,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 8,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 9,
+        "type": "model_actual"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 10,
+        "type": "model_actual"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 10,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 11,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "model": "nx-model-5",
+        "requested_model": "qwen3.5:9b",
+        "round": 12,
+        "type": "model_actual"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 12,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "review_status": "not_reviewed",
+        "round": 13,
+        "stage": "verify",
+        "test_status": "not_verified",
+        "type": "coding_work_packet"
+      },
+      {
+        "reason": "coding_acceptance_retry_limit",
+        "status": "failed",
+        "type": "agent_terminal"
+      },
+      {
+        "endpoint_id": "6865006e",
+        "input_tokens": 151124,
+        "model": "nx-model-5",
+        "output_tokens": 4076,
+        "requested_model": "qwen3.5:9b",
+        "total_tokens": 155200,
+        "type": "metrics"
+      }
+    ],
+    "model": "qwen3.5:9b",
+    "output_saved": false,
+    "preset_id": null,
+    "run_id": "0f3a4eb5ccbc43b1a664aa9cce28e320",
+    "seconds": 136.105,
+    "session_id": "96d3bf6c-a424-4d20-a1bf-aec41d106cb1",
+    "source_files": [
+      "dist/main/index.js",
+      "dist/main/preload.js",
+      "dist/renderer/renderer.js",
+      "dist/renderer/index.html",
+      "package.json"
+    ],
+    "status": "failed",
+    "stream_ended": true,
+    "terminal": {
+      "reason": "coding_acceptance_retry_limit",
+      "status": "failed",
+      "type": "agent_terminal"
+    },
+    "verification_passed": null
+  }
+}

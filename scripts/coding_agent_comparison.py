@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 FIXTURE = {
     "calc.py": "def add(a, b):\n    return a - b\n",
-    "TASK.md": "Fix `add` so it returns the sum for positive, negative, and zero values. Keep the change minimal.\n",
+    "TASK.md": "Fix the `add` function in `calc.py` so it returns the sum for positive, negative, and zero values. Keep the change minimal.\n",
 }
 ACCEPTANCE = (
     "from calc import add; "

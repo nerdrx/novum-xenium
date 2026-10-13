@@ -13,11 +13,11 @@ On this host, `command -v aider` found no system Aider executable. Aider 0.86.2
 is installed in the isolated venv
 `/tmp/nx-coding-agent-comparison-aider-venv`; system Python was not changed.
 The venv uses the bundled Python 3.12.14. `aider --version` and a help-only
-check passed. No endpoint request or model run was made.
+check passed. An initial live wiring run is recorded in `evaluations/coding-wiring-20261013.json`; its limitations prevent treating it as a fair checked-workflow comparison.
 
 ## Task and evidence
 
-Both agents receive `TASK.md` and the same initial `calc.py`, where `add(a, b)`
+Both agents receive `TASK.md`, which explicitly names the `add` function in `calc.py`, and the same initial `calc.py`, where `add(a, b)`
 incorrectly subtracts. The fixed acceptance command checks positive, negative,
 zero, and negative-pair inputs. The initial fixture fails that command. A task
 counts as passing only when its real acceptance check passes; the adapter exit
@@ -85,8 +85,7 @@ python /run/media/nerdrx/Lex/novum-xenium/scripts/coding_comparison_novum.py --t
 ```
 
 It creates a session, streams the task in agent mode, and prints one JSON
-metadata record with session ID, run ID, model, and status; it does not save
-model output. If Novum pauses for tool approval, the adapter reports
+metadata record with session ID, run ID, actual route, bounded outcome evidence, and status; it does not save model output. Stream termination alone never counts as verified completion. External acceptance results remain separate from the agent's own completion status. If Novum pauses for tool approval, the adapter reports
 `approval_needed` without approving it. On timeout it stops only the run ID
 received for that session. Verify the app's live endpoint/model mapping before
 running. The current app stream route obtains generation temperature from the

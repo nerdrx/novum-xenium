@@ -15,7 +15,9 @@ import tempfile
 from urllib.parse import urlsplit
 
 
-SECRET_KEY = re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization|credential)")
+SECRET_KEY = re.compile(
+    r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|token|secret|password|authorization|credential)(?:$|[_-])"
+)
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 

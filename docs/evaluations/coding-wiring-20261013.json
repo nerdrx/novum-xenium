@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-13",
+  "scope": "Wiring diagnostic only; not a fair checked-workflow comparison",
+  "model": "qwen3.5:9b",
+  "serving_model": "nx-model-5",
+  "task": "Fix `add` so it returns the sum for positive, negative, and zero values. Keep the change minimal.\n",
+  "fixture_sha256": "0b662aa7884d857dfa2cf8b41153829630a800f32c774fd1723e15243d3b1513",
+  "run_order": [
+    "aider",
+    "novum"
+  ],
+  "results": {
+    "aider": {
+      "seconds": 4.121,
+      "external_acceptance_passed": true,
+      "manual_code_edits": 0
+    },
+    "novum": {
+      "seconds": 46.53,
+      "external_acceptance_passed": true,
+      "manual_code_edits": 0
+    }
+  },
+  "findings": [
+    "Aider changed subtraction to addition in one response.",
+    "Novum inserted an addition return before the old subtraction return; external assertions passed but unreachable code remained.",
+    "Novum completion review reported missing functional test evidence; the chat ended unverified with a provider-error notice.",
+    "The initial adapter incorrectly treated stream termination as completion.",
+    "The vague initial task omitted both a source filename and the word function. Novum coding detection did not activate, so its requested output ceiling was 4096 rather than the declared 16384.",
+    "Aider received calc.py explicitly; the revised shared prompt names calc.py for both agents."
+  ],
+  "general_coding_ability_proven": false
+}

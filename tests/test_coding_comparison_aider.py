@@ -58,6 +58,13 @@ class AiderAdapterTests(unittest.TestCase):
             aider_adapter.validate_endpoint("http://user:pass@localhost")
         with self.assertRaisesRegex(ValueError, "credential-like"):
             aider_adapter.parse_settings('{"extra_headers":{"Authorization":"Bearer secret"}}')
+        self.assertEqual(
+            aider_adapter.parse_settings('{"temperature":0.2,"max_tokens":8000}'),
+            {"temperature": 0.2, "max_tokens": 8000},
+        )
+        for key in ("api_key", "access_token", "refresh_token", "client-secret"):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "credential-like"):
+                aider_adapter.parse_settings(json.dumps({key: "private"}))
 
     def test_provider_environment_uses_same_endpoint_without_recording_keys(self):
         env = aider_adapter.child_environment("http://local-model:11434", "ollama", {

@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-13",
+  "scope": "Post-checkpoint single-file repair retest; not a general benchmark",
+  "novum_revision": "48846f9",
+  "model": "qwen3.5:9b",
+  "serving_model": "nx-model-5",
+  "aider_version": "0.86.2",
+  "settings": {
+    "temperature": 1.0,
+    "max_tokens": 16384
+  },
+  "run_order": [
+    "aider",
+    "novum"
+  ],
+  "fixture_sha256": "0cd0ff0557b5cefbf8c05ae87be6d5d3377098cc0163f98f09e8e0b03fbf7710",
+  "results": {
+    "aider": {
+      "seconds": 2.969,
+      "external_acceptance_passed": true,
+      "command_returncode": 0,
+      "final_source": "def add(a, b):\n    return a + b\n",
+      "manual_code_edits": 0
+    },
+    "novum": {
+      "seconds": 50.653,
+      "external_acceptance_passed": false,
+      "command_returncode": 2,
+      "final_source": "def add(a, b):\n    return a - b\n",
+      "manual_code_edits": 0
+    }
+  },
+  "novum_task_approvals": 1,
+  "novum_status": "incomplete",
+  "novum_packet_events": 0,
+  "observed_stop": "Outcome guard paused after repeated unchanged read_file/todowrite results.",
+  "limits": [
+    "No packet event was observed; this run did not establish recovery checkpoint behavior.",
+    "One stochastic trial; not proof the checkpoint change caused the failure.",
+    "Neither model output nor user credentials are included.",
+    "No FFmpeg application or GUI was verified."
+  ]
+}

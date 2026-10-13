@@ -375,9 +375,40 @@ def test_verifier_retries_malformed_format_once_with_same_evidence(
     assert calls[0]["model"] == calls[1]["model"] == "test-model"
     assert calls[0]["headers"] == calls[1]["headers"] == {"x-test": "1"}
     assert calls[0]["reasoning_mode"] == calls[1]["reasoning_mode"] == "off"
+    assert calls[0]["max_tokens"] == calls[1]["max_tokens"] == 2048
     assert "Create the GUI" in calls[0]["messages"][0]["content"]
     assert "[bash] npm test (exit_code=0)" in calls[1]["messages"][0]["content"]
     assert "Formatting retry" in calls[1]["messages"][0]["content"]
+
+
+def test_verifier_length_retry_increases_budget_but_still_fails_closed(monkeypatch):
+    import asyncio
+    import src.agent_loop as agent_loop
+    import src.llm_core
+
+    calls = []
+
+    async def truncated_call(**kwargs):
+        calls.append(kwargs)
+        kwargs["response_diagnostics"].update({
+            "finish_reason": "length",
+            "completion_tokens": kwargs["max_tokens"],
+            "content_chars": 0,
+        })
+        return ""
+
+    monkeypatch.setattr(src.llm_core, "llm_call_async", truncated_call)
+    issues = asyncio.run(agent_loop._run_verifier_subagent(
+        "Create the GUI", "same evidence", endpoint_url="http://localhost",
+        model="test-model", headers={}, reasoning_mode="off",
+    ))
+
+    assert len(calls) == 2
+    assert [call["max_tokens"] for call in calls] == [2048, 4096]
+    assert all(call["model"] == "test-model" for call in calls)
+    assert all(call["reasoning_mode"] == "off" for call in calls)
+    assert "Formatting retry" in calls[1]["messages"][0]["content"]
+    assert issues == ["Unverified: Verifier returned no single final verdict."]
 
 
 def test_valid_unverified_verdict_does_not_retry_format(monkeypatch):

@@ -3976,12 +3976,15 @@ async def _run_verifier_subagent(
             "VERIFICATION: UNVERIFIED: <what evidence is missing>\n"
             "Output nothing after that final line."
         )
+        retry_max_tokens = (
+            4096 if response_diagnostics.get("finish_reason") == "length" else 2048
+        )
         response_diagnostics = {}
         try:
             retry_raw = await llm_call_async(
                 url=endpoint_url, model=model,
                 messages=[{"role": "user", "content": retry_prompt}],
-                headers=headers, temperature=0.0, max_tokens=2048, timeout=60,
+                headers=headers, temperature=0.0, max_tokens=retry_max_tokens, timeout=60,
                 response_diagnostics=response_diagnostics,
                 reasoning_mode=reasoning_mode,
             )

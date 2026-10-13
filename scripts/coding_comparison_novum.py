@@ -22,7 +22,10 @@ from http.cookiejar import CookieJar
 EVENT_FIELDS = {
     "model_actual": ("model", "requested_model", "endpoint_id", "round"),
     "fallback": ("selected_model", "answered_by", "answered_by_endpoint_id", "round"),
-    "agent_terminal": ("status", "reason", "failed", "model", "requested_model", "endpoint_id", "round"),
+    "agent_terminal": (
+        "status", "reason", "failed", "model", "requested_model", "endpoint_id",
+        "round", "test_status", "review_status",
+    ),
     "verification": ("passed", "status", "round"),
     "coding_work_packet": ("stage", "test_status", "review_status", "round"),
     "metrics": ("model", "requested_model", "endpoint_id", "actual_endpoint_id", "input_tokens", "output_tokens", "total_tokens", "total_time", "tps"),

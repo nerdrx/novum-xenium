@@ -83,6 +83,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     {"type": "metrics", "data": {"model": "served-model", "endpoint_id": "ep-actual",
                      "input_tokens": 120, "output_tokens": 44, "total_tokens": 164}},
                 ],
+                "checked_unreviewed": [
+                    {"type": "agent_terminal", "status": "completed", "reason": "coding_checks_passed",
+                     "test_status": "passed", "review_status": "not_reviewed"},
+                ],
             }
             payload = b"".join(
                 (b"data: " + json.dumps(event).encode() + b"\n\n")
@@ -172,6 +176,18 @@ class NovumAdapterTests(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertEqual(report["status"], "incomplete")
         self.assertTrue(report["stream_ended"])
+        self.assertIsNone(report["verification_passed"])
+
+    def test_checked_completion_preserves_unreviewed_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "TASK.md").write_text("Fix defect.\n")
+            Path(directory, "calc.py").write_text("broken\n")
+            result = self.invoke(directory, mode="checked_unreviewed")
+        self.assertEqual(result.returncode, 0)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["terminal"]["test_status"], "passed")
+        self.assertEqual(report["terminal"]["review_status"], "not_reviewed")
         self.assertIsNone(report["verification_passed"])
 
     def test_provider_error_then_done_stays_failed_and_redacted(self):

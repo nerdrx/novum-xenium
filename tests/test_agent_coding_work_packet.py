@@ -269,7 +269,8 @@ def test_reviewed_completed_packet_emits_success_terminal(monkeypatch, tmp_path)
 
     terminal = [event for event in events if event.get("type") == "agent_terminal"]
     assert terminal == [{"type": "agent_terminal", "status": "completed",
-                         "reason": "coding_work_verified"}]
+                         "reason": "coding_work_verified", "test_status": "passed",
+                         "review_status": "passed"}]
 
 
 def test_teacher_takeover_suppresses_checked_work_success_terminal(monkeypatch, tmp_path):
@@ -305,14 +306,16 @@ def test_packet_reports_actual_independent_review_result(monkeypatch, tmp_path, 
     assert completed is (status == "passed")
 
 
-def test_unreviewed_packet_does_not_emit_success_terminal(monkeypatch, tmp_path):
+def test_unreviewed_packet_emits_truthful_completion_terminal(monkeypatch, tmp_path):
     events, _executed, _requested = _run_packet(
         monkeypatch, tmp_path,
         todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
         checked_workflow=True,
     )
-    assert not any(event.get("type") == "agent_terminal" and event.get("status") == "completed"
-                   for event in events)
+    terminal = [event for event in events if event.get("type") == "agent_terminal"]
+    assert terminal == [{"type": "agent_terminal", "status": "completed",
+                         "reason": "coding_checks_passed", "test_status": "passed",
+                         "review_status": "not_reviewed"}]
 
 
 def test_paused_or_unfinished_packet_does_not_emit_success_terminal(monkeypatch, tmp_path):

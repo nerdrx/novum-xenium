@@ -31,9 +31,12 @@ and `review_status`. A passing command reports `test_status: passed` and
 `review_status: not_reviewed`; it never impersonates an independent review or
 certifies all requested functionality. The existing completion reviewer still
 runs independently when enabled. A checked run emits an explicit completed
-terminal event only after all slices pass, independent review passes, and no
-pause, budget stop, or teacher intervention invalidates that conclusion. A
-closed stream by itself is not completion evidence.
+terminal event after all slices pass and no pause, budget stop, or teacher
+intervention invalidates that conclusion. The terminal reports
+`review_status: passed` when independent review passed, or
+`review_status: not_reviewed` when that optional reviewer is disabled; consumers
+must keep those outcomes distinct. A closed stream by itself is not completion
+evidence.
 
 Server checkpoints preserve bounded packet evidence for the exact owner, chat,
 and run. Exact tool approval can restore that evidence; interrupted recovery

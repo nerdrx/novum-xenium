@@ -9157,13 +9157,22 @@ async def stream_agent_loop(
             _teacher_escalation_intervened = True
             logger.warning(f"teacher escalation hook failed: {_esc_err}", exc_info=True)
 
+    _checked_unreviewed_pass = bool(
+        _coding_work.enabled
+        and _coding_work.state
+        and _coding_work.state.stage == "done"
+        and _coding_work.review_status == "not_reviewed"
+        and not get_setting("agent_verifier_subagent", False)
+    )
+    _checked_reviewed_pass = bool(
+        _coding_work.review_status == "passed" and _completion_review_passed
+    )
     if (
         _coding_work.enabled
         and _coding_work.state
         and _coding_work.state.stage == "done"
         and not _coding_work.pending
-        and _coding_work.review_status == "passed"
-        and _completion_review_passed
+        and (_checked_reviewed_pass or _checked_unreviewed_pass)
         and not _awaiting_user
         and not _progress_paused
         and not _exhausted_rounds
@@ -9171,6 +9180,13 @@ async def stream_agent_loop(
         and not _teacher_escalation_intervened
         and (_project_verification is None or _project_verification.get("complete") is True)
     ):
-        yield f'data: {json.dumps({"type": "agent_terminal", "status": "completed", "reason": "coding_work_verified"})}\n\n'
+        terminal = {
+            "type": "agent_terminal",
+            "status": "completed",
+            "reason": "coding_work_verified" if _checked_reviewed_pass else "coding_checks_passed",
+            "test_status": "passed",
+            "review_status": _coding_work.review_status,
+        }
+        yield f'data: {json.dumps(terminal)}\n\n'
 
     yield "data: [DONE]\n\n"

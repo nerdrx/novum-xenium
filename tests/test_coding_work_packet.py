@@ -525,3 +525,44 @@ def test_initial_guidance_defaults_to_one_outcome_without_forbidding_multiple(pa
     ):
         assert not tracker.blocks("todowrite", {"todos": todos, "work_packet": packet.to_dict()})
     assert tracker.blocks("edit_file", "{}")  # Guidance cannot bypass the baseline gate.
+
+
+def test_acceptance_failure_bound_survives_checkpoint_and_edits(packet):
+    from src.coding_work_packet import CodingWorkTracker
+    tracker = CodingWorkTracker(enabled=True)
+    tracker.observe("todowrite", "{}", {"exit_code": 0, "todos": [
+        {"content": "Repair", "status": "in_progress"}], "work_packet": packet.to_dict()})
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    assert tracker.failed_acceptance_checks == 0
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    for blocked in ({"exit_code": 1, "blocked": True}, {"exit_code": 1, "approval_required": True}):
+        tracker.observe("bash", packet.acceptance_command, blocked)
+    assert tracker.failed_acceptance_checks == 0
+    assert tracker.observe("bash", packet.acceptance_command, {"exit_code": 1})
+    restored = CodingWorkTracker(enabled=True)
+    assert restored.restore_checkpoint(tracker.checkpoint_data()) == "restored"
+    assert restored.failed_acceptance_checks == 1
+    # Identical failures still change counter/checkpoint even without an edit.
+    assert restored.observe("bash", packet.acceptance_command, {"exit_code": 1})
+    assert restored.retry_limit_reached
+    resumed = CodingWorkTracker(enabled=True)
+    resumed.restore_checkpoint(restored.checkpoint_data())
+    assert resumed.retry_limit_reached
+    assert resumed.blocks("todowrite", "{}")
+    assert resumed.blocks("edit_file", "{}")
+    assert resumed.check_command({})[0] is None
+    assert CodingWorkTracker(enabled=True).failed_acceptance_checks == 0
+
+
+def test_acceptance_success_resets_consecutive_failure_count(packet):
+    from src.coding_work_packet import CodingWorkTracker
+    tracker = CodingWorkTracker(enabled=True)
+    tracker.observe("todowrite", "{}", {"exit_code": 0, "todos": [
+        {"content": "Repair", "status": "in_progress"}], "work_packet": packet.to_dict()})
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 1})
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    assert tracker.failed_acceptance_checks == 1
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    assert tracker.failed_acceptance_checks == 0

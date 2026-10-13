@@ -216,6 +216,11 @@ class CodingWorkTracker:
         self.milestones = ()
         self.completed = set()
         self.current_milestone = None
+        self.failed_acceptance_checks = 0
+
+    @property
+    def retry_limit_reached(self):
+        return self.enabled and self.failed_acceptance_checks >= 2
 
     def checkpoint_data(self):
         """Return bounded evidence observed by this server-side tracker."""
@@ -223,6 +228,7 @@ class CodingWorkTracker:
             return None
         state = self.state
         return {
+            "failed_acceptance_checks": self.failed_acceptance_checks,
             "version": 1,
             "enabled": self.enabled,
             "packet": state.packet.to_dict(),
@@ -256,6 +262,8 @@ class CodingWorkTracker:
             args = arguments
         if args != {}:
             return None, "run_coding_check takes no arguments; use an empty object."
+        if self.retry_limit_reached:
+            return None, "Stopped after two failed acceptance checks; changes are preserved."
         if not self.enabled or not self.state:
             return None, "run_coding_check requires an active checked coding packet."
         if self.state.stage == "reproduce":
@@ -277,6 +285,9 @@ class CodingWorkTracker:
         except (KeyError, TypeError, ValueError):
             return "invalid"
 
+        failures = data.get("failed_acceptance_checks", 0)
+        self.failed_acceptance_checks = (min(failures, 2)
+            if type(failures) is int and failures >= 0 else 2)
         self.state = CodingWorkState(packet)
         stage = data.get("stage")
         reproduction = data.get("reproduction_exit_code")
@@ -399,6 +410,8 @@ class CodingWorkTracker:
 
     def observe(self, tool, content, result):
         import json
+        if self.retry_limit_reached:
+            return False
         try:
             if tool == "todowrite" and isinstance(result, dict) and "work_packet" in result:
                 if _executed_result(result) != 0:
@@ -424,6 +437,7 @@ class CodingWorkTracker:
             if not self.state:
                 return False
             before = self.state.to_dict()
+            previous_failures = self.failed_acceptance_checks
             if (self.state.stage == "done" and tool in (_EDIT_TOOLS | {"bash", "python"})
                     and isinstance(result, dict) and type(result.get("exit_code")) is int
                     and not result.get("blocked") and not result.get("approval_required")):
@@ -440,6 +454,11 @@ class CodingWorkTracker:
                     self.state.record_reproduction(command, result)
                 elif command == self.state.packet.acceptance_command:
                     self.state.record_acceptance(command, result)
+                    if self.enabled:
+                        if result["exit_code"] == 0:
+                            self.failed_acceptance_checks = 0
+                        elif self.state.edit_result is not None:
+                            self.failed_acceptance_checks += 1
                 elif _executed_result(result) == 0 and self.state.edit_result is not None:
                     # Arbitrary shell commands might edit files; invalidate an
                     # earlier pass rather than pretending it still proves them.
@@ -454,7 +473,7 @@ class CodingWorkTracker:
                     self.completed.discard(self.current_milestone)
             if self.state.stage != "done":
                 self.review_status = "not_reviewed"
-            return self.state.to_dict() != before
+            return self.state.to_dict() != before or self.failed_acceptance_checks != previous_failures
         except (ValueError, TypeError):
             if self.enabled and self.current_milestone and self.state.stage != "done":
                 self.completed.discard(self.current_milestone)
@@ -467,6 +486,8 @@ class CodingWorkTracker:
 
     @property
     def instruction(self):
+        if self.retry_limit_reached:
+            return "Stopped after two failed acceptance checks. Changes and failed check evidence are preserved; report the remaining failure."
         if self.enabled and self.milestones and self.state and self.state.stage == "done" and self.pending:
             import json
 
@@ -557,6 +578,8 @@ class CodingWorkTracker:
 
     def blocks(self, tool, content):
         import json
+        if self.retry_limit_reached:
+            return True
         needs_packet = self.requires_packet
         if self.enabled and tool == "todowrite":
             try:

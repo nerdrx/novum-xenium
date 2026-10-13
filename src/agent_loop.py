@@ -6897,6 +6897,8 @@ async def stream_agent_loop(
     for round_num in count(1):
         round_response = ""
         round_reasoning = ""  # reasoning_content deltas (DeepSeek-thinking, vLLM --reasoning-parser)
+        if _coding_work.retry_limit_reached:
+            break
         # Delay completion prose until review passes. After a failed review,
         # also withhold recovery prose until a real tool action executes.
         hold_round_text = _coding_work.pending or bool(_verification_issues) or (
@@ -8987,6 +8989,8 @@ async def stream_agent_loop(
                 and not result.get("error")
             ):
                 _ody_doc_tool_completed = True
+            if _coding_work.retry_limit_reached:
+                break
             if _pending_ask_user_event:
                 # An approval card is a turn boundary.  Never execute a later
                 # model-supplied call from the same batch after this request.
@@ -9048,6 +9052,8 @@ async def stream_agent_loop(
             messages[-1].setdefault("metadata", {})["source"] = "server-scheduled coding check results"
         messages.extend(skill_reference_messages)
 
+        if _coding_work.retry_limit_reached:
+            continue
         stall = _progress_guard.observe(tool_result_records)
         if stall:
             if (
@@ -9130,6 +9136,14 @@ async def stream_agent_loop(
 
         # Separator in accumulated response
         full_response += "\n\n"
+
+    if _coding_work.retry_limit_reached:
+        _progress_paused = True
+        notice = "Stopped after two failed acceptance checks. Your changes are preserved; the registered check still fails."
+        full_response += "\n\n" + notice
+        yield 'data: ' + json.dumps({"delta": notice}) + '\n\n'
+        yield 'data: ' + json.dumps({"type": "agent_terminal", "status": "failed",
+            "reason": "coding_acceptance_retry_limit", "message": notice}) + '\n\n'
 
     # If the loop hit the round cap while still working, tell the client so it
     # can show a "Continue" affordance instead of the turn just stopping.

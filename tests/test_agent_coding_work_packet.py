@@ -38,7 +38,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 stall_before_packet=False, fail_stall_reads=False, omit_acceptance=False,
                 acceptance_blocked=False, verify_existing=False, repair_failed_check=False,
                 max_tool_calls=0, baseline_blocked=False, max_rounds=10, extra_tools=False,
-                schema_details=None):
+                schema_details=None, repeated_failed_checks=False, batch_retry=False):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -115,6 +115,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         actions = [action for action in actions if action[0] != "write_file"]
     if repair_failed_check:
         actions.append(("write_file", {"path": "src/auth.py", "content": "fixed again"}))
+    if repeated_failed_checks:
+        actions.extend(("write_file", {"path": "src/auth.py", "content": "repair " + str(i)}) for i in range(3))
     requested = []
     executed = []
     initial_todowrite = json.dumps(actions[0][1])
@@ -197,7 +199,13 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 schema_details.append(request["kwargs"]["tools"] or [])
             requested.append({item["function"]["name"] for item in request["kwargs"]["tools"] or []})
             call = {"id": f"packet-{turn}", "name": tool, "arguments": json.dumps(args)}
-            yield "data: " + json.dumps({"type": "tool_calls", "calls": [call]}) + "\n\n"
+            calls = [call]
+            if batch_retry and args.get("content") == "repair 0":
+                calls.extend([
+                    {"id": "batch-acceptance", "name": "bash", "arguments": json.dumps({"command": _packet()["acceptance_command"]})},
+                    {"id": "forbidden-later-edit", "name": "write_file", "arguments": json.dumps({"path": "src/auth.py", "content": "must not execute"})},
+                ])
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
         else:
             if schema_details is not None:
                 request = await kwargs["candidate_request_factory"](0, *candidates[0])
@@ -845,3 +853,30 @@ def test_workflow_startup_state_is_reported_before_any_packet(monkeypatch, tmp_p
     status = [event for event in events if event.get("type") == "coding_workflow"]
     assert status == [{"type": "coding_workflow", "requested": enabled, "enabled": enabled}]
     assert not any(event.get("type") == "coding_work_packet" for event in events)
+
+
+@pytest.mark.parametrize("batch_retry", [False, True])
+def test_two_failed_acceptance_checks_stop_before_third_repair(monkeypatch, tmp_path, batch_retry):
+    events, executed, _ = _run_packet(monkeypatch, tmp_path, checked_workflow=True,
+                                    acceptance_exit=1, repeated_failed_checks=True, batch_retry=batch_retry)
+    assert sum(tool == "bash" and content == _packet()["acceptance_command"]
+               for tool, content in executed) == 2
+    assert sum(tool == "write_file" for tool, _ in executed) == 2
+    assert any(e.get("reason") == "coding_acceptance_retry_limit" and e.get("status") == "failed" for e in events)
+    assert not any(e.get("type") == "agent_terminal" and e.get("status") == "completed" for e in events)
+
+
+def test_exhausted_restored_tracker_stops_before_approval_or_model_execution(monkeypatch, tmp_path):
+    from src.coding_work_packet import CodingWorkTracker
+    original = CodingWorkTracker.restore_checkpoint
+
+    def restore_exhausted(self, data, **kwargs):
+        result = original(self, data, **kwargs)
+        self.failed_acceptance_checks = 2
+        return result
+
+    monkeypatch.setattr(CodingWorkTracker, "restore_checkpoint", restore_exhausted)
+    events, executed, requested = _run_packet(monkeypatch, tmp_path, checked_workflow=True)
+    assert not requested
+    assert not any(tool in {"bash", "write_file"} for tool, _ in executed)
+    assert any(event.get("reason") == "coding_acceptance_retry_limit" for event in events)

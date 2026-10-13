@@ -141,7 +141,72 @@ def test_large_result_that_exceeds_remaining_input_budget_is_archived(monkeypatc
     assert any("Recovered exact detail." in event for event in events)
 
 
-def test_read_file_archives_when_actual_context_is_full_below_configured_cap(monkeypatch, tmp_path):
+def test_small_complete_read_survives_final_route_trim_near_input_budget(monkeypatch, tmp_path):
+    import src.tool_result_store as store
+    from src.context_compactor import estimate_tokens
+    from src.model_context import estimate_tool_schema_tokens
+
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        loop, "get_setting",
+        lambda key, default=None: 15_534 if key == "agent_input_token_budget" else default,
+    )
+    monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
+    monkeypatch.setattr(loop, "_build_system_prompt", lambda messages, *args, **kwargs: (list(messages), []))
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *args, **kwargs: 32_768)
+    package = '{"name":"nflix","scripts":{},"note":"' + ("x" * 1300) + '"}'
+    old_history = [
+        item
+        for index in range(18)
+        for item in (
+            {"role": "user", "content": f"Earlier request {index}"},
+            {"role": "assistant", "content": "Old conversation detail. " * 350},
+        )
+    ]
+    requests = []
+
+    async def execute(block, **kwargs):
+        assert block.tool_type == "read_file"
+        return "read", {"output": package, "exit_code": 0}
+
+    async def stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        shaped = request["messages"]
+        requests.append(request)
+        if len(requests) == 1:
+            calls = [{"id": "package-read", "name": "read_file", "arguments": '{"path":"package.json"}'}]
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
+        else:
+            result = next(item for item in reversed(shaped) if item.get("role") == "tool")
+            assert package in result["content"]
+            assert "stored as" not in result["content"]
+            schema_tokens = estimate_tool_schema_tokens(request["kwargs"]["tools"])
+            assert estimate_tokens(shaped) + schema_tokens <= 15_534
+            yield 'data: {"delta":"Read the complete package file."}\n\n'
+            yield "data: [DONE]\n\n"
+            return
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(loop, "execute_tool_block", execute)
+    monkeypatch.setattr(loop, "stream_llm_with_fallback", stream)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "qwen3-test",
+            [*old_history, {"role": "user", "content": "Inspect package.json."}],
+            owner="alice", session_id="chat-small-read-near-limit", relevant_tools={"read_file"},
+            max_tokens=512, max_rounds=2, _is_teacher_run=True,
+        )]
+
+    events = asyncio.run(run())
+    assert len(requests) == 2
+    assert any("Read the complete package file." in event for event in events)
+    assert not any('"context_result_id"' in event for event in events)
+
+
+def test_oversized_read_file_archives_when_actual_context_is_full_below_configured_cap(monkeypatch, tmp_path):
     import src.tool_result_store as store
 
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
@@ -166,7 +231,7 @@ def test_read_file_archives_when_actual_context_is_full_below_configured_cap(mon
             "output_reserve": 13052,
         },
     )
-    source = ("const marker = 'DETAIL_FROM_FULL_SOURCE';\n" + "// source line\n" * 500).ljust(7235, " ")[:7235]
+    source = ("const marker = 'DETAIL_FROM_FULL_SOURCE';\n" + "// source line\n" * 1100).ljust(15000, " ")[:15000]
     requests = []
 
     async def execute(block, **kwargs):

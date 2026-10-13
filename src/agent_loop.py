@@ -5643,7 +5643,11 @@ async def stream_agent_loop(
     _context_preview_accounted_round = None
     _context_preview_accounted_tokens = 0
 
-    async def _context_result_preview(tool_name, description, result, formatted, event):
+    async def _context_result_preview(
+        tool_name, description, result, formatted, event, *,
+        tool_index=-1, native_tool_calls=None,
+        round_response="", round_reasoning="", tool_content="",
+    ):
         nonlocal _context_preview_accounted_round, _context_preview_accounted_tokens
         current_round = event.get("round", 0)
         if current_round != _context_preview_accounted_round:
@@ -5762,12 +5766,53 @@ async def stream_agent_loop(
             remaining_tokens is not None
             and estimate_tokens([{"role": "tool", "content": formatted}]) > remaining_tokens
         )
-        # A modest file explicitly requested by the model is working context,
-        # not bulk data. Keep its middle intact when the input budget allows it;
-        # large files and tight contexts still use the searchable archive.
+        # A modest explicit file read can fit after the route trimmer removes
+        # old conversation. Check the final shaped exchange before archiving;
+        # checking only current headroom made near-full contexts reread the same
+        # file forever. Only the last call in a native batch is eligible, so
+        # every other result in that exchange is already accounted for.
         requested_file_read = tool_name == "read_file" and isinstance(result.get("output"), str)
-        if (selected_skill_view or requested_file_read) and len(formatted) <= 12000 and not exceeds_remaining_budget:
+        if selected_skill_view and len(formatted) <= 12000 and not exceeds_remaining_budget:
             return _account_preview(formatted, exchange_tokens)
+        if (
+            requested_file_read
+            and len(formatted) <= 12000
+            and native_tool_calls
+            and tool_index == len(native_tool_calls) - 1
+            and effective_budget is not None
+        ):
+            from src.context_compactor import native_tool_exchange_fits
+
+            candidate_messages = [dict(message) for message in _last_route_request_messages]
+            candidate_texts = [*tool_result_texts, formatted]
+            candidate_results = [*tool_results, formatted]
+            candidate_records = list(tool_result_records) + [{
+                "tool_name": tool_name,
+                "content": tool_content,
+                "result": result,
+                "text": formatted,
+            }]
+            _append_tool_results(
+                candidate_messages,
+                round_response,
+                native_tool_calls,
+                candidate_results,
+                candidate_texts,
+                True,
+                current_round,
+                round_reasoning,
+                candidate_records,
+            )
+            schema_tokens = (
+                (inspection.get("categories") or {}).get("native_tool_schemas", {}).get("tokens", 0)
+            )
+            if native_tool_exchange_fits(
+                _last_route_request_messages,
+                candidate_messages,
+                effective_budget,
+                schema_tokens=schema_tokens,
+            ):
+                return _account_preview(formatted, exchange_tokens)
         if len(raw_context) <= 6000 and not exceeds_remaining_budget:
             return _account_preview(formatted, exchange_tokens)
         try:
@@ -7959,7 +8004,14 @@ async def stream_agent_loop(
                 _effectful_used = True
 
             formatted = format_tool_result(desc, result)
-            formatted = await _context_result_preview(block.tool_type, desc, result, formatted, tool_event)
+            formatted = await _context_result_preview(
+                block.tool_type, desc, result, formatted, tool_event,
+                tool_index=i,
+                native_tool_calls=native_tool_calls if used_native else None,
+                round_response=round_response,
+                round_reasoning=round_reasoning,
+                tool_content=block.content,
+            )
             tool_results.append(formatted)
             tool_result_texts.append(formatted)
             tool_result_records.append(

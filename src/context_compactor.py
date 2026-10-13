@@ -328,6 +328,79 @@ def _truncate_message_to_token_budget(msg: Dict[str, Any], token_budget: int) ->
     return _truncate_tool_call_args(out, token_budget)
 
 
+def native_tool_exchange_fits(
+    messages: List[Dict[str, Any]],
+    candidate_messages: List[Dict[str, Any]],
+    input_budget: int,
+    schema_tokens: int = 0,
+) -> bool:
+    """Check whether trimming old context retains the latest exchange and essentials."""
+    try:
+        budget = max(0, int(input_budget) - max(0, int(schema_tokens)))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    protected_candidate = [
+        {**message, "_protected": True} if message.get("role") == "system" else message
+        for message in candidate_messages
+    ]
+    trimmed = trim_for_context(protected_candidate, budget, reserve_tokens=0)
+    if estimate_tokens(trimmed) > budget:
+        return False
+
+    essential = [message for message in messages if message.get("role") == "system"]
+    actual_users = [
+        message for message in messages
+        if message.get("role") == "user"
+        and message.get("_agent_injected") != "context"
+        and (message.get("metadata") or {}).get("trusted") is not False
+    ]
+    if actual_users:
+        essential.append(actual_users[-1])
+    def _public_message(message):
+        return {key: value for key, value in message.items() if key != "_protected"}
+
+    if any(
+        not any(_public_message(message) == _public_message(item) for item in trimmed)
+        for message in essential
+    ):
+        return False
+
+    latest_call_index = next(
+        (index for index in range(len(candidate_messages) - 1, -1, -1)
+         if candidate_messages[index].get("role") == "assistant"
+         and candidate_messages[index].get("tool_calls")),
+        -1,
+    )
+    latest_call = candidate_messages[latest_call_index] if latest_call_index >= 0 else None
+    if latest_call is None or not any(
+        _public_message(latest_call) == _public_message(item) for item in trimmed
+    ):
+        return False
+    calls = latest_call.get("tool_calls", [])
+    expected_call_ids = [call.get("id") for call in calls]
+    expected_tools = []
+    for message in candidate_messages[latest_call_index + 1:]:
+        if message.get("role") != "tool":
+            break
+        expected_tools.append(message)
+    if (
+        not calls
+        or len(expected_tools) != len(calls)
+        or [message.get("tool_call_id") for message in expected_tools] != expected_call_ids
+    ):
+        return False
+    for expected in expected_tools:
+        actual = next(
+            (item for item in trimmed
+             if item.get("role") == "tool"
+             and item.get("tool_call_id") == expected.get("tool_call_id")),
+            None,
+        )
+        if actual is None or actual != expected:
+            return False
+    return bool(expected_tools)
+
+
 def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: int = 512) -> List[Dict]:
     """Trim system messages to fit within context_length.
 

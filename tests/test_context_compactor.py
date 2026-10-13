@@ -26,6 +26,7 @@ from src.context_compactor import (
     SUMMARY_MAX_TOKENS,
     _content_as_text,
     maybe_compact,
+    native_tool_exchange_fits,
     trim_for_context,
 )
 
@@ -88,6 +89,83 @@ class TestSelfSummaryPrompt:
 
 
 class TestTrimForContext:
+    def test_near_full_budget_keeps_complete_latest_small_file_read(self):
+        file_text = "{\"name\":\"nflix\",\"scripts\":{},\"note\":\"" + ("x" * 1300) + "\"}"
+        formatted = f"### Read file\n```\n{file_text}\n```"
+        user_request = {"role": "user", "content": "Inspect package.json."}
+        tool_call = {
+            "role": "assistant", "content": None, "tool_calls": [{
+                "id": "read-1", "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path":"package.json"}'},
+            }],
+        }
+        tool_result = {"role": "tool", "tool_call_id": "read-1", "content": formatted}
+        messages = [
+            {"role": "system", "_agent_injected": "prompt", "content": "Agent instructions. " * 600},
+            {"role": "system", "_coding_guidance": True, "content": "Read in small steps."},
+            {"role": "system", "content": "Relevant memory context."},
+            *[
+                item
+                for _ in range(18)
+                for item in (
+                    {"role": "user", "content": f"Old request {_}"},
+                    {"role": "assistant", "content": "Old conversation detail. " * 350},
+                )
+            ],
+            user_request,
+            tool_call,
+            tool_result,
+        ]
+
+        base_messages = messages[:-2]
+        candidate = [*base_messages, tool_call, tool_result]
+        assert native_tool_exchange_fits(
+            base_messages, candidate, input_budget=15_534, schema_tokens=300,
+        )
+        assert not native_tool_exchange_fits(
+            base_messages, candidate, input_budget=128,
+        )
+        trimmed = trim_for_context(
+            [
+                {**message, "_protected": True} if message.get("role") == "system" else message
+                for message in candidate
+            ],
+            context_length=15_234,
+            reserve_tokens=0,
+        )
+
+        assert estimate_tokens(trimmed) <= 15_234
+        assert tool_call in trimmed
+        assert tool_result in trimmed
+        assert messages[0] in [{key: value for key, value in item.items() if key != "_protected"} for item in trimmed]
+        assert messages[1] in [{key: value for key, value in item.items() if key != "_protected"} for item in trimmed]
+        assert messages[2] in [{key: value for key, value in item.items() if key != "_protected"} for item in trimmed]
+        assert user_request in trimmed
+        assert file_text in next(m["content"] for m in trimmed if m.get("tool_call_id") == "read-1")
+        assert not any("truncated" in str(m.get("content", "")).lower() for m in trimmed[-2:])
+
+    def test_native_exchange_fit_requires_every_tool_result_in_batch(self):
+        messages = [
+            {"role": "system", "content": "Instructions."},
+            {"role": "user", "content": "Read both files."},
+        ]
+        assistant = {
+            "role": "assistant", "content": None,
+            "tool_calls": [
+                {"id": "one", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+                {"id": "two", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+            ],
+        }
+        first = {"role": "tool", "tool_call_id": "one", "content": "first result"}
+        second = {"role": "tool", "tool_call_id": "two", "content": "second result"}
+
+        assert not native_tool_exchange_fits(
+            messages, [*messages, assistant, first], input_budget=4096,
+        )
+        assert native_tool_exchange_fits(
+            messages, [*messages, assistant, first, second], input_budget=4096,
+        )
+
     def test_injected_datetime_does_not_replace_current_user(self):
         question = {"role": "user", "content": "Find me a free online image generator."}
         messages = [

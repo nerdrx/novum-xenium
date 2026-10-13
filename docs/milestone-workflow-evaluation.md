@@ -239,3 +239,13 @@ A same-model repair corrected successful and failed request settlement. Independ
 The separate stdlib progress-parser task (`fixtures/progress-parser`) also failed: the same model described a solution but ended by asking whether to implement the explicitly authorized function. The starter remained unimplemented; all protected test/wrapper hashes matched. Evidence: `coding-progress-parser-20261013.json`. These results do not establish reliable independent coding. The scheduled task remains paused.
 
 A final focused busy-control/buffer-scope slice also exhausted two failed checks. Its independent full-flow run reached the helper's 45-second deadline, so it is not accepted and later phases are unverified. All candidate workspaces remain separate; no candidate application was deployed as a completed product. The earlier cancellation candidate remains evidence of partial progress (six passing phases), not a fully working app. See `coding-final-controls-20261013.json`.
+
+### Diverse small-task evaluation
+
+Three isolated tasks used the same qwen3.5:9b model with the coding workflow enabled. Every starter failed its baseline. The model alone edited solution.py, and independent checks used the original test files outside its workspace. SQLite batch rollback passed five tests in 79.885 seconds; list chunking passed eight tests in 37.736 seconds. Both produced changed source and retained protected test/runner hashes. These are two bounded implementation successes, not evidence of reliable full-app development.
+
+The CSV/Decimal aggregation task stopped after 21.748 seconds with no source edit. The checkpoint shows a successful read of solution.py immediately before asking the user for its path. This is unnecessary clarification despite available evidence, not demonstrated missing tools. No answer or coaching was supplied to rescue the trial. The adapter originally reported generic incomplete status; preserve that raw observation alongside the checkpoint diagnosis. Settings were restored and scheduling remains paused.
+
+Reproducible starters/tests are in `evaluations/fixtures/diverse`; full evidence is `evaluations/coding-diverse-tasks-20261013.json`.
+
+The comparison adapter now reports unresolved clarification as `waiting_user` (non-success exit 2), with redacted event metadata. It does not answer the question or treat it as tool approval. All 17 adapter tests pass, including approval followed by clarification and resolved-card handling. This fixes evaluation reporting; it does not fix the model's unnecessary question or retroactively pass the CSV trial.

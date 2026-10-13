@@ -66,6 +66,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     {"type": "ask_user", "data": {"kind": "tool_approval", "approval_id": "approval-x"}},
                     {"type": "tool_output", "ask_user": {"kind": "tool_approval", "approval_id": "bad\nid"}},
                 ],
+                "clarification": [
+                    {"type": "ask_user", "data": {"question": "PRIVATE QUESTION", "options": ["PRIVATE CHOICE"]}},
+                ],
+                "nested_clarification": [
+                    {"type": "tool_output", "data": {"ask_user": {"question": "PRIVATE QUESTION"}}},
+                ],
+                "resolved_clarification": [
+                    {"type": "tool_output", "ask_user": {"question": "PRIVATE QUESTION", "resolved": True}},
+                    {"type": "agent_terminal", "status": "completed"},
+                ],
+                "approval_then_clarification": ([
+                    {"type": "ask_user", "data": {"kind": "tool_approval", "approval_id": "approval-x"}},
+                ] if chat_call == 1 else [
+                    {"type": "ask_user", "data": {"question": "PRIVATE QUESTION"}},
+                ]),
                 "error_done": [
                     {"error": "Provider request failed: PRIVATE BODY", "status": 502},
                 ],
@@ -284,6 +299,31 @@ class NovumAdapterTests(unittest.TestCase):
         self.assertEqual(first["selected_endpoint_id"], resumed["selected_endpoint_id"])
         self.assertEqual(resumed["tool_approval_id"], ["approval-x"])
         self.assertEqual(resumed["tool_approval_decision"], ["approve_task"])
+
+    def test_clarification_is_waiting_user_without_answering_or_logging_text(self):
+        for mode in ("clarification", "nested_clarification", "approval_then_clarification"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                Path(directory, "TASK.md").write_text("Fix defect.\n")
+                Path(directory, "calc.py").write_text("broken\n")
+                result = self.invoke(directory, mode=mode, approve_task=True)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["status"], "waiting_user")
+            self.assertIsNone(report["terminal"])
+            self.assertIn({"type": "ask_user", "status": "waiting_user"}, report["evidence"])
+            self.assertNotIn("PRIVATE", result.stdout)
+            expected_streams = 2 if mode == "approval_then_clarification" else 1
+            self.assertEqual(sum(path == "/api/chat_stream" for path, *_ in Handler.calls), expected_streams)
+            self.assertFalse(any("/stop/" in path for path, *_ in Handler.calls))
+
+    def test_resolved_clarification_does_not_override_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "TASK.md").write_text("Fix defect.\n")
+            Path(directory, "calc.py").write_text("broken\n")
+            result = self.invoke(directory, mode="resolved_clarification")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "complete")
+        self.assertNotIn("PRIVATE", result.stdout)
 
     def test_opt_in_rejects_malformed_or_wrong_session_approval(self):
         for mode in ("approval_malformed", "approval_wrong_session", "approval_valid_then_invalid"):

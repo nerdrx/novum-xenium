@@ -80,6 +80,19 @@ def valid_approval_id(value) -> bool:
     )
 
 
+def waiting_for_user(event: dict) -> bool:
+    """Recognize unresolved clarification cards without retaining their text."""
+    nested = event.get("data") if isinstance(event.get("data"), dict) else {}
+    candidates = [source.get("ask_user") for source in (event, nested)]
+    if event.get("type") == "ask_user":
+        candidates.append(nested or event)
+    return any(
+        isinstance(card, dict) and bool(card) and not card.get("resolved")
+        and card.get("kind") != "tool_approval"
+        for card in candidates
+    )
+
+
 def approval_binding_matches(event: dict, card: dict, session_id: str, workspace: str) -> bool:
     nested = event.get("data") if isinstance(event.get("data"), dict) else {}
     for source in (event, nested, card):
@@ -198,6 +211,7 @@ def main() -> int:
     stream_error = False
     terminal_failure = False
     terminal_unverified = False
+    user_input_needed = False
     try:
         with post("/api/session", {
             "name": "Coding comparison fixture",
@@ -280,6 +294,10 @@ def main() -> int:
                         elif summary["type"] == "error":
                             stream_error = True
                     card, requested = approval_card(event)
+                    if waiting_for_user(event):
+                        user_input_needed = True
+                        evidence.append({"type": "ask_user", "status": "waiting_user"})
+                        evidence = evidence[-32:]
                     if card is not None or requested:
                         if not args.approve_task:
                             approval_needed = True
@@ -296,7 +314,7 @@ def main() -> int:
                         break
             if time.monotonic() >= deadline:
                 raise TimeoutError
-            if pending_approval is None or approval_needed:
+            if pending_approval is None or approval_needed or user_input_needed:
                 break
             approval_count += 1
             evidence.append({"type": "approval_decision", "decision": "approve_task"})
@@ -310,6 +328,8 @@ def main() -> int:
             status, returncode = ("approval_invalid", 4) if approval_invalid else ("approval_needed", 3)
         elif stream_error or terminal_failure:
             status, returncode = "failed", 1
+        elif user_input_needed:
+            status, returncode = "waiting_user", 2
         elif terminal_unverified or verification_passed is False:
             status, returncode = "unverified", 2
         elif (stream_ended and terminal

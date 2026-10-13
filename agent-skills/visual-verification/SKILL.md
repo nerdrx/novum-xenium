@@ -1,7 +1,7 @@
 ---
 name: visual-verification
 description: Verify GUI, UI, frontend, website, CSS, and theme changes in a real rendered interface, including behavior and accessibility.
-version: 1.0.5
+version: 1.0.6
 category: design
 tags: [gui, ui, design, interface, frontend, website, css, theme]
 requires_toolsets: [read_file]
@@ -62,6 +62,11 @@ profile and does not change app defaults. It refuses root-owned workspaces and
 confines artifact output and test-script paths to the selected workspace.
 Inspect the report and screenshots; if you cannot view the images, say visual
 inspection remains unverified.
+
+## Repository Delivery
+Before changing `.gitignore`, read and preserve its existing rules; merge new patterns instead of replacing the file. Before committing, inspect the staged paths and diff summary, and remove unintended caches, dependencies, build outputs, or large binaries from the index.
+
+If generated files are already in an unpushed commit, first preserve uncommitted work in a verified file backup or patch and keep a backup ref for the original commits; then correct only the unpushed history. Deleting files in a later commit does not remove their earlier blobs. Do not delete the project as a Git repair shortcut unless the user explicitly requests removal. Read the exact Git error and address that failure; a failed push is not a reason to delete local work or rewrite shared/published history.
 
 ## Verification
 - No blocking parse, page, startup, or request errors remain in the tested flow.

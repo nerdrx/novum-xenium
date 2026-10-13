@@ -30,3 +30,19 @@ def test_design_skill_templates_import_match_gui_task_and_preserve_ownership(tmp
     assert imported['owner'] == 'bob'
     assert imported['name'] in {skill['name'] for skill in manager.load(owner='bob')}
     assert manager.load(owner='alice') == original
+
+
+def test_visual_verification_bundle_preserves_repository_delivery_guidance(tmp_path):
+    manager = SkillsManager(str(tmp_path))
+    source = (ROOT / 'agent-skills/visual-verification/SKILL.md').read_text()
+    imported = manager.import_bundle_from_files(
+        {'SKILL.md': source}, owner='alice', category='design',
+    )
+    body = manager.read_skill_md(imported['name'], owner='alice')
+    assert body is not None
+    assert 'preserve its existing rules' in body
+    assert 'inspect the staged paths and diff summary' in body
+    assert 'verified file backup or patch' in body
+    assert 'correct only the unpushed history' in body
+    assert 'unless the user explicitly requests removal' in body
+    assert 'failed push is not a reason to delete local work' in body

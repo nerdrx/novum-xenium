@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { ELECTRON_WORKER_SOURCE, ensureOutputIgnore, resolveWorkspaceProject, runOwnedCommand } from '../scripts/electron_preview.mjs';
+import { ELECTRON_WORKER_SOURCE, ensureOutputIgnore, resolveWorkspaceProject, runOwnedCommand, summarizeMainStderr } from '../scripts/electron_preview.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const node = process.execPath;
@@ -39,6 +39,24 @@ test('resolves only the local Electron manifest entry, executable, and test modu
   assert.equal(project.entryPath, path.join(root, 'src/main.js'));
   assert.equal(project.electronPath, path.join(root, 'node_modules/electron/dist/electron'));
   assert.equal(project.testScript, path.join(root, 'smoke.mjs'));
+});
+
+test('main-process stderr summary prioritizes exception with nearby source location', () => {
+  const summary = summarizeMainStderr([
+    'DBus warning: routine startup notice',
+    'App threw an error during load',
+    '/workspace/dist/main/index.js:14',
+    'const source = ' + 'x'.repeat(1200),
+    ' '.repeat(80) + '^',
+    "SyntaxError: Identifier '__dirname' has already been declared",
+    '    at Module._compile (/workspace/dist/main/index.js:14:7)',
+    'DBus warning: another routine notice',
+  ]);
+  assert.match(summary[0], /SyntaxError: Identifier '__dirname' has already been declared/);
+  assert.match(summary[0], /dist\/main\/index\.js:14/);
+  assert.ok(summary[0].indexOf('SyntaxError:') < summary[0].indexOf('dist/main/index.js:14'));
+  assert.ok(summary[0].length <= 740);
+  assert.deepEqual(summarizeMainStderr(['first notice', 'second notice']), ['first notice', 'second notice']);
 });
 
 test('preview output is locally ignored without replacing an existing user ignore file', async t => {
@@ -189,6 +207,7 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
     const path = require('node:path');
     const { spawn } = require('node:child_process');
     process.stderr.write('DBus warning: routine fixture startup notice\\n');
+    process.stderr.write('App threw an error during load\\n/workspace/dist/main/index.js:14\\nSyntaxError: duplicate __dirname declaration\\n/workspace/dist/main/index.js:14\\n');
     const profile = process.argv.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});
     fs.writeFileSync(path.join(profile, 'DevToolsActivePort'), '9222\\n/devtools/browser/fixture\\n');
@@ -237,9 +256,16 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   }
   assert.ok(await processState(unrelated.pid), 'outer cancellation must preserve unrelated detached process');
 
-  const retry = spawn(node, [helper, '--workspace', root, '--timeout', '15'], { stdio: 'ignore', env });
+  const retry = spawn(node, [helper, '--workspace', root, '--timeout', '15'], { stdio: ['ignore', 'pipe', 'ignore'], env });
+  let retryStdout = '';
+  retry.stdout.setEncoding('utf8').on('data', chunk => { retryStdout += chunk; });
   const retryResult = await new Promise(resolve => retry.once('close', code => resolve({ code })));
   assert.equal(retryResult.code, 0, 'a cancelled preview must not leave a stale workspace lock');
+  const retrySummary = JSON.parse(retryStdout.split('PREVIEW_RESULT: ')[1]);
+  assert.match(retrySummary.errors.mainStderrExamples[0], /SyntaxError: duplicate __dirname declaration/);
+  assert.match(retrySummary.errors.mainStderrExamples[0], /dist\/main\/index\.js:14/);
+  assert.match(retrySummary.errors.examples[0], /SyntaxError: duplicate __dirname declaration/,
+    'the main-process exception should outrank routine stderr in the compact examples');
   const completedRuns = (await readdir(outputDir)).filter(name => name.startsWith('run-'));
   assert.equal(completedRuns.length, 2, 'each preview must retain isolated artifacts in its own run directory');
   const reports = await Promise.all(completedRuns.map(async name => {
@@ -282,6 +308,7 @@ test('hard cancellation of the outer Bash group stops the real helper launch tre
   assert.ok(leads.runtimeBoundaries.some(note => note.includes('BrowserWindow.webPreferences.preload')));
   assert.match(leads.note, /not a diagnosis or verified remediation/i);
   const popupSummary = JSON.parse(popupStdout.split('PREVIEW_RESULT: ')[1]);
+  assert.match(popupSummary.errors.mainStderrExamples[0], /SyntaxError: duplicate __dirname declaration/);
   assert.equal(popupSummary.electronDiagnosticLeads.note, leads.note);
   assert.equal(popupSummary.electronDiagnosticLeads.runtimeBoundaries.length, 4);
   assert.match(popupSummary.errors.actualSourceFrames[0].stack, /popup-test\.mjs/);

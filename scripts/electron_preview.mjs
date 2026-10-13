@@ -20,6 +20,20 @@ export function ensureOutputIgnore(fsApi, outputDir) {
   }
 }
 
+export function summarizeMainStderr(lines) {
+  const values = Array.isArray(lines) ? lines.map(value => String(value)) : [];
+  const errorIndex = values.findIndex(value => /\b(?:[A-Za-z]*Error|Exception):/.test(value));
+  if (errorIndex >= 0) {
+    const location = values.slice(Math.max(0, errorIndex - 8), errorIndex)
+      .reverse().find(value => /(?:^|[/\\])[^/\\\s:]+:\d+(?::\d+)?\s*$/.test(value));
+    const exception = values[errorIndex].slice(0, 480);
+    return [location
+      ? `${exception}\n${location.slice(0, 240)}`.slice(0, 740)
+      : exception];
+  }
+  return values.slice(0, 3).map(value => value.slice(0, 180));
+}
+
 function inside(root, target) {
   const rel = path.relative(root, target);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
@@ -112,6 +126,7 @@ function parseArgs(argv) {
 
 export const ELECTRON_WORKER_SOURCE = String.raw`
 const ensureOutputIgnore = ${ensureOutputIgnore.toString()};
+const summarizeMainStderr = ${summarizeMainStderr.toString()};
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as fs from 'node:fs';
@@ -359,7 +374,8 @@ try {
       mainStderr: diagnostics.mainStderr.length,
       examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors,
         ...diagnostics.failedRequests, ...diagnostics.badResponses,
-        ...diagnostics.mainStderr].slice(0, 3).map(value => String(value).slice(0, 180)),
+        ...summarizeMainStderr(diagnostics.mainStderr)].slice(0, 3).map(value => String(value).slice(0, 180)),
+      mainStderrExamples: summarizeMainStderr(diagnostics.mainStderr),
       actualSourceFrames: diagnostics.pageErrorDetails.slice(0, 2).map(detail => ({ message: detail.message, stack: detail.stack.slice(0, 800) })),
       consoleLocations: diagnostics.consoleErrorDetails.slice(0, 2),
     },
@@ -402,8 +418,9 @@ try {
     errors: {
       page: diagnostics.pageErrors.length, console: diagnostics.consoleErrors.length,
       stderr: diagnostics.mainStderr.length,
-      examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors, ...diagnostics.mainStderr].slice(0, 3).map(value => String(value).slice(0, 180)),
-      mainStderrExamples: diagnostics.mainStderr.slice(0, 3).map(value => String(value).slice(0, 180)),
+      examples: [...diagnostics.pageErrors, ...diagnostics.consoleErrors,
+        ...summarizeMainStderr(diagnostics.mainStderr)].slice(0, 3).map(value => String(value).slice(0, 180)),
+      mainStderrExamples: summarizeMainStderr(diagnostics.mainStderr),
     },
     report: reportPath || null,
   }));

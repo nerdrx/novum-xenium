@@ -101,7 +101,70 @@
             "test_status": "passed",
             "type": "coding_work_packet"
           }
-        ]
+        ],
+        "checkpoint_packet": {
+          "version": 1,
+          "enabled": true,
+          "packet": {
+            "objective": "Repair core.total to return sum of numeric values, and repair report.summary to return dict with total (sum) and count (number of values)",
+            "files": [
+              "core.py",
+              "report.py"
+            ],
+            "reproduce_command": "python -c \"import core; import report; print('total([1,2,3]):', core.total([1,2,3])); print('summary([1,2,3]):', report.summary([1,2,3])); print('summary([]):', report.summary([]))\"",
+            "acceptance_command": "python -c \"import core; import report; assert core.total([1,2,3]) == 6; assert core.total([]) == 0; assert report.summary([1,2,3]) == {'total': 6, 'count': 3}; assert report.summary([]) == {'total': 0, 'count': 0}; print('All assertions passed')\"",
+            "acceptance_condition": "core.total([1,2,3]) returns 6, core.total([]) returns 0, report.summary([1,2,3]) returns {'total': 6, 'count': 3}, report.summary([]) returns {'total': 0, 'count': 0}"
+          },
+          "stage": "done",
+          "reproduction_exit_code": 0,
+          "edit_tool": "edit_file",
+          "acceptance_exit_code": 0,
+          "milestones": [
+            "Repair core.total to sum numeric values",
+            "Repair report.summary to return correct total and count",
+            "Verify the fixes work correctly"
+          ],
+          "completed": [
+            "Repair core.total to sum numeric values"
+          ],
+          "current_milestone": "Repair core.total to sum numeric values",
+          "review_status": "not_reviewed"
+        },
+        "rejected_checklist_calls": [
+          {
+            "arguments": {
+              "todos": [
+                {
+                  "content": "Repair core.total to sum numeric values",
+                  "status": "completed",
+                  "priority": "medium"
+                },
+                {
+                  "content": "Repair report.summary to return correct total and count",
+                  "status": "completed",
+                  "priority": "medium"
+                },
+                {
+                  "content": "Verify the fixes work correctly",
+                  "status": "completed",
+                  "priority": "medium"
+                }
+              ],
+              "work_packet": {
+                "objective": "Repair core.total to return sum of numeric values, and repair report.summary to return dict with total (sum) and count (number of values)",
+                "files": [
+                  "core.py",
+                  "report.py"
+                ],
+                "reproduce_command": "python -c \"import core; import report; print('total([1,2,3]):', core.total([1,2,3])); print('summary([1,2,3]):', report.summary([1,2,3])); print('summary([]):', report.summary([]))\"",
+                "acceptance_command": "python -c \"import core; import report; assert core.total([1,2,3]) == 6; assert core.total([]) == 0; assert report.summary([1,2,3]) == {'total': 6, 'count': 3}; assert report.summary([]) == {'total': 0, 'count': 0}; print('All assertions passed')\"",
+                "acceptance_condition": "core.total([1,2,3]) returns 6, core.total([]) returns 0, report.summary([1,2,3]) returns {'total': 6, 'count': 3}, report.summary([]) returns {'total': 0, 'count': 0}"
+              }
+            },
+            "exit_code": 1
+          }
+        ],
+        "asked_user_to_verify": false
       }
     },
     {
@@ -199,7 +262,68 @@
             "test_status": "passed",
             "type": "coding_work_packet"
           }
-        ]
+        ],
+        "checkpoint_packet": {
+          "version": 1,
+          "enabled": true,
+          "packet": {
+            "objective": "Fix core.total to sum numeric values instead of returning len(values)",
+            "files": [
+              "core.py"
+            ],
+            "reproduce_command": "python -c \"from core import total; print(total([1,2,3,4,5]))\"",
+            "acceptance_command": "python -c \"from core import total; print(total([1,2,3,4,5]))\"",
+            "acceptance_condition": "Output must be 15 (the sum of [1,2,3,4,5])"
+          },
+          "stage": "done",
+          "reproduction_exit_code": 0,
+          "edit_tool": "edit_file",
+          "acceptance_exit_code": 0,
+          "milestones": [
+            "Fix core.total to sum numeric values",
+            "Fix report.summary to return correct total and count",
+            "Verify the fix works correctly"
+          ],
+          "completed": [
+            "Fix core.total to sum numeric values"
+          ],
+          "current_milestone": "Fix core.total to sum numeric values",
+          "review_status": "not_reviewed"
+        },
+        "rejected_checklist_calls": [
+          {
+            "arguments": {
+              "todos": [
+                {
+                  "content": "Fix core.total to sum numeric values",
+                  "status": "completed",
+                  "priority": "medium"
+                },
+                {
+                  "content": "Fix report.summary to return correct total and count",
+                  "status": "completed",
+                  "priority": "medium"
+                },
+                {
+                  "content": "Verify the fix works correctly",
+                  "status": "in_progress",
+                  "priority": "medium"
+                }
+              ],
+              "work_packet": {
+                "objective": "Verify report.summary returns correct total and count including empty input",
+                "files": [
+                  "report.py"
+                ],
+                "reproduce_command": "python -c \"from report import summary; print(summary([1,2,3,4,5]))\"",
+                "acceptance_command": "python -c \"from report import summary; print(summary([1,2,3,4,5])); print(summary([]))\"",
+                "acceptance_condition": "summary([1,2,3,4,5]) returns {'total': 15, 'count': 5} and summary([]) returns {'total': 0, 'count': 0}"
+              }
+            },
+            "exit_code": 1
+          }
+        ],
+        "asked_user_to_verify": true
       }
     }
   ],
@@ -211,5 +335,6 @@
     "Only one stochastic trial per order; timings are observations, not a general speed benchmark.",
     "The Novum packet test result covers its registered command, not independent review. A zero-exit print-only command does not automatically enforce the textual expected output.",
     "No manual fixture source repairs were performed during these trials. The FFmpeg GUI conversion remains unverified."
-  ]
+  ],
+  "diagnosis": "Both runs attempted to mark an unverified checklist item completed. The tracker rejected that status update. In the Novum-first run, the model then requested teacher help (also blocked pending a valid packet) and asked the user to execute verification. The proposed packet also omitted verify_existing, but the premature completed status itself is sufficient to explain rejection; missing mode was not established as the rejection cause."
 }

@@ -66,3 +66,15 @@ def test_todowrite_schema_has_optional_bounded_work_packet():
     assert packet["additionalProperties"] is False
     assert packet["properties"]["files"]["maxItems"] == 32
 
+
+
+def test_verification_packet_roundtrip_and_unknown_fields_rejected(monkeypatch, tmp_path):
+    monkeypatch.setattr(coding_tools, "_TODO_DIR", str(tmp_path))
+    packet = dict(_packet(), mode="verify_existing")
+    args = {"todos": [{"content": "Verify existing auth", "status": "in_progress"}], "work_packet": packet}
+    ctx = {"owner": "alice", "session_id": "verify"}
+    result = _run(args, ctx)
+    assert result["exit_code"] == 0
+    assert result["work_packet"] == packet
+    packet["skip_checks"] = True
+    assert _run(args, ctx)["exit_code"] == 1

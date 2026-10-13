@@ -154,7 +154,7 @@ def test_checked_packet_instructions_follow_evidence_stage(packet):
         "todos": [{"content": "Fix refresh", "status": "in_progress"}],
         "work_packet": packet.to_dict(),
     })
-    assert "Run the exact recorded reproduction command before editing" in tracker.instruction
+    assert "run_coding_check {}" in tracker.instruction
     tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
     assert "recorded reproduction command has run" in tracker.instruction
     assert "write_file, edit_file, or apply_patch" in tracker.instruction
@@ -170,6 +170,24 @@ def test_checked_packet_instructions_follow_evidence_stage(packet):
     optional.observe("bash", packet.reproduce_command, {"exit_code": 1})
     assert "Bash and Python are unavailable" not in optional.instruction
     assert not optional.blocks("bash", "sed -i 's/a/b/' src/auth.py")
+
+
+def test_registered_check_resolves_only_packet_commands_and_rejects_arguments(packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    tracker.observe("todowrite", "{}", {
+        "exit_code": 0,
+        "todos": [{"content": "Fix refresh", "status": "in_progress"}],
+        "work_packet": packet.to_dict(),
+    })
+    assert tracker.check_command("{}") == (packet.reproduce_command, None)
+    assert tracker.check_command('{"command":"rm -rf /"}')[0] is None
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    assert tracker.check_command("{}")[0] is None  # edit stage
+    tracker.observe("write_file", "{}", {"exit_code": 0})
+    assert tracker.check_command("{}") == (packet.acceptance_command, None)
+    assert tracker.check_command("not-json")[0] is None
 
 
 def test_checkpoint_restores_only_server_observed_stage_and_checklist(packet):
@@ -283,3 +301,47 @@ def test_checkpoint_rejects_unhashable_edit_tool(packet, stage, edit_tool, accep
     restored = CodingWorkTracker(enabled=True)
     assert restored.restore_checkpoint(checkpoint) == "reset"
     assert restored.state.stage == "reproduce"
+
+
+def test_verify_existing_requires_real_checks_and_credits_only_active_slice(packet):
+    from src.coding_work_packet import CodingWorkTracker
+    tracker = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Verify auth", "status": "in_progress"},
+             {"content": "Verify settings", "status": "pending"}]
+    check_packet = dict(packet.to_dict(), mode="verify_existing")
+    assert tracker.observe("todowrite", "{}", {
+        "exit_code": 0, "todos": todos, "work_packet": check_packet})
+    assert not tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    assert tracker.observe("bash", packet.reproduce_command, {"exit_code": 0})
+    assert tracker.state.stage == "verify"
+    assert tracker.state.edit_result is None
+    assert not tracker.observe("bash", packet.acceptance_command, {"exit_code": 0, "blocked": True})
+    assert tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    assert tracker.state.stage == "done"
+    assert tracker.completed == {"Verify auth"}
+    assert tracker.pending
+    assert "Verify settings" in tracker.instruction
+    assert "verify_existing" in tracker.instruction
+    assert tracker.blocks("todowrite", {"todos": [dict(t, status="completed") for t in todos]})
+    restored = CodingWorkTracker(enabled=True)
+    assert restored.restore_checkpoint(tracker.checkpoint_data()) == "restored"
+    assert restored.state.stage == "done"
+    assert restored.state.edit_result is None
+    assert restored.review_status == "not_reviewed"
+    damaged = tracker.checkpoint_data()
+    damaged["packet"].pop("mode")
+    assert CodingWorkTracker(enabled=True).restore_checkpoint(damaged) == "reset"
+    assert restored.restore_checkpoint(tracker.checkpoint_data(), recovery=True) == "reset"
+
+
+def test_failed_verification_baseline_requires_repair(packet):
+    from dataclasses import replace
+    state = CodingWorkState(replace(packet, mode="verify_existing"))
+    assert state.record_reproduction(packet.reproduce_command, {"exit_code": 1}) == "edit"
+    with pytest.raises(ValueError, match="successful edit"):
+        state.record_acceptance(packet.acceptance_command, {"exit_code": 0})
+    state.record_edit("edit_file", {"exit_code": 0})
+    assert state.record_acceptance(packet.acceptance_command, {"exit_code": 0}) == "done"
+    for bad_mode in [None, [], "skip"]:
+        with pytest.raises(ValueError, match="mode"):
+            replace(packet, mode=bad_mode)

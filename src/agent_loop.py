@@ -6020,8 +6020,14 @@ async def stream_agent_loop(
         if not _coding_work.enabled:
             return schemas
         checked = []
+        has_bash = any(
+            schema.get("function", {}).get("name") == "bash"
+            for schema in schemas or []
+        )
         for schema in schemas or []:
             tool_name = schema.get("function", {}).get("name")
+            if tool_name == "run_coding_check":
+                continue
             if (_coding_work.state and _coding_work.state.stage == "edit"
                     and tool_name in {"bash", "python"}):
                 continue
@@ -6047,6 +6053,22 @@ async def stream_agent_loop(
                 + " coding contract for the active slice. Commands must be exact real commands."
             )
             checked.append(schema)
+        if (has_bash and _coding_work.state
+                and _coding_work.state.stage in {"reproduce", "verify"}):
+            checked.append({
+                "type": "function",
+                "function": {
+                    "name": "run_coding_check",
+                    "description": (
+                        "Run the active checked coding packet's recorded reproduction or acceptance "
+                        "command. Takes no arguments; it cannot run a model-supplied command."
+                    ),
+                    "parameters": {
+                        "type": "object", "properties": {}, "required": [],
+                        "additionalProperties": False,
+                    },
+                },
+            })
         return checked
 
     _t3 = time.time()
@@ -7839,6 +7861,13 @@ async def stream_agent_loop(
         skill_reference_messages = []
         budget_hit = False
         for i, block in enumerate(tool_blocks):
+            coding_check_error = None
+            if block.tool_type == "run_coding_check":
+                check_command, coding_check_error = _coding_work.check_command(block.content)
+                if check_command:
+                    # Resolve the alias before security, approval, and execution so
+                    # the registered command follows the ordinary Bash path.
+                    block = ToolBlock("bash", check_command)
             native_tool_fields = (
                 _native_tool_provenance(converted_calls, i, block.tool_type)
                 if used_native else {}
@@ -7954,7 +7983,15 @@ async def stream_agent_loop(
                         security_decision = type(security_decision)(
                             False, "Auto review: " + judge_review["reason"],
                         )
-            if web_fetch_input_error or task_alignment_reason or workspace_deletion_reason or (
+            if coding_check_error:
+                desc = "run_coding_check: BLOCKED"
+                result = {
+                    "error": coding_check_error,
+                    "exit_code": 1,
+                    "blocked": True,
+                    "policy": "coding_work_packet",
+                }
+            elif web_fetch_input_error or task_alignment_reason or workspace_deletion_reason or (
                 (blocked_by_tool_policy or blocked_by_disabled_tools)
                 and not _ody_clamped_tool_allowed
             ):

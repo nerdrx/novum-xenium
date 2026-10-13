@@ -313,6 +313,8 @@ FUNCTION_TOOL_SCHEMAS = [
                             "reproduce_command": {"type": "string", "minLength": 1, "maxLength": 1000},
                             "acceptance_command": {"type": "string", "minLength": 1, "maxLength": 1000},
                             "acceptance_condition": {"type": "string", "minLength": 1, "maxLength": 1000},
+                            "mode": {"type": "string", "enum": ["change", "verify_existing"],
+                                     "description": "Default change requires an edit. Use verify_existing only to check already implemented work; passing baseline and acceptance are required."},
                         },
                         "required": [
                             "objective", "files", "reproduce_command",

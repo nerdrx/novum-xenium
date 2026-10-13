@@ -4,6 +4,10 @@ A coding agent can attach an optional `work_packet` to `todowrite` to describe
 one small change. The existing checklist interface still works without it.
 The packet contains `objective`, project-relative `files`, an exact single-line
 `reproduce_command`, an exact `acceptance_command`, and `acceptance_condition`.
+An optional `mode` defaults to `change`. Use `verify_existing` for work already
+implemented or a verification-only checklist item: a successful baseline moves
+directly to verification, while a failed baseline still requires repair. The
+acceptance check must actually run and pass; no edit is invented.
 These are untrusted task data and grant no tool permissions.
 
 The current run tracks actual tool results through `reproduce`, `edit`,
@@ -13,9 +17,14 @@ Before reproduction, file edits and unrelated executable actions are blocked.
 In checked mode the edit stage exposes file-edit tools; shell and Python
 execution resume after an edit, for verification. Shell edits are not accepted
 as packet edit evidence.
-After a successful file-tool edit, only a successful exact acceptance command
-marks the slice done. Later edits or shell actions invalidate that pass.
+After a successful file-tool edit (or a passing `verify_existing` baseline),
+only a successful exact acceptance command marks the slice done. Later edits or shell actions invalidate that pass.
 An unfinished packet cannot be replaced by another checklist write.
+
+In checked mode, `run_coding_check {}` runs the registered command for the current
+reproduction or verification stage. It accepts no replacement command and is
+exposed only when Bash is available. The resolved command passes through the
+normal Bash security, approval, and execution path.
 
 The stream emits `coding_work_packet` events with packet, stage, `test_status`,
 and `review_status`. A passing command reports `test_status: passed` and

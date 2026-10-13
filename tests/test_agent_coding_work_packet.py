@@ -33,7 +33,8 @@ def _todos():
 
 def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=None, todos=None,
                 pause_after_acceptance=False, teacher_event=None, checked_workflow=False,
-                attempt_shell_edit=False):
+                attempt_shell_edit=False, registered_checks=False, disabled_bash=False,
+                malformed_check=False):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -85,6 +86,11 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         ("write_file", {"path": "src/auth.py", "content": "fixed"}),
         ("bash", {"command": _packet()["acceptance_command"]}),
     ])
+    if registered_checks:
+        actions[2] = ("run_coding_check", {})
+        actions[-1] = ("run_coding_check", {})
+    if malformed_check:
+        actions[2] = ("run_coding_check", {"command": "echo injected"})
     requested = []
     executed = []
     initial_todowrite = json.dumps(actions[0][1])
@@ -149,6 +155,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
         relevant_tools={"todowrite", "bash", "write_file", "python"}, max_rounds=10,
+        disabled_tools={"bash"} if disabled_bash else set(),
     ))
     return _types(chunks), executed, requested
 
@@ -165,6 +172,59 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
     assert [tool for tool, _content in executed] == ["todowrite", "todowrite", "bash", "write_file", "bash"]
     assert "Everything is complete." in " ".join(event.get("delta", "") for event in events)
     assert "write_file" in requested[1]
+
+
+def test_registered_checks_use_packet_commands_through_bash(monkeypatch, tmp_path):
+    events, executed, requested = _run_packet(
+        monkeypatch, tmp_path, registered_checks=True, checked_workflow=True,
+    )
+
+    assert [tool for tool, _content in executed] == [
+        "todowrite", "todowrite", "bash", "write_file", "bash",
+    ]
+    assert executed[2][1] == _packet()["reproduce_command"]
+    assert executed[-1][1] == _packet()["acceptance_command"]
+    assert any("run_coding_check" in tools for tools in requested)
+    assert any(event.get("stage") == "done" for event in events)
+
+
+def test_registered_check_does_not_bypass_disabled_bash(monkeypatch, tmp_path):
+    _events, executed, requested = _run_packet(
+        monkeypatch, tmp_path, registered_checks=True, disabled_bash=True,
+        checked_workflow=True,
+    )
+
+    assert "bash" not in {tool for tool, _content in executed}
+    assert all("run_coding_check" not in tools for tools in requested)
+
+
+def test_registered_check_rejects_model_supplied_command(monkeypatch, tmp_path):
+    events, executed, _requested = _run_packet(
+        monkeypatch, tmp_path, registered_checks=True, malformed_check=True,
+        checked_workflow=True,
+    )
+
+    bash_commands = [content for tool, content in executed if tool == "bash"]
+    assert "echo injected" not in bash_commands
+    assert all(command in {_packet()["reproduce_command"], _packet()["acceptance_command"]}
+               for command in bash_commands)
+    assert any("takes no arguments" in event.get("output", "")
+               for event in events if event.get("type") == "tool_output")
+
+
+def test_registered_check_keeps_native_call_name_and_result_id():
+    messages = []
+    al._append_tool_results(
+        messages, "", [{"id": "check-call-1", "name": "run_coding_check", "arguments": "{}"}],
+        ["check passed"], ["check passed"], True, 1,
+        tool_result_records=[{
+            "tool_name": "bash", "content": _packet()["reproduce_command"],
+            "result": {"exit_code": 0}, "text": "check passed",
+        }],
+    )
+
+    assert messages[0]["tool_calls"][0]["function"]["name"] == "run_coding_check"
+    assert messages[1]["tool_call_id"] == "check-call-1"
 
 
 def test_checked_edit_stage_hides_and_rejects_shell_writes_with_actionable_error(monkeypatch, tmp_path):

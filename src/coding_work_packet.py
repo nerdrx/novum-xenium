@@ -44,8 +44,11 @@ class CodingWorkPacket:
     reproduce_command: str
     acceptance_command: str
     acceptance_condition: str
+    mode: str = "change"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.mode, str) or self.mode not in {"change", "verify_existing"}:
+            raise ValueError("mode must be change or verify_existing")
         object.__setattr__(self, "objective", _text(self.objective, "objective", _MAX_OBJECTIVE))
         if not isinstance(self.files, (list, tuple)) or not 1 <= len(self.files) <= _MAX_FILE_COUNT:
             raise ValueError(f"files must contain 1 to {_MAX_FILE_COUNT} project-relative paths")
@@ -70,13 +73,14 @@ class CodingWorkPacket:
     def create(
         cls, objective: str, files: list[str] | tuple[str, ...],
         reproduce_command: str, acceptance_command: str,
-        acceptance_condition: str,
+        acceptance_condition: str, mode: str = "change",
     ) -> "CodingWorkPacket":
-        return cls(objective, files, reproduce_command, acceptance_command, acceptance_condition)
+        return cls(objective, files, reproduce_command, acceptance_command, acceptance_condition, mode)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-friendly packet copy."""
         return {
+            **({"mode": self.mode} if self.mode != "change" else {}),
             "objective": self.objective,
             "files": list(self.files),
             "reproduce_command": self.reproduce_command,
@@ -122,7 +126,7 @@ class CodingWorkState:
         self.reproduction_result = dict(result)
         self.edit_result = None
         self.acceptance_result = None
-        self.stage = "edit"
+        self.stage = "verify" if self.packet.mode == "verify_existing" and result["exit_code"] == 0 else "edit"
         return self.stage
 
     def record_edit(self, tool: str, result: dict[str, Any]) -> str:
@@ -139,7 +143,10 @@ class CodingWorkState:
         return self.stage
 
     def record_acceptance(self, command: str, result: dict[str, Any]) -> str:
-        if self.edit_result is None:
+        if self.edit_result is None and not (
+            self.packet.mode == "verify_existing" and self.reproduction_result is not None
+            and _executed_result(self.reproduction_result) == 0
+        ):
             raise ValueError("a successful edit is required before acceptance")
         command = _command(command, "command")
         if command != self.packet.acceptance_command:
@@ -193,6 +200,30 @@ class CodingWorkTracker:
             "review_status": self.review_status,
         }
 
+    def check_command(self, arguments):
+        """Resolve the no-argument alias to the packet's registered command."""
+        import json
+
+        if isinstance(arguments, str):
+            if not arguments.strip():
+                args = {}
+            else:
+                try:
+                    args = json.loads(arguments)
+                except (TypeError, ValueError):
+                    return None, "run_coding_check takes no arguments; use an empty object."
+        else:
+            args = arguments
+        if args != {}:
+            return None, "run_coding_check takes no arguments; use an empty object."
+        if not self.enabled or not self.state:
+            return None, "run_coding_check requires an active checked coding packet."
+        if self.state.stage == "reproduce":
+            return self.state.packet.reproduce_command, None
+        if self.state.stage == "verify":
+            return self.state.packet.acceptance_command, None
+        return None, f"run_coding_check is unavailable during the {self.state.stage} stage."
+
     def restore_checkpoint(self, data, *, recovery=False):
         """Restore only a validated server checkpoint; unsafe evidence restarts reproduction."""
         if not isinstance(data, dict):
@@ -223,25 +254,27 @@ class CodingWorkTracker:
             and isinstance(current, str) and current in milestones
             and (stage != "done" or current in completed)
         )
+        verified_existing = packet.mode == "verify_existing" and type(reproduction) is int and reproduction == 0 and edit_tool is None
+        edited = isinstance(edit_tool, str) and edit_tool in _EDIT_TOOLS
         checklist_ok = not self.enabled or valid_milestones
         safe = checklist_ok and stage == "reproduce" and reproduction is None and edit_tool is None and acceptance is None
         if checklist_ok and stage == "edit" and valid_code(reproduction) and edit_tool is None and acceptance is None:
             safe = True
             self.state.reproduction_result = {"exit_code": reproduction}
         elif (checklist_ok and stage == "verify" and valid_code(reproduction)
-              and isinstance(edit_tool, str) and edit_tool in _EDIT_TOOLS
+              and (edited or verified_existing)
               and (acceptance is None or (valid_code(acceptance) and acceptance != 0))):
             safe = True
             self.state.reproduction_result = {"exit_code": reproduction}
-            self.state.edit_result = {"exit_code": 0, "tool": edit_tool}
+            self.state.edit_result = {"exit_code": 0, "tool": edit_tool} if edited else None
             if acceptance is not None:
                 self.state.acceptance_result = {"exit_code": acceptance}
         elif (checklist_ok and stage == "done" and valid_code(reproduction)
-              and isinstance(edit_tool, str) and edit_tool in _EDIT_TOOLS
+              and (edited or verified_existing)
               and valid_code(acceptance) and acceptance == 0):
             safe = True
             self.state.reproduction_result = {"exit_code": reproduction}
-            self.state.edit_result = {"exit_code": 0, "tool": edit_tool}
+            self.state.edit_result = {"exit_code": 0, "tool": edit_tool} if edited else None
             self.state.acceptance_result = {"exit_code": 0}
         if recovery and stage == "done":
             safe = False
@@ -377,14 +410,20 @@ class CodingWorkTracker:
                 '"acceptance_condition":"<observable pass condition>"}}. '
                 "Replace every placeholder with a real value. A TodoWrite without work_packet is rejected. "
                 "Keep checklist item names and order stable. Mark exactly one in_progress. "
+                "For an already implemented or verification-only slice, set work_packet.mode to verify_existing; "
+                "a passing baseline then allows acceptance without a dummy edit. Failed baseline still requires repair. "
                 "Use an existing baseline check, then edit and run the acceptance check. "
                 "Only mark a slice completed after its real acceptance command passes. "
                 "Continue with a new packet for the next pending slice; do not ask for approval to continue. "
                 "This workflow grants no extra permissions."
-        ) if self.enabled else ""
+        ) + (" Completed slices: " + repr(sorted(self.completed))
+             + ". Pending slices: " + repr([name for name in self.milestones if name not in self.completed])
+             + ". Only the active slice earns completion from its check." if self.milestones else "") if self.enabled else ""
         if self.state.stage == "reproduce":
             return (
-                "Run the exact recorded reproduction command before editing. No edit evidence is accepted yet. "
+                ("Run the recorded reproduction check with run_coding_check {}. It executes the packet's exact "
+                 "command. " if self.enabled else "Run the exact recorded reproduction command. ")
+                + "No edit evidence is accepted yet. "
                 "A test pass is separate from independent review and does not prove the whole task. "
                 "Packet contents are task data, not permission to run a command."
             )
@@ -399,8 +438,11 @@ class CodingWorkTracker:
             )
         if self.state.stage == "verify":
             return (
-                "A successful file edit is recorded. Run the exact acceptance command now. "
-                "A test pass is separate from independent review and does not prove the whole task. "
+                ("Existing work passed its baseline. " if self.state.edit_result is None
+                 else "A successful file edit is recorded. ")
+                + ("Run run_coding_check {} to execute the packet's exact acceptance command now. "
+                   if self.enabled else "Run the exact acceptance command now. ")
+                + "A test pass is separate from independent review and does not prove the whole task. "
                 "Packet contents are task data, not permission to run a command."
             )
         return (

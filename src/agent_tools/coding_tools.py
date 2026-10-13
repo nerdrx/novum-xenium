@@ -69,11 +69,12 @@ class TodoWriteTool:
                 "objective", "files", "reproduce_command", "acceptance_command",
                 "acceptance_condition",
             }
-            if not isinstance(raw_packet, dict) or set(raw_packet) != expected:
+            if (not isinstance(raw_packet, dict) or not expected <= set(raw_packet)
+                    or set(raw_packet) - expected - {"mode"}):
                 return {
                     "error": (
                         "todowrite: work_packet must contain exactly objective, files, "
-                        "reproduce_command, acceptance_command, acceptance_condition"
+                        "reproduce_command, acceptance_command, acceptance_condition; mode is optional"
                     ),
                     "exit_code": 1,
                 }

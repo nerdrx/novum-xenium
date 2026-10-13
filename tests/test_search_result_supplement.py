@@ -149,6 +149,85 @@ def test_supplement_discards_zero_match_noise_and_invalid_urls(core, monkeypatch
     assert status == ("duckduckgo", "ok (4 returned; 1 relevant; 2 unique)")
 
 
+def test_zero_match_primary_gets_one_fallback_and_empty_is_not_cached(core, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    query = "Electron FFmpeg GUI apps examples features"
+    primary = [
+        _row("https://claude.ai/", "Claude desktop", ""),
+        _row("https://en.wikipedia.org/wiki/Anne_with_an_E", "Anne with an E", "TV series"),
+    ]
+    calls = []
+    analytics = []
+    monkeypatch.setattr(core, "_call_provider", lambda provider, *args: (
+        calls.append(provider) or (primary if provider == "searxng" else [
+            _row("https://video.example/", "Unrelated video", "Enjoy music and videos")
+        ])
+    ))
+    monkeypatch.setattr(core, "_record_query", lambda *args, **kwargs: analytics.append((args, kwargs)))
+
+    assert core.searxng_search_results(query, count=3) == []
+
+    assert calls == ["searxng", "duckduckgo"]
+    assert analytics == [((query, False), {"cache_hit": False})]
+    key = generate_cache_key(f"search-v4:{query}|3|None")
+    assert not (core.SEARCH_CACHE_DIR / f"{key}.cache").exists()
+    assert "none matched query" in caplog.text.lower()
+    assert "all search providers failed" not in caplog.text.lower()
+
+
+def test_comprehensive_search_filters_zero_matches_before_fetch(core, monkeypatch):
+    query = "Electron FFmpeg GUI apps examples features"
+    primary = [
+        _row("https://claude.ai/", "Claude desktop", ""),
+        _row("https://en.wikipedia.org/wiki/Anne_with_an_E", "Anne with an E", "TV series"),
+        _row("https://www.flypig.co.uk/gecko", "Gecko diary", "Electron framework uses Blink"),
+    ]
+    calls = []
+    fetched = []
+
+    def call(provider, *args):
+        calls.append(provider)
+        return primary if provider == "searxng" else []
+
+    def fetch(url, timeout=8, retry_attempt=0):
+        fetched.append(url)
+        return {"success": True, "url": url, "title": "Gecko", "content": "body"}
+
+    monkeypatch.setattr(core, "_call_provider", call)
+    monkeypatch.setattr(core, "fetch_webpage_content", fetch)
+
+    output, sources = core.comprehensive_web_search(
+        query, max_pages=3, return_sources=True,
+    )
+
+    assert calls == ["searxng", "duckduckgo"]
+    assert fetched == ["https://www.flypig.co.uk/gecko"]
+    assert [source["url"] for source in sources] == fetched
+    assert "claude.ai" not in output.lower()
+    assert "anne_with_an_e" not in output.lower()
+
+
+def test_comprehensive_search_reports_no_matches_instead_of_provider_failure(core, monkeypatch):
+    query = "Electron FFmpeg GUI apps examples features"
+    primary = [_row("https://en.wikipedia.org/wiki/Anne_with_an_E", "Anne with an E", "TV series")]
+    calls = []
+    fetched = []
+    monkeypatch.setattr(core, "_call_provider", lambda provider, *args: (
+        calls.append(provider) or (primary if provider == "searxng" else [])
+    ))
+    monkeypatch.setattr(core, "fetch_webpage_content", lambda url, **kwargs: fetched.append(url))
+
+    output, sources = core.comprehensive_web_search(
+        query, max_pages=3, return_sources=True,
+    )
+
+    assert calls == ["searxng", "duckduckgo"]
+    assert fetched == []
+    assert sources == []
+    assert "none matched the query" in output.lower()
+    assert "all providers errored" not in output.lower()
+
+
 def test_strong_primary_batch_does_not_call_fallback(core, monkeypatch):
     calls = []
     primary = [_row(f"https://docs.example/{i}", "Electron FFmpeg desktop app",
@@ -188,7 +267,7 @@ def test_disabled_and_custom_fallback_chains_are_respected(core, monkeypatch):
 
 def test_simple_search_ignores_old_weak_cache_namespace(core, monkeypatch):
     query = "Electron FFmpeg desktop app"
-    old_key = generate_cache_key(f"search-v2:{query}|3|None")
+    old_key = generate_cache_key(f"search-v3:{query}|3|None")
     (core.SEARCH_CACHE_DIR / f"{old_key}.cache").write_text(json.dumps({
         "expiry": (datetime.now() + timedelta(hours=1)).isoformat(),
         "data": [_row("https://stale.example/", "Old weak result", "")],

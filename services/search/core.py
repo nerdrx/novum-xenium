@@ -23,6 +23,7 @@ from .cache import (
 from .query import _cache_duration_for_query
 from .ranking import (
     best_query_token_coverage,
+    filter_zero_match_results,
     needs_search_supplement,
     rank_search_results,
 )
@@ -134,11 +135,15 @@ def _build_provider_chain(primary: str) -> List[str]:
     return chain
 
 
-def _supplement_weak_results(query, primary_results, count, time_filter, provider_chain):
+def _supplement_weak_results(
+    query, primary_results, count, time_filter, provider_chain, raw_primary_results=None,
+):
     """Try one configured fallback for a sparse/weak nonempty SearXNG batch."""
-    if (not primary_results or not provider_chain or provider_chain[0] != "searxng"
-            or len(provider_chain) < 2
-            or not needs_search_supplement(query, primary_results, count)):
+    raw_primary_results = raw_primary_results if raw_primary_results is not None else primary_results
+    if (not raw_primary_results or not provider_chain or provider_chain[0] != "searxng"
+            or len(provider_chain) < 2):
+        return primary_results, None
+    if primary_results and not needs_search_supplement(query, primary_results, count):
         return primary_results, None
 
     fallback = provider_chain[1]
@@ -197,7 +202,7 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
     if count == 10:
         count = result_count
 
-    cache_key = generate_cache_key(f"search-v3:{query}|{count}|{time_filter}")
+    cache_key = generate_cache_key(f"search-v4:{query}|{count}|{time_filter}")
     cache_file = SEARCH_CACHE_DIR / f"{cache_key}.cache"
 
     # Check cache
@@ -247,15 +252,22 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
         if results:
             break
 
+    raw_success = bool(results)
+    if raw_success:
+        if primary_results is not None:
+            filtered_primary = filter_zero_match_results(query, primary_results)
+            results, _supplement = _supplement_weak_results(
+                query, filtered_primary, count, time_filter, provider_chain,
+                raw_primary_results=primary_results,
+            )
+        else:
+            results = filter_zero_match_results(query, results)
+        results = rank_search_results(query, results)[:count]
+
     success = bool(results)
     _record_query(query, success, cache_hit=False)
 
     if success:
-        if primary_results is not None:
-            results, _supplement = _supplement_weak_results(
-                query, primary_results, count, time_filter, provider_chain,
-            )
-        results = rank_search_results(query, results)[:count]
         try:
             expiry = datetime.now() + _cache_duration_for_query(query)
             cache_data = {
@@ -270,7 +282,9 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
         except Exception as e:
             logger.warning(f"Failed to write search cache for {query}: {e}")
 
-    if not success:
+    if not success and raw_success:
+        logger.info("Search providers returned results, but none matched query: %s", query)
+    elif not success:
         logger.error(f"All search providers failed for query: {query}")
 
     return results
@@ -293,7 +307,7 @@ def invalidate_search_cache(query: Optional[str] = None) -> None:
         # Match the key the write path stores: searxng_search_results replaces
         # the caller's default count with the configured _get_result_count()
         # (default 5), so a hardcoded "|10|None" never matched a real entry.
-        cache_key = generate_cache_key(f"search-v3:{query}|{_get_result_count()}|None")
+        cache_key = generate_cache_key(f"search-v4:{query}|{_get_result_count()}|None")
         cache_file = SEARCH_CACHE_DIR / f"{cache_key}.cache"
         if cache_file.exists():
             try:
@@ -366,7 +380,28 @@ def comprehensive_web_search(
         elif empty:
             provider_attempts[provider_name] = "empty"
 
+    raw_search_success = bool(search_results)
+    if raw_search_success:
+        raw_primary_results = primary_results
+        if primary_results is not None:
+            filtered_primary = filter_zero_match_results(query, primary_results)
+            search_results, supplement = _supplement_weak_results(
+                query, filtered_primary, fetch_count, time_filter, provider_chain,
+                raw_primary_results=raw_primary_results,
+            )
+            if supplement:
+                provider_attempts[f"supplement:{supplement[0]}"] = supplement[1]
+        else:
+            search_results = filter_zero_match_results(query, search_results)
+
     if not search_results:
+        if raw_search_success:
+            msg = (
+                "Search providers returned pages, but none matched the query. "
+                "Try rephrasing or provide a target URL."
+            )
+            logger.info(msg)
+            return (msg, []) if return_sources else msg
         tally = ", ".join(f"{p}:{r}" for p, r in provider_attempts.items()) or "no providers configured"
         any_errors = any(r.startswith("error") for r in provider_attempts.values())
         if any_errors:
@@ -380,12 +415,6 @@ def comprehensive_web_search(
         logger.warning(msg)
         return (msg, []) if return_sources else msg
 
-    if primary_results is not None:
-        search_results, supplement = _supplement_weak_results(
-            query, primary_results, fetch_count, time_filter, provider_chain,
-        )
-        if supplement:
-            provider_attempts[f"supplement:{supplement[0]}"] = supplement[1]
     search_results = rank_search_results(query, search_results)[:fetch_count]
 
     # URL filter helper

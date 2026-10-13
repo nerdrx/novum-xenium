@@ -16,8 +16,8 @@ import pytest
 def core(monkeypatch):
     mod = importlib.import_module("services.search.core")
     results = [
-        {"url": "http://one.example/a", "title": "One", "snippet": "s1"},
-        {"url": "http://two.example/b", "title": "Two", "snippet": "s2"},
+        {"url": "http://one.example/a", "title": "One", "snippet": "test s1"},
+        {"url": "http://two.example/b", "title": "Two", "snippet": "test s2"},
     ]
     monkeypatch.setattr(mod, "_get_search_settings", lambda: {"search_provider": "searxng"})
     monkeypatch.setattr(mod, "_get_result_count", lambda: 2)

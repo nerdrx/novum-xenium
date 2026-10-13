@@ -101,6 +101,20 @@ def best_query_token_coverage(query: str, results: List[dict]) -> float:
     ), default=0.0)
 
 
+def filter_zero_match_results(query: str, results: List[dict]) -> List[dict]:
+    """Drop zero-token matches only for queries with at least two distinct words."""
+    terms = {term.lower() for term in re.findall(r"\b\w+\b", query)}
+    if len(terms) < 2:
+        return results
+    return [
+        item for item in results
+        if isinstance(item, dict) and any(
+            _has_word(f"{item.get('title', '')} {item.get('snippet', '')}".lower(), term)
+            for term in terms
+        )
+    ]
+
+
 def needs_search_supplement(query: str, results: List[dict], count: int) -> bool:
     """Detect a nonempty but sparse or lexically weak result batch."""
     return bool(results) and (

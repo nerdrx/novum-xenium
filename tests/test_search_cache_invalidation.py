@@ -1,7 +1,7 @@
 """Regression test for invalidate_search_cache key construction.
 
 The write path (`searxng_search_results`) stores a cache entry under
-``generate_cache_key(f"search-v3:{query}|{count}|{time_filter}")`` where ``count`` is the
+``generate_cache_key(f"search-v4:{query}|{count}|{time_filter}")`` where ``count`` is the
 admin-configured result count (``_get_result_count()``, default **5**) — it
 replaces the caller's default of 10 with the configured value before building
 the key.
@@ -28,7 +28,7 @@ def test_invalidate_uses_configured_count_not_hardcoded_10(tmp_path, monkeypatch
 
     # Reproduce exactly what searxng_search_results writes for a default search:
     # the caller's default count of 10 is replaced by result_count, time_filter=None.
-    write_key = generate_cache_key(f"search-v3:{query}|{result_count}|None")
+    write_key = generate_cache_key(f"search-v4:{query}|{result_count}|None")
     cache_file = tmp_path / f"{write_key}.cache"
     cache_file.write_text("{}", encoding="utf-8")
     core.search_cache_index[write_key] = None

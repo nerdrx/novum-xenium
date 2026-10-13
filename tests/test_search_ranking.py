@@ -1,5 +1,6 @@
 from services.search.ranking import (
     best_query_token_coverage,
+    filter_zero_match_results,
     needs_search_supplement,
     rank_search_results,
 )
@@ -92,3 +93,16 @@ def test_query_coverage_uses_word_boundaries():
 def test_query_coverage_ignores_malformed_rows():
     assert best_query_token_coverage("Electron FFmpeg", [None, "bad row"]) == 0.0
     assert needs_search_supplement("Electron FFmpeg", [None], 3)
+
+
+def test_zero_match_filter_preserves_partial_and_single_word_results():
+    results = [
+        {"title": "Claude desktop", "snippet": ""},
+        {"title": "Anne with an E", "snippet": "TV series"},
+        {"title": "Gecko diary", "snippet": "Electron framework uses Blink"},
+    ]
+    assert filter_zero_match_results(
+        "Electron FFmpeg GUI apps examples features", results,
+    ) == [results[2]]
+    assert filter_zero_match_results("C++", results) == results
+    assert filter_zero_match_results("!!!", results) == results

@@ -939,3 +939,32 @@ def test_coding_github_setup_does_not_restore_unrelated_admin_schemas(monkeypatc
     assert {"web_fetch", "read_file", "search_tools"} <= names
     assert not names & {"write_file", "bash"}  # investigate before implementation
     assert not names & {"manage_documents", "create_session", "manage_settings", "manage_tokens"}
+
+
+def test_constrained_coding_schema_budget_retains_tool_discovery(monkeypatch, tmp_path):
+    names = {"read_file", "edit_file", "search_tools"}
+    schemas = [json.loads(json.dumps(schema)) for schema in loop.FUNCTION_TOOL_SCHEMAS
+               if schema["function"]["name"] in names]
+    next(schema for schema in schemas if schema["function"]["name"] == "read_file")[
+        "function"]["description"] += " x" * 700
+    requests = []
+    _configure(monkeypatch, [], requests)
+    monkeypatch.setattr(loop, "FUNCTION_TOOL_SCHEMAS", schemas)
+    monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *a, **k: 4096)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://api.example/v1", "gpt-4o",
+            [{"role": "user", "content": "Build a small app in this workspace."}],
+            relevant_tools=names, workspace=str(tmp_path), max_tokens=256,
+            max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    request = requests[0]
+    schemas_sent = request["kwargs"]["tools"]
+    sent = {schema["function"]["name"] for schema in schemas_sent}
+    assert {"read_file", "search_tools"} <= sent
+    assert (estimate_tokens(request["messages"])
+            + estimate_tool_schema_tokens(schemas_sent)
+            + request["kwargs"]["max_tokens"] <= 4096)

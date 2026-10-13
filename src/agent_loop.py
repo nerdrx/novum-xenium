@@ -5063,8 +5063,12 @@ async def stream_agent_loop(
                     priority_names.add("generate_image")
                 # A selected/forced tool is a relevance preference, not a
                 # licence for its whole MCP family to exceed the schema cap.
-                # Only schemas in an existing native exchange must survive.
-                required_names = used_names
+                # Preserve existing exchanges and the catalog lookup entry
+                # point when it is present and passed the route's policy gates.
+                route_schema_names = {
+                    schema.get("function", {}).get("name", "") for schema in route_tools
+                }
+                required_names = used_names | ({"search_tools"} & route_schema_names)
                 selected = [
                     schema for schema in route_tools
                     if schema.get("function", {}).get("name") in required_names
@@ -5101,6 +5105,22 @@ async def stream_agent_loop(
                 }
                 coding_core = {"read_file": 0, "edit_file": 1, "bash": 2, "grep": 3,
                                "write_file": 4, "apply_patch": 5, "python": 6}
+                if coding_requested and "search_tools" in route_schema_names:
+                    first_coding_schema = min(
+                        (schema for schema in route_tools
+                         if schema.get("function", {}).get("name", "") in coding_core),
+                        key=lambda schema: coding_core[schema["function"]["name"]],
+                        default=None,
+                    )
+                    search_schema = next(
+                        schema for schema in route_tools
+                        if schema.get("function", {}).get("name") == "search_tools"
+                    )
+                    if first_coding_schema is not None:
+                        pair_cap = estimate_tool_schema_tokens(
+                            [first_coding_schema, search_schema]
+                        )
+                        schema_cap = max(schema_cap, min(pair_cap, preferred_cap))
                 forced_schema_names = {
                     schema.get("function", {}).get("name", "")
                     for schema in route_tools

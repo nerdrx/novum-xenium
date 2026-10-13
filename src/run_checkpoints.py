@@ -231,6 +231,39 @@ class CheckpointStore:
                 (json.dumps(payload, ensure_ascii=False), time.time(), run_id),
             )
 
+    def record_coding_work(self, run_id: str, session_id: str, owner: Optional[str], state: dict) -> bool:
+        """Save server-observed packet evidence in its exact run/session scope."""
+        if not all(isinstance(value, str) and value.strip() for value in (run_id, session_id)):
+            return False
+        try:
+            encoded_state = json.dumps(state, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(state, dict) or len(encoded_state) > 64_000:
+            return False
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload FROM agent_run_checkpoints "
+                "WHERE run_id=? AND session_id=? AND owner=?",
+                (run_id, session_id, str(owner or "")),
+            ).fetchone()
+            if row is None:
+                return False
+            try:
+                payload = json.loads(row["payload"])
+                if not isinstance(payload, dict) or payload.get("corrupt"):
+                    return False
+            except (ValueError, TypeError):
+                return False
+            payload["coding_work_packet"] = json.loads(encoded_state)
+            db.execute(
+                "UPDATE agent_run_checkpoints SET payload=?, updated=? "
+                "WHERE run_id=? AND session_id=? AND owner=?",
+                (json.dumps(payload, ensure_ascii=False), time.time(), run_id, session_id, str(owner or "")),
+            )
+        return True
+
     def finish(self, run_id: str, status: str) -> None:
         if status not in {"done", "error", "stopped", "interrupted", "continued"}:
             return
@@ -353,6 +386,14 @@ def record_delta(run_id: str, delta: str) -> None:
         _STORE.record_delta(run_id, delta)
     except Exception:
         logger.exception("Could not checkpoint agent output")
+
+
+def record_coding_work(run_id: str, session_id: str, owner: Optional[str], state: dict) -> bool:
+    try:
+        return _STORE.record_coding_work(run_id, session_id, owner, state)
+    except Exception:
+        logger.exception("Could not checkpoint coding work packet")
+        return False
 
 
 def finish(run_id: str, status: str) -> None:

@@ -139,3 +139,116 @@ def test_checked_workflow_requires_each_slice_and_rejects_checklist_shortcuts(pa
     tracker.observe("edit_file", "{}", {"exit_code": 0})
     tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
     assert not tracker.pending
+
+
+def test_checkpoint_restores_only_server_observed_stage_and_checklist(packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Fix token refresh handling", "status": "in_progress"}]
+    tracker.observe("todowrite", "{}", {"exit_code": 0, "todos": todos, "work_packet": packet.to_dict()})
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    checkpoint = tracker.checkpoint_data()
+
+    restored = CodingWorkTracker(enabled=True)
+    assert restored.restore_checkpoint(checkpoint) == "restored"
+    assert restored.state.stage == "edit"
+    assert restored.state.reproduction_result == {"exit_code": 1}
+    assert restored.milestones == ("Fix token refresh handling",)
+    assert restored.completed == set()
+
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 1})
+    failed_acceptance = CodingWorkTracker(enabled=True)
+    assert failed_acceptance.restore_checkpoint(tracker.checkpoint_data()) == "restored"
+    assert failed_acceptance.state.stage == "verify"
+    assert failed_acceptance.state.acceptance_result == {"exit_code": 1}
+
+    checkpoint["reproduction_exit_code"] = None
+    reset = CodingWorkTracker(enabled=True)
+    assert reset.restore_checkpoint(checkpoint) == "reset"
+    assert reset.state.stage == "reproduce"
+    assert reset.blocks("write_file", "{}")
+
+    done = CodingWorkTracker(enabled=True)
+    tracker.observe("edit_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    done_data = tracker.checkpoint_data()
+    done_data["acceptance_exit_code"] = True
+    assert done.restore_checkpoint(done_data) == "reset"
+    assert done.state.stage == "reproduce"
+    assert "Fix token refresh handling" not in done.completed
+
+    inconsistent = tracker.checkpoint_data()
+    inconsistent["stage"] = "done"
+    inconsistent["acceptance_exit_code"] = 0
+    inconsistent["completed"] = []
+    reset_checklist = CodingWorkTracker(enabled=True)
+    assert reset_checklist.restore_checkpoint(inconsistent) == "reset"
+    assert reset_checklist.state.stage == "reproduce"
+
+    inconsistent["completed"] = ["Fix token refresh handling"]
+    inconsistent["current_milestone"] = "missing"
+    malformed = CodingWorkTracker(enabled=True)
+    assert malformed.restore_checkpoint(inconsistent) == "reset"
+    assert malformed.state.stage == "reproduce"
+
+
+def test_checkpoint_cannot_enable_workflow_or_restore_model_history(packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    source = CodingWorkTracker(enabled=True)
+    source.observe("todowrite", "{}", {
+        "exit_code": 0,
+        "todos": [{"content": "Fix token refresh handling", "status": "in_progress"}],
+        "work_packet": packet.to_dict(),
+    })
+    checkpoint = source.checkpoint_data()
+    disabled = CodingWorkTracker(enabled=False)
+    assert disabled.restore_checkpoint(checkpoint) == "ineligible"
+    assert not disabled.enabled and disabled.state is None
+
+    checkpoint["version"] = 999
+    invalid = CodingWorkTracker(enabled=True)
+    assert invalid.restore_checkpoint(checkpoint) == "invalid"
+    assert invalid.state is None
+
+
+def test_interrupted_recovery_retests_previously_passed_acceptance(packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    source = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Fix refresh", "status": "in_progress"}]
+    source.observe("todowrite", "{}", {"exit_code": 0, "todos": todos, "work_packet": packet.to_dict()})
+    source.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    source.observe("write_file", "{}", {"exit_code": 0})
+    source.observe("bash", packet.acceptance_command, {"exit_code": 0})
+
+    recovered = CodingWorkTracker(enabled=True)
+    assert recovered.restore_checkpoint(source.checkpoint_data(), recovery=True) == "reset"
+    assert recovered.state.stage == "reproduce"
+    assert recovered.state.acceptance_result is None
+    assert recovered.review_status == "not_reviewed"
+    assert recovered.blocks("write_file", "{}")
+
+
+@pytest.mark.parametrize(("stage", "edit_tool", "acceptance"), [
+    ("verify", [], None),
+    ("done", {}, 0),
+])
+def test_checkpoint_rejects_unhashable_edit_tool(packet, stage, edit_tool, acceptance):
+    from src.coding_work_packet import CodingWorkTracker
+
+    source = CodingWorkTracker(enabled=True)
+    todos = [{"content": "Fix refresh", "status": "in_progress"}]
+    source.observe("todowrite", "{}", {"exit_code": 0, "todos": todos, "work_packet": packet.to_dict()})
+    source.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    source.observe("write_file", "{}", {"exit_code": 0})
+    if stage == "done":
+        source.observe("bash", packet.acceptance_command, {"exit_code": 0})
+    checkpoint = source.checkpoint_data()
+    checkpoint.update(stage=stage, edit_tool=edit_tool, acceptance_exit_code=acceptance)
+
+    restored = CodingWorkTracker(enabled=True)
+    assert restored.restore_checkpoint(checkpoint) == "reset"
+    assert restored.state.stage == "reproduce"

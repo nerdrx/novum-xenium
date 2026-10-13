@@ -8,6 +8,16 @@ import pytest
 from src import agent_runs, run_checkpoints
 
 
+def test_coding_work_checkpoint_is_scoped_to_exact_run_session_owner(tmp_path):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "packet.db"), recover_on_open=False)
+    store.begin("run-a", "session-a", "alice")
+    packet_state = {"version": 1, "enabled": True, "stage": "edit"}
+    assert store.record_coding_work("run-a", "session-a", "alice", packet_state)
+    assert store.get_run("run-a", "session-a", "alice")["coding_work_packet"] == packet_state
+    assert not store.record_coding_work("run-a", "session-b", "alice", packet_state)
+    assert not store.record_coding_work("run-a", "session-a", "bob", packet_state)
+
+
 @pytest.mark.asyncio
 async def test_context_budget_failure_reaches_subscriber_as_actionable_error():
     async def stream():

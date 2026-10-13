@@ -165,9 +165,119 @@ class CodingWorkTracker:
     def __init__(self, enabled=False):
         self.enabled = bool(enabled)
         self.state = None
+        self.review_status = "not_reviewed"
         self.milestones = ()
         self.completed = set()
         self.current_milestone = None
+
+    def checkpoint_data(self):
+        """Return bounded evidence observed by this server-side tracker."""
+        if not self.state:
+            return None
+        state = self.state
+        return {
+            "version": 1,
+            "enabled": self.enabled,
+            "packet": state.packet.to_dict(),
+            "stage": state.stage,
+            "reproduction_exit_code": (
+                state.reproduction_result.get("exit_code") if state.reproduction_result else None
+            ),
+            "edit_tool": state.edit_result.get("tool") if state.edit_result else None,
+            "acceptance_exit_code": (
+                state.acceptance_result.get("exit_code") if state.acceptance_result else None
+            ),
+            "milestones": list(self.milestones),
+            "completed": sorted(self.completed),
+            "current_milestone": self.current_milestone,
+            "review_status": self.review_status,
+        }
+
+    def restore_checkpoint(self, data, *, recovery=False):
+        """Restore only a validated server checkpoint; unsafe evidence restarts reproduction."""
+        if not isinstance(data, dict):
+            return "missing"
+        if not self.enabled:
+            return "ineligible"
+        if data.get("version") != 1 or data.get("enabled") is not True:
+            return "invalid"
+        try:
+            packet = CodingWorkPacket(**data["packet"])
+        except (KeyError, TypeError, ValueError):
+            return "invalid"
+
+        self.state = CodingWorkState(packet)
+        stage = data.get("stage")
+        reproduction = data.get("reproduction_exit_code")
+        edit_tool = data.get("edit_tool")
+        acceptance = data.get("acceptance_exit_code")
+        valid_code = lambda value: type(value) is int
+        milestones = data.get("milestones")
+        completed = data.get("completed")
+        current = data.get("current_milestone")
+        valid_milestones = (
+            isinstance(milestones, list) and 0 < len(milestones) <= 20
+            and all(isinstance(item, str) and item and len(item) <= 500 for item in milestones)
+            and len(set(milestones)) == len(milestones)
+            and isinstance(completed, list) and all(item in milestones for item in completed)
+            and isinstance(current, str) and current in milestones
+            and (stage != "done" or current in completed)
+        )
+        checklist_ok = not self.enabled or valid_milestones
+        safe = checklist_ok and stage == "reproduce" and reproduction is None and edit_tool is None and acceptance is None
+        if checklist_ok and stage == "edit" and valid_code(reproduction) and edit_tool is None and acceptance is None:
+            safe = True
+            self.state.reproduction_result = {"exit_code": reproduction}
+        elif (checklist_ok and stage == "verify" and valid_code(reproduction)
+              and isinstance(edit_tool, str) and edit_tool in _EDIT_TOOLS
+              and (acceptance is None or (valid_code(acceptance) and acceptance != 0))):
+            safe = True
+            self.state.reproduction_result = {"exit_code": reproduction}
+            self.state.edit_result = {"exit_code": 0, "tool": edit_tool}
+            if acceptance is not None:
+                self.state.acceptance_result = {"exit_code": acceptance}
+        elif (checklist_ok and stage == "done" and valid_code(reproduction)
+              and isinstance(edit_tool, str) and edit_tool in _EDIT_TOOLS
+              and valid_code(acceptance) and acceptance == 0):
+            safe = True
+            self.state.reproduction_result = {"exit_code": reproduction}
+            self.state.edit_result = {"exit_code": 0, "tool": edit_tool}
+            self.state.acceptance_result = {"exit_code": 0}
+        if recovery and stage == "done":
+            safe = False
+        if safe:
+            self.state.stage = stage
+        else:
+            self.state = CodingWorkState(packet)
+
+        if self.enabled and valid_milestones:
+            self.milestones = tuple(milestones)
+            self.completed = set(completed)
+            self.current_milestone = current
+            if not safe and current:
+                self.completed.discard(current)
+        status = data.get("review_status")
+        self.review_status = (
+            status if self.state.stage == "done"
+            and isinstance(status, str)
+            and status in {"passed", "failed", "unverified", "not_reviewed"}
+            else "not_reviewed"
+        )
+        return "restored" if safe else "reset"
+
+    def record_review(self, issues):
+        """Record an actual independent reviewer result for a completed packet."""
+        if not self.state or self.state.stage != "done":
+            return False
+        if not isinstance(issues, list):
+            self.review_status = "unverified"
+        elif not issues:
+            self.review_status = "passed"
+        elif all(isinstance(issue, str) and issue.startswith("Failed:") for issue in issues):
+            self.review_status = "failed"
+        else:
+            self.review_status = "unverified"
+        return True
 
     def valid_todo_update(self, args):
         if not self.enabled:
@@ -205,6 +315,7 @@ class CodingWorkTracker:
                 if self.state and self.state.stage != "done":
                     return False  # Finish the current slice before replacing it.
                 self.state = CodingWorkState(packet)
+                self.review_status = "not_reviewed"
                 if self.enabled:
                     self.milestones = self.milestones or tuple(item["content"] for item in result["todos"])
                     self.current_milestone = next(item["content"] for item in result["todos"] if item["status"] == "in_progress")
@@ -240,6 +351,8 @@ class CodingWorkTracker:
                     self.completed.add(self.current_milestone)
                 else:
                     self.completed.discard(self.current_milestone)
+            if self.state.stage != "done":
+                self.review_status = "not_reviewed"
             return self.state.to_dict() != before
         except (ValueError, TypeError):
             if self.enabled and self.current_milestone and self.state.stage != "done":
@@ -319,7 +432,7 @@ class CodingWorkTracker:
             "type": "coding_work_packet", "round": round_number,
             "packet": self.state.packet.to_dict(), "stage": self.state.stage,
             "test_status": "passed" if self.state.stage == "done" else "not_verified",
-            "review_status": "not_reviewed",
+            "review_status": self.review_status,
         }
 
 

@@ -3937,12 +3937,13 @@ def _build_actions_snapshot(tool_events: list, limit: int = 8000) -> str:
     return compact_action_evidence(tool_events, limit=limit)
 
 
-def _coding_review_status(issues: list[str]) -> str:
-    """Map the independent review result to the packet UI's bounded status."""
-    if not issues:
-        return "passed"
-    return "failed" if all(issue.startswith("Failed:") for issue in issues) else "unverified"
-
+def _coding_work_stop_notice(tracker) -> str:
+    if tracker.state and tracker.state.stage == "done" and tracker.pending:
+        return (
+            "Stopped: this coding slice passed its acceptance check, but the task checklist "
+            "still has unfinished items. The task remains incomplete."
+        )
+    return "Stopped: the current coding slice has no passing check after its last edit. It remains unverified."
 
 
 async def _run_verifier_subagent(
@@ -4332,6 +4333,8 @@ async def stream_agent_loop(
     public_read_sources: Optional[List[Dict]] = None,
     exact_approval: Optional[ExactToolApproval] = None,
     task_continuation: Optional[TaskApprovalContinuation] = None,
+    coding_work_checkpoint: Optional[Dict] = None,
+    coding_work_checkpoint_recovery: bool = False,
     relevant_tools_are_selection_only: bool = False,
     _is_teacher_run: bool = False,
     history_session=None,
@@ -4534,16 +4537,39 @@ async def stream_agent_loop(
         disabled_tools=disabled_tools, plan_mode=plan_mode, guide_mode=guide_only,
     )
     from src.coding_work_packet import CodingWorkTracker, fresh_packet_context
+    _resume_coding_work = bool(
+        isinstance(coding_work_checkpoint, dict)
+        and coding_work_checkpoint.get("version") == 1
+        and coding_work_checkpoint.get("enabled") is True
+        and isinstance(coding_work_checkpoint.get("packet"), dict)
+    )
     _coding_work = CodingWorkTracker(enabled=bool(
         get_setting("agent_milestone_workflow", False)
-        and _use_coding_tools(_retrieval_query or _last_user, workspace)
+        and (_use_coding_tools(_retrieval_query or _last_user, workspace) or _resume_coding_work)
         and workspace and not plan_mode and not guide_only
         and not incognito and not delegated_credential and not approved_plan
         and "todowrite" not in disabled_tools
     ))
+    _coding_work_restore = _coding_work.restore_checkpoint(
+        coding_work_checkpoint, recovery=coding_work_checkpoint_recovery,
+    )
+    def _save_coding_work_checkpoint():
+        if not server_run_id or not session_id or not _coding_work.state:
+            return
+        from src.run_checkpoints import record_coding_work
+        record_coding_work(server_run_id, session_id, owner, _coding_work.checkpoint_data())
     _coding_work_nudges = 0
     _coding_packet_boundary = None
-    _coding_review_status_value = "not_reviewed"
+    if _coding_work.state and _coding_work_restore in {"restored", "reset"}:
+        _save_coding_work_checkpoint()
+        _coding_packet_boundary = uuid.uuid4().hex
+        _restored_packet_event = _coding_work.event(0)
+        yield f'data: {json.dumps(_restored_packet_event)}\n\n'
+        messages.append(untrusted_context_message(
+            ("coding work packet reset to reproduction" if _coding_work_restore == "reset"
+             else "restored coding work packet; server-observed evidence only"),
+            json.dumps(_restored_packet_event), arm_tool_gate=False,
+        ) | {"_coding_packet_boundary": _coding_packet_boundary})
     from src.milestone_checkpoint import MilestoneCheckpoint
     _milestone_checkpoint = MilestoneCheckpoint(bool(
         _coding_grounding.required and workspace and owner and session_id and not _coding_work.enabled
@@ -5809,7 +5835,7 @@ async def stream_agent_loop(
             compact=is_api or is_native_ollama or is_ollama_compat,
             owner=owner,
             suppress_local_context=guide_only,
-            compact_coding_context=_coding_work.state is not None,
+            compact_coding_context=_coding_work.enabled or _coding_work.state is not None,
             suppress_skills=_low_signal_turn,
             active_email=active_email,
             workspace=workspace,
@@ -5856,9 +5882,10 @@ async def stream_agent_loop(
                 )
             if saved_todos or (route_tools is not None and "todowrite" in route_tools
                                and "todowrite" not in disabled_tools):
-                _prepend_agent_directive(route_messages, AUTO_MILESTONE_DIRECTIVE)
+                if not _coding_work.enabled:
+                    _prepend_agent_directive(route_messages, AUTO_MILESTONE_DIRECTIVE)
                 route_messages = _attach_milestones(route_messages, saved_todos)
-                if saved_todos:
+                if saved_todos and not _coding_work.enabled:
                     _milestone_checkpoint.restore(saved_todos)
             if _milestone_checkpoint.pending and _coding_grounding.may_mutate:
                 _prepend_agent_directive(route_messages, _milestone_checkpoint.directive)
@@ -6373,6 +6400,11 @@ async def stream_agent_loop(
             )
             if approval_matches else None
         )
+        packet_blocked = bool(
+            approval_matches and not approved_alignment_reason
+            and _coding_work.enabled
+            and _coding_work.blocks(approved.tool_name, approved.content)
+        )
         if approval_matches and not approved_alignment_reason:
             yield (
                 "data: "
@@ -6388,7 +6420,15 @@ async def stream_agent_loop(
                 )
                 + "\n\n"
             )
-        if approved_alignment_reason:
+        if packet_blocked:
+            approved_result = {
+                "error": "The checked work packet was reset to reproduction; rerun its recorded reproduction command before editing.",
+                "exit_code": 1,
+                "blocked": True,
+                "policy": "coding_work_packet",
+            }
+            desc = f"{approved.tool_name}: BLOCKED"
+        elif approved_alignment_reason:
             desc = f"{approved.tool_name}: BLOCKED"
             approved_result = {
                 "error": approved_alignment_reason,
@@ -6453,10 +6493,8 @@ async def stream_agent_loop(
         _coding_grounding.observe(approved.tool_name, approved_result, approved.content)
         _milestone_checkpoint.observe(approved.tool_name, approved_result)
         if _coding_work.observe(approved.tool_name, approved.content, approved_result):
+            _save_coding_work_checkpoint()
             packet_event = _coding_work.event(0)
-            if packet_event["stage"] != "done":
-                _coding_review_status_value = "not_reviewed"
-            packet_event["review_status"] = _coding_review_status_value
             yield f'data: {json.dumps(packet_event)}\n\n'
             packet_message = untrusted_context_message(
                 "current coding work packet", json.dumps(packet_event), arm_tool_gate=False,
@@ -7490,7 +7528,7 @@ async def stream_agent_loop(
         if not tool_blocks:
             if _coding_work.pending:
                 if _coding_work_nudges >= 2 or _force_answer:
-                    notice = "Stopped: the current coding slice has no passing check after its last edit. It remains unverified."
+                    notice = _coding_work_stop_notice(_coding_work)
                     full_response += "\n\n" + notice
                     yield 'data: ' + json.dumps({"delta": notice}) + '\n\n'
                     break
@@ -7565,9 +7603,9 @@ async def stream_agent_loop(
                     reasoning_mode=reasoning_mode,
                 )
                 if _coding_work.state and _coding_work.state.stage == "done":
-                    _coding_review_status_value = _coding_review_status(_vfail)
+                    _coding_work.record_review(_vfail)
+                    _save_coding_work_checkpoint()
                     packet_event = _coding_work.event(round_num)
-                    packet_event["review_status"] = _coding_review_status_value
                     yield f'data: {json.dumps(packet_event)}\n\n'
                 _verification_issues = _vfail
                 if _vfail:
@@ -8110,11 +8148,9 @@ async def stream_agent_loop(
 
             _milestone_checkpoint.observe(block.tool_type, result)
             if _coding_work.observe(block.tool_type, block.content, result):
+                _save_coding_work_checkpoint()
                 _coding_work_nudges = 0
                 packet_event = _coding_work.event(round_num)
-                if packet_event["stage"] != "done":
-                    _coding_review_status_value = "not_reviewed"
-                packet_event["review_status"] = _coding_review_status_value
                 yield f'data: {json.dumps(packet_event)}\n\n'
                 packet_message = untrusted_context_message(
                     "current coding work packet", json.dumps(packet_event), arm_tool_gate=False,

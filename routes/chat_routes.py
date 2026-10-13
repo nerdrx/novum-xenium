@@ -1240,6 +1240,8 @@ def setup_chat_routes(
         _approval_mode = resolve_tool_approval_mode(request)
         exact_tool_approval = None
         pending_tool_approval = None
+        coding_work_checkpoint = None
+        coding_work_checkpoint_recovery = False
         task_question_context = None
         task_question_continuation = None
         retired_tool_approval_taint = False
@@ -1492,6 +1494,15 @@ def setup_chat_routes(
                         409,
                         "This tool approval could not be consumed.",
                     )
+                if exact_tool_approval is not None:
+                    coding_work_checkpoint = run_checkpoints.get_run_checkpoint(
+                        exact_tool_approval.pending.origin_run_id,
+                        exact_tool_approval.pending.session_id,
+                        exact_tool_approval.pending.owner,
+                    )
+                    coding_work_checkpoint = (
+                        coding_work_checkpoint or {}
+                    ).get("coding_work_packet")
                 if not _mark_tool_approval_resolved(
                     sess,
                     tool_approval_id,
@@ -2051,6 +2062,8 @@ def setup_chat_routes(
             claimed_checkpoint = run_checkpoints.claim_recovery(session, owner, recovery_run_id)
             if not claimed_checkpoint:
                 raise HTTPException(409, "This interrupted run was already continued or is no longer available.")
+            coding_work_checkpoint = claimed_checkpoint.get("coding_work_packet")
+            coding_work_checkpoint_recovery = True
             recovery_message = untrusted_context_message(
                 "interrupted agent run",
                 _recovery_context_content(claimed_checkpoint, request_archive_id=request_archive_id),
@@ -2853,6 +2866,8 @@ def setup_chat_routes(
                         incognito=incognito,
                         exact_approval=exact_tool_approval,
                         task_continuation=task_question_continuation,
+                        coding_work_checkpoint=coding_work_checkpoint,
+                        coding_work_checkpoint_recovery=coding_work_checkpoint_recovery,
                         server_run_id=_detached_run_id,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):

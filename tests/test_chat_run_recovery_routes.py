@@ -433,6 +433,34 @@ def test_ordinary_workspace_intent_still_auto_enables_bash(tmp_path, monkeypatch
     assert "bash" not in (captured["loop_kwargs"]["disabled_tools"] or [])
 
 
+def test_interrupted_recovery_passes_scoped_packet_checkpoint_to_agent(tmp_path, monkeypatch):
+    from src.coding_work_packet import CodingWorkPacket
+
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    store = _interrupted_store(tmp_path / "packet-recovery.sqlite", workspace=workspace)
+    packet = CodingWorkPacket.create(
+        "Fix refresh", ["src/auth.py"], "pytest -q tests/test_auth.py::test_refresh",
+        "pytest -q tests/test_auth.py", "Auth tests pass",
+    )
+    state = {
+        "version": 1, "enabled": True, "packet": packet.to_dict(), "stage": "edit",
+        "reproduction_exit_code": 1, "edit_tool": None, "acceptance_exit_code": None,
+        "milestones": ["Fix refresh"], "completed": [],
+        "current_milestone": "Fix refresh", "review_status": "not_reviewed",
+    }
+    assert store.record_coding_work("run-a", "session-a", "alice", state)
+    client, captured = _recovery_post_client(
+        monkeypatch, checkpoint_store=store, workspace=workspace,
+    )
+
+    response = _continue(client, workspace=workspace)
+
+    assert response.status_code == 200, response.text[:500]
+    assert captured["loop_kwargs"]["coding_work_checkpoint"] == state
+    assert captured["loop_kwargs"]["coding_work_checkpoint_recovery"] is True
+
+
 @pytest.mark.parametrize("mismatch", ["workspace", "model", "endpoint"])
 def test_chat_stream_rejects_stale_recovery_binding_before_claim(tmp_path, monkeypatch, mismatch):
     workspace = str(tmp_path / "workspace")

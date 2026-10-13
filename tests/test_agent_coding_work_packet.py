@@ -168,6 +168,92 @@ def test_failed_acceptance_cannot_mark_packet_done_or_finish_as_verified(monkeyp
     assert [tool for tool, _content in executed] == ["todowrite", "todowrite", "bash", "write_file", "bash"]
 
 
+@pytest.mark.parametrize("valid_reproduction", [True, False])
+def test_exactly_approved_write_uses_restored_reproduction_evidence(monkeypatch, tmp_path, valid_reproduction):
+    from src.coding_work_packet import CodingWorkTracker
+
+    _patch_common(monkeypatch)
+    monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "approval-runs.db"))
+    monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
+    monkeypatch.setattr(al, "get_setting", lambda key, default=None: True if key == "agent_milestone_workflow" else default)
+
+    class GroundedCodingTask(CodingGrounding):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.evidence.add("read_file")
+
+    monkeypatch.setattr("src.coding_grounding.CodingGrounding", GroundedCodingTask)
+    tracker = CodingWorkTracker(enabled=True)
+    tracker.observe("todowrite", "{}", {
+        "exit_code": 0,
+        "todos": [{"content": "Fix refresh behavior", "status": "in_progress"}],
+        "work_packet": _packet(),
+    })
+    tracker.observe("bash", _packet()["reproduce_command"], {"exit_code": 1})
+    checkpoint = tracker.checkpoint_data()
+    if not valid_reproduction:
+        checkpoint["reproduction_exit_code"] = None
+
+    sealed = json.dumps({"path": "src/auth.py", "content": "fixed"})
+    approvals = ToolApprovalStore()
+    pending = approvals.create(
+        owner="alice", session_id="approved-packet-test", origin_run_id="prior-run",
+        tool_name="write_file", content=sealed, workspace=str(tmp_path),
+        selected_tools={"write_file"}, external_untrusted_context_seen=False,
+        capabilities=capabilities_for_action("write_file", sealed),
+    )
+    grant = approvals.consume(pending.approval_id, decision="approve", owner="alice", session_id="approved-packet-test")
+    assert grant is not None
+
+    executed = []
+    async def execute(block, *args, **kwargs):
+        executed.append(block.tool_type)
+        return block.tool_type, {"exit_code": 0, "output": "saved"}
+
+    monkeypatch.setattr(al, "execute_tool_block", execute)
+    async def stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        assert al.AUTO_MILESTONE_DIRECTIVE not in json.dumps(request)
+        yield 'data: {"delta":"done"}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "stream_llm_with_fallback", stream)
+    chunks = _collect(al.stream_agent_loop(
+        "http://x/v1", "gpt-4o", [{"role": "user", "content": "Fix auth refresh"}],
+        workspace=str(tmp_path), owner="alice", session_id="approved-packet-test",
+        approval_mode="auto", exact_approval=grant, server_run_id="approved-resume",
+        coding_work_checkpoint=checkpoint, max_rounds=2,
+    ))
+    events = _types(chunks)
+    packets = [event for event in events if event.get("type") == "coding_work_packet"]
+    assert packets[0]["stage"] == ("edit" if valid_reproduction else "reproduce")
+    assert executed == (["write_file"] if valid_reproduction else [])
+    if not valid_reproduction:
+        assert any(event.get("policy") == "coding_work_packet" for event in events)
+
+
+def test_stop_notice_distinguishes_passed_slice_from_failed_checklist(monkeypatch):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    todos = [
+        {"content": "Fix refresh", "status": "in_progress"},
+        {"content": "Handle expired tokens", "status": "pending"},
+    ]
+    packet = _packet()
+    packet["objective"] = "Fix refresh"
+    assert tracker.observe("todowrite", "{}", {
+        "exit_code": 0, "todos": todos, "work_packet": packet,
+    })
+    tracker.observe("bash", packet["reproduce_command"], {"exit_code": 1})
+    tracker.observe("write_file", "{}", {"exit_code": 0})
+    tracker.observe("bash", packet["acceptance_command"], {"exit_code": 0})
+
+    notice = al._coding_work_stop_notice(tracker)
+    assert "passed its acceptance check" in notice
+    assert "unfinished items" in notice
+
+
 def test_enabled_workflow_requires_each_checklist_slice_and_refreshes_packet_context(monkeypatch, tmp_path):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))

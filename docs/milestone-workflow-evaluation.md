@@ -132,3 +132,20 @@ English no-styling phrases; it is not a general semantic scope classifier.
 72 focused grounding, resume, integration, and design tests passed. This change
 reduces preparation overhead; it does not demonstrate recovery from the model's
 inspection loop or successful autonomous GUI repair.
+
+## Clarification guidance follow-up
+
+`088a600` aligned the catalog, native schema, and prompt descriptions for `ask_user`.
+They now explicitly distinguish genuinely missing information from permission to
+inspect files, run checks, or continue already-authorized work. Dedicated approvals
+remain unchanged. Ten focused tests passed. Three runtime files were backed up and
+updated after two all-idle checks covering 100 chats. Runtime source parity was
+confirmed; image `77a47decc2c8` includes the change.
+
+The [fresh same-model trial](evaluations/coding-clarification-guidance-20261013.json)
+used the original task, broken baseline, and preserved GUI checker. It ended
+incomplete after 43.538 seconds: the model identified likely bugs but asked whether
+to test first or repair directly. It made no edits and executed no test. The external
+check failed. No operator coaching or application edits occurred; settings were
+restored. Thus this guidance alignment did not solve the redundant-question failure
+in the observed run. Do not present the passing guidance tests as model success.

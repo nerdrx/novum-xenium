@@ -125,12 +125,29 @@ def test_non_markdown_outline_is_empty_and_bounded(tmp_path, monkeypatch):
 
 def test_query_operators_are_data_and_output_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
-    store.archive_result("alice", "run", "tool", "alpha " * 5000)
+    result_id = store.archive_result("alice", "run", "tool", "alpha " * 5000)
 
     result = store.search_results("alice", "run", 'alpha" OR tool:* --')
     assert "No matching" not in result
     assert len(result) <= store._OUTPUT_LIMIT
     assert "alpha" in result
+
+    punctuation = store.search_results("alice", "run", ",", result_id, offset=0)
+    assert "No searchable terms provided." in punctuation
+    assert 'query="" with result_id and offset' in punctuation
+    assert "provide keyword text" in punctuation
+    assert "alpha" not in punctuation
+
+
+def test_stale_result_id_suggests_chat_keyword_search_or_refetch(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    result_id = store.archive_result("alice", "run", "web_fetch", "orange palette details")
+
+    stale = store.search_results("alice", "run", "", "expired-result-id", offset=0)
+    assert "No matching archived results." in stale
+    assert "Search keywords without result_id in this chat" in stale
+    assert "rerun the original read/fetch" in stale
+    assert result_id in store.search_results("alice", "run", "orange")
 
 
 def test_oversize_result_is_explicitly_capped_and_keeps_tail(tmp_path, monkeypatch):

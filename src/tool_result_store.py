@@ -21,6 +21,10 @@ _TTL_SECONDS = 30 * 24 * 60 * 60
 _CHUNK_SIZE = 2000
 _CHUNK_OVERLAP = 200
 _OUTPUT_LIMIT = 6000
+_NO_MATCH_HINT = (
+    "No matching archived results. Search keywords without result_id in this chat, "
+    "or rerun the original read/fetch."
+)
 # ponytail: fixed stripes avoid an unbounded lock registry; increase if contention appears.
 _SCOPE_LOCKS = tuple(threading.RLock() for _ in range(64))
 _FENCED_SCOPES: set[str] = set()
@@ -425,7 +429,10 @@ def search_results(
     query_terms = re.findall(r"[^\W_]+", query, flags=re.UNICODE)[:32] if searching else []
     match_query = _match_query(query) if searching else ""
     if searching and not match_query:
-        return "No searchable terms provided."
+        return (
+            'No searchable terms provided. Use query="" with result_id and offset '
+            "for exact chunks, or provide keyword text to search."
+        )
     try:
         result_filter = " AND r.id = ?" if result_id is not None else ""
         cutoff = time.time() - _TTL_SECONDS
@@ -464,7 +471,7 @@ def search_results(
             if evicted:
                 conn.execute("VACUUM")
     except (sqlite3.OperationalError, ValueError, TypeError):
-        return "No matching archived results."
+        return _NO_MATCH_HINT
     output = []
     used = 0
     read_hint = (
@@ -492,7 +499,7 @@ def search_results(
         used += len(line) + 1
         added += 1
     if not added:
-        return "No matching archived results."
+        return _NO_MATCH_HINT
     next_offset = offset + added
     output[0] += f"next_offset={next_offset}." if len(rows) > added else "end."
     return "\n".join(output)

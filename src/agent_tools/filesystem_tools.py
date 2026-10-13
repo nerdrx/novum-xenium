@@ -544,8 +544,10 @@ class ReadFileTool:
                     out, n, budget = [], 0, MAX_READ_CHARS
                     next_offset = start
                     reached_eof = True
+                    line_count = 0
                     with open(path, "r", encoding="utf-8", errors="replace") as f:
                         for i, line in enumerate(f, 1):
+                            line_count = i
                             if i < start:
                                 continue
                             if limit > 0 and n >= limit:
@@ -569,6 +571,12 @@ class ReadFileTool:
                                 else:
                                     out.append(f"\n... [truncated at {MAX_READ_CHARS} chars]")
                                 break
+                    if not out:
+                        out.append(
+                            "[End of file: file is empty (0 lines).]"
+                            if line_count == 0 else
+                            f"[End of file: requested line {start}; file has {line_count} lines.]"
+                        )
                     return "".join(out), {
                         "start_line": start,
                         "reached_eof": reached_eof,
@@ -596,6 +604,8 @@ class ReadFileTool:
             return {"error": f"read_file: {path}: is a directory (use ls)", "exit_code": 1}
         except OSError as e:
             return {"error": f"read_file: {path}: {e}", "exit_code": 1}
+        if not data:
+            data = "[End of file: file is empty (0 lines).]"
         if not (offset > 0 or limit > 0) and len(data) > MAX_READ_CHARS:
             data = data[:MAX_READ_CHARS] + f"\n... [truncated at {MAX_READ_CHARS} chars]"
         return {"output": data, "exit_code": 0, "read_metadata": read_metadata}

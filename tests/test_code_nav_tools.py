@@ -251,8 +251,34 @@ def test_read_file_offset_limit_at_eof_has_no_pagination_notice(repo):
     assert r["read_metadata"] == {"start_line": 3, "reached_eof": True}
 
     beyond = _run("read_file", f'{{"path": "{p}", "offset": 99, "limit": 2}}')
-    assert beyond["output"] == ""
+    assert beyond["output"] == "[End of file: requested line 99; file has 4 lines.]"
     assert beyond["read_metadata"] == {"start_line": 99, "reached_eof": True}
+
+
+def test_read_file_empty_file_reports_eof_without_changing_offsets(repo):
+    p = os.path.join(repo, "empty.txt")
+    open(p, "w").close()
+
+    plain = _run("read_file", p)
+    assert plain["exit_code"] == 0
+    assert plain["output"] == "[End of file: file is empty (0 lines).]"
+    assert plain["read_metadata"] == {"start_line": 1, "reached_eof": True}
+
+    offset = _run("read_file", f'{{"path": "{p}", "offset": 7, "limit": 2}}')
+    assert offset["output"] == "[End of file: file is empty (0 lines).]"
+    assert offset["read_metadata"] == {"start_line": 7, "reached_eof": True}
+
+
+def test_read_file_preserves_existing_content_and_line_offsets(repo):
+    p = os.path.join(repo, "content.txt")
+    with open(p, "w") as f:
+        f.write("first\nsecond\nthird\n")
+
+    r = _run("read_file", f'{{"path": "{p}", "offset": 2, "limit": 1}}')
+    assert r["output"] == "second\n\n... [more lines available; continue with offset=3]"
+    assert r["read_metadata"] == {
+        "start_line": 2, "reached_eof": False, "next_offset": 3,
+    }
 
 
 def test_read_file_char_cap_reports_next_offset(repo, monkeypatch):

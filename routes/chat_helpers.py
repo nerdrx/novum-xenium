@@ -89,6 +89,7 @@ class PresetInfo:
     max_tokens: Optional[int]
     system_prompt: Optional[str]
     character_name: Optional[str]
+    reasoning_mode: str = "auto"
 
 
 @dataclass
@@ -281,11 +282,20 @@ def extract_preset(chat_handler, preset_id) -> PresetInfo:
     temperature, max_tokens, system_prompt, char_name = (
         chat_handler.validate_and_extract_preset(preset_id)
     )
+    preset_manager = getattr(chat_handler, "preset_manager", None)
+    presets = getattr(preset_manager, "presets", {})
+    preset = presets.get(preset_id) if preset_id and isinstance(presets, dict) else None
+    reasoning_mode = "auto"
+    if isinstance(preset, dict) and preset.get("enabled") is not False:
+        configured_mode = preset.get("reasoning_mode", "auto")
+        if isinstance(configured_mode, str) and configured_mode in {"auto", "on", "off"}:
+            reasoning_mode = configured_mode
     return PresetInfo(
         temperature=temperature,
         max_tokens=max_tokens,
         system_prompt=system_prompt,
         character_name=char_name,
+        reasoning_mode=reasoning_mode,
     )
 
 

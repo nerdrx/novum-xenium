@@ -366,6 +366,7 @@ def test_verifier_retries_malformed_format_once_with_same_evidence(
     issues = asyncio.run(agent_loop._run_verifier_subagent(
         "Create the GUI", "[bash] npm test (exit_code=0)",
         endpoint_url="http://localhost", model="test-model", headers={"x-test": "1"},
+        reasoning_mode="off",
     ))
 
     assert issues == expected
@@ -373,6 +374,7 @@ def test_verifier_retries_malformed_format_once_with_same_evidence(
     assert calls[0]["url"] == calls[1]["url"] == "http://localhost"
     assert calls[0]["model"] == calls[1]["model"] == "test-model"
     assert calls[0]["headers"] == calls[1]["headers"] == {"x-test": "1"}
+    assert calls[0]["reasoning_mode"] == calls[1]["reasoning_mode"] == "off"
     assert "Create the GUI" in calls[0]["messages"][0]["content"]
     assert "[bash] npm test (exit_code=0)" in calls[1]["messages"][0]["content"]
     assert "Formatting retry" in calls[1]["messages"][0]["content"]

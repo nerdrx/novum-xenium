@@ -1116,6 +1116,7 @@ def setup_chat_routes(
             max_tokens=ctx.preset.max_tokens,
             prompt_type=preset_id,
             session_id=session,
+            reasoning_mode=getattr(ctx.preset, "reasoning_mode", "auto"),
         )
         actual_index = _candidate_index(foreground_candidates, actual_candidate)
         apply_compaction_state(
@@ -2425,6 +2426,7 @@ def setup_chat_routes(
                         # whole budget thinking and never emit the answer (seen in
                         # Compare on heavy generation prompts).
                         max_tokens=ctx.preset.max_tokens,
+                        reasoning_mode=getattr(ctx.preset, "reasoning_mode", "auto"),
                         prompt_type=preset_id,
                         tools=None,
                         session_id=session,
@@ -2809,6 +2811,7 @@ def setup_chat_routes(
                         headers=sess.headers,
                         temperature=ctx.preset.temperature,
                         max_tokens=ctx.preset.max_tokens,
+                        reasoning_mode=getattr(ctx.preset, "reasoning_mode", "auto"),
                         prompt_type=preset_id,
                         max_tool_calls=_tool_budget,
                         max_rounds=_max_rounds,

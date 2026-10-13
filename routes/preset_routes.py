@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ class UserTemplateRequest(BaseModel):
     system_prompt: str = Field("", max_length=10000)
     temperature: float = Field(1.0, ge=0.0, le=2.0)
     max_tokens: int = Field(0, ge=0, le=65536)
+    reasoning_mode: Literal["auto", "on", "off"] = "auto"
 
 
 def setup_preset_routes(preset_manager) -> APIRouter:
@@ -41,6 +42,7 @@ def setup_preset_routes(preset_manager) -> APIRouter:
                 preset_update.enabled,
                 preset_update.inject_prefix,
                 preset_update.inject_suffix,
+                preset_update.reasoning_mode,
             )
             if success:
                 return {"success": True, "message": "Custom preset updated"}

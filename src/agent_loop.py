@@ -3854,7 +3854,7 @@ def _build_actions_snapshot(tool_events: list, limit: int = 8000) -> str:
 
 async def _run_verifier_subagent(
     instruction: str, actions_snapshot: str,
-    *, endpoint_url: str, model: str, headers: dict,
+    *, endpoint_url: str, model: str, headers: dict, reasoning_mode: str = "auto",
 ) -> list:
     """Review completion independently; missing evidence never counts as a pass."""
     from src.llm_core import llm_call_async
@@ -3873,6 +3873,7 @@ async def _run_verifier_subagent(
             # 600 truncated both control reviews before a final line.
             headers=headers, temperature=0.0, max_tokens=2048, timeout=60,
             response_diagnostics=response_diagnostics,
+            reasoning_mode=reasoning_mode,
         )
     except Exception as e:
         logger.warning(f"[agent] verifier subagent failed: {e}")
@@ -3905,6 +3906,7 @@ async def _run_verifier_subagent(
                 messages=[{"role": "user", "content": retry_prompt}],
                 headers=headers, temperature=0.0, max_tokens=2048, timeout=60,
                 response_diagnostics=response_diagnostics,
+                reasoning_mode=reasoning_mode,
             )
         except Exception as e:
             logger.warning(f"[agent] verifier format retry failed: {e}")
@@ -4210,6 +4212,7 @@ async def stream_agent_loop(
     defer_context_shaping: bool = False,
     incognito: bool = False,
     server_run_id: Optional[str] = None,
+    reasoning_mode: str = "auto",
 ) -> AsyncGenerator[str, None]:
     """Streaming agent loop generator.
 
@@ -4558,6 +4561,7 @@ async def stream_agent_loop(
                 direct_messages,
                 temperature=temperature,
                 max_tokens=min(max_tokens or 128, 128),
+                reasoning_mode=reasoning_mode,
                 prompt_type=None,
                 tools=None,
                 timeout=int(get_setting("agent_stream_timeout_seconds", 300) or 300),
@@ -6690,6 +6694,7 @@ async def stream_agent_loop(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            reasoning_mode=reasoning_mode,
             prompt_type=prompt_type if round_num == 1 else None,
             tools=all_tool_schemas if all_tool_schemas else None,
             tool_choice_none=_ody_doc_finetune_mode,
@@ -7208,6 +7213,7 @@ async def stream_agent_loop(
                     _raw = await llm_call_async(
                         url=endpoint_url, model=model, messages=_synth_messages,
                         headers=headers, temperature=0.3, max_tokens=max_tokens, timeout=60,
+                        reasoning_mode=reasoning_mode,
                     )
                     _raw_text = _raw or ""
                     _synth = _strip_think_blocks(strip_tool_blocks(_raw_text)).strip()
@@ -7339,6 +7345,7 @@ async def stream_agent_loop(
                     _verifier_instruction,
                     _build_actions_snapshot(tool_events),
                     endpoint_url=endpoint_url, model=model, headers=headers,
+                    reasoning_mode=reasoning_mode,
                 )
                 _verification_issues = _vfail
                 if _vfail:

@@ -1264,6 +1264,15 @@
                 <span class="preset-slider-value" id="tokens-value">No limit</span>
               </div>
               <input type="range" class="preset-range" id="custom-max-tokens" min="256" max="8448" step="256" value="8448">
+              <div class="preset-slider-row">
+                <label for="custom-reasoning-mode">Thinking</label>
+              </div>
+              <select id="custom-reasoning-mode" style="width:100%; margin-bottom:4px" aria-describedby="reasoning-mode-note">
+                <option value="auto">Auto</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+              <small id="reasoning-mode-note">Applies to compatible local models only.</small>
             </div>
             <!-- Prompt (character/persona) tab -->
             <div class="preset-chartab" data-chartab-panel="character" style="display:none">

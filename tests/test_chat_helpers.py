@@ -21,6 +21,30 @@ from routes.chat_helpers import (
 )
 
 
+@pytest.mark.parametrize(("configured", "enabled", "expected"), [
+    ("on", True, "on"), ("off", True, "off"), ("auto", True, "auto"),
+    ("invalid", True, "auto"), ({"unexpected": "value"}, True, "auto"),
+    ("off", False, "auto"), (None, True, "auto"),
+])
+def test_extract_preset_reasoning_mode_is_safe_and_keeps_legacy_tuple(configured, enabled, expected):
+    preset = {"enabled": enabled}
+    if configured is not None:
+        preset["reasoning_mode"] = configured
+
+    class Handler:
+        preset_manager = SimpleNamespace(presets={"preset-1": preset})
+
+        def validate_and_extract_preset(self, preset_id):
+            assert preset_id == "preset-1"
+            return 0.3, 128, "system prompt", "character"
+
+    info = chat_helpers.extract_preset(Handler(), "preset-1")
+    assert (info.temperature, info.max_tokens, info.system_prompt, info.character_name) == (
+        0.3, 128, "system prompt", "character",
+    )
+    assert info.reasoning_mode == expected
+
+
 class _AuthManager:
     def __init__(self, privileges):
         self._privileges = privileges

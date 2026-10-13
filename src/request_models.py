@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 
 
@@ -75,6 +75,10 @@ class PresetUpdateRequest(BaseModel):
         ge=0,
         le=8192,
         description="Maximum number of tokens to generate (0 = no limit)"
+    )
+    reasoning_mode: Literal["auto", "on", "off"] = Field(
+        default="auto",
+        description="Thinking mode for compatible local models",
     )
     system_prompt: str = Field(
         "",

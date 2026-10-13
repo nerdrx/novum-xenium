@@ -221,6 +221,7 @@ def _chat_stream_endpoint(
     capture_context=False,
     endpoint_url="https://selected.example/v1",
     character_name=None,
+    reasoning_mode="auto",
 ):
     def add_message(message):
         captured.setdefault("added_messages", []).append(message)
@@ -260,7 +261,10 @@ def _chat_stream_endpoint(
         context_messages_after_trim=1,
         context_tokens_before_trim=10,
         context_tokens_after_trim=10,
-        preset=SimpleNamespace(temperature=0.2, max_tokens=128, character_name=character_name),
+        preset=SimpleNamespace(
+            temperature=0.2, max_tokens=128, character_name=character_name,
+            reasoning_mode=reasoning_mode,
+        ),
     )
 
     async def fake_build_context(*args, **kwargs):
@@ -270,6 +274,8 @@ def _chat_stream_endpoint(
 
     async def fake_chat_stream(candidates, messages, **kwargs):
         captured["chat"] = candidates
+        if kwargs.get("reasoning_mode") != "auto":
+            captured["chat_reasoning_mode"] = kwargs.get("reasoning_mode")
         if chat_chunks is not None:
             for chunk in chat_chunks:
                 if isinstance(chunk, BaseException):
@@ -284,6 +290,8 @@ def _chat_stream_endpoint(
             "primary": (endpoint_url, model, kwargs.get("headers")),
             "fallbacks": kwargs.get("fallbacks"),
         }
+        if kwargs.get("reasoning_mode") != "auto":
+            captured["agent"]["reasoning_mode"] = kwargs.get("reasoning_mode")
         if captured.get("capture_max_rounds"):
             captured["agent"]["max_rounds"] = kwargs.get("max_rounds")
         if kwargs.get("external_untrusted_context_seen"):
@@ -390,6 +398,26 @@ async def test_chat_stream_route_keeps_selected_model_strict_with_legacy_data(mo
         assert captured == {"chat": [selected]}
     else:
         assert captured == {"agent": {"primary": selected, "fallbacks": []}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("mode", "reasoning_mode"), [
+    ("chat", "on"), ("agent", "off"),
+])
+async def test_chat_stream_passes_preset_reasoning_mode(monkeypatch, mode, reasoning_mode):
+    captured = {}
+    endpoint = _chat_stream_endpoint(
+        monkeypatch, mode, captured, reasoning_mode=reasoning_mode,
+    )
+
+    response = await endpoint(_RouteRequest(mode))
+    async for _ in response.body_iterator:
+        pass
+
+    if mode == "chat":
+        assert captured["chat_reasoning_mode"] == reasoning_mode
+    else:
+        assert captured["agent"]["reasoning_mode"] == reasoning_mode
 
 
 @pytest.mark.asyncio
@@ -2473,6 +2501,7 @@ def test_multi_round_agent_uses_only_selected_model(monkeypatch):
     """Every Agent round receives only the selected foreground candidate."""
 
     seen_candidates = []
+    seen_reasoning_modes = []
     round_number = 0
 
     monkeypatch.setattr(agent_loop, "get_setting", lambda key, default=None: default)
@@ -2483,6 +2512,7 @@ def test_multi_round_agent_uses_only_selected_model(monkeypatch):
         nonlocal round_number
         round_number += 1
         seen_candidates.append([(url, model) for url, model, _headers in candidates])
+        seen_reasoning_modes.append(kwargs.get("reasoning_mode"))
         if round_number == 1:
             call = {"name": "bash", "arguments": json.dumps({"command": "printf ok"})}
             yield f'data: {json.dumps({"type": "tool_calls", "calls": [call]})}\n\n'
@@ -2504,6 +2534,7 @@ def test_multi_round_agent_uses_only_selected_model(monkeypatch):
             max_rounds=3,
             relevant_tools={"bash"},
             fallbacks=[],
+            reasoning_mode="on",
             _is_teacher_run=True,
         )
     )
@@ -2512,6 +2543,7 @@ def test_multi_round_agent_uses_only_selected_model(monkeypatch):
         [("https://selected.example/v1", "selected-model")],
         [("https://selected.example/v1", "selected-model")],
     ]
+    assert seen_reasoning_modes == ["on", "on"]
     assert any('"delta": "done"' in chunk for chunk in chunks)
 
 

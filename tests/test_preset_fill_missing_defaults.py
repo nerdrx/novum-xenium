@@ -64,7 +64,7 @@ def test_fill_does_not_clobber_user_edits():
     # reason was filled...
     assert "reason" in pm.presets
     # ...but the user's edited custom + templates are untouched.
-    assert pm.presets["custom"] == edited_custom
+    assert pm.presets["custom"] == {**edited_custom, "reasoning_mode": "auto"}
     assert pm.presets["user_templates"] == [{"id": "t1", "name": "Tmpl"}]
 
 

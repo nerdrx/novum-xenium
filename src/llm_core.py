@@ -2498,6 +2498,7 @@ async def llm_call_async(
     availability_only_transport: bool = False,
     return_model_metadata: bool = False,
     response_diagnostics: Optional[Dict[str, object]] = None,
+    reasoning_mode: str = "auto",
 ) -> str | tuple[str, str]:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
     provider = _detect_provider(url)
@@ -2521,7 +2522,7 @@ async def llm_call_async(
     )
     # Response strings do not retain provider metadata. Diagnostics callers
     # must reach the provider so finish_reason/usage cannot be lost to a cache hit.
-    use_response_cache = response_diagnostics is None
+    use_response_cache = response_diagnostics is None and reasoning_mode == "auto"
     cached_response = _get_cached_response(cache_key) if use_response_cache else None
     if cached_response:
         logger.debug(f"Returning cached response for key: {cache_key}")
@@ -2627,6 +2628,9 @@ async def llm_call_async(
             payload["think"] = False
         if provider == "mistral" and _supports_thinking(model):
             payload["reasoning_effort"] = _MISTRAL_REASONING_EFFORT
+        thinking_override = await _local_thinking_override(url, model, headers, reasoning_mode)
+        if thinking_override is not None:
+            payload["chat_template_kwargs"] = {"enable_thinking": thinking_override}
         _apply_local_cache_affinity(payload, url, session_id)
         _apply_local_generation_stability(payload, target_url, model)
 
@@ -2795,11 +2799,59 @@ def _stream_target_url(url: str) -> str:
     return _normalize_openai_chat_url(url)
 
 
+async def _local_thinking_override(url, model, headers, reasoning_mode):
+    """Probe explicit local thinking controls; never infer support from a model name."""
+    if reasoning_mode not in ("on", "off") or not is_local_endpoint(url):
+        return None
+    parsed = urlsplit(url)
+    path = parsed.path.rstrip("/")
+    for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+        if path.endswith(suffix):
+            path = path[:-len(suffix)]
+            break
+    base = urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+    async def read_metadata(client, target, **kwargs):
+        async with client.stream("GET", target, headers=headers, **kwargs) as response:
+            response.raise_for_status()
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > 1024 * 1024:
+                    raise ValueError("Model metadata exceeds probe limit")
+        return json.loads(body)
+
+    try:
+        async with asyncio.timeout(3.0), httpx.AsyncClient(timeout=3.0, follow_redirects=False) as client:
+            inventory = await read_metadata(client, base + "/v1/models")
+            entries = inventory.get("data", []) if isinstance(inventory, dict) else []
+            if not isinstance(entries, list):
+                return None
+            canonical_id = next((entry.get("id") for entry in entries
+                if isinstance(entry, dict) and entry.get("owned_by") == "llamacpp"
+                and isinstance(entry.get("id"), str)
+                and (entry["id"] == model or (
+                    isinstance(entry.get("aliases"), list) and model in entry["aliases"]))), None)
+            if not canonical_id:
+                return None
+            props = await read_metadata(client, base + "/props", params={"model": canonical_id})
+        if (isinstance(props, dict) and props.get("model_alias") == canonical_id
+                and isinstance(props.get("default_generation_settings"), dict)
+                and isinstance(props.get("chat_template_caps"), dict)
+                and isinstance(props.get("chat_template"), str)
+                and re.search(r"\benable_thinking\b", props["chat_template"])):
+            return reasoning_mode == "on"
+    except (httpx.HTTPError, ValueError, TypeError, TimeoutError):
+        pass
+    return None
+
+
 async def stream_llm(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
                      max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
                      timeout: int = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
                      tools: Optional[List[Dict]] = None, session_id: Optional[str] = None,
-                     tool_choice_none: bool = False, workload: str = "foreground"):
+                     tool_choice_none: bool = False, workload: str = "foreground",
+                     reasoning_mode: str = "auto"):
     target_url = _stream_target_url(url)
     async with _local_model_slot(target_url, model, workload):
         async for chunk in _stream_llm_inner(
@@ -2814,6 +2866,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
             tools=tools,
             session_id=session_id,
             tool_choice_none=tool_choice_none,
+            reasoning_mode=reasoning_mode,
         ):
             yield explain_sse_failure(chunk)
 
@@ -2822,7 +2875,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                             max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
                             timeout: int = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
                             tools: Optional[List[Dict]] = None, session_id: Optional[str] = None,
-                            tool_choice_none: bool = False):
+                            tool_choice_none: bool = False, reasoning_mode: str = "auto"):
     """Stream LLM responses with improved error handling.
 
     Yields SSE chunks:
@@ -2898,6 +2951,9 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         # <think> blocks. Ollama /v1 accepts "think": false as a top-level param.
         if _is_ollama_openai_compat_url(url) and _supports_thinking(model):
             payload["think"] = False
+        thinking_override = await _local_thinking_override(url, model, headers, reasoning_mode)
+        if thinking_override is not None:
+            payload["chat_template_kwargs"] = {"enable_thinking": thinking_override}
         _apply_local_cache_affinity(payload, url, session_id)
         _apply_local_generation_stability(payload, target_url, model)
         _scrub_openai_chat_tool_reasoning(payload, target_url, model)

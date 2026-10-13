@@ -60,6 +60,7 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
             "system_prompt": "",
             "inject_prefix": "",
             "inject_suffix": "",
+            "reasoning_mode": "auto",
             "enabled": False,
         }
     }
@@ -81,6 +82,11 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
                 logger.error("Error loading presets: expected an object")
                 return self.DEFAULT_PRESETS.copy()
             custom = presets.get("custom") if isinstance(presets, dict) else None
+            if isinstance(custom, dict):
+                reasoning_mode = custom.get("reasoning_mode")
+                if not isinstance(reasoning_mode, str) or reasoning_mode not in ("auto", "on", "off"):
+                    custom["reasoning_mode"] = "auto"
+                    self.save(presets)
             if isinstance(custom, dict) and "enabled" not in custom:
                 legacy_prompt = "You are a helpful, balanced assistant. Match your response style to the user's needs."
                 if (
@@ -140,6 +146,7 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
         enabled: bool = True,
         inject_prefix: str = "",
         inject_suffix: str = "",
+        reasoning_mode: str = "auto",
     ) -> bool:
         """Update the custom preset"""
         self.presets["custom"] = {
@@ -150,6 +157,11 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
             "system_prompt": system_prompt,
             "inject_prefix": inject_prefix,
             "inject_suffix": inject_suffix,
+            "reasoning_mode": (
+                reasoning_mode
+                if isinstance(reasoning_mode, str) and reasoning_mode in ("auto", "on", "off")
+                else "auto"
+            ),
             "enabled": enabled,
         }
         return self.save(self.presets)

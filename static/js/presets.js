@@ -209,12 +209,14 @@ function initNameDropdown() {
       const tempValue = document.getElementById('temp-value');
       const tokensInput = document.getElementById('custom-max-tokens');
       const tokensValue = document.getElementById('tokens-value');
+      const reasoningInput = document.getElementById('custom-reasoning-mode');
       if (nameInput) nameInput.value = '';
       if (promptInput) promptInput.value = '';
       const nameRow = document.getElementById('char-name-row');
       if (nameRow) nameRow.style.display = '';
       if (tempInput) { tempInput.value = 1.0; if (tempValue) tempValue.textContent = '1.0'; tempInput.dispatchEvent(new Event('input')); }
       if (tokensInput) { tokensInput.value = 8448; if (tokensValue) tokensValue.textContent = 'No limit'; tokensInput.dispatchEvent(new Event('input')); }
+      if (reasoningInput) reasoningInput.value = 'auto';
       if (delBtn) delBtn.style.display = 'none';
       return;
     }
@@ -279,12 +281,14 @@ function _tryLoadTemplate(name) {
       const promptInput = document.getElementById('custom-system-prompt');
       const tempInput = document.getElementById('custom-temperature');
       const tempValue = document.getElementById('temp-value');
+      const reasoningInput = document.getElementById('custom-reasoning-mode');
       if (promptInput) promptInput.value = builtin.prompt;
       if (tempInput && builtin.temperature != null) {
         tempInput.value = builtin.temperature;
         if (tempValue) tempValue.textContent = parseFloat(builtin.temperature).toFixed(1);
         tempInput.dispatchEvent(new Event('input'));
       }
+      if (reasoningInput) reasoningInput.value = builtin.reasoning_mode || 'auto';
       return;
     }
     return;
@@ -294,6 +298,7 @@ function _tryLoadTemplate(name) {
   const tempValue = document.getElementById('temp-value');
   const tokensInput = document.getElementById('custom-max-tokens');
   const tokensValue = document.getElementById('tokens-value');
+  const reasoningInput = document.getElementById('custom-reasoning-mode');
   if (promptInput) promptInput.value = tmpl.system_prompt || '';
   if (tempInput) {
     tempInput.value = tmpl.temperature ?? 1.0;
@@ -306,6 +311,7 @@ function _tryLoadTemplate(name) {
     if (tokensValue) tokensValue.textContent = (v === 0 || v > 8192) ? 'No limit' : v.toLocaleString();
     tokensInput.dispatchEvent(new Event('input'));
   }
+  if (reasoningInput) reasoningInput.value = tmpl.reasoning_mode || 'auto';
   const delBtn = document.getElementById('char-delete-template-btn');
   if (delBtn) delBtn.style.display = '';
 }
@@ -452,6 +458,7 @@ function initSaveAsTemplate() {
     const promptInput = document.getElementById('custom-system-prompt');
     const tempInput = document.getElementById('custom-temperature');
     const tokensInput = document.getElementById('custom-max-tokens');
+    const reasoningInput = document.getElementById('custom-reasoning-mode');
 
     let name = nameInput ? nameInput.value.trim() : '';
     if (!name) {
@@ -468,6 +475,7 @@ function initSaveAsTemplate() {
       system_prompt: promptInput ? promptInput.value : '',
       temperature: tempInput ? parseFloat(tempInput.value) : 1.0,
       max_tokens: _rawTk > 8192 ? 0 : _rawTk,
+      reasoning_mode: reasoningInput ? reasoningInput.value : 'auto',
     };
 
     try {
@@ -565,13 +573,15 @@ export function openCustomPresetModal() {
     character_name: "",
     temperature: 1.0,
     max_tokens: 0,
-    system_prompt: ""
+    system_prompt: "",
+    reasoning_mode: 'auto',
   };
 
   const nameInput = document.getElementById('custom-character-name');
   const tempInput = document.getElementById('custom-temperature');
   const tokensInput = document.getElementById('custom-max-tokens');
   const promptInput = document.getElementById('custom-system-prompt');
+  const reasoningInput = document.getElementById('custom-reasoning-mode');
 
   if (nameInput) nameInput.value = savedConfig.character_name || '';
   // Sync select dropdown to current character
@@ -598,6 +608,7 @@ export function openCustomPresetModal() {
     if (tkv) tkv.textContent = (saved === 0 || saved > 8192) ? 'No limit' : parseInt(saved).toLocaleString();
   }
   if (promptInput) promptInput.value = savedConfig.system_prompt || '';
+  if (reasoningInput) reasoningInput.value = ['auto', 'on', 'off'].includes(savedConfig.reasoning_mode) ? savedConfig.reasoning_mode : 'auto';
 
   // Load inject fields
   const prefixInput = document.getElementById('inject-prefix');
@@ -611,6 +622,7 @@ export function openCustomPresetModal() {
     prompt: promptInput ? promptInput.value : '',
     temp: tempInput ? tempInput.value : '1',
     tokens: tokensInput ? tokensInput.value : '8448',
+    reasoning: reasoningInput ? reasoningInput.value : 'auto',
   };
   function _updateStartBtn() {
     const btn = document.getElementById('save-custom-preset');
@@ -619,7 +631,8 @@ export function openCustomPresetModal() {
     const changed = (nameInput && nameInput.value !== _snapshot.name)
       || (promptInput && promptInput.value !== _snapshot.prompt)
       || (tempInput && tempInput.value !== _snapshot.temp)
-      || (tokensInput && tokensInput.value !== _snapshot.tokens);
+      || (tokensInput && tokensInput.value !== _snapshot.tokens)
+      || (reasoningInput && reasoningInput.value !== _snapshot.reasoning);
     // The footer button starts whichever of the three things the active tab
     // represents — a character chat, a group, or a plain tuned chat. Label
     // it so the action is obvious instead of a generic "Start".
@@ -653,6 +666,7 @@ export function openCustomPresetModal() {
   [nameInput, promptInput, tempInput, tokensInput].forEach(el => {
     if (el) el.addEventListener('input', _updateStartBtn);
   });
+  if (reasoningInput) reasoningInput.addEventListener('change', _updateStartBtn);
   // Re-label the Start button when the user switches tabs. Rebind the fresh
   // closure each time the modal opens (removing any stale one) so the label
   // logic always reads this open's snapshot/inputs.
@@ -689,6 +703,7 @@ export function openCustomPresetModal() {
     _snapshot.prompt = promptInput ? promptInput.value : '';
     _snapshot.temp = tempInput ? tempInput.value : '1';
     _snapshot.tokens = tokensInput ? tokensInput.value : '8448';
+    _snapshot.reasoning = reasoningInput ? reasoningInput.value : 'auto';
     _updateStartBtn();
   }, 50));
   _updateStartBtn();
@@ -726,7 +741,7 @@ export function openCustomPresetModal() {
       const notice = document.createElement('div');
       notice.id = 'char-lock-notice';
       notice.style.cssText = 'font-size:11px;color:var(--color-muted);text-align:center;padding:6px;margin-bottom:8px;border:1px dashed var(--border);border-radius:6px;';
-      notice.textContent = 'Persistent chat — persona is locked. Style, temperature, and memory can still be changed.';
+      notice.textContent = 'Persistent chat — persona is locked. Style, temperature, thinking mode, and memory can still be changed.';
       modal.querySelector('.modal-body').prepend(notice);
     }
   } else {
@@ -748,6 +763,7 @@ export async function saveCustomPreset(showToast, showError) {
   const tempInput = document.getElementById('custom-temperature');
   const tokensInput = document.getElementById('custom-max-tokens');
   const promptInput = document.getElementById('custom-system-prompt');
+  const reasoningInput = document.getElementById('custom-reasoning-mode');
 
   if (!tempInput || !tokensInput || !promptInput) return;
 
@@ -786,6 +802,7 @@ export async function saveCustomPreset(showToast, showError) {
     temperature: Math.max(0, Math.min(2, temperature)),
     max_tokens: max_tokens,
     system_prompt: system_prompt,
+    reasoning_mode: reasoningInput ? reasoningInput.value : 'auto',
     inject_prefix: _prefixInput ? _prefixInput.value : '',
     inject_suffix: _suffixInput ? _suffixInput.value : '',
   };
@@ -804,10 +821,12 @@ export async function saveCustomPreset(showToast, showError) {
       // The custom preset must be the SELECTED preset for its values to reach
       // the model — chat.js only sends `preset_id` when getSelectedPreset() is
       // truthy. Activate it when there's a persona (name/prompt) OR when the
-      // user has dialed in non-default tuning (temperature / max tokens) — the
+      // user has dialed in non-default tuning (temperature / max tokens / thinking mode) — the
       // "Inject" tab's plain-chat case. Without the tuning check, "just set
-      // temp + max tokens" would silently do nothing.
-      const _hasTuning = (config.temperature !== 1.0) || (config.max_tokens !== 0);
+      // temp, token limit, or thinking mode" would silently do nothing.
+      const _hasTuning = (config.temperature !== 1.0)
+        || (config.max_tokens !== 0)
+        || (config.reasoning_mode !== 'auto');
       const _hasInject = !!(config.inject_prefix || config.inject_suffix);
       const _hasContent = !!(system_prompt || name || _hasTuning || _hasInject);
       if (enabled && _hasContent) {
@@ -842,6 +861,7 @@ export async function saveCustomPreset(showToast, showError) {
           system_prompt: system_prompt ?? '',
           temperature: config.temperature,
           max_tokens: config.max_tokens,
+          reasoning_mode: config.reasoning_mode,
         }
         const ENDPOINT = `${API_BASE}/api/presets/templates`;
 

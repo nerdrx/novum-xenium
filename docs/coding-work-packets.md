@@ -10,6 +10,9 @@ The current run tracks actual tool results through `reproduce`, `edit`,
 `verify`, and `done`. A reproduction may fail: its real exit status is the
 baseline evidence. Approval requests and blocked or pending calls do not count.
 Before reproduction, file edits and unrelated executable actions are blocked.
+In checked mode the edit stage exposes file-edit tools; shell and Python
+execution resume after an edit, for verification. Shell edits are not accepted
+as packet edit evidence.
 After a successful file-tool edit, only a successful exact acceptance command
 marks the slice done. Later edits or shell actions invalidate that pass.
 An unfinished packet cannot be replaced by another checklist write.

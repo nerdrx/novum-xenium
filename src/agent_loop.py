@@ -6021,7 +6021,11 @@ async def stream_agent_loop(
             return schemas
         checked = []
         for schema in schemas or []:
-            if schema.get("function", {}).get("name") != "todowrite":
+            tool_name = schema.get("function", {}).get("name")
+            if (_coding_work.state and _coding_work.state.stage == "edit"
+                    and tool_name in {"bash", "python"}):
+                continue
+            if tool_name != "todowrite":
                 checked.append(schema)
                 continue
             schema = copy.deepcopy(schema)
@@ -7999,7 +8003,7 @@ async def stream_agent_loop(
                 result = {"error": _milestone_checkpoint.directive, "exit_code": 1,
                           "blocked": True, "policy": "milestone_checkpoint"}
             elif _coding_work.blocks(block.tool_type, block.content):
-                desc = f"{block.tool_type}: REPRODUCE FIRST"
+                desc = f"{block.tool_type}: CODING WORKFLOW"
                 result = {"error": _coding_work.instruction, "exit_code": 1,
                           "blocked": True, "policy": "coding_work_packet"}
             elif not security_decision.allowed:

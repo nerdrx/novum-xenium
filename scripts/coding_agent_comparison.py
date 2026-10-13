@@ -37,7 +37,7 @@ MULTIFILE_FIXTURE = {
     "report.py": "from core import total\ndef summary(values):\n    return {'total': total(values), 'count': total(values)}\n",
     "TASK.md": (
         "Repair this project: `core.total` must sum numeric values; "
-        "`report.summary` must return their sum and count, including empty input. "
+        "`report.summary` must return a dictionary with exactly the keys `total` (the sum) and `count` (number of values), including empty input. "
         "Change `core.py` and `report.py`, then verify the result.\n"
     ),
 }

@@ -32,7 +32,8 @@ def _todos():
 
 
 def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=None, todos=None,
-                pause_after_acceptance=False, teacher_event=None, checked_workflow=False):
+                pause_after_acceptance=False, teacher_event=None, checked_workflow=False,
+                attempt_shell_edit=False):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -77,9 +78,13 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         # Must be rejected by the packet guard before the executor sees it.
         ("write_file", {"path": "src/auth.py", "content": "too soon"}),
         ("bash", {"command": _packet()["reproduce_command"]}),
+    ]
+    if attempt_shell_edit:
+        actions.append(("bash", {"command": "sed -i 's/old/new/' src/auth.py"}))
+    actions.extend([
         ("write_file", {"path": "src/auth.py", "content": "fixed"}),
         ("bash", {"command": _packet()["acceptance_command"]}),
-    ]
+    ])
     requested = []
     executed = []
     initial_todowrite = json.dumps(actions[0][1])
@@ -87,7 +92,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
     pending = approvals.create(
         owner="alice", session_id="coding-packet-test", origin_run_id="packet-origin",
         tool_name="todowrite", content=initial_todowrite, workspace=str(tmp_path),
-        selected_tools={"todowrite", "bash", "write_file"},
+        selected_tools={"todowrite", "bash", "write_file", "python"},
         external_untrusted_context_seen=True,
         capabilities=capabilities_for_action("todowrite", initial_todowrite),
     )
@@ -143,7 +148,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
          {"role": "user", "content": "Fix the auth refresh bug in this workspace and run tests"}],
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
-        relevant_tools={"todowrite", "bash", "write_file"}, max_rounds=10,
+        relevant_tools={"todowrite", "bash", "write_file", "python"}, max_rounds=10,
     ))
     return _types(chunks), executed, requested
 
@@ -160,6 +165,21 @@ def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monke
     assert [tool for tool, _content in executed] == ["todowrite", "todowrite", "bash", "write_file", "bash"]
     assert "Everything is complete." in " ".join(event.get("delta", "") for event in events)
     assert "write_file" in requested[1]
+
+
+def test_checked_edit_stage_hides_and_rejects_shell_writes_with_actionable_error(monkeypatch, tmp_path):
+    events, executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, attempt_shell_edit=True,
+        todos=[{"content": "Fix refresh behavior", "status": "in_progress"}],
+    )
+
+    # Turn four proposes the shell edit; its following model request receives
+    # the blocker. Shell tools remain available again for acceptance in verify.
+    assert not ({"bash", "python"} & requested[3])
+    assert not ({"bash", "python"} & requested[4])
+    assert "Bash and Python are unavailable during the edit stage" in json.dumps(events)
+    assert "sed -i" not in json.dumps(executed)
+    assert "bash" in requested[-1]
 
 
 def test_reviewed_completed_packet_emits_success_terminal(monkeypatch, tmp_path):

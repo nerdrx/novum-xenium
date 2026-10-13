@@ -145,6 +145,33 @@ def test_checked_workflow_requires_each_slice_and_rejects_checklist_shortcuts(pa
     assert not tracker.pending
 
 
+def test_checked_packet_instructions_follow_evidence_stage(packet):
+    from src.coding_work_packet import CodingWorkTracker
+
+    tracker = CodingWorkTracker(enabled=True)
+    tracker.observe("todowrite", "{}", {
+        "exit_code": 0,
+        "todos": [{"content": "Fix refresh", "status": "in_progress"}],
+        "work_packet": packet.to_dict(),
+    })
+    assert "Run the exact recorded reproduction command before editing" in tracker.instruction
+    tracker.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    assert "recorded reproduction command has run" in tracker.instruction
+    assert "write_file, edit_file, or apply_patch" in tracker.instruction
+    assert "Bash and Python are unavailable" in tracker.instruction
+    assert tracker.blocks("bash", "sed -i 's/a/b/' src/auth.py")
+    assert tracker.blocks("python", "open('src/auth.py', 'w').write('x')")
+    tracker.observe("write_file", "{}", {"exit_code": 0})
+    assert "successful file edit is recorded" in tracker.instruction
+    assert not tracker.blocks("bash", packet.acceptance_command)
+
+    optional = CodingWorkTracker()
+    optional.observe("todowrite", "{}", {"exit_code": 0, "work_packet": packet.to_dict()})
+    optional.observe("bash", packet.reproduce_command, {"exit_code": 1})
+    assert "Bash and Python are unavailable" not in optional.instruction
+    assert not optional.blocks("bash", "sed -i 's/a/b/' src/auth.py")
+
+
 def test_checkpoint_restores_only_server_observed_stage_and_checklist(packet):
     from src.coding_work_packet import CodingWorkTracker
 

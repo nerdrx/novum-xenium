@@ -137,6 +137,7 @@
     "Requested settings match; effective context/output capacity differs by agent overhead.",
     "Only two stochastic trials; ordering does not establish causation or speed performance.",
     "No manual code edits were made to either fixture.",
-    "No FFmpeg GUI was verified."
+    "No FFmpeg GUI was verified.",
+    "The task said sum and count but did not explicitly name output keys. The Novum-first result used sum rather than the initial interface total; treat that as an ambiguous task contract, not definitive evidence of model inability. Future paired trials explicitly name both keys."
   ]
 }

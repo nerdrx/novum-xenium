@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -269,6 +270,142 @@ def github_visibility_conflict(
         "this command requests public visibility. Do not create or change it "
         f"to public. {correction}"
     )
+
+
+_DELETE_VERB = r"(?:delete|remove|wipe)"
+_WHOLE_PROJECT_DELETE_RE = re.compile(
+    rf"^\s*(?:please\s+)?{_DELETE_VERB}\s+(?:the\s+)?"
+    r"(?:(?:entire|whole|complete|all)\s+)?"
+    r"(?:project|repository|repo)\b"
+    r"(?:\s*(?:[.!]|$)|\s+(?:(?:and|then)\s+(?:recreate|rebuild|replace|clone)\b.*))",
+    re.I,
+)
+_WHOLE_WORKSPACE_DELETE_RE = re.compile(
+    rf"^\s*(?:please\s+)?{_DELETE_VERB}\s+(?:the\s+)?"
+    r"(?:(?:entire|whole|complete|all)\s+)?workspace\b"
+    r"(?:\s*(?:[.!]|$)|\s+(?:(?:and|then)\s+(?:recreate|rebuild|replace|clone)\b.*))",
+    re.I,
+)
+_AUTHORIZED_DELETE_SUFFIX = r"(?:\s+(?:project|repository|repo|workspace))?(?:\s*(?:[.!]|$)|\s+(?:(?:and|then)\s+(?:recreate|rebuild|replace|clone)\b.*))"
+_DELETE_DENIAL_RE = re.compile(
+    rf"^\s*(?:please\s+)?(?:do\s+not|don't|never)\s+{_DELETE_VERB}\b",
+    re.I,
+)
+
+
+def _workspace_or_parent(path: str, workspace: str) -> bool:
+    return path == workspace or workspace.startswith(path.rstrip(os.sep) + os.sep)
+
+
+def _is_git_project_root(path: str) -> bool:
+    marker = os.path.join(path, ".git")
+    return os.path.isdir(marker) or os.path.isfile(marker)
+
+
+def workspace_project_deletion_conflict(
+    tool_name: object,
+    content: object,
+    *,
+    workspace: object,
+    working_directory: object,
+    task_anchor: object = "",
+    latest_user_request: object = "",
+) -> str | None:
+    """Block common recursive `rm` forms that remove a workspace or Git root.
+
+    This is a narrow pre-dispatch guard, not a general shell parser. It handles
+    direct `rm` commands, common shell chains, and simple `cd` paths only.
+    """
+    if str(tool_name or "").casefold() != "bash":
+        return None
+    workspace = str(workspace or "")
+    working_directory = str(working_directory or "")
+    if not workspace or not working_directory:
+        return None
+    try:
+        workspace = os.path.realpath(workspace)
+        current = os.path.realpath(working_directory)
+        commands = _shell_commands(str(content or "")[:16_000])
+    except (OSError, ValueError):
+        return None
+
+    latest_text = str(latest_user_request or "")[:2_000].strip()
+    authorization_texts = [latest_text]
+    if not _DELETE_DENIAL_RE.search(latest_text):
+        # The trusted anchor is the original user task, not arbitrary history or
+        # tool output, so an explicit same-task deletion remains authorized on
+        # a short "continue" reply.
+        anchor = str(task_anchor or "")[:8_000].strip()
+        if anchor:
+            authorization_texts.append(anchor)
+    for tokens in commands:
+        if not tokens:
+            continue
+        if os.path.basename(tokens[0]) == "cd":
+            if len(tokens) == 2 and not re.search(r"[$*?`\\]", tokens[1]):
+                target = tokens[1]
+                current = os.path.realpath(
+                    target if os.path.isabs(target) else os.path.join(current, target)
+                )
+            else:
+                current = ""
+            continue
+
+        rm_index = 0
+        if tokens[0] in {"sudo", "command"} and len(tokens) > 1:
+            rm_index = 1
+        if rm_index >= len(tokens) or os.path.basename(tokens[rm_index]) != "rm":
+            continue
+        options = tokens[rm_index + 1:]
+        recursive = False
+        targets = []
+        parsing_options = True
+        for value in options:
+            if parsing_options and value == "--":
+                parsing_options = False
+            elif parsing_options and value == "--recursive":
+                recursive = True
+            elif parsing_options and value.startswith("-") and value != "-":
+                if not value.startswith("--") and any(flag in value[1:] for flag in "rR"):
+                    recursive = True
+            elif value:
+                targets.append(value)
+        if not recursive:
+            continue
+        for target in targets:
+            if not current or re.search(r"[$*?`\\]", target):
+                continue
+            candidate = os.path.realpath(
+                target if os.path.isabs(target) else os.path.join(current, target)
+            )
+            workspace_exact = candidate == workspace
+            workspace_ancestor = candidate != workspace and _workspace_or_parent(candidate, workspace)
+            removes_git_root = _is_git_project_root(candidate)
+            target_name = os.path.basename(candidate.rstrip(os.sep))
+            def explicitly_authorizes_target(text: str) -> bool:
+                named_delete = bool(target_name and re.match(
+                    rf"^\s*(?:please\s+)?{_DELETE_VERB}\s+(?:(?:the|entire|whole|complete|all)\s+){{0,2}}"
+                    rf"{re.escape(target_name)}\b{_AUTHORIZED_DELETE_SUFFIX}",
+                    text,
+                    re.I,
+                ))
+                return bool(
+                    named_delete or _WHOLE_PROJECT_DELETE_RE.match(text)
+                    or (workspace_exact and _WHOLE_WORKSPACE_DELETE_RE.match(text))
+                )
+
+            authorized = any(explicitly_authorizes_target(text) for text in authorization_texts)
+            authorized = authorized and not workspace_ancestor and (
+                workspace_exact or removes_git_root
+            )
+            if (workspace_exact or workspace_ancestor or removes_git_root) and not authorized:
+                return (
+                    "This recursive delete targets the workspace or a Git project root. "
+                    "Preserve source and repair the existing project in place. Limit "
+                    "cleanup to generated directories unless the current user request "
+                    "explicitly directs deleting the whole project."
+                )
+    return None
 
 
 def tool_toggle_enabled(value: object) -> bool:

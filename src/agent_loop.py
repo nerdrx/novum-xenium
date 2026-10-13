@@ -49,6 +49,7 @@ from src.tool_policy import (
     WEB_TOOL_NAMES,
     ToolPolicy,
     github_visibility_conflict,
+    workspace_project_deletion_conflict,
 )
 from src.tool_capabilities import (
     ResultIntegrity,
@@ -7136,10 +7137,19 @@ async def stream_agent_loop(
                 task_anchor=_trusted_task_anchor,
                 latest_user_request=_last_user,
             )
+            workspace_deletion_reason = workspace_project_deletion_conflict(
+                block.tool_type,
+                block.content,
+                workspace=workspace or snapshot_workspace,
+                working_directory=workspace or snapshot_workspace,
+                task_anchor=_trusted_task_anchor,
+                latest_user_request=_last_user,
+            )
             judge_review = None
             action = None
             if (not security_decision.allowed and not blocked_by_tool_policy
                     and not blocked_by_disabled_tools and not task_alignment_reason
+                    and not workspace_deletion_reason
                     and not plan_mode
                     and approval_mode == "auto" and not delegated_credential
                     and _coding_grounding.allows_tool(block.tool_type, block.content)):
@@ -7173,13 +7183,16 @@ async def stream_agent_loop(
                         security_decision = type(security_decision)(
                             False, "Auto review: " + judge_review["reason"],
                         )
-            if task_alignment_reason or (
+            if task_alignment_reason or workspace_deletion_reason or (
                 (blocked_by_tool_policy or blocked_by_disabled_tools)
                 and not _ody_clamped_tool_allowed
             ):
                 if task_alignment_reason:
                     reason = task_alignment_reason
                     block_policy = "task_intent_alignment"
+                elif workspace_deletion_reason:
+                    reason = workspace_deletion_reason
+                    block_policy = "whole_project_deletion"
                 elif blocked_by_tool_policy:
                     blocked_name = next(
                         name for name in policy_names if tool_policy.blocks(name)

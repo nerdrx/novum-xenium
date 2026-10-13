@@ -8,6 +8,7 @@ from src.agent_loop import _classify_agent_request
 from src.tool_policy import (
     github_private_repository_requested,
     github_visibility_conflict,
+    workspace_project_deletion_conflict,
 )
 
 
@@ -126,3 +127,125 @@ def test_line_format_api_call_is_checked_too():
     )
     assert reason is not None
     assert "private: true" in reason
+
+
+def test_recursive_delete_of_nested_git_project_is_blocked_during_repair(tmp_path):
+    workspace = tmp_path / "evaluation"
+    project = workspace / "nflix"
+    (project / ".git").mkdir(parents=True)
+    reason = workspace_project_deletion_conflict(
+        "bash",
+        f"cd {workspace} && rm -rf nflix && git clone /missing/nflix-backup {project}",
+        workspace=workspace,
+        working_directory=tmp_path,
+        task_anchor="Repair the existing nflix project and keep its current files.",
+        latest_user_request="Continue fixing the Git push issue.",
+    )
+    assert reason and "Git project root" in reason
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf .",
+    "rm -R nflix",
+    "rm --recursive --force -- .",
+    "cd .. && sudo rm -rf -- workspace",
+])
+def test_recursive_delete_of_workspace_or_parent_is_blocked(tmp_path, command):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    reason = workspace_project_deletion_conflict(
+        "bash", command, workspace=workspace, working_directory=workspace,
+        task_anchor="Repair a broken application.", latest_user_request="Continue.",
+    )
+    assert reason and "recursive delete" in reason
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf dist",
+    "rm -rf nflix/build",
+    "rm -f nflix/package.json",
+    "echo 'rm -rf nflix'",
+])
+def test_generated_directory_and_file_cleanup_remain_available(tmp_path, command):
+    workspace = tmp_path / "evaluation"
+    project = workspace / "nflix"
+    (project / ".git").mkdir(parents=True)
+    assert workspace_project_deletion_conflict(
+        "bash", command, workspace=workspace, working_directory=workspace,
+        task_anchor="Repair the nflix project.", latest_user_request="Continue.",
+    ) is None
+
+
+def test_explicit_user_authorization_can_remove_the_named_project(tmp_path):
+    workspace = tmp_path / "evaluation"
+    project = workspace / "nflix"
+    (project / ".git").mkdir(parents=True)
+    assert workspace_project_deletion_conflict(
+        "bash", "rm -rf nflix", workspace=workspace, working_directory=workspace,
+        task_anchor="Repair nflix.",
+        latest_user_request="Delete the entire nflix project and recreate it.",
+    ) is None
+    assert workspace_project_deletion_conflict(
+        "read_file", "rm -rf nflix", workspace=workspace, working_directory=workspace,
+    ) is None
+    assert workspace_project_deletion_conflict(
+        "bash", "rm -rf nflix", workspace=workspace, working_directory=workspace,
+        task_anchor="Delete the entire nflix project.", latest_user_request="Continue.",
+    ) is None
+
+
+def test_explicit_workspace_delete_is_allowed_only_for_workspace_root(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assert workspace_project_deletion_conflict(
+        "bash", "rm -rf .", workspace=workspace, working_directory=workspace,
+        latest_user_request="Delete the entire workspace.",
+    ) is None
+    assert workspace_project_deletion_conflict(
+        "bash", "rm -rf /", workspace=workspace, working_directory=workspace,
+        latest_user_request="Delete the entire workspace.",
+    )
+
+
+@pytest.mark.parametrize("user_request", [
+    "Do not delete the entire project.",
+    "Actually, do not delete the project.",
+    "Can we remove the project?",
+    "The note says 'delete the entire project'.",
+    "Delete generated files in the project.",
+    "Delete nflix cache.",
+    "Reset project settings.",
+    "Continue.",
+])
+def test_non_direct_or_narrow_cleanup_text_does_not_authorize_project_removal(tmp_path, user_request):
+    workspace = tmp_path / "evaluation"
+    project = workspace / "nflix"
+    (project / ".git").mkdir(parents=True)
+    reason = workspace_project_deletion_conflict(
+        "bash", "rm -rf nflix", workspace=workspace, working_directory=workspace,
+        latest_user_request=user_request,
+    )
+    assert reason
+
+
+@pytest.mark.parametrize("command", ["rm -rf .", "rm -rf /"])
+def test_named_target_authorization_does_not_extend_to_workspace_ancestors(tmp_path, command):
+    workspace = tmp_path / "evaluation"
+    project = workspace / "nflix"
+    (project / ".git").mkdir(parents=True)
+    reason = workspace_project_deletion_conflict(
+        "bash", command, workspace=workspace, working_directory=workspace,
+        latest_user_request="Delete the entire nflix project and recreate it.",
+    )
+    assert reason
+
+
+def test_latest_user_denial_revokes_same_task_delete_authorization(tmp_path):
+    workspace = tmp_path / "evaluation"
+    (workspace / "nflix" / ".git").mkdir(parents=True)
+    reason = workspace_project_deletion_conflict(
+        "bash", "rm -rf nflix", workspace=workspace, working_directory=workspace,
+        task_anchor="Delete the entire nflix project.",
+        latest_user_request="Do not delete the nflix project.",
+    )
+    assert reason

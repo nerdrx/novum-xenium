@@ -18,18 +18,28 @@ This test drives the real producer (_append_tool_results) into the sanitizer.
 """
 import sys
 from unittest.mock import MagicMock
+from tests.helpers.import_state import clear_module, preserve_import_state
 
-# Mock heavy dependencies before importing (mirrors tests/test_agent_loop.py).
-for mod in [
+# Import against the real tool parser, restoring every temporary module and
+# parent-package attribute so this isolated import cannot poison later tests.
+_IMPORT_STATE = (
     'sqlalchemy', 'sqlalchemy.orm', 'sqlalchemy.ext', 'sqlalchemy.ext.declarative',
     'sqlalchemy.ext.hybrid', 'sqlalchemy.sql', 'sqlalchemy.sql.expression',
-    'src.database', 'src.agent_tools', 'core.models', 'core.database',
-]:
-    if mod not in sys.modules:
-        sys.modules[mod] = MagicMock()
+    'src', 'src.database', 'src.agent_loop', 'src.agent_tools',
+    'src.tool_parsing', 'src.tool_schemas', 'src.tool_execution',
+    'core', 'core.models', 'core.database', 'core.auth',
+)
+with preserve_import_state(*_IMPORT_STATE):
+    for mod in _IMPORT_STATE:
+        if mod.startswith(('sqlalchemy', 'core.', 'src.database')) and mod not in sys.modules:
+            sys.modules[mod] = MagicMock()
+    for mod in ('src.agent_loop', 'src.agent_tools', 'src.tool_parsing', 'src.tool_schemas', 'src.tool_execution'):
+        clear_module(mod)
 
-from src.agent_loop import _append_tool_results
-from src.llm_core import _sanitize_llm_messages
+    import src.agent_loop as _agent_loop
+    from src.agent_loop import _append_tool_results
+    from src.llm_core import _sanitize_llm_messages
+    from src.tool_parsing import parse_tool_blocks as _real_parse_tool_blocks
 
 
 def test_sanitize_keeps_no_prose_assistant_tool_call_message():
@@ -59,6 +69,11 @@ def test_sanitize_keeps_no_prose_assistant_tool_call_message():
     # Pairing intact: the tool result references the assistant's tool_call id.
     tool = next(m for m in out if m["role"] == "tool")
     assert tool["tool_call_id"] == assistant["tool_calls"][0]["id"]
+
+
+def test_import_keeps_the_real_tool_parser():
+    assert callable(_agent_loop.parse_tool_blocks)
+    assert _agent_loop.parse_tool_blocks is _real_parse_tool_blocks
 
 
 def test_sanitize_merges_consecutive_user_messages():
@@ -163,6 +178,5 @@ def test_build_anthropic_payload_alternating_roles():
     assert len(anth_messages) == 1
     assert anth_messages[0]["role"] == "user"
     assert anth_messages[0]["content"] == "web search results\n\nuser query"
-
 
 

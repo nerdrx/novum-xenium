@@ -15,6 +15,7 @@ import json
 import re
 import time
 import logging
+import uuid
 from typing import Any, AsyncGenerator, List, Dict, Optional, Set
 from urllib.parse import urlparse
 
@@ -55,8 +56,16 @@ from src.tool_capabilities import (
 )
 from src.tool_approvals import (
     ExactToolApproval,
+    TaskApprovalContinuation,
     document_content_digest,
+    task_approval_continuation_store,
     tool_approval_store,
+)
+from src.tool_approval_scopes import ToolApprovalScope
+from src.tool_approval_scopes import (
+    TASK_APPROVAL_CONTINUATION_METADATA_FIELD,
+    TASK_APPROVAL_ORIGIN_RUN_ID_FIELD,
+    TASK_APPROVAL_QUESTION_RUN_ID_FIELD,
 )
 from src.tool_utils import _truncate, get_mcp_manager
 from src.agent_tools import (
@@ -1161,6 +1170,73 @@ def _uploaded_files_context_message(uploaded_files: Optional[List[Dict]]) -> Opt
         "current chat uploaded files",
         "\n".join(lines),
     )
+
+
+async def _restore_approved_coding_source(
+    coding_grounding, exact_approval, owner, session_id, task_continuation=None,
+):
+    """Restore only a fetched source linked to this exact approved run."""
+    if not (coding_grounding.required and coding_grounding.web_allowed
+            and "web_fetch" not in coding_grounding.disabled_tools
+            and coding_grounding.preferred_urls and (exact_approval or task_continuation)
+            and session_id):
+        return None
+    source_run_id = (
+        task_continuation.question_run_id
+        if task_continuation is not None
+        else exact_approval.pending.origin_run_id
+    )
+    source_owner = (
+        task_continuation.owner
+        if task_continuation is not None
+        else exact_approval.pending.owner
+    )
+    source_session = (
+        task_continuation.session_id
+        if task_continuation is not None
+        else exact_approval.pending.session_id
+    )
+    if (not source_run_id
+            or source_owner != str(owner or "").strip().casefold()
+            or source_session != str(session_id)):
+        return None
+
+    from src import run_checkpoints, tool_result_store
+    checkpoint = await asyncio.to_thread(
+        run_checkpoints.get_run_checkpoint,
+        source_run_id,
+        session_id,
+        owner,
+    )
+    if not checkpoint or checkpoint.get("run_id") != source_run_id:
+        return None
+    refs = checkpoint.get("tool_result_refs")
+    for ref in reversed(refs if isinstance(refs, list) else []):
+        if not isinstance(ref, dict) or ref.get("tool_name") != "web_fetch":
+            continue
+        result_id = ref.get("result_id")
+        if not isinstance(result_id, str):
+            continue
+        archived = await asyncio.to_thread(
+            tool_result_store.read_result, owner, session_id, result_id,
+        )
+        if not isinstance(archived, str) or not archived:
+            continue
+        source_url = ref.get("source_url")
+        if not isinstance(source_url, str) or not source_url.startswith(("http://", "https://")):
+            continue
+        if not coding_grounding.fetch_url_matches_task(json.dumps({"url": source_url})):
+            continue
+        coding_grounding.fetched_urls.add(source_url)
+        restored = archived[:12_000]
+        if len(archived) > len(restored):
+            restored += "\n[Archived source excerpt truncated for this request.]"
+        return untrusted_context_message(
+            "verified documentation from this task's successful web fetch",
+            restored,
+            provenance_origin="archived_tool_result",
+        )
+    return None
 
 
 _WORKSPACE_CODE_ACTION_RE = re.compile(
@@ -3829,6 +3905,39 @@ async def _archive_result_until_worker_finishes(archive_result, *args):
         raise
 
 
+def _web_fetch_source_url(command: Any) -> str | None:
+    """Extract the requested URL from a successful server-side fetch call."""
+    if not isinstance(command, str):
+        return None
+    raw = command.strip()
+    if raw.startswith("{"):
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        raw = str(parsed.get("url") or "").strip() if isinstance(parsed, dict) else ""
+    else:
+        raw = raw.splitlines()[0].strip() if raw else ""
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        parsed_url = urlparse(raw)
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.hostname
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+            or len(raw) > 2_048
+            or any(ord(char) < 32 for char in raw)
+        ):
+            return None
+    except ValueError:
+        return None
+    return raw
+
+
 async def stream_agent_loop(
     endpoint_url: str,
     model: str,
@@ -3862,10 +3971,12 @@ async def stream_agent_loop(
     approval_mode: str = "auto",
     public_read_sources: Optional[List[Dict]] = None,
     exact_approval: Optional[ExactToolApproval] = None,
+    task_continuation: Optional[TaskApprovalContinuation] = None,
     _is_teacher_run: bool = False,
     history_session=None,
     defer_context_shaping: bool = False,
     incognito: bool = False,
+    server_run_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Streaming agent loop generator.
 
@@ -3888,21 +3999,55 @@ async def stream_agent_loop(
         except (ValueError, RuntimeError, OSError):
             snapshot_workspace = None
     run_security = ToolRunSecurityContext(
+        run_id=server_run_id or uuid.uuid4().hex,
         external_untrusted_context_seen=(
             bool(external_untrusted_context_seen)
             or bool(
                 exact_approval
                 and exact_approval.pending.external_untrusted_context_seen
             )
+            or bool(
+                task_continuation
+                and task_continuation.external_untrusted_context_seen
+            )
             or messages_contain_external_untrusted_context(messages)
         ),
         approval_gate_bypassed=bool(
             exact_approval and exact_approval.allow_remaining_actions
+        ) or bool(
+            isinstance(task_continuation, TaskApprovalContinuation)
+            and task_continuation.scope is ToolApprovalScope.TASK
+            and task_continuation.allow_remaining_actions is True
+            and approval_mode == "auto"
+            and not delegated_credential
+            and not plan_mode
+            and not incognito
         ),
         delegated_credential=bool(delegated_credential),
         approval_mode=approval_mode,
         workspace_snapshots_enabled=bool(snapshot_workspace and snapshot_owner and session_id and not incognito),
     )
+    task_approval_authority = None
+    if (
+        isinstance(task_continuation, TaskApprovalContinuation)
+        and task_continuation.scope is ToolApprovalScope.TASK
+        and task_continuation.allow_remaining_actions is True
+        and approval_mode == "auto"
+        and not delegated_credential
+        and not plan_mode
+        and not incognito
+    ):
+        task_approval_authority = task_continuation
+    elif (
+        exact_approval is not None
+        and exact_approval.scope is ToolApprovalScope.TASK
+        and exact_approval.allow_remaining_actions is True
+        and approval_mode == "auto"
+        and not delegated_credential
+        and not plan_mode
+        and not incognito
+    ):
+        task_approval_authority = exact_approval
     run_security.observe_public_sources(public_read_sources or ())
     approval_judge_reviews = {}
     from src.approval_judge import candidate_action, trusted_request, review_action, MAX_REVIEWS_PER_RUN
@@ -3988,6 +4133,12 @@ async def stream_agent_loop(
     # Retrieval uses the active task anchor plus the latest human instruction.
     # Unfamiliar task wording must still reach model-driven tool discovery.
     _retrieval_query = str(_intent.get("retrieval_query") or _last_user)
+    if task_continuation and task_continuation.continuation_query:
+        _retrieval_query = (
+            str(task_continuation.continuation_query)
+            + "\n"
+            + _last_user
+        )[:8_000]
     from src.coding_grounding import CodingGrounding
     _coding_grounding = CodingGrounding(
         (_retrieval_query + "\n" + _last_user) if _use_coding_tools(_retrieval_query, workspace) else "",
@@ -4001,6 +4152,11 @@ async def stream_agent_loop(
     # not disable grounding for unrelated actions later in this resumed turn.
     if not get_setting("agent_coding_grounding", True):
         _coding_grounding.required = False
+    restored_source = await _restore_approved_coding_source(
+        _coding_grounding, exact_approval, owner, session_id, task_continuation,
+    )
+    if restored_source:
+        messages = _insert_before_latest_user(messages, restored_source)
     if _explicitly_references_missing_workspace(_retrieval_query, workspace):
         msg = (
             "No active workspace is set. Use `/workspace pick` or "
@@ -5477,6 +5633,10 @@ async def stream_agent_loop(
                 archive_result, owner, session_id, tool_name, raw_context,
             )
             event["context_result_id"] = context_id
+            if tool_name == "web_fetch":
+                source_url = _web_fetch_source_url(event.get("command"))
+                if source_url:
+                    event["context_source_url"] = source_url
             # A 700-character webpage prefix can be only navigation/advertising.
             # Keep one archive-sized opening chunk when the prompt has room;
             # the rest remains searchable rather than filling the context.
@@ -7156,6 +7316,7 @@ async def stream_agent_loop(
             # view.  The payload is also copied into the persisted tool event so
             # history reload can reconstruct an unanswered card.
             _pending_ask_user_event = None
+            _pending_task_approval_metadata = None
             if "ask_user" in result:
                 # The question lives in the tool args. ChatMessage.to_dict()
                 # replays only role+content to the model next turn — tool_event
@@ -7165,6 +7326,47 @@ async def stream_agent_loop(
                 # text (once) so it persists and is replayed. The card shows the
                 # options only, so this is the single visible copy of the question.
                 _auq = result["ask_user"]
+                if (
+                    block.tool_type == "ask_user"
+                    and task_approval_authority is not None
+                ):
+                    try:
+                        marker = task_approval_continuation_store.create(
+                            task_approval_authority,
+                            question_run_id=run_security.run_id,
+                            approval_mode=approval_mode,
+                            owner=owner,
+                            session_id=session_id,
+                            workspace=workspace,
+                            document_id=getattr(active_document, "id", None),
+                            document_version=getattr(
+                                active_document, "version_count", None,
+                            ),
+                            document_digest=(
+                                document_content_digest(
+                                    getattr(active_document, "current_content", "")
+                                )
+                                if active_document is not None else None
+                            ),
+                            ask_user=_auq,
+                        )
+                        if marker:
+                            _pending_task_approval_metadata = {
+                                TASK_APPROVAL_CONTINUATION_METADATA_FIELD: marker,
+                                TASK_APPROVAL_ORIGIN_RUN_ID_FIELD: (
+                                    task_approval_authority.origin_run_id
+                                    if isinstance(
+                                        task_approval_authority,
+                                        TaskApprovalContinuation,
+                                    )
+                                    else task_approval_authority.pending.origin_run_id
+                                ),
+                                TASK_APPROVAL_QUESTION_RUN_ID_FIELD: run_security.run_id,
+                            }
+                    except Exception:
+                        logger.exception(
+                            "Could not mint one-use task clarification continuation"
+                        )
                 _auq_q = (_auq.get("question") or "").strip()
                 if _auq_q and _auq_q not in full_response:
                     _auq_delta = ("\n\n" if full_response.strip() else "") + _auq_q
@@ -7453,6 +7655,8 @@ async def stream_agent_loop(
                 # reload, chatRenderer can restore the card; a later user
                 # message removes it as answered.
                 tool_event["ask_user"] = _pending_ask_user_event
+                if _pending_task_approval_metadata:
+                    tool_event.update(_pending_task_approval_metadata)
             tool_events.append(tool_event)
             if block.tool_type in _VERIFIER_EFFECTFUL_TOOLS:
                 _effectful_used = True

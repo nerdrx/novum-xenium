@@ -250,6 +250,35 @@ def get_result_stats(owner: str | None, session_id: str) -> dict[str, int]:
         return {"count": 0, "bytes": 0}
 
 
+def read_result(owner: str | None, session_id: str, result_id: str) -> str | None:
+    """Read one unexpired result only from its exact owner/session scope."""
+    try:
+        owner = _storage_owner(owner)
+        if not isinstance(session_id, str) or not session_id.strip():
+            return None
+        if not isinstance(result_id, str) or not result_id:
+            return None
+        key = _scope_key(owner, session_id)
+        with _scope_lock(key):
+            if key in _FENCED_SCOPES:
+                return None
+            path = _scope_file(owner, session_id)
+            if not path.is_file() or path.is_symlink():
+                return None
+            conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+            try:
+                row = conn.execute(
+                    "SELECT body FROM results WHERE id=? AND owner=? AND session_id=? "
+                    "AND tool_name='web_fetch' AND created_at>=?",
+                    (result_id, owner, session_id, time.time() - _TTL_SECONDS),
+                ).fetchone()
+                return row[0] if row else None
+            finally:
+                conn.close()
+    except (sqlite3.Error, OSError, ValueError, TypeError):
+        return None
+
+
 def _match_query(query: str) -> str:
     # FTS5 receives only quoted word tokens; punctuation and operators stay data.
     tokens = re.findall(r"[^\W_]+", query, flags=re.UNICODE)

@@ -58,6 +58,58 @@ async def test_run_manager_persists_completed_tool_outcome(tmp_path, monkeypatch
     assert agent_runs.get_checkpoint(session_id, "bob") is None
 
 
+@pytest.mark.asyncio
+async def test_detached_run_id_can_anchor_successful_archived_fetch_refs(tmp_path, monkeypatch):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "runs.db"))
+    monkeypatch.setattr(run_checkpoints, "_STORE", store)
+
+    async def stream():
+        yield 'data: ' + json.dumps({"type": "metrics", "data": {"tool_events": [
+            {"tool": "web_fetch", "exit_code": 0, "context_result_id": "a" * 32,
+             "context_source_url": "https://docs.example/guide"},
+            {"tool": "web_fetch", "exit_code": 1, "context_result_id": "b" * 32},
+            {"tool": "read_file", "exit_code": 0, "context_result_id": "c" * 32},
+            {"tool": "web_fetch", "exit_code": 0, "context_result_id": "bad-id"},
+        ]}}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    run = agent_runs.start(
+        "checkpoint-ref-session", stream(), owner="alice", run_id="origin-run-id",
+    )
+    await run.task
+    checkpoint = run_checkpoints.get_run_checkpoint(
+        "origin-run-id", "checkpoint-ref-session", "alice",
+    )
+    assert checkpoint["tool_result_refs"] == [{
+        "tool_name": "web_fetch", "result_id": "a" * 32,
+        "source_url": "https://docs.example/guide",
+    }]
+    assert run_checkpoints.get_run_checkpoint(
+        "origin-run-id", "other-session", "alice",
+    ) is None
+    assert run_checkpoints.get_run_checkpoint(
+        "origin-run-id", "checkpoint-ref-session", "bob",
+    ) is None
+
+
+def test_exact_run_checkpoint_identity_and_status_come_from_database(tmp_path):
+    store = run_checkpoints.CheckpointStore(str(tmp_path / "canonical-run.db"), recover_on_open=False)
+    store.begin("real-run", "real-session", "alice")
+    with store._connect() as db:
+        db.execute(
+            "UPDATE agent_run_checkpoints SET payload=? WHERE run_id=?",
+            (json.dumps({"run_id": "forged-run", "session_id": "other-session",
+                         "owner": "bob", "status": "done", "updated": -1}), "real-run"),
+        )
+
+    checkpoint = store.get_run("real-run", "real-session", "alice")
+    assert checkpoint["run_id"] == "real-run"
+    assert checkpoint["session_id"] == "real-session"
+    assert checkpoint["owner"] == "alice"
+    assert checkpoint["status"] == "running"
+    assert checkpoint["updated"] > 0
+
+
 def test_original_request_is_preserved_through_the_raw_chat_limit(tmp_path):
     request = "start " + ("x" * 49_980) + " TAIL"
     store = run_checkpoints.CheckpointStore(str(tmp_path / "long-request.db"), recover_on_open=False)

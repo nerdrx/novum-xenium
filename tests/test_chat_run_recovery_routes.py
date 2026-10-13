@@ -281,6 +281,7 @@ def test_chat_stream_continue_claims_once_and_preserves_saved_read_only_mode(tmp
     assert captured["loop_kwargs"]["workspace"] == workspace
     assert captured["loop_kwargs"]["external_untrusted_context_seen"] is True
     assert captured["start"]["persist"] is True
+    assert captured["loop_kwargs"]["server_run_id"] == captured["start"]["run_id"]
     assert all("tool_calls" not in message for message in captured["messages"])
     assert any("Do not replay the saved tool call" in str(message) for message in captured["messages"])
     assert store.get("session-a", "alice")["status"] == "continued"

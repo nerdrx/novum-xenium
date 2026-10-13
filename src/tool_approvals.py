@@ -9,8 +9,10 @@ are display copies, never authority.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -525,6 +527,408 @@ class ToolApprovalStore:
             for approval_id in retired_ids:
                 self._pending.pop(approval_id, None)
         return carried_taint
+
+
+_TASK_ASK_USER_MAX_QUESTION_CHARS = 8_000
+_TASK_ASK_USER_MAX_LABEL_CHARS = 512
+_TASK_ASK_USER_MAX_DESCRIPTION_CHARS = 2_000
+_TASK_ASK_USER_MAX_REPLY_CHARS = 8_000
+
+
+def _task_ask_user_payload(ask_user: Any) -> dict[str, Any] | None:
+    """Canonical, bounded representation of the server's ask_user card."""
+    if not isinstance(ask_user, dict):
+        return None
+    if ask_user.get("kind") == "tool_approval" or ask_user.get("approval_id"):
+        return None
+    if bool(ask_user.get("multi", False)):
+        return None
+    question = ask_user.get("question")
+    options = ask_user.get("options")
+    if (
+        not isinstance(question, str)
+        or not question.strip()
+        or len(question) > _TASK_ASK_USER_MAX_QUESTION_CHARS
+        or not isinstance(options, list)
+        or not 2 <= len(options) <= 6
+    ):
+        return None
+    canonical_options = []
+    labels = set()
+    for option in options:
+        if isinstance(option, str):
+            label, description = option.strip(), ""
+        elif isinstance(option, dict):
+            label = option.get("label")
+            description = option.get("description", "")
+            if not isinstance(label, str) or not isinstance(description, str):
+                return None
+            label, description = label.strip(), description.strip()
+        else:
+            return None
+        folded = label.casefold()
+        if (
+            not label
+            or len(label) > _TASK_ASK_USER_MAX_LABEL_CHARS
+            or len(description) > _TASK_ASK_USER_MAX_DESCRIPTION_CHARS
+            or folded in labels
+        ):
+            return None
+        labels.add(folded)
+        canonical_options.append({"label": label, "description": description})
+    return {
+        "question": question.strip(),
+        "options": canonical_options,
+        "multi": bool(ask_user.get("multi", False)),
+    }
+
+
+@dataclass(frozen=True)
+class TaskApprovalContinuation:
+    """A one-use task continuation; it contains no executable approved action."""
+
+    origin_run_id: str
+    question_run_id: str
+    source_approval_id: str
+    owner: str
+    session_id: str
+    workspace: str
+    document_id: str
+    document_version: int | None
+    document_digest: str
+    selected_label: str
+    reply: str
+    continuation_query: str
+    selected_tools: tuple[str, ...]
+    external_untrusted_context_seen: bool
+    web_search_enabled: bool
+    expires_at: float
+    allow_remaining_actions: bool = True
+    scope: ToolApprovalScope = ToolApprovalScope.TASK
+
+
+@dataclass(frozen=True)
+class _TaskApprovalContinuationRecord:
+    nonce: str
+    signature: str
+    ask_user_digest: str
+    source_approval_id: str
+    origin_run_id: str
+    question_run_id: str
+    continuation_query: str
+    selected_tools: tuple[str, ...]
+    external_untrusted_context_seen: bool
+    web_search_enabled: bool
+    owner: str
+    session_id: str
+    workspace: str
+    document_id: str
+    document_version: int | None
+    document_digest: str
+    expires_at: float
+
+
+class TaskApprovalContinuationStore:
+    """One-use Auto-task continuation bound to a server ask_user exchange.
+
+    The caller must supply only the immediately preceding server-owned ask_user
+    card and its next user reply. Records are intentionally process-local and
+    receive a fresh short TTL when the question is created.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: int = DEFAULT_APPROVAL_TTL_SECONDS,
+        max_pending: int = DEFAULT_MAX_PENDING_APPROVALS,
+    ):
+        self._ttl_seconds = max(1, int(ttl_seconds))
+        self._max_pending = max(1, int(max_pending))
+        self._pending: dict[str, _TaskApprovalContinuationRecord] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _signature(nonce: str, binding_digest: str) -> str | None:
+        from src.tool_approval_scopes import _grant_key
+
+        key = _grant_key()
+        if key is None:
+            return None
+        payload = f"task-approval-continuation\0{nonce}\0{binding_digest}"
+        return hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def create(
+        self,
+        approval: ExactToolApproval | TaskApprovalContinuation,
+        *,
+        question_run_id: Any,
+        approval_mode: Any,
+        owner: Any,
+        session_id: Any,
+        workspace: Any,
+        document_id: Any,
+        document_version: Any,
+        document_digest: Any,
+        ask_user: Any,
+        now: float | None = None,
+    ) -> str | None:
+        """Create an opaque server token only from a live Auto TASK approval."""
+        pending = getattr(approval, "pending", None)
+        if isinstance(approval, TaskApprovalContinuation):
+            source_approval_id = approval.source_approval_id
+            origin_run_id = approval.origin_run_id
+            source_owner = approval.owner
+            source_session = approval.session_id
+            continuation_query = approval.continuation_query
+            selected_tools = approval.selected_tools
+            external_untrusted_context_seen = approval.external_untrusted_context_seen
+            web_search_enabled = approval.web_search_enabled
+            source_authorized = (
+                approval.scope is ToolApprovalScope.TASK
+                and approval.allow_remaining_actions is True
+            )
+        else:
+            source_approval_id = (
+                pending.approval_id if isinstance(pending, PendingToolApproval) else ""
+            )
+            origin_run_id = (
+                pending.origin_run_id if isinstance(pending, PendingToolApproval) else ""
+            )
+            source_owner = pending.owner if isinstance(pending, PendingToolApproval) else ""
+            source_session = pending.session_id if isinstance(pending, PendingToolApproval) else ""
+            continuation_query = (
+                pending.continuation_query if isinstance(pending, PendingToolApproval) else ""
+            )
+            selected_tools = (
+                pending.selected_tools if isinstance(pending, PendingToolApproval) else ()
+            )
+            external_untrusted_context_seen = bool(
+                pending.external_untrusted_context_seen
+                if isinstance(pending, PendingToolApproval) else False
+            )
+            web_search_enabled = bool(
+                pending.web_search_enabled
+                if isinstance(pending, PendingToolApproval) else False
+            )
+            source_authorized = (
+                isinstance(pending, PendingToolApproval)
+                and getattr(approval, "scope", None) is ToolApprovalScope.TASK
+                and getattr(approval, "allow_remaining_actions", False) is True
+            )
+        card = _task_ask_user_payload(ask_user)
+        now = time.time() if now is None else float(now)
+        owner_key = _normalized_owner(owner)
+        session_key = str(session_id or "")
+        workspace_key = _normalized_workspace(workspace)
+        doc_id = str(document_id or "")
+        try:
+            doc_version = int(document_version) if document_version is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+        doc_digest = str(document_digest or "").strip().lower()
+        if (
+            not source_authorized
+            or str(approval_mode or "").strip().casefold() != "auto"
+            or not owner_key
+            or owner_key != source_owner
+            or session_key != source_session
+            or not origin_run_id
+            or not str(question_run_id or "").strip()
+            or card is None
+        ):
+            return None
+        expires_at = now + self._ttl_seconds
+        ask_digest = _canonical_digest(card)
+        nonce = secrets.token_urlsafe(32)
+        binding = {
+            "nonce": nonce,
+            "approval_id": source_approval_id,
+            "origin_run_id": origin_run_id,
+            "question_run_id": str(question_run_id),
+            "owner": owner_key,
+            "session_id": session_key,
+            "workspace": workspace_key,
+            "document_id": doc_id,
+            "document_version": doc_version,
+            "document_digest": doc_digest,
+            "ask_user_digest": ask_digest,
+            "expires_at": expires_at,
+        }
+        signature = self._signature(nonce, _canonical_digest(binding))
+        if signature is None:
+            return None
+        record = _TaskApprovalContinuationRecord(
+            nonce=nonce,
+            signature=signature,
+            ask_user_digest=ask_digest,
+            source_approval_id=source_approval_id,
+            origin_run_id=origin_run_id,
+            question_run_id=str(question_run_id),
+            continuation_query=continuation_query,
+            selected_tools=tuple(selected_tools),
+            external_untrusted_context_seen=external_untrusted_context_seen,
+            web_search_enabled=web_search_enabled,
+            owner=owner_key,
+            session_id=session_key,
+            workspace=workspace_key,
+            document_id=doc_id,
+            document_version=doc_version,
+            document_digest=doc_digest,
+            expires_at=expires_at,
+        )
+        with self._lock:
+            expired = [
+                key for key, value in self._pending.items()
+                if value.expires_at <= now
+            ]
+            for key in expired:
+                self._pending.pop(key, None)
+            while len(self._pending) >= self._max_pending:
+                oldest = min(
+                    self._pending,
+                    key=lambda key: self._pending[key].expires_at,
+                )
+                self._pending.pop(oldest, None)
+            self._pending[nonce] = record
+        return f"{nonce}.{signature}"
+
+    def consume(
+        self,
+        marker: Any,
+        *,
+        approval_mode: Any,
+        owner: Any,
+        session_id: Any,
+        origin_run_id: Any,
+        question_run_id: Any,
+        workspace: Any,
+        document_id: Any,
+        document_version: Any,
+        document_digest: Any,
+        ask_user: Any,
+        reply: Any,
+        now: float | None = None,
+    ) -> TaskApprovalContinuation | None:
+        """Consume once, refusing any changed task, scope, question, or choice."""
+        if not isinstance(marker, str) or marker.count(".") != 1:
+            return None
+        nonce, supplied_signature = marker.split(".", 1)
+        if (
+            not nonce
+            or len(supplied_signature) != hashlib.sha256().digest_size * 2
+            or any(
+                character not in "0123456789abcdef"
+                for character in supplied_signature
+            )
+        ):
+            return None
+        now = time.time() if now is None else float(now)
+        owner_key = _normalized_owner(owner)
+        session_key = str(session_id or "")
+        with self._lock:
+            record = self._pending.get(nonce)
+            if record is None:
+                return None
+            if record.owner != owner_key or record.session_id != session_key:
+                return None
+            # Same principal's next turn consumes the nonce even when it has
+            # changed context or reply: an intervening turn cannot revive it.
+            self._pending.pop(nonce, None)
+        if now >= record.expires_at:
+            return None
+        binding = {
+            "nonce": record.nonce,
+            "approval_id": record.source_approval_id,
+            "origin_run_id": record.origin_run_id,
+            "question_run_id": record.question_run_id,
+            "owner": record.owner,
+            "session_id": record.session_id,
+            "workspace": record.workspace,
+            "document_id": record.document_id,
+            "document_version": record.document_version,
+            "document_digest": record.document_digest,
+            "ask_user_digest": record.ask_user_digest,
+            "expires_at": record.expires_at,
+        }
+        expected_signature = self._signature(nonce, _canonical_digest(binding))
+        if (
+            expected_signature is None
+            or not hmac.compare_digest(supplied_signature, record.signature)
+            or not hmac.compare_digest(record.signature, expected_signature)
+        ):
+            return None
+        card = _task_ask_user_payload(ask_user)
+        if card is None or _canonical_digest(card) != record.ask_user_digest:
+            return None
+        try:
+            version = int(document_version) if document_version is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if (
+            str(approval_mode or "").strip().casefold() != "auto"
+            or str(origin_run_id or "") != record.origin_run_id
+            or str(question_run_id or "") != record.question_run_id
+            or _normalized_workspace(workspace) != record.workspace
+            or str(document_id or "") != record.document_id
+            or version != record.document_version
+            or str(document_digest or "").strip().lower() != record.document_digest
+            or not isinstance(reply, str)
+            or not reply.strip()
+            or len(reply) > _TASK_ASK_USER_MAX_REPLY_CHARS
+        ):
+            return None
+        normalized_reply = reply.strip()
+        matches = []
+        for option in card["options"]:
+            label = option["label"]
+            if not normalized_reply.startswith(label):
+                continue
+            suffix = normalized_reply[len(label):]
+            if (
+                not suffix
+                or suffix[0].isspace()
+                or suffix[0] in ",.;:!?—–-()[]{}'\"/"
+            ):
+                matches.append(label)
+        if not matches:
+            return None
+        # Resolve label-prefix collisions by longest exact offered label.
+        selected = max(matches, key=len)
+        if sum(len(label) == len(selected) for label in matches) != 1:
+            return None
+        suffix = normalized_reply[len(selected):].strip()
+        if re.search(
+            r"(?i)(?:^|[.!?;,]\s*)(?:new task\b|new request\b|"
+            r"different task\b|different request\b|unrelated task\b|"
+            r"forget (?:that|it|the original request)\b|"
+            r"never mind[, ]+(?:build|create|make|help|work on|look up)\b|"
+            r"i changed my mind[,; ]+(?:make|build|create|help|work on)\b|"
+            r"switch to (?:an? )?unrelated\b|"
+            r"instead[, ]+(?:help|do|work on|look up|search for|build|create)\b)",
+            suffix,
+        ):
+            return None
+        return TaskApprovalContinuation(
+            origin_run_id=record.origin_run_id,
+            question_run_id=record.question_run_id,
+            source_approval_id=record.source_approval_id,
+            owner=record.owner,
+            session_id=record.session_id,
+            workspace=record.workspace,
+            document_id=record.document_id,
+            document_version=record.document_version,
+            document_digest=record.document_digest,
+            selected_label=selected,
+            reply=normalized_reply,
+            continuation_query=record.continuation_query,
+            selected_tools=record.selected_tools,
+            external_untrusted_context_seen=record.external_untrusted_context_seen,
+            web_search_enabled=record.web_search_enabled,
+            expires_at=record.expires_at,
+        )
+
+
+task_approval_continuation_store = TaskApprovalContinuationStore()
 
 
 tool_approval_store = ToolApprovalStore()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -48,6 +49,29 @@ def checkpoint_event(event: str) -> dict:
         }
         result["tool_outcome"] = outcome
         result["clear_pending_tool"] = True
+    elif kind == "metrics":
+        data = item.get("data")
+        refs = []
+        if isinstance(data, dict) and isinstance(data.get("tool_events"), list):
+            for event in data["tool_events"]:
+                if not isinstance(event, dict) or event.get("tool") != "web_fetch":
+                    continue
+                result_id = event.get("context_result_id")
+                source_url = event.get("context_source_url")
+                if (type(event.get("exit_code")) is int and event["exit_code"] == 0
+                        and isinstance(result_id, str)
+                        and re.fullmatch(r"[0-9a-f]{32}", result_id)):
+                    ref = {"tool_name": "web_fetch", "result_id": result_id}
+                    if (
+                        isinstance(source_url, str)
+                        and source_url.startswith(("http://", "https://"))
+                        and len(source_url) <= 2_048
+                        and not any(ord(char) < 32 for char in source_url)
+                    ):
+                        ref["source_url"] = source_url
+                    refs.append(ref)
+        if refs:
+            result["tool_result_refs"] = refs[-64:]
     elif kind == "tool_start":
         result["pending_tool"] = {
             key: _clip(item[key], 512)
@@ -167,6 +191,14 @@ class CheckpointStore:
                     outcomes = payload["tool_outcomes"] = []
                 outcomes.append(change["tool_outcome"])
                 del outcomes[:-_MAX_OUTCOMES]
+            if "tool_result_refs" in change:
+                refs = payload.setdefault("tool_result_refs", [])
+                if not isinstance(refs, list):
+                    refs = payload["tool_result_refs"] = []
+                seen = {ref.get("result_id") for ref in refs if isinstance(ref, dict)}
+                refs.extend(ref for ref in change["tool_result_refs"]
+                            if ref["result_id"] not in seen)
+                del refs[:-64]
             if "pending_tool" in change:
                 payload["pending_tool"] = change["pending_tool"]
             if change.get("clear_pending_tool"):
@@ -235,6 +267,31 @@ class CheckpointStore:
             **payload, "can_continue": status == "interrupted", "replay_tools": False,
             "uncertain_tool_outcome": bool(payload.get("pending_tool")) and status in {"interrupted", "stopped", "error"},
         }
+
+    def get_run(self, run_id: str, session_id: str, owner: Optional[str]) -> Optional[dict]:
+        """Read one exact run checkpoint within its owner/session scope."""
+        if not all(isinstance(value, str) and value.strip()
+                   for value in (run_id, session_id)):
+            return None
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT run_id, session_id, owner, status, payload, updated FROM agent_run_checkpoints "
+                "WHERE run_id=? AND session_id=? AND owner=?",
+                (run_id, session_id, str(owner or "")),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload"])
+            if not isinstance(payload, dict) or payload.get("corrupt"):
+                return None
+        except (ValueError, TypeError):
+            return None
+        # Payload is recovery data, never authority for the checkpoint's
+        # identity or lifecycle state. Put canonical columns last so even a
+        # damaged/legacy payload cannot redirect a scoped lookup.
+        return {**payload, "run_id": row["run_id"], "session_id": row["session_id"],
+                "owner": row["owner"], "status": row["status"], "updated": row["updated"]}
 
     def claim_recovery(self, session_id: str, owner: Optional[str], run_id: str) -> Optional[dict]:
         """Consume one explicit recovery request; concurrent repeats fail closed."""
@@ -310,6 +367,14 @@ def get_checkpoint(session_id: str, owner: Optional[str] = None) -> Optional[dic
         return _STORE.get(session_id, owner)
     except Exception:
         logger.exception("Could not read agent run checkpoint")
+        return None
+
+
+def get_run_checkpoint(run_id: str, session_id: str, owner: Optional[str] = None) -> Optional[dict]:
+    try:
+        return _STORE.get_run(run_id, session_id, owner)
+    except Exception:
+        logger.exception("Could not read exact agent run checkpoint")
         return None
 
 

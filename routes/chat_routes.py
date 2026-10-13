@@ -6,6 +6,7 @@ import os
 import re
 import time
 import logging
+import uuid
 from datetime import datetime
 from typing import Dict, Any, AsyncGenerator, List, Optional
 
@@ -82,8 +83,18 @@ from src.tool_policy import (
     is_web_search_explicitly_denied,
     web_search_enabled_for_turn,
 )
-from src.tool_approvals import tool_approval_store
-from src.tool_approval_scopes import stamp_chat_session_grant
+from src.tool_approvals import (
+    document_content_digest,
+    task_approval_continuation_store,
+    tool_approval_store,
+)
+from src.tool_approval_scopes import (
+    TASK_APPROVAL_CONTINUATION_METADATA_FIELD,
+    TASK_APPROVAL_ORIGIN_RUN_ID_FIELD,
+    TASK_APPROVAL_PRIVATE_EVENT_FIELDS,
+    TASK_APPROVAL_QUESTION_RUN_ID_FIELD,
+    stamp_chat_session_grant,
+)
 from src.tool_security import delegated_credential_blocked_tools
 
 logger = logging.getLogger(__name__)
@@ -92,6 +103,58 @@ logger = logging.getLogger(__name__)
 def _is_pure_web_intent(message, workspace, explicit_web_intent):
     """Keep the web-only tool clamp off coding requests that mention web terms."""
     return bool(explicit_web_intent and not _use_coding_tools(message, workspace))
+
+
+def _latest_task_continuation_question(sess):
+    """Return only a task marker on the immediately preceding assistant turn."""
+    history = getattr(sess, "history", None) or []
+    if not history:
+        return None
+    previous = history[-1]
+    role = previous.get("role") if isinstance(previous, dict) else getattr(previous, "role", None)
+    metadata = previous.get("metadata") if isinstance(previous, dict) else getattr(previous, "metadata", None)
+    if role != "assistant" or not isinstance(metadata, dict):
+        return None
+    events = metadata.get("tool_events")
+    if not isinstance(events, list):
+        return None
+    for event in reversed(events):
+        if not isinstance(event, dict):
+            continue
+        ask_user = event.get("ask_user")
+        if not isinstance(ask_user, dict):
+            continue
+        marker = event.get(TASK_APPROVAL_CONTINUATION_METADATA_FIELD)
+        origin_run_id = event.get(TASK_APPROVAL_ORIGIN_RUN_ID_FIELD)
+        question_run_id = event.get(TASK_APPROVAL_QUESTION_RUN_ID_FIELD)
+        if (
+            ask_user.get("kind") == "tool_approval"
+            or ask_user.get("resolved")
+            or not isinstance(marker, str)
+            or not isinstance(origin_run_id, str)
+            or not isinstance(question_run_id, str)
+        ):
+            return None
+        return {
+            "ask_user": ask_user,
+            "marker": marker,
+            "origin_run_id": origin_run_id,
+            "question_run_id": question_run_id,
+        }
+    return None
+
+
+def _continuation_web_controls(continuation, allow_web_search, use_web):
+    """Restore the old task toggle only when the current turn omitted controls."""
+    if allow_web_search is None and use_web is None:
+        return (
+            "true" if continuation.web_search_enabled else "false",
+            use_web,
+            continuation.web_search_enabled,
+        )
+    return allow_web_search, use_web, web_search_enabled_for_turn(
+        allow_web_search, use_web
+    )
 
 
 # Track active streams for partial-save safety net
@@ -1175,6 +1238,8 @@ def setup_chat_routes(
         _approval_mode = resolve_tool_approval_mode(request)
         exact_tool_approval = None
         pending_tool_approval = None
+        task_question_context = None
+        task_question_continuation = None
         retired_tool_approval_taint = False
         external_untrusted_context_seen = False
         tool_approval_continuation = False
@@ -1486,6 +1551,8 @@ def setup_chat_routes(
                 external_untrusted_context_seen = (
                     external_untrusted_context_seen or retired_tool_approval_taint
                 )
+                if not recovery_run_id:
+                    task_question_context = _latest_task_continuation_question(sess)
             _reconcile_selected_route_from_request(request, sess, session, form_data, owner=owner)
             if _clear_orphaned_session_endpoint(sess, owner=owner):
                 raise HTTPException(400, "Selected model endpoint was removed. Pick another model in Settings.")
@@ -1729,6 +1796,64 @@ def setup_chat_routes(
             logger.warning(f"Failed to query active document: {e}")
         finally:
             _doc_db.close()
+
+        if task_question_context and not incognito:
+            task_question_continuation = task_approval_continuation_store.consume(
+                task_question_context["marker"],
+                approval_mode=(
+                    "ask" if plan_mode or compare_mode else _approval_mode
+                ),
+                owner=owner,
+                session_id=session,
+                origin_run_id=task_question_context["origin_run_id"],
+                question_run_id=task_question_context["question_run_id"],
+                workspace=workspace,
+                document_id=getattr(active_doc, "id", None),
+                document_version=getattr(active_doc, "version_count", None),
+                document_digest=(
+                    document_content_digest(
+                        getattr(active_doc, "current_content", "")
+                    )
+                    if active_doc is not None else None
+                ),
+                ask_user=task_question_context["ask_user"],
+                reply=message,
+            )
+            if task_question_continuation:
+                chat_mode = "agent"
+                _task_query = task_question_continuation.continuation_query[:4000].strip()
+                if _task_query:
+                    _task_context_message = {
+                        "role": "user",
+                        "content": (
+                            "Original task context, retained for this clarification: "
+                            + _task_query
+                        ),
+                    }
+                    _route_messages = getattr(ctx, "route_messages", ctx.messages)
+                    _message_lists = [ctx.messages]
+                    if _route_messages is not ctx.messages:
+                        _message_lists.append(_route_messages)
+                    for _messages in _message_lists:
+                        _insert_at = next(
+                            (
+                                index for index in range(len(_messages) - 1, -1, -1)
+                                if _messages[index].get("role") == "user"
+                            ),
+                            len(_messages),
+                        )
+                        _messages.insert(_insert_at, dict(_task_context_message))
+                external_untrusted_context_seen = (
+                    external_untrusted_context_seen
+                    or task_question_continuation.external_untrusted_context_seen
+                )
+                # Preserve current explicit disable/enable; use the saved task
+                # toggle only when the current reply omitted both controls.
+                allow_web_search, use_web, _search_enabled = (
+                    _continuation_web_controls(
+                        task_question_continuation, allow_web_search, use_web,
+                    )
+                )
 
         # Build disabled-tools set from frontend toggles + user privileges
         disabled_tools = set()
@@ -2694,6 +2819,9 @@ def setup_chat_routes(
                             if exact_tool_approval
                             and pending_tool_approval
                             and pending_tool_approval.selected_tools
+                            else set(task_question_continuation.selected_tools)
+                            if task_question_continuation
+                            and task_question_continuation.selected_tools
                             else None
                         ),
                         forced_tools=_forced_tools,
@@ -2705,6 +2833,8 @@ def setup_chat_routes(
                         public_read_sources=ctx.web_sources,
                         incognito=incognito,
                         exact_approval=exact_tool_approval,
+                        task_continuation=task_question_continuation,
+                        server_run_id=_detached_run_id,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
@@ -2837,7 +2967,22 @@ def setup_chat_routes(
                                         last_metrics["context_messages_after_trim"] = ctx.context_messages_after_trim
                                         last_metrics["context_tokens_before_trim"] = ctx.context_tokens_before_trim
                                         last_metrics["context_tokens_after_trim"] = ctx.context_tokens_after_trim
-                                    _metrics_event = {"type": "metrics", "data": last_metrics}
+                                    public_metrics = dict(last_metrics)
+                                    public_tool_events = public_metrics.get("tool_events")
+                                    if isinstance(public_tool_events, list):
+                                        public_metrics["tool_events"] = [
+                                            {
+                                                key: value
+                                                for key, value in event.items()
+                                                if key not in TASK_APPROVAL_PRIVATE_EVENT_FIELDS
+                                            }
+                                            if isinstance(event, dict) else event
+                                            for event in public_tool_events
+                                        ]
+                                    _metrics_event = {
+                                        "type": "metrics",
+                                        "data": public_metrics,
+                                    }
                                     # Inline teacher escalation marks its
                                     # recursively emitted events at the SSE
                                     # envelope. Preserve that non-secret marker
@@ -2937,6 +3082,8 @@ def setup_chat_routes(
                 finally:
                     _active_streams.pop(session, None)
 
+        _detached_run_id = uuid.uuid4().hex
+
         async def _safe_stream() -> AsyncGenerator[str, None]:
             """Wrapper that guarantees _active_streams cleanup even if stream_with_save
             raises before reaching a mode-specific finally block."""
@@ -3035,6 +3182,7 @@ def setup_chat_routes(
                 "plan_mode": bool(plan_mode),
             },
             persist=not incognito,
+            run_id=_detached_run_id,
         )
         if _subagent_chat:
             from src.subagents import update_status

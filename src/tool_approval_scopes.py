@@ -21,6 +21,17 @@ DENY_APPROVAL_DECISION = "deny"
 # session history contains a matching, resolved chat-session approval.
 CHAT_SESSION_APPROVAL_CONTEXT_MARKER = "_tool_approval_chat_session_granted"
 
+# Opaque, server-owned proof that the immediately preceding ask_user card is a
+# continuation of one Auto task approval. Never accept this from client input.
+TASK_APPROVAL_CONTINUATION_METADATA_FIELD = "_tool_approval_task_continuation"
+TASK_APPROVAL_ORIGIN_RUN_ID_FIELD = "_tool_approval_origin_run_id"
+TASK_APPROVAL_QUESTION_RUN_ID_FIELD = "_tool_approval_question_run_id"
+TASK_APPROVAL_PRIVATE_EVENT_FIELDS = (
+    TASK_APPROVAL_CONTINUATION_METADATA_FIELD,
+    TASK_APPROVAL_ORIGIN_RUN_ID_FIELD,
+    TASK_APPROVAL_QUESTION_RUN_ID_FIELD,
+)
+
 # The server's proof that IT resolved this approval. More than one route
 # writes caller-supplied metadata into session history, so a client can write
 # the shape of a resolved card directly; only the server can produce this.
@@ -68,6 +79,7 @@ def sign_chat_session_grant(
 _SERVER_OWNED_METADATA_KEYS = (
     "tool_events",
     CHAT_SESSION_APPROVAL_CONTEXT_MARKER,
+    *TASK_APPROVAL_PRIVATE_EVENT_FIELDS,
 )
 
 

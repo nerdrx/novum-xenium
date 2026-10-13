@@ -37,7 +37,8 @@ class _Run:
     )
 
     def __init__(self, owner: Optional[str] = None, persist_checkpoint: bool = True,
-                 predecessor_task: Optional[asyncio.Task] = None) -> None:
+                 predecessor_task: Optional[asyncio.Task] = None,
+                 run_id: Optional[str] = None) -> None:
         self.buffer: list = []          # ordered SSE event strings (replay log)
         self.subscribers: set = set()   # one asyncio.Queue per connected client
         self.status: str = "running"    # running | done | error | stopped
@@ -45,7 +46,7 @@ class _Run:
         self.evict_task: Optional[asyncio.Task] = None
         # Stable across every subscription/replay of this exact detached run.
         # The browser uses it to make local cost accounting replay-idempotent.
-        self.run_id: str = uuid.uuid4().hex
+        self.run_id: str = run_id or uuid.uuid4().hex
         self.owner = owner
         self.checkpoint_pending = ""
         self.checkpoint_last_flush = 0.0
@@ -213,7 +214,9 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
                     )[-32_000:]
                     if time.monotonic() - run.checkpoint_last_flush >= 0.5:
                         _flush_checkpoint_delta(run)
-                elif "pending_tool" in change or "tool_outcome" in change:
+                elif any(key in change for key in (
+                    "pending_tool", "tool_outcome", "tool_result_refs",
+                )):
                     _flush_checkpoint_delta(run)
                     run_checkpoints.record(run.run_id, ev)
             _publish(run, ev)
@@ -280,6 +283,7 @@ def start(
     owner: Optional[str] = None,
     context: Optional[dict] = None,
     persist: bool = True,
+    run_id: Optional[str] = None,
 ) -> _Run:
     """Start a detached run draining `agen` for a session. If a run is already in
     flight for this session (e.g. a rapid double-send), it's cancelled first."""
@@ -322,7 +326,8 @@ def start(
                     prev_task = prev.task
             if prev.evict_task and not prev.evict_task.done():
                 prev.evict_task.cancel()
-        run = _Run(owner, persist_checkpoint=persist, predecessor_task=prev_task)
+        run = _Run(owner, persist_checkpoint=persist, predecessor_task=prev_task,
+                   run_id=run_id)
         _RUNS[session_id] = run
         if persist:
             run_checkpoints.begin(run.run_id, session_id, owner, context)

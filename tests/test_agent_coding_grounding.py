@@ -1,6 +1,7 @@
 """Loop integration for research-first coding turns."""
 import json
 import copy
+import asyncio
 
 import src.agent_loop as al
 from test_agent_rounds_exhausted import _collect, _patch_common, _types
@@ -20,7 +21,7 @@ def _schemas(kwargs):
 
 
 def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_tools=None,
-         exact_approval=None, schema_details=None):
+         exact_approval=None, schema_details=None, server_run_id=None):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
@@ -57,6 +58,7 @@ def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_to
         workspace="/workspace", approval_mode="full", max_rounds=len(replies) + 1,
         disabled_tools=disabled_tools or set(),
         exact_approval=exact_approval,
+        server_run_id=server_run_id,
     )))
     return events, requests, histories, executed
 
@@ -460,3 +462,201 @@ def test_exhausted_search_without_skill_candidate_gets_no_skill_reminder(monkeyp
                not in str(history) for history in histories)
     assert 'write_file' in requests[6]
     assert executed == ['web_search'] * 6 + ['write_file']
+
+
+def test_exact_approval_resume_restores_only_its_archived_requested_docs(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from src import agent_runs, run_checkpoints, tool_result_store
+    from src.tool_approval_scopes import TASK_APPROVAL_DECISION
+    from src.tool_approvals import ToolApprovalStore
+    from src.tool_capabilities import capabilities_for_action
+
+    _no_suggested_skills(monkeypatch)
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(al, 'blocked_tools_for_owner', lambda _owner: set())
+    monkeypatch.setattr(tool_result_store, 'DATA_DIR', str(tmp_path / 'archive'))
+    checkpoint_store = run_checkpoints.CheckpointStore(str(tmp_path / 'runs.db'))
+    monkeypatch.setattr(run_checkpoints, '_STORE', checkpoint_store)
+    url = 'https://vendor.example/docs/gui'
+    task = f'Build a GUI app following {url}.'
+    origin_run_id = 'origin-run-9d25'
+    requests = []
+    histories = []
+    mode = {'resume': False}
+    executed = []
+
+    async def stream(_candidates, messages, **kwargs):
+        req = await kwargs['candidate_request_factory'](0, *_candidates[0])
+        tool_names = _schemas(req['kwargs'])
+        requests.append(tool_names)
+        histories.append(req['messages'])
+        if not mode['resume'] and len(requests) == 1:
+            yield _call('web_fetch', {'url': url}, 'fetch')
+        else:
+            yield 'data: ' + json.dumps({'delta': 'Continuing with the verified guide.'}) + '\n\n'
+        yield 'data: [DONE]\n\n'
+
+    async def execute(block, *args, **kwargs):
+        executed.append(block.tool_type)
+        if block.tool_type == 'web_fetch':
+            return 'fetch', {'output': f'Source: {url}\n\n' + 'Official GUI specification. ' * 800,
+                              'exit_code': 0}
+        return 'view skill', {'results': 'Use a compact, task-focused interface.', 'exit_code': 0}
+
+    monkeypatch.setattr(al, 'stream_llm_with_fallback', stream)
+    monkeypatch.setattr(al, 'execute_tool_block', execute)
+
+    async def original_run():
+        run = agent_runs.start(
+            'grounding-resume-chat',
+            al.stream_agent_loop(
+                'http://x/v1', 'gpt-4o', [{'role': 'user', 'content': task}],
+                owner='alice', session_id='grounding-resume-chat',
+                workspace='/workspace', relevant_tools={'web_fetch'},
+                server_run_id=origin_run_id, max_rounds=3, approval_mode='full',
+            ),
+            owner='alice', persist=True, run_id=origin_run_id,
+        )
+        await run.task
+        checkpoint = run_checkpoints.get_run_checkpoint(
+            origin_run_id, 'grounding-resume-chat', 'alice',
+        )
+        assert len(checkpoint['tool_result_refs']) == 1
+        assert checkpoint['tool_result_refs'][0]['tool_name'] == 'web_fetch'
+        assert run.evict_task is not None
+        run.evict_task.cancel()
+
+    asyncio.run(original_run())
+
+    args = {'action': 'view', 'name': 'ui-design'}
+    approval_store = ToolApprovalStore()
+    pending = approval_store.create(
+        owner='alice', session_id='grounding-resume-chat',
+        origin_run_id=origin_run_id, tool_name='manage_skills',
+        content=json.dumps(args), workspace='/workspace',
+        external_untrusted_context_seen=True,
+        capabilities=capabilities_for_action('manage_skills', json.dumps(args)),
+    )
+    exact_approval = approval_store.consume(
+        pending.approval_id, decision=TASK_APPROVAL_DECISION,
+        owner='alice', session_id='grounding-resume-chat',
+    )
+    mode['resume'] = True
+
+    async def resumed_run():
+        return [event async for event in al.stream_agent_loop(
+            'http://x/v1', 'gpt-4o', [
+                {'role': 'user', 'content': task},
+                {'role': 'assistant', 'content': 'I read the requested guide.'},
+                {'role': 'user', 'content': 'Continue.'},
+            ],
+            owner='alice', session_id='grounding-resume-chat',
+            workspace='/workspace', relevant_tools={'web_fetch', 'write_file', 'manage_skills'},
+            exact_approval=exact_approval, server_run_id='resumed-run-123',
+            max_rounds=2, approval_mode='full',
+        )]
+
+    events = _types(asyncio.run(resumed_run()))
+    assert 'write_file' in requests[-1]
+    restored = next(message for message in histories[-1]
+                    if message.get('metadata', {}).get('provenance_origin') == 'archived_tool_result')
+    assert restored['metadata']['trusted'] is False
+    assert url in restored['content']
+    assert 'Official GUI specification.' in restored['content']
+    assert 'web_fetch' not in executed[1:]
+    assert executed == ['web_fetch', 'manage_skills']
+    assert not any(event.get('type') == 'tool_output' and event.get('tool') == 'web_fetch'
+                   for event in events)
+
+
+def test_approval_source_restore_rejects_legacy_unbound_and_wrong_source(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from src import run_checkpoints, tool_result_store
+    from src.coding_grounding import CodingGrounding
+
+    monkeypatch.setattr(tool_result_store, 'DATA_DIR', str(tmp_path / 'archive'))
+    store = run_checkpoints.CheckpointStore(str(tmp_path / 'runs.db'))
+    monkeypatch.setattr(run_checkpoints, '_STORE', store)
+    session_id = 'source-refusal-session'
+    origin_run_id = 'source-refusal-origin'
+    requested = 'https://vendor.example/docs/current'
+    old_result = tool_result_store.archive_result(
+        'alice', session_id, 'web_fetch', f'Source: {requested}\nOld source bytes.',
+    )
+    store.begin(origin_run_id, session_id, 'alice', {})  # legacy checkpoint: no result refs
+    pending = SimpleNamespace(owner='alice', session_id=session_id,
+                              origin_run_id=origin_run_id)
+    approval = SimpleNamespace(pending=pending)
+
+    async def restore(task=requested, owner='alice', session=session_id):
+        grounding = CodingGrounding(f'Build a GUI app following {task}.')
+        message = await al._restore_approved_coding_source(
+            grounding, approval, owner, session,
+        )
+        return message, grounding
+
+    message, grounding = asyncio.run(restore())
+    assert message is None
+    assert not grounding.has_evidence
+
+    # The same run-owned result ID is insufficient when its Source header misses task URL.
+    task = 'https://vendor.example/docs/current'
+    mismatch_result = tool_result_store.archive_result(
+        'alice', session_id, 'web_fetch', 'Source: https://vendor.example/old\nOld source bytes.',
+    )
+    store.record(origin_run_id, 'data: ' + json.dumps({
+        'type': 'metrics', 'data': {'tool_events': [{
+            'tool': 'web_fetch', 'exit_code': 0, 'context_result_id': mismatch_result,
+            'context_source_url': 'https://vendor.example/old',
+        }]},
+    }) + '\n\n')
+    message, grounding = asyncio.run(restore(task=task))
+    assert message is None
+    assert not grounding.has_evidence
+
+    disabled = CodingGrounding(f'Build a GUI app following {task}.', disabled_tools={'web_fetch'})
+    message = asyncio.run(al._restore_approved_coding_source(disabled, approval, 'alice', session_id))
+    assert message is None
+    assert not disabled.has_evidence
+
+
+def test_task_clarification_restores_fetch_from_question_run_not_approval_origin(
+    monkeypatch, tmp_path,
+):
+    from types import SimpleNamespace
+    from src import run_checkpoints, tool_result_store
+    from src.coding_grounding import CodingGrounding
+
+    monkeypatch.setattr(tool_result_store, 'DATA_DIR', str(tmp_path / 'archive'))
+    store = run_checkpoints.CheckpointStore(str(tmp_path / 'runs.sqlite'))
+    monkeypatch.setattr(run_checkpoints, '_STORE', store)
+    session_id = 'task-source-session'
+    question_run_id = 'clarification-run'
+    source_url = 'https://vendor.example/docs/gui'
+    result_id = tool_result_store.archive_result(
+        'alice', session_id, 'web_fetch',
+        'Source: https://attacker.example/spoofed\nVerified GUI guide.',
+    )
+    store.begin(question_run_id, session_id, 'alice', {})
+    store.record(question_run_id, 'data: ' + json.dumps({
+        'type': 'metrics', 'data': {'tool_events': [{
+            'tool': 'web_fetch', 'exit_code': 0,
+            'context_result_id': result_id, 'context_source_url': source_url,
+        }]},
+    }) + '\n\n')
+    continuation = SimpleNamespace(
+        origin_run_id='original-approval-run',
+        question_run_id=question_run_id,
+        owner='alice', session_id=session_id,
+    )
+    grounding = CodingGrounding(
+        f'Build the GUI following {source_url}.',
+    )
+    restored = asyncio.run(al._restore_approved_coding_source(
+        grounding, None, 'alice', session_id,
+        task_continuation=continuation,
+    ))
+    assert restored is not None
+    assert source_url in grounding.fetched_urls
+    assert 'Verified GUI guide.' in restored['content']
+    assert 'attacker.example' in restored['content']

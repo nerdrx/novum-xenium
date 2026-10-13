@@ -18,6 +18,22 @@ def test_results_are_isolated_by_owner_and_session_and_persist(tmp_path, monkeyp
     assert stat.S_IMODE(db_file.stat().st_mode) == 0o600
 
 
+def test_exact_fetch_read_is_owner_session_ttl_and_fence_scoped(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
+    result_id = store.archive_result("alice", "chat", "web_fetch", "Source: https://x.test/docs\nbody")
+    assert store.read_result("alice", "chat", result_id).endswith("body")
+    assert store.read_result("bob", "chat", result_id) is None
+    assert store.read_result("alice", "other-chat", result_id) is None
+
+    store.fence_results("alice", "chat")
+    assert store.read_result("alice", "chat", result_id) is None
+    store.release_results_fence("alice", "chat")
+    assert store.read_result("alice", "chat", result_id).endswith("body")
+
+    monkeypatch.setattr(store, "_TTL_SECONDS", 0)
+    assert store.read_result("alice", "chat", result_id) is None
+
+
 def test_auth_disabled_ownerless_archive_and_search_share_local_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AUTH_ENABLED", "false")

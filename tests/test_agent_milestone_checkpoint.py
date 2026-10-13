@@ -2,6 +2,10 @@ import json
 import pytest
 import src.agent_loop as al
 from src.agent_tools import coding_tools
+from src.coding_grounding import CodingGrounding
+from src.tool_approvals import ToolApprovalStore
+from src.tool_capabilities import capabilities_for_action
+from src.tool_approval_scopes import TASK_APPROVAL_DECISION
 from test_agent_rounds_exhausted import _collect, _patch_common, _types
 
 
@@ -46,3 +50,62 @@ def test_first_write_waits_for_successful_checkpoint(monkeypatch, tmp_path, save
         assert executed == []
         assert len(requests) == 2
         assert any("did not save an actionable task checklist" in e.get("delta", "") for e in events)
+
+
+def test_fresh_exact_approved_todowrite_unlocks_primary_route(monkeypatch, tmp_path):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
+
+    class GroundedCodingTask(CodingGrounding):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.evidence.add("read_file")
+
+    monkeypatch.setattr("src.coding_grounding.CodingGrounding", GroundedCodingTask)
+    todos = [{"content": "Implement CLI; run focused checks", "status": "in_progress"},
+             {"content": "Review output; verify errors", "status": "pending"}]
+    content = json.dumps({"todos": todos})
+    approvals = ToolApprovalStore()
+    pending = approvals.create(
+        owner="alice", session_id="fresh-checkpoint", origin_run_id="origin-run",
+        tool_name="todowrite", content=content, workspace=str(tmp_path),
+        selected_tools={"todowrite", "write_file"},
+        external_untrusted_context_seen=False,
+        capabilities=capabilities_for_action("todowrite", content),
+    )
+    grant = approvals.consume(
+        pending.approval_id, decision=TASK_APPROVAL_DECISION,
+        owner="alice", session_id="fresh-checkpoint",
+    )
+    assert grant is not None
+
+    persisted_todos = []
+    monkeypatch.setattr(coding_tools, "read_todos", lambda _ctx: list(persisted_todos))
+
+    async def execute(block, **kwargs):
+        assert block.tool_type == "todowrite"
+        persisted_todos[:] = todos
+        return "todowrite", {"exit_code": 0, "output": "saved", "todos": todos}
+
+    observed_primary_tools = []
+
+    async def stream(candidates, messages, **kwargs):
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        observed_primary_tools.extend(
+            tool["function"]["name"] for tool in request["kwargs"]["tools"] or []
+        )
+        yield 'data: {"delta":"Continue implementation."}\n\n'
+        yield 'data: [DONE]\n\n'
+
+    monkeypatch.setattr(al, "execute_tool_block", execute)
+    monkeypatch.setattr(al, "stream_llm_with_fallback", stream)
+    _types(_collect(al.stream_agent_loop(
+        "http://x/v1", "gpt-4o",
+        [{"role": "user", "content": "Build a Python CLI tool and add tests"}],
+        workspace=str(tmp_path), owner="alice", session_id="fresh-checkpoint",
+        approval_mode="auto", relevant_tools={"todowrite", "write_file"},
+        exact_approval=grant, max_rounds=1,
+    )))
+
+    assert persisted_todos == todos
+    assert "write_file" in observed_primary_tools

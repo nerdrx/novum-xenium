@@ -6416,6 +6416,7 @@ async def stream_agent_loop(
         # any actual read evidence it returned, but keep the remaining-turn
         # mutation gate active for separate calls.
         _coding_grounding.observe(approved.tool_name, approved_result, approved.content)
+        _milestone_checkpoint.observe(approved.tool_name, approved_result)
 
         if tool_result_is_successful(approved_result):
             for doc_event in _document_stream_events(approved_block):
@@ -6656,7 +6657,7 @@ async def stream_agent_loop(
                 _route_state.get("compaction_state", {}) if round_num == 1 else {}
             ),
         }
-        if round_num == 1:
+        if round_num == 1 and not _approved_result_injected:
             _active_route_state["tools"] = _route_state.get("tools", [])
         all_tool_schemas = _tool_schemas_for_route(_active_route_state)
         if round_num == 1 and not _approved_result_injected:

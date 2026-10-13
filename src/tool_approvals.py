@@ -670,9 +670,11 @@ class TaskApprovalContinuationStore:
         document_version: Any,
         document_digest: Any,
         ask_user: Any,
+        continuation_query: Any = None,
         now: float | None = None,
     ) -> str | None:
         """Create an opaque server token only from a live Auto TASK approval."""
+        query_override = continuation_query
         pending = getattr(approval, "pending", None)
         if isinstance(approval, TaskApprovalContinuation):
             source_approval_id = approval.source_approval_id
@@ -715,6 +717,10 @@ class TaskApprovalContinuationStore:
                 and getattr(approval, "scope", None) is ToolApprovalScope.TASK
                 and getattr(approval, "allow_remaining_actions", False) is True
             )
+        # Callers may refresh the server-derived effective query after a new
+        # user clarification. Never derive this value from the ask_user card.
+        if query_override is not None:
+            continuation_query = _normalized_continuation_query(query_override)
         card = _task_ask_user_payload(ask_user)
         now = time.time() if now is None else float(now)
         owner_key = _normalized_owner(owner)

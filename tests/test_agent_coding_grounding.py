@@ -257,6 +257,12 @@ def test_research_can_load_owned_skill_but_cannot_edit_it(monkeypatch, tmp_path)
 
 def test_read_only_skill_approval_keeps_research_gate(monkeypatch, tmp_path):
     from services.memory.skills import SkillsManager
+    # This test covers approval continuation, not managed-workspace checks.
+    import src.project_workflows as workflows
+    monkeypatch.setattr(workflows, 'verification_plan', lambda *_args: None)
+    async def no_workspace_verification(*_args, **_kwargs):
+        return None
+    monkeypatch.setattr(workflows, 'run_workspace_verification', no_workspace_verification)
     monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
         'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
         'category': 'design', 'tags': ['gui'], 'procedure': [],
@@ -329,7 +335,14 @@ def test_documentation_evidence_still_waits_for_suggested_skill_view(monkeypatch
 
 def test_documentation_ready_schema_focuses_on_pending_skill(monkeypatch, tmp_path):
     _seed_ui_skill(monkeypatch)
+    # This test asserts schema phasing, not managed-workspace auto-verification.
+    import src.project_workflows as workflows
+    monkeypatch.setattr(workflows, 'verification_plan', lambda *_args: None)
+    async def no_workspace_verification(*_args, **_kwargs):
+        return None
+    monkeypatch.setattr(workflows, 'run_workspace_verification', no_workspace_verification)
     url = 'https://vendor.example/docs/gui'
+    schema_details = []
     events, requests, _, executed = _run(
         monkeypatch, tmp_path, f'Build a GUI app following {url}.',
         [_call('web_fetch', {'url': url}, 'fetch'),
@@ -339,13 +352,15 @@ def test_documentation_ready_schema_focuses_on_pending_skill(monkeypatch, tmp_pa
         {'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
          'manage_skills': [{'results': 'Use a compact GUI layout.'}],
          'write_file': [{'output': 'saved', 'exit_code': 0}]},
+        schema_details=schema_details,
     )
 
     focused = requests[1]
-    assert 'manage_skills' in focused
-    assert 'ask_user' in focused
-    assert not ({'web_search', 'web_fetch', 'write_file', 'bash'} & focused)
-    assert {'read_file', 'grep', 'glob', 'ls', 'get_workspace'} <= focused
+    assert focused == {'manage_skills'}
+    skill_schema = schema_details[1][0]['function']
+    assert skill_schema['name'] == 'manage_skills'
+    assert skill_schema['parameters']['properties']['action']['enum'] == ['view']
+    assert skill_schema['parameters']['properties']['name']['enum'] == ['ui-design']
     assert 'write_file' in requests[2]
     assert executed == ['web_fetch', 'manage_skills', 'write_file']
 

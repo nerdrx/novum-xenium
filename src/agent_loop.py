@@ -5499,6 +5499,11 @@ async def stream_agent_loop(
                         "GitHub raw/blob equivalent."
                     )
             filtered.append(schema)
+        if _coding_grounding.skill_preparation_required:
+            # Make the prerequisite the only native action in this bounded
+            # phase. The dispatcher still enforces owner, effect, and approval
+            # policy when the view call executes.
+            return _coding_grounding.constrain_skill_view_schemas(filtered)
         return filtered
 
     def _tool_schemas_for_route(route_state):
@@ -7702,6 +7707,7 @@ async def stream_agent_loop(
                                 if active_document is not None else None
                             ),
                             ask_user=_auq,
+                            continuation_query=_retrieval_query or _last_user,
                         )
                         if marker:
                             _pending_task_approval_metadata = {

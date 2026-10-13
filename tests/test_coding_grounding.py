@@ -371,11 +371,8 @@ def test_documentation_ready_pending_skill_exposes_only_skill_phase_tools():
     gate.set_skill_candidates(["gui-workflow"])
     assert gate.allows_tool("read_file")  # source inspection remains available during docs lookup
     assert gate.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
-    assert gate.phase_tools == {
-        "manage_skills", "ask_user", "search_tools",
-        "get_workspace", "ls", "glob", "grep", "read_file",
-    }
-    assert gate.allows_tool("read_file")
+    assert gate.phase_tools == {"manage_skills"}
+    assert not gate.allows_tool("read_file")
     assert not gate.observe("read_file", {"output": "Existing renderer source", "exit_code": 0}, "src/renderer.js")
     assert not gate.may_mutate
     for tool in ("write_file", "edit_file", "apply_patch", "bash"):
@@ -389,6 +386,44 @@ def test_documentation_ready_pending_skill_exposes_only_skill_phase_tools():
     disabled.set_skill_candidates(["gui-workflow"], available=False)
     assert "manage_skills" not in disabled.phase_tools
     assert disabled.may_mutate is False  # documentation gate still applies
+
+
+def test_preparation_schema_only_allows_an_exact_pending_skill_view_then_releases():
+    from src.tool_schemas import FUNCTION_TOOL_SCHEMAS
+
+    gate = CodingGrounding(task())
+    gate.set_skill_candidates(["ui-design", "visual-verification"])
+    assert gate.observe("read_file", {"output": "Framework setup", "exit_code": 0}, "README.md")
+
+    source_schemas = [
+        schema for schema in FUNCTION_TOOL_SCHEMAS
+        if schema.get("function", {}).get("name") in {"manage_skills", "write_file", "bash"}
+    ]
+    original = json.dumps(source_schemas, sort_keys=True)
+    focused = gate.constrain_skill_view_schemas(source_schemas)
+    assert [s["function"]["name"] for s in focused] == ["manage_skills"]
+    params = focused[0]["function"]["parameters"]
+    assert params["properties"]["action"]["enum"] == ["view"]
+    assert params["properties"]["name"]["enum"] == ["ui-design", "visual-verification"]
+    assert set(params["required"]) >= {"action", "name"}
+    assert json.dumps(source_schemas, sort_keys=True) == original
+
+    assert gate.allows_tool("manage_skills", '{"action":"view","name":"ui-design"}')
+    assert not gate.allows_tool("manage_skills", '{"action":"list","name":"ui-design"}')
+    assert not gate.allows_tool("manage_skills", '{"action":"view","name":"unrelated"}')
+    assert not gate.allows_tool("write_file", '{"path":"app.js"}')
+    assert gate.observe("manage_skills", {"results": "Design steps", "exit_code": 0},
+                        '{"action":"view","name":"ui-design"}')
+    next_schema = gate.constrain_skill_view_schemas(source_schemas)
+    assert [s["function"]["name"] for s in next_schema] == ["manage_skills"]
+    assert next_schema[0]["function"]["parameters"]["properties"]["name"]["enum"] == [
+        "visual-verification"
+    ]
+    assert gate.observe("manage_skills", {"results": "Verification steps", "exit_code": 0},
+                        '{"action":"view","name":"visual-verification"}')
+    assert gate.may_mutate
+    assert gate.constrain_skill_view_schemas(source_schemas) is source_schemas
+    assert gate.allows_tool("write_file", '{"path":"app.js"}')
 
 
 def test_skill_phase_directive_reports_documentation_truth_without_more_lookups():

@@ -110,10 +110,15 @@ def _task_continuation_fixture(
     approval_ttl_seconds=600,
     continuation_ttl_seconds=600,
     created_at=None,
+    continuation_query="inspect the project using memory and skills",
 ):
     monkeypatch.setattr("src.tool_approval_scopes._grant_key", lambda: b"test-key")
     approvals = ToolApprovalStore(ttl_seconds=approval_ttl_seconds)
-    pending = _pending(approvals, selected_tools=["bash", "web_fetch"])
+    pending = _pending(
+        approvals,
+        selected_tools=["bash", "web_fetch"],
+        continuation_query=continuation_query,
+    )
     grant = approvals.consume(
         pending.approval_id,
         decision="approve_task",
@@ -192,18 +197,27 @@ def test_auto_task_ask_user_choice_creates_one_use_continuation(monkeypatch):
 
 
 def test_task_clarification_can_continue_through_second_native_question(monkeypatch):
-    store, pending, first_card, first_marker = _task_continuation_fixture(monkeypatch)
+    design_url = "https://github.com/example/project/blob/main/docs/DESIGN.md"
+    store, pending, first_card, first_marker = _task_continuation_fixture(
+        monkeypatch,
+        continuation_query=f"Build an Electron GUI following {design_url}",
+    )
     first = _consume_task_continuation(store, first_marker, first_card)
     assert first is not None
     second_card = {
         "question": "Which packaging target?",
         "options": [{"label": "Windows and Linux"}, {"label": "Linux only"}],
     }
+    effective_query = (
+        first.continuation_query
+        + "\nLatest user instruction: Only repair the CommonJS startup and conversion path."
+    )
     second_marker = store.create(
         first,
         approval_mode="auto", owner="alice", session_id="session-1",
         question_run_id="run-3", workspace=None, document_id=None,
         document_version=None, document_digest=None, ask_user=second_card,
+        continuation_query=effective_query,
     )
     assert second_marker is not None
     second = _consume_task_continuation(
@@ -215,6 +229,18 @@ def test_task_clarification_can_continue_through_second_native_question(monkeypa
     assert second.origin_run_id == pending.origin_run_id
     assert second.question_run_id == "run-3"
     assert second.source_approval_id == pending.approval_id
+    assert second.continuation_query == effective_query
+    assert "Latest user instruction: Only repair the CommonJS startup" in second.continuation_query
+    from src.coding_grounding import CodingGrounding
+
+    next_turn_query = (
+        second.continuation_query
+        + "\nLatest user instruction: Convert main/index.js to CommonJS now."
+    )
+    grounding = CodingGrounding(next_turn_query)
+    assert grounding.latest_scope.startswith("Only repair the CommonJS")
+    assert grounding.skill_matching_query == grounding.latest_scope
+    assert design_url not in grounding.preferred_urls
 
 
 def test_task_continuation_refuses_wrong_choice_context_and_replays(monkeypatch):

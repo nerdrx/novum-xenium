@@ -1,0 +1,261 @@
+{
+  "recorded_at_utc": "2026-10-14T05:09:51.340279+00:00",
+  "model": "qwen3.5:9b",
+  "router_model": "nx-model-5",
+  "scope": "Bounded local coding evaluations, not a benchmark or comparison with another model. No model-generated solution was manually repaired. Guided repairs and expanded test coverage are explicitly labeled.",
+  "evidence_location": "Local preserved .nx-evaluations directories; names below use host local time (Europe/Berlin).",
+  "limitations": [
+    "A passed suite establishes only its tested behavior. Several source reviews found gaps in passing suites.",
+    "Same-model completion review missed demonstrated defects, including when given complete source and tests.",
+    "These small tasks do not demonstrate end-to-end GUI application success.",
+    "The live continuation classifier check proves retained task context, not model task completion."
+  ],
+  "platform_changes": [
+    {
+      "commit": "18bab5d",
+      "change": "Bounded verifier reasoning-overrun recovery for supported local models.",
+      "validation": "40 focused tests; live same-model retry; positive and negative review controls."
+    },
+    {
+      "commit": "eb6fee0",
+      "change": "Keep original task anchor for implementation confirmations followed by detail. No approval change.",
+      "validation": "Regression reproduced before fix; 83 routing tests passed; authenticated live affected-history replay; all eight GitHub workflows succeeded."
+    }
+  ],
+  "evaluations": [
+    {
+      "evidence_directory": "file-inventory-20261014-023540",
+      "assessment": "first_attempt_pass",
+      "notes": "6 independent checks passed.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "bca674b12a85f03324cc033f4158f09e504969e8d855ca0b88b98b66513b1611"
+    },
+    {
+      "evidence_directory": "json-lines-20261014-025044",
+      "assessment": "first_attempt_pass",
+      "notes": "8 independent checks passed.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "9c885b6648809cde64b97b7e8efbba692e8ca0d401cc51dae7cf79448c2de6e6"
+    },
+    {
+      "evidence_directory": "dependencies-20261014-035402",
+      "assessment": "first_attempt_pass",
+      "notes": "9 checks and exhaustive enumeration of all 512 directed three-node graphs passed.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "30f47b902676b89559a9255eeebe44bcc24b26c929eaa049a8022204f8640bb7"
+    },
+    {
+      "evidence_directory": "retry-20261014-052410",
+      "assessment": "first_attempt_pass",
+      "notes": "8 independent checks passed; this is a bounded contract test, not general reliability proof.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "d38758749727ea83a9378ef51e536f938972e8d4e544e47340475fed600e0cc2"
+    },
+    {
+      "evidence_directory": "ttl-cache-20261014-022047",
+      "assessment": "failed",
+      "notes": "Original cache eviction failed.",
+      "adapter_status": "failed",
+      "adapter_exit": 1,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "7bc2277d0989be4058dd79e0cd9dd4ba141791ab1f3713b3cb45b65ea9732f19"
+    },
+    {
+      "evidence_directory": "ttl-cache-repair-20261014-022220",
+      "assessment": "guided_repair_pass",
+      "notes": "8 checks passed after explicit repair guidance.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "311897a46665252eca54eb4f9e7b3fe72d266a125afdeb54a204d84220ee580e"
+    },
+    {
+      "evidence_directory": "async-map-20261014-030545",
+      "assessment": "failed",
+      "notes": "Worker failure did not promptly cancel remaining work.",
+      "adapter_status": "failed",
+      "adapter_exit": 1,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "89398f474226eaabbbffc4f58f5b613ffb055285fff75bc5381d87e2e699e8af"
+    },
+    {
+      "evidence_directory": "async-map-repair-20261014-030824",
+      "assessment": "guided_repair_failed",
+      "notes": "Same cancellation error remained.",
+      "adapter_status": "failed",
+      "adapter_exit": 1,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "9c0b03cea1c82603c1a66d75638891d1773de04beaf68d9542dd10bdec746097"
+    },
+    {
+      "evidence_directory": "nested-batch-20261014-033304",
+      "assessment": "false_positive_tests_and_review",
+      "notes": "6 tests passed but source inspection found unreleased savepoints.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "dbc10e6bdcafa91d303f3e3ebbe28a5ee412947e19596c8202d6aa8240d749b6"
+    },
+    {
+      "evidence_directory": "nested-batch-repair-20261014-033445",
+      "assessment": "guided_repair_pass",
+      "notes": "7 tests passed including new savepoint cleanup checks.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "3428627d10a610360bf5da0535897fe6b3f567b729e97d92fe20037dbfe280bf"
+    },
+    {
+      "evidence_directory": "atomic-file-20261014-033906",
+      "assessment": "fixture_error_then_external_pass",
+      "notes": "Original test patched only os.replace; implementation used valid Linux os.rename. Corrected external fixture passed 10 checks. Original platform run stayed failed.",
+      "adapter_status": "failed",
+      "adapter_exit": 1,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "99b2ad5de632ae917088d4b79f794e88a4b5beee3f7a9181e4fbd486ac213a7f"
+    },
+    {
+      "evidence_directory": "frames-20261014-040905",
+      "assessment": "failed",
+      "notes": "Parser repeated buffered output; owned runaway QA process was stopped. Independent run timed out. Subsequent QA wrappers were bounded to 512 MiB address space and 10 CPU seconds.",
+      "adapter_status": "failed",
+      "adapter_exit": null,
+      "external_exit": "timeout",
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "723a78fb2acb30f08e0bf966b7b9c603f687e11076055ba6a8621cd85139231a"
+    },
+    {
+      "evidence_directory": "frames-repair-20261014-042346",
+      "assessment": "guided_repair_failed",
+      "notes": "Joined frames and clean EOF still incorrect.",
+      "adapter_status": "failed",
+      "adapter_exit": 1,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "2bedfc439437be01dbbc160868f8e745a61d1e9bb614f649be6fa4fd4b18f984"
+    },
+    {
+      "evidence_directory": "pointer-20261014-043903",
+      "assessment": "failed",
+      "notes": "7 of 10 tests passed; valid zero index and escaped tilde rejected.",
+      "adapter_status": "failed",
+      "adapter_exit": 1,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "ef33e9f0c434861a6eb9756d99229840a0f9dc2bfaaa31d41a106c4b9ffc967b"
+    },
+    {
+      "evidence_directory": "pointer-repair-20261014-045349",
+      "assessment": "false_positive_tests_and_review",
+      "notes": "10 tests passed, but extra checks found mixed ASCII/Unicode indices accepted. Same-model reviewer also missed bug with full source and test evidence.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "1201d3c24617140ac832a6ee292cfc3cf1c00ad8c12c178e134c51470c91f71d"
+    },
+    {
+      "evidence_directory": "merge-20261014-053910",
+      "assessment": "false_positive_platform_run",
+      "notes": "Independent ordering check failed. Hash seeds 0 and 1 failed; 2 through 5 passed. Set iteration lost required ordering.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "f16292b107e06e40d7f764b0565ca5261b7d9529a6634c230ad3f2127a32d9f8"
+    },
+    {
+      "evidence_directory": "merge-repair-20261014-055346",
+      "assessment": "guided_repair_failed",
+      "notes": "9 tests passed but source inspection and extra check found alphabetical rather than insertion ordering. Platform run timed out at 240 seconds and exact owned run was stopped.",
+      "adapter_status": "timeout",
+      "adapter_exit": 124,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "2410bd05b685e44b16e430da414f5fa6287d7b27ee57040b63458f86aaac54bb"
+    },
+    {
+      "evidence_directory": "cli-20261014-060914",
+      "assessment": "incomplete",
+      "notes": "Repeated unnecessary clarification, then planning loop. No implementation. Continuation routing bug fixed separately; post-fix model still stalled.",
+      "adapter_status": "waiting_user",
+      "adapter_exit": 2,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "57ca18092dadccf2a33f5a86081a0121b28adecf9064e82156f57aedc16fb071"
+    }
+  ]
+}

@@ -14,6 +14,7 @@ import { matchModelKey } from './model/matchKey.js';
 import { getTools } from './appConfig.js';
 import { copyImageToClipboard } from './imageClipboard.js';
 import { appendSubagentCard } from './subagentCard.js';
+import { modelOutputFallback } from './modelOutputFallback.js';
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>';
 const REPORT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
@@ -21,6 +22,12 @@ const CHAT_ABOUT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="n
 const COPY_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const CHECK_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const PAPERCLIP_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.8l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+
+export function modelOutputFallbackHtml(output) {
+  return '<div class="model-output-fallback"><div class="model-output-fallback-note" role="note">The provider did not separate a final response; showing its available model output.</div>'
+    + markdownModule.mdToHtml(markdownModule.squashOutsideCode(String(output || '')))
+    + '</div>';
+}
 
 /** Sanitize a URL for use in href — only allow http(s) and protocol-relative. */
 function _safeHref(url) {
@@ -2673,6 +2680,10 @@ export function addMessage(role, content, modelName, metadata) {
 
       const toolRounds = Object.keys(toolsByRound).map(Number);
       const maxRound = Math.max(toolRounds.length ? Math.max(...toolRounds) : 0, roundTexts.length);
+      const fallbackOutput = modelOutputFallback(
+        markdownModule.squashOutsideCode(stripToolBlocks(textRaw || '')),
+        metadata,
+      );
 
       const firstRound = (toolsByRound[0] || []).length ? 0 : 1;
       for (let roundNum = firstRound; roundNum <= maxRound; roundNum++) {
@@ -2723,7 +2734,7 @@ export function addMessage(role, content, modelName, metadata) {
           body.className = 'body';
           // Check if this is the last text round — sources go on top of final response
           var agentSourcesPrefix = '';
-          var isLastTextRound = true;
+          var isLastTextRound = !fallbackOutput;
           for (let rr = r + 1; rr < maxRound; rr++) {
             if ((roundTexts[rr] || '').trim()) { isLastTextRound = false; break; }
           }
@@ -2817,6 +2828,33 @@ export function addMessage(role, content, modelName, metadata) {
             }
           }
         }
+      }
+
+      // Some providers put the complete final prose in their reasoning channel
+      // and send no assistant text in the final round. Preserve every original
+      // round/tool event, but expose that payload as an explicitly uncertain
+      // response instead of leaving it only in the reasoning accordion.
+      if (fallbackOutput) {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg msg-ai msg-continuation';
+        const roleEl = document.createElement('div');
+        roleEl.className = 'role';
+        roleEl.textContent = metadata?.character_name || modelName || 'Model';
+        applyModelColor(roleEl, modelName);
+        wrap.appendChild(roleEl);
+        const body = document.createElement('div');
+        body.className = 'body';
+        const fallbackSources = metadata?.research_sources?.length
+          ? buildSourcesBox(metadata.research_sources, 'research')
+          : metadata?.web_sources?.length ? buildSourcesBox(metadata.web_sources, 'web') : '';
+        const fallbackFindings = metadata?.research_findings?.length
+          ? buildFindingsBox(metadata.research_findings) : '';
+        body.innerHTML = fallbackSources + modelOutputFallbackHtml(fallbackOutput) + fallbackFindings;
+        wrap.appendChild(body);
+        wrap.dataset.raw = fallbackOutput;
+        if (metadata?._db_id) wrap.dataset.dbId = metadata._db_id;
+        box.appendChild(wrap);
+        lastWrap = lastMsgAi = wrap;
       }
 
       const firstWrap = lastMsgAi || lastWrap;

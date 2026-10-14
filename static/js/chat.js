@@ -8,7 +8,8 @@
 import Storage from './storage.js';
 import uiModule from './ui.js';
 import sessionModule from './sessions.js';
-import chatRenderer from './chatRenderer.js?v=20261007toolstatus1';
+import chatRenderer, { modelOutputFallbackHtml } from './chatRenderer.js?v=20261007toolstatus1';
+import { modelOutputFallback } from './modelOutputFallback.js';
 import chatStream from './chatStream.js?v=20261007approvalfix2';
 import { addAITTSButton } from './tts-ai.js';
 import markdownModule from './markdown.js';
@@ -4391,8 +4392,18 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
           // If thinking was collapsed in-place during streaming, preserve it
           var _liveReplyEl = _body4 && _body4.querySelector('.live-reply-content');
           var _extracted = _liveReplyEl ? markdownModule.extractThinkingBlocks(finalDisplay) : null;
+          const _liveOutputParts = markdownModule.extractThinkingBlocks(accumulated);
+          const _modelOutputFallback = modelOutputFallback(
+            _liveOutputParts.content,
+            metrics,
+            _liveOutputParts.thinkingBlocks?.[_liveOutputParts.thinkingBlocks.length - 1],
+          );
           var _finalReply = '';
-          if (_liveReplyEl) {
+          if (_modelOutputFallback) {
+            _body4.innerHTML = (_sourcesData ? _buildSourcesBox(_sourcesData, _sourcesType, _wasExpanded) : '')
+              + modelOutputFallbackHtml(_modelOutputFallback)
+              + (_findingsData ? chatRenderer.buildFindingsBox(_findingsData) : '');
+          } else if (_liveReplyEl) {
             // Try standard extraction first (for native <think> tags)
             if (_extracted?.thinkingBlocks?.length) {
               _finalReply = (_extracted.content || '').trim();
@@ -4518,6 +4529,15 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
         }
         // Also store raw on the footer target so copy/TTS work
         if (footerTarget !== holder) footerTarget.dataset.raw = accumulated;
+        if (footerTarget !== holder && metrics) {
+          const _liveOutputParts = markdownModule.extractThinkingBlocks(accumulated);
+          const _modelOutputFallback = modelOutputFallback(
+            _liveOutputParts.content,
+            metrics,
+            _liveOutputParts.thinkingBlocks?.[_liveOutputParts.thinkingBlocks.length - 1],
+          );
+          if (_modelOutputFallback) footerTarget.dataset.raw = _modelOutputFallback;
+        }
         try {
           if (isPlanMode && accumulated) {
             _attachPlanActions(footerTarget, updatedPlanForTurn || accumulated, streamSessionId);

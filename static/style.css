@@ -9402,6 +9402,16 @@ button.hamburger {
 /* Hide thinking sections globally via settings toggle */
 body.hide-thinking .thinking-section { display: none !important; }
 
+.model-output-fallback-note {
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  border-left: 3px solid var(--accent, #9c7ad8);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent, #9c7ad8) 9%, transparent);
+  color: var(--text-muted, #aaa);
+  font-size: 0.9em;
+}
+
 /* Widen chat area via settings toggle */
 body.fullwidth-chat .chat-history {
   padding-left: 0 !important;

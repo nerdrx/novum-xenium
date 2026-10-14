@@ -465,6 +465,11 @@ export function _parseServePhase(snapshot) {
   if (flat.includes('Application startup complete')) {
     return { phase: 'ready', status: 'ready' };
   }
+  // stable-diffusion.cpp emits its native listening marker instead of
+  // Uvicorn's startup line. This exact marker means its API is listening.
+  if (/\[I\]\s+listening on:\s+https?:\/\/\S+/.test(flat)) {
+    return { phase: 'ready', status: 'ready' };
+  }
   if (/Ollama API ready on port\s+\d+/i.test(flat)) {
     return { phase: 'ready', status: 'ready' };
   }
@@ -606,6 +611,11 @@ function _endpointFromAdvertisedUrl(rawUrl, currentHost, fallbackPort = '11434')
 }
 
 function _serveExpectedModel(task) {
+  // The local SD.cpp endpoint is registered under this stable ID. Its
+  // diffusion checkpoint path is a launch input, not the API model ID.
+  if (_isImageServeTask(task) && /(?:^|[\s/])sd-server(?:-(?:cpu|vulkan|zvram))?(?:\.exe)?(?=\s|$)/i.test(String(task?.payload?._cmd || ''))) {
+    return 'sd-cpp-local';
+  }
   const fields = task?.payload?._fields || {};
   return String(
     fields.served_model_name ||
@@ -654,7 +664,8 @@ function _appendPinnedServeModel(fd, task) {
 
 function _isImageServeTask(task) {
   const cmd = String(task?.payload?._cmd || '');
-  return cmd.includes('diffusion_server') || cmd.includes('mlx_image_server');
+  return cmd.includes('diffusion_server') || cmd.includes('mlx_image_server')
+    || /(?:^|[\s/])sd-server(?:-(?:cpu|vulkan|zvram))?(?:\.exe)?(?=\s|$)/i.test(cmd);
 }
 
 // ── Download queue — runs one at a time per server ──
@@ -747,6 +758,7 @@ function _serveOutputLooksReady(task) {
   const out = String(task?.output || '');
   return !!task?._serveReady
     || /Application startup complete/i.test(out)
+    || /\[I\]\s+listening on:\s+https?:\/\/\S+/i.test(out)
     || /Ollama API ready on port\s+\d+/i.test(out)
     || /(?:GET|POST)\s+\/[^\s]*\s+HTTP\/[\d.]+"\s*2\d\d/i.test(out);
 }
@@ -1295,7 +1307,7 @@ function _autoSaveWorkingConfig(task) {
   if (task._autoSaved) return;
   const cmd = task.payload._cmd;
   // Diffusion/image servers aren't vLLM presets — skip them.
-  if (cmd.includes('diffusion_server') || cmd.includes('mlx_image_server')) { task._autoSaved = true; return; }
+  if (_isImageServeTask(task)) { task._autoSaved = true; return; }
   const model = task.payload.repo_id || task.name;
   const presets = _loadPresets();
   const existing = presets.find(p => p.cmd === cmd);
@@ -1774,13 +1786,14 @@ function _parseServeCmdToFields(cmd) {
   if (!cmd) return null;
   const ex = (re) => { const m = cmd.match(re); return m ? m[1] : ''; };
     const fields = {
-      backend: cmd.includes('llama_cpp') || cmd.includes('llama-server') ? 'llamacpp'
+      backend: /(?:^|[\s/])sd-server(?:-(?:cpu|vulkan|zvram))?(?:\.exe)?(?=\s|$)/i.test(cmd) ? 'stable-diffusion.cpp'
+      : cmd.includes('llama_cpp') || cmd.includes('llama-server') ? 'llamacpp'
       : cmd.includes('mlx_image_server') ? 'mlx_image'
       : cmd.includes('mlx_lm.server') ? 'mlx'
       : cmd.includes('diffusion_server') ? 'diffusers'
       : cmd.includes('sglang') ? 'sglang'
       : cmd.includes('ollama') ? 'ollama' : 'vllm',
-    port: ex(/--port\s+(\d+)/) || '8000',
+    port: ex(/--port\s+(\d+)/) || ex(/--listen-port\s+(\d+)/) || '8000',
     tp: ex(/--tensor-parallel-size\s+(\d+)/) || '1',
     ctx: ex(/--max-model-len\s+(\d+)/) || ex(/--context-length\s+(\d+)/) || ex(/--max-tokens\s+(\d+)/) || ex(/--n_ctx\s+(\d+)/) || ex(/-c\s+(\d+)/) || '8192',
     gpu_mem: ex(/--gpu-memory-utilization\s+([\d.]+)/) || '0.90',
@@ -1818,7 +1831,7 @@ function _serveCmdNeedsGpuPreflight(cmd, repo) {
   const c = String(cmd || '').toLowerCase();
   const r = String(repo || '').toLowerCase();
   if (!c || /gpu-cleanup|sglang-kernel|mlx-lm|pip\s+install|python\d*\s+-m\s+pip/.test(`${r} ${c}`)) return false;
-  return /\b(vllm\s+serve|sglang(?:\.launch_server|\s+serve)|mlx_lm\.server|mlx_image_server\.py|diffusion_server\.py|llama-server|llama_cpp\.server|text-generation-launcher|aphrodite|ollama\s+(?:serve|run))\b/.test(c);
+  return /\b(vllm\s+serve|sglang(?:\.launch_server|\s+serve)|mlx_lm\.server|mlx_image_server\.py|diffusion_server\.py|sd-server(?:-(?:cpu|vulkan|zvram))?(?:\.exe)?|llama-server|llama_cpp\.server|text-generation-launcher|aphrodite|ollama\s+(?:serve|run))\b/.test(c);
 }
 
 function _selectedGpuIndexes(gpus) {
@@ -3632,13 +3645,14 @@ async function _reconnectTask(el, task) {
             .then(async (eps) => {
               // Match only exact base_url — don't dedup by friendly name,
               // because other endpoints may happen to share a model name.
-              const exists = eps.some(e => e.base_url === baseUrl);
+              const ownedEndpointId = task.payload?._endpointId || '';
+              const _ex = eps.find(e => e.base_url === baseUrl || (ownedEndpointId && e.id === ownedEndpointId));
+              const exists = !!_ex;
               if (exists) {
                 // Already registered — e.g. the backend pre-registers diffusion
                 // endpoints server-side. Mark so we don't retry, but STILL
                 // refresh the picker (and probe until online) so the new model
                 // shows up without the user having to manually refresh.
-                const _ex = eps.find(e => e.base_url === baseUrl);
                 if (_ex && !_endpointMatchesServe(_ex, task)) {
                   _markServeEndpointMismatch(task, _ex, host, port);
                   return null;

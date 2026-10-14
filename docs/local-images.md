@@ -19,10 +19,10 @@ layer is unavailable if its wrapper is selected.
 
 Model files are not in the container image. In **Cookbook → Download**, download
 a supported single-checkpoint Stable Diffusion 1.x/2.x/XL model into the
-persistent model cache. For FLUX.2, choose the targeted Klein 4B or Klein Base
-4B recipe; it downloads only the diffusion checkpoint, the recommended
-Qwen3-4B encoder, and the shared Klein VAE from the public Comfy-Org component
-repository. These are the component files expected by stable-diffusion.cpp,
+persistent model cache. For FLUX.2 Klein 4B or Klein Base 4B, open the cached
+model under **Launch** and use **Download missing FLUX.2 Klein components**.
+This targets only missing diffusion weights, the recommended Qwen3-4B encoder,
+and the shared Klein VAE from the public Comfy-Org component repository. These are the component files expected by stable-diffusion.cpp,
 not a duplicate full Hugging Face repository. Use CFG 1 and 4 steps for
 distilled Klein 4B, or CFG 4 and 20 steps for Klein Base 4B. Select
 **stable-diffusion.cpp** under **Launch**, choose CPU or Vulkan, then start the

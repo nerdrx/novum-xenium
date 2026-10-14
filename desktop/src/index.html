@@ -39,6 +39,14 @@
               <button class="button button-secondary" type="button" data-action="stop" disabled>Stop backend</button>
               <button class="button button-secondary" type="button" data-action="open" disabled>Open workspace</button>
             </div>
+            <label class="field renderer-field">
+              <span>Workbench renderer</span>
+              <select id="workbench-renderer" aria-describedby="renderer-description">
+                <option value="embedded">Embedded (current)</option>
+                <option value="chromium">Chromium app window</option>
+              </select>
+            </label>
+            <p id="renderer-description" class="renderer-description">Chromium opens the same local workspace in a separate app window with a persistent private browser profile.</p>
           </section>
 
           <section class="panel config-panel" aria-labelledby="config-heading">

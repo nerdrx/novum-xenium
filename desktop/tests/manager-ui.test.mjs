@@ -80,6 +80,7 @@ test('manager uses native IPC safely and browser preview remains inert', async (
       if (command === 'start_backend') { await new Promise((resolve) => { window.__finishStart = resolve; }); window.__backend = { state: 'running' }; return {}; }
       if (command === 'stop_backend') { window.__backend = { state: 'stopped' }; return {}; }
       if (command === 'open_workbench') return { url: 'http://127.0.0.1:7300' };
+      if (command === 'open_chromium_workbench') return { url: 'http://127.0.0.1:7300/' };
       if (command === 'read_logs') return { text: '<img src=x onerror=alert(1)>\nservice ready', truncated: true };
       if (command === 'check_update') return window.__updateCheck || { supported: false, message: 'Updates are not supported by this installation yet.' };
       if (command === 'update_backend') return { updated: true, from: 'old', to: 'new', backupPath: '/tmp/nx-backup', detail: 'Updated successfully.' };
@@ -88,6 +89,7 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   });
   await page.goto(url);
   await page.waitForFunction(() => window.__calls.some((call) => call.command === 'get_status'));
+  assert.equal(await page.locator('#workbench-renderer').inputValue(), 'embedded', 'keep existing renderer as the default');
   assert.equal(await page.locator('#backend-state-text').textContent(), 'Stopped');
   assert.equal(await page.locator('.dashboard-grid').getAttribute('aria-busy'), 'false');
   assert.equal(await page.locator('body').evaluate(el => getComputedStyle(el).backgroundImage), 'none');
@@ -178,6 +180,11 @@ test('manager uses native IPC safely and browser preview remains inert', async (
   assert.equal(await page.locator('[data-action="open"]').isEnabled(), true);
   await page.locator('[data-action="open"]').click();
   await page.waitForFunction(() => window.__calls.some((call) => call.command === 'open_workbench'));
+  await page.locator('#workbench-renderer').selectOption('chromium');
+  assert.equal(await page.evaluate(() => localStorage.getItem('nx-workbench-renderer')), 'chromium');
+  await page.locator('[data-action="open"]').click();
+  await page.waitForFunction(() => window.__calls.some((call) => call.command === 'open_chromium_workbench'));
+  assert.match(await page.locator('#global-notice').textContent(), /^Requested Chromium app window at http:\/\/127\.0\.0\.1:7300\//);
   await page.locator('[data-action="stop"]').focus();
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.__calls.some((call) => call.command === 'stop_backend'));

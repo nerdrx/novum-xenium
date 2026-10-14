@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
+mod chromium_workbench;
+#[cfg(target_os = "linux")]
 mod linux_file_paste;
 #[cfg(target_os = "linux")]
 mod linux_rendering;
@@ -1120,6 +1122,26 @@ fn update_workbench_chrome(window: &WebviewWindow) {
     }
 }
 
+fn set_window_decorations(window: &WebviewWindow, decorated: bool) -> tauri::Result<()> {
+    #[cfg(target_os = "linux")]
+    window.with_webview(move |webview| {
+        use gtk::prelude::*;
+        if let Some(window) = webview.inner().toplevel().and_then(|widget| widget.downcast::<gtk::Window>().ok()) {
+            if window.display().type_().name() == "GdkWaylandDisplay" {
+                // Tao installs this CSD hint only at creation. We switch frames
+                // after the web controls mount, so update the hint here too.
+                if decorated {
+                    window.set_titlebar(None::<&gtk::Widget>);
+                } else {
+                    window.set_titlebar(Some(&gtk::EventBox::new()));
+                }
+                window.set_decorated(decorated);
+            }
+        }
+    })?;
+    window.set_decorations(decorated)
+}
+
 fn handle_workbench_window_action(
     window: &WebviewWindow,
     state: &NativeState,
@@ -1127,18 +1149,18 @@ fn handle_workbench_window_action(
 ) -> tauri::Result<()> {
     match action {
         "ready" if !cfg!(target_os = "macos") => {
-            window.set_decorations(false)?;
+            set_window_decorations(window, false)?;
             // If injection cannot complete, immediately retain native controls.
             if let Err(error) =
                 window.eval("document.documentElement.dataset.nxWindowFrame='custom';")
             {
-                let _ = window.set_decorations(true);
+                let _ = set_window_decorations(&window, true);
                 return Err(error);
             }
             update_workbench_chrome(window);
         }
         "native-frame" | "ready" => {
-            window.set_decorations(true)?;
+            set_window_decorations(&window, true)?;
             let _ = window.eval("document.documentElement.dataset.nxWindowFrame='native';");
         }
         "drag" => window.start_dragging()?,
@@ -1322,7 +1344,7 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
                             if let Err(error) = handle_workbench_window_action(&window, &state, action) {
                                 eprintln!("Workspace window action {action} failed: {error}");
                                 if action == "ready" || action == "native-frame" {
-                                    let _ = window.set_decorations(true);
+                                    let _ = set_window_decorations(&window, true);
                                     let _ = window.eval(
                                         "document.documentElement.dataset.nxWindowFrame='native';",
                                     );
@@ -1354,7 +1376,7 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
         .on_page_load(|window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 // Failed loads still have usable OS controls, even before JS mounts.
-                let _ = window.set_decorations(true);
+                let _ = set_window_decorations(&window, true);
                 let _ = window.eval("document.documentElement.dataset.nxWindowFrame='native';");
             }
         })
@@ -1381,6 +1403,28 @@ fn open_workbench(
 ) -> Result<WorkbenchResult, String> {
     require_main(&window)?;
     open_saved_workbench(&app, &state)
+}
+
+#[tauri::command]
+fn open_chromium_workbench(window: WebviewWindow, app: AppHandle) -> Result<WorkbenchResult, String> {
+    require_main(&window)?;
+    #[cfg(not(target_os = "linux"))]
+    { let _ = app; Err("Chromium app windows are available on Linux only.".into()) }
+    #[cfg(target_os = "linux")]
+    {
+        let config = load_config_at(&config_path(&app)?)?
+            .ok_or("Save a checkout before opening the workbench.")?;
+        let url = app_url(&config);
+        let profile = app.path().app_config_dir().map_err(|e| e.to_string())?.join("chromium-workbench");
+        let mut command = chromium_workbench::command(&url, &profile)?;
+        if let Some(appdir) = std::env::var_os("APPDIR") {
+            host_browser_environment(&mut command, Path::new(&appdir), std::env::vars_os());
+        }
+        let mut child = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().map_err(|e| format!("Cannot launch Chromium app window: {e}"))?;
+        thread::spawn(move || { let _ = child.wait(); });
+        Ok(WorkbenchResult { url })
+    }
 }
 
 fn show_manager(app: &AppHandle) -> bool {
@@ -2383,6 +2427,7 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
             stop_backend,
             read_logs,
             open_workbench,
+            open_chromium_workbench,
             check_update,
             update_backend,
             zvram::zvram_status,

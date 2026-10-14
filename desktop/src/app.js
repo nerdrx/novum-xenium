@@ -11,11 +11,23 @@ const configMessage = $('#config-message');
 const checkoutInput = $('#checkout');
 const projectInput = $('#project');
 const portInput = $('#port');
+const rendererSelect = $('#workbench-renderer');
 const main = $('#main');
 const dashboard = $('.dashboard-grid');
 dashboard.setAttribute('aria-busy', 'false');
 let statusRequestSeq = 0;
 let updateCheckSeq = 0;
+try {
+  const renderer = localStorage.getItem('nx-workbench-renderer');
+  if (renderer === 'embedded' || renderer === 'chromium') rendererSelect.value = renderer;
+} catch { /* Keep the embedded renderer when browser storage is unavailable. */ }
+if (!navigator.platform.includes('Linux')) {
+  rendererSelect.querySelector('[value="chromium"]').remove();
+  rendererSelect.value = 'embedded';
+}
+rendererSelect.addEventListener('change', () => {
+  try { localStorage.setItem('nx-workbench-renderer', rendererSelect.value); } catch { /* Selection lasts for this window. */ }
+});
 
 function readConfigFields() {
   return { checkout: checkoutInput.value, project: projectInput.value, port: portInput.value };
@@ -74,6 +86,7 @@ function syncActions() {
   $('[data-action="start"]').disabled = !invoke || state.busy || !configured || ['running', 'unknown'].includes(state.backend.state);
   $('[data-action="stop"]').disabled = !invoke || state.busy || !['running', 'unhealthy'].includes(state.backend.state);
   $('[data-action="open"]').disabled = !invoke || state.busy || state.backend.state !== 'running';
+  rendererSelect.disabled = !invoke || state.busy;
   $('[data-action="refresh"]').disabled = !invoke || state.busy;
   $('[data-action="logs"]').disabled = !invoke || state.busy;
   $('[data-action="check-update"]').disabled = !invoke || state.busy;
@@ -212,9 +225,12 @@ document.querySelectorAll('.app-shell [data-action]').forEach((button) => {
       }, null, action === 'start' ? 'Starting backend…' : 'Stopping backend…');
     } else if (action === 'open') {
       performAction('open the workspace', async () => {
-        const result = await invoke('open_workbench');
+        const command = rendererSelect.value === 'chromium' ? 'open_chromium_workbench' : 'open_workbench';
+        const result = await invoke(command);
         if (!result || typeof result.url !== 'string' || !/^https?:\/\//i.test(result.url)) throw new Error('The manager did not return a valid workspace address.');
-        setNotice(globalNotice, `Workspace opened at ${result.url}`);
+        setNotice(globalNotice, rendererSelect.value === 'chromium'
+          ? `Requested Chromium app window at ${result.url}`
+          : `Workspace opened at ${result.url}`);
       }, null, 'Opening workspace…');
     } else if (action === 'logs') {
       performAction('load logs', async () => {
@@ -253,6 +269,7 @@ if (!invoke) {
   setNotice(globalError, 'Native manager controls are unavailable in browser preview. Open this app in the Novum Xenium desktop manager.');
   $('#backend-detail').textContent = 'Browser preview is read-only; it cannot inspect or control a local backend.';
   document.querySelectorAll('.app-shell [data-action], #config-form input').forEach((control) => { control.disabled = true; });
+  rendererSelect.disabled = true;
   syncActions();
 } else {
   syncActions();

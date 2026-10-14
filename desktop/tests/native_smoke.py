@@ -346,6 +346,10 @@ try:
         print('PASS: native workspace Ctrl+R, F5 and available tray reload', flush=True)
     print('PASS: native config/status/logs/workbench; remote management blocked',flush=True)
     if options.browser_probe:
+        for _ in range(100):
+            if execute("return document.documentElement.dataset.nxWindowFrame === 'custom'"): break
+            time.sleep(.1)
+        assert execute("return document.documentElement.dataset.nxWindowFrame === 'custom'"), 'custom window controls did not mount'
         probe_url = 'https://example.com/?a=1&b=2'
         execute('window.location.href=' + json.dumps(probe_url))
         for _ in range(100):

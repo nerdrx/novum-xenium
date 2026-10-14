@@ -8,11 +8,12 @@ Vulkan is never chosen implicitly. Both use the same upstream server API and
 accept model weights as runtime arguments. The upstream MIT license is at
 `/usr/share/licenses/stable-diffusion.cpp/LICENSE` in the image.
 
-Linux x86_64 images also bundle zVram `a464b0293918bf9715f0af1d3830622512377ff2`
-and expose `/usr/local/bin/sd-server-zvram`. It launches `sd-server-vulkan`
-through zVram's compatibility mode for allocation telemetry and AMD memory
-overallocation. This mode disables live control and automatic paging/recovery;
-it does not add physical VRAM or make an unsupported Vulkan queue compatible.
+Linux x86_64 images also bundle zVram `2e904b8bee5e31ca6440299480ec2f00d71f89a6`
+and expose `/usr/local/bin/sd-server-zvram`. When selected in Cookbook alongside
+Vulkan, it launches `sd-server-vulkan` through zVram's local recovery mode,
+which can page eligible Vulkan allocations into system memory when VRAM is full. Paging
+can be slow and does not add physical VRAM or make an unsupported Vulkan queue
+compatible.
 The zVram MIT license is at `/usr/share/licenses/zvram/LICENSE`. Other image
 architectures keep the normal Vulkan server and report that the bundled zVram
 layer is unavailable if its wrapper is selected.
@@ -54,16 +55,16 @@ installs need a separately built runtime; the helper below builds the CPU or
 Vulkan variant for the current host. Windows native installs must follow
 upstream's Windows build instructions.
 
-For FLUX.2 in stable-diffusion.cpp, use the zVram compatibility wrapper only
-with explicit CPU text encoder/VAE backends and `--auto-fit off`. The Vulkan
-layer can report a virtual heap to applications, so automatic VRAM fitting
-could otherwise overestimate usable memory.
+For Vulkan launches, zVram is an opt-in memory-management path for ordinary
+Stable Diffusion checkpoints and FLUX.2 Klein. It uses `--auto-fit off` because
+the Vulkan layer can report a virtual heap that overstates immediately
+available VRAM. FLUX.2 Klein also keeps its text encoder and VAE on CPU.
 
 Native Linux installs can put `scripts/sd-server-zvram` on `PATH` (for example,
 `install -m 0755 scripts/sd-server-zvram ~/.local/bin/`) when both `zvram` and
 `sd-server-vulkan` are already installed and on `PATH`. The wrapper forces
-`--no-live-control` and `--auto-fit off`; it does not enable active paging or
-recovery.
+`--vulkan-recover-local` and `--auto-fit off`; paging can be slow when it spills
+into system memory.
 
 Native Linux/macOS build prerequisites are CMake, a C/C++ compiler, Git and
 recursive submodule network access. Vulkan additionally needs the Vulkan SDK
@@ -85,10 +86,11 @@ Upstream references: [build guide](https://github.com/leejet/stable-diffusion.cp
 
 ## Verified integration
 
-A downloaded SD 1.5 Q4 checkpoint generated real 512×512 PNGs with both CPU
-and RX 7900 XTX Vulkan execution. FLUX.2 Klein Base 4B also generated a real
-512×512 image on an RX 7900 XTX using the compatibility wrapper, with Vulkan
-diffusion and CPU text encoder/VAE backends. The installed backend was also checked through
+A downloaded SD 1.5 Q4 checkpoint generated a real 512×512 PNG with 20 steps
+using RX 7900 XTX Vulkan execution and zVram local paging. FLUX.2 Klein Base 4B
+was tested earlier with the compatibility wrapper and CPU text encoder/VAE,
+before local paging was enabled; FLUX paging has not been tested. The installed
+backend was also checked through
 Cookbook launch, readiness, image generation, authenticated Gallery retrieval,
 stop (including port release), and a same-port restart. An existing cloud image
 default remained unchanged. The UI defaults this engine to 512×512 when a tool

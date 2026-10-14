@@ -65,7 +65,7 @@ def test_sd_cpp_is_local_only_and_uses_safe_checkpoint_defaults():
     assert 'data-field="sd_gguf_file"' in serve
     assert "Choose a cached GGUF checkpoint or enter a local .safetensors/.ckpt path first." in serve
     assert "--backend ${sdBackend}`" in cookbook
-    assert "const binary = useVulkan ? (useZVramCompatibility ? 'sd-server-zvram' : 'sd-server-vulkan') : 'sd-server';" in cookbook
+    assert "const binary = useVulkan ? (useZVram ? 'sd-server-zvram' : 'sd-server-vulkan') : 'sd-server';" in cookbook
     assert "does not load arbitrary Diffusers pipelines, FLUX, or video models" in serve
 
 
@@ -84,10 +84,11 @@ def test_flux2_klein_components_and_launch_defaults():
     assert "--cfg-scale ${cfg}" in cookbook
     assert "--steps ${steps}" in cookbook
     assert "sd-server-zvram" in cookbook
-    assert "Use zVram compatibility mode (Vulkan)" in serve
-    assert "Paging is disabled for this engine." in serve
-    assert "diffusion=vulkan0,te=cpu,vae=cpu" in cookbook
-    assert "if (useZVramCompatibility) cmd += ' --auto-fit off';" in cookbook
+    assert "Use zVram memory management (Vulkan)" in serve
+    assert "Paging can be slow" in serve
+    assert "const sdBackend = useZVram ? (f.flux2 ? 'diffusion=vulkan0,te=cpu,vae=cpu' : 'diffusion=vulkan0')" in cookbook
+    assert "if (useZVram) cmd += ' --auto-fit off';" in cookbook
+    assert "zvram --vulkan-recover-local -- sd-server-vulkan" in (ROOT / "scripts/sd-server-zvram").read_text(encoding="utf-8")
     assert "flux2MissingAtRender.length" in serve
     assert "downloadFlux2KleinBundle(panel, variant, undefined, missingKinds)" in serve
 

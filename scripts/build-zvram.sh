@@ -4,7 +4,7 @@ set -eu
 
 target_arch=${1:-$(uname -m)}
 out=${2:-./build/zvram}
-commit=a464b0293918bf9715f0af1d3830622512377ff2
+commit=2e904b8bee5e31ca6440299480ec2f00d71f89a6
 src=$(mktemp -d)
 trap 'rm -rf "$src"' EXIT HUP INT TERM
 
@@ -33,4 +33,4 @@ sed "s|$build/libzvram_layer.so|/opt/zvram/build/libzvram_layer.so|" \
 for file in zvram zvram_control.py zvram_manager.py zvram_model.py VERSION; do
     cp "$src/$file" "$out/$file"
 done
-printf '0.4.22\n' > "$out/VERSION"
+printf '0.4.22+2e904b8\n' > "$out/VERSION"

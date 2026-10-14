@@ -989,12 +989,12 @@ export function _buildServeCmd(f, modelName, backend) {
     const listenIp = f.host ? '0.0.0.0' : '127.0.0.1';
     const modelFile = String(f._sd_model_path || '').trim();
     const useVulkan = !!f.sd_vulkan;
-    const useZVramCompatibility = useVulkan && f.flux2 && f.sd_zvram;
-    const binary = useVulkan ? (useZVramCompatibility ? 'sd-server-zvram' : 'sd-server-vulkan') : 'sd-server';
+    const useZVram = useVulkan && f.sd_zvram;
+    const binary = useVulkan ? (useZVram ? 'sd-server-zvram' : 'sd-server-vulkan') : 'sd-server';
     const modelArg = f.flux2 ? '--diffusion-model' : '-m';
-    const sdBackend = useZVramCompatibility ? 'diffusion=vulkan0,te=cpu,vae=cpu' : (useVulkan ? 'diffusion=vulkan0' : 'cpu');
+    const sdBackend = useZVram ? (f.flux2 ? 'diffusion=vulkan0,te=cpu,vae=cpu' : 'diffusion=vulkan0') : (useVulkan ? 'diffusion=vulkan0' : 'cpu');
     cmd += `${binary}${modelFile ? ` ${modelArg} ${modelFile}` : ''} --listen-ip ${listenIp} --listen-port ${f.port || '1234'} --backend ${sdBackend}`;
-    if (useZVramCompatibility) cmd += ' --auto-fit off';
+    if (useZVram) cmd += ' --auto-fit off';
     if (f.flux2) {
       const llm = String(f._flux2_llm_path || '').trim();
       const vae = String(f._flux2_vae_path || '').trim();

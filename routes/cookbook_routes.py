@@ -61,6 +61,7 @@ def _is_stable_diffusion_cpp_command(command: str | None) -> bool:
     return os.path.basename(executable).lower() in {
         "sd-server", "sd-server.exe", "sd-server-cpu", "sd-server-cpu.exe",
         "sd-server-vulkan", "sd-server-vulkan.exe",
+        "sd-server-zvram", "sd-server-zvram.exe",
     }
 
 
@@ -329,7 +330,13 @@ def _missing_binary_message(
             "Install Docker and make sure this user can run `docker`, then retry."
         )
     binary_name = os.path.basename(binary).lower()
-    if binary_name in {"sd-server", "sd-server.exe", "sd-server-cpu", "sd-server-cpu.exe", "sd-server-vulkan", "sd-server-vulkan.exe"}:
+    if binary_name in {"sd-server", "sd-server.exe", "sd-server-cpu", "sd-server-cpu.exe", "sd-server-vulkan", "sd-server-vulkan.exe", "sd-server-zvram", "sd-server-zvram.exe"}:
+        if "zvram" in binary_name:
+            return (
+                f"The zVram stable-diffusion.cpp launcher is missing on {target}. "
+                "Install the `sd-server-zvram` wrapper on PATH and ensure `zvram` and "
+                "`sd-server-vulkan` are available."
+            )
         mode = "vulkan" if "vulkan" in binary_name else "cpu"
         produced = f"<output-dir>/{'vulkan' if mode == 'vulkan' else 'cpu'}/sd-server"
         wrapper = "sd-server-vulkan" if mode == "vulkan" else "sd-server"
@@ -1608,6 +1615,8 @@ def setup_cookbook_routes() -> APIRouter:
                     entry["is_ollama"] = True
                 if isinstance(m.get("gguf_files"), list):
                     entry["gguf_files"] = m["gguf_files"]
+                if isinstance(m.get("safetensors_files"), list):
+                    entry["safetensors_files"] = m["safetensors_files"]
                 models.append(entry)
         except Exception as e:
             logger.warning(f"Failed to parse cached models host={host or 'local'}: {e}")
@@ -3572,10 +3581,9 @@ def setup_cookbook_routes() -> APIRouter:
         Merge guard: the UI debounces a `_syncToServer` POST every few
         seconds with whatever localStorage has. The agent's tool layer
         writes server-side tasks (e.g. `download_model` registering a
-        task). Without a merge, every UI sync wipes the agent's recent
-        additions. We preserve any on-disk task that the incoming body
-        omits but was added in the last RACE_WINDOW seconds — that's a
-        race, not an intentional delete.
+        task). Preserve recent omitted tasks during hydration races and
+        preserve running serve tasks until an explicit removedTasks tombstone
+        arrives, even when the browser's cached state is old.
         """
         require_admin(request)
         RACE_WINDOW_MS = 60_000
@@ -3661,10 +3669,15 @@ def setup_cookbook_routes() -> APIRouter:
                 if sid in removed_ids:
                     continue  # intentional cross-device clear/remove
                 ts = t.get("ts") or 0
-                if isinstance(ts, (int, float)) and (now_ms - ts) <= RACE_WINDOW_MS:
+                active_server = (
+                    t.get("type") == "serve"
+                    and str(t.get("status") or "").lower() in {"running", "starting", "ready"}
+                )
+                recent = isinstance(ts, (int, float)) and (now_ms - ts) <= RACE_WINDOW_MS
+                if active_server or recent:
                     preserved.append(t)
             if preserved:
-                logger.info(f"cookbook state POST: preserving {len(preserved)} recent task(s) "
+                logger.info(f"cookbook state POST: preserving {len(preserved)} active/recent task(s) "
                             f"not in incoming body (race guard): "
                             f"{[t.get('sessionId') for t in preserved]}")
                 data["tasks"] = incoming_tasks + preserved
@@ -4604,7 +4617,7 @@ def setup_cookbook_routes() -> APIRouter:
                 except Exception:
                     pass
             else:
-                # Skip the live SSH check entirely for tasks already in a
+                # Skip the live SSH check for remote tasks already in a
                 # terminal state — they won't change, and 10s timeouts
                 # stacked per task were the dominant cost of this whole
                 # status endpoint (3+ minute stalls with ~8 accumulated
@@ -4616,7 +4629,7 @@ def setup_cookbook_routes() -> APIRouter:
                     and bool(full_snapshot)
                     and _parse_serve_phase(full_snapshot, task_type).get("status") == "ready"
                 )
-                if _task_status in {"stopped", "done", "completed",
+                if (remote or task_type != "serve") and _task_status in {"stopped", "done", "completed",
                                     "crashed", "error", "failed",
                                     "ended", "killed"} and not _persisted_serve_ready:
                     is_alive = False

@@ -989,8 +989,22 @@ export function _buildServeCmd(f, modelName, backend) {
     const listenIp = f.host ? '0.0.0.0' : '127.0.0.1';
     const modelFile = String(f._sd_model_path || '').trim();
     const useVulkan = !!f.sd_vulkan;
-    const binary = useVulkan ? 'sd-server-vulkan' : 'sd-server';
-    cmd += `${binary}${modelFile ? ` -m ${modelFile}` : ''} --listen-ip ${listenIp} --listen-port ${f.port || '1234'} --backend ${useVulkan ? 'diffusion=vulkan0' : 'cpu'}`;
+    const useZVramCompatibility = useVulkan && f.flux2 && f.sd_zvram;
+    const binary = useVulkan ? (useZVramCompatibility ? 'sd-server-zvram' : 'sd-server-vulkan') : 'sd-server';
+    const modelArg = f.flux2 ? '--diffusion-model' : '-m';
+    const sdBackend = useZVramCompatibility ? 'diffusion=vulkan0,te=cpu,vae=cpu' : (useVulkan ? 'diffusion=vulkan0' : 'cpu');
+    cmd += `${binary}${modelFile ? ` ${modelArg} ${modelFile}` : ''} --listen-ip ${listenIp} --listen-port ${f.port || '1234'} --backend ${sdBackend}`;
+    if (useZVramCompatibility) cmd += ' --auto-fit off';
+    if (f.flux2) {
+      const llm = String(f._flux2_llm_path || '').trim();
+      const vae = String(f._flux2_vae_path || '').trim();
+      if (llm) cmd += ` --llm ${llm}`;
+      if (vae) cmd += ` --vae ${vae}`;
+      const cfg = String(f.flux2_cfg || '').trim();
+      const steps = String(f.flux2_steps || '').trim();
+      if (/^\d+(?:\.\d+)?$/.test(cfg)) cmd += ` --cfg-scale ${cfg}`;
+      if (/^\d+$/.test(steps)) cmd += ` --steps ${steps}`;
+    }
   } else if (backend === 'mlx') {
     const mlxPy = _isWindows() ? 'python' : _py3Bin;
     const mlxHost = f.host ? '0.0.0.0' : '127.0.0.1';

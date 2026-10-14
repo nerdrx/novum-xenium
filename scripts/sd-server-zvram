@@ -1,0 +1,3 @@
+#!/bin/sh
+# Compatibility mode: zVram's Vulkan layer, without virtual paging/recovery.
+exec zvram --no-live-control -- sd-server-vulkan "$@" --auto-fit off

@@ -989,6 +989,36 @@ def test_cached_model_scan_runs_additional_hf_cache(tmp_path):
     assert rec["is_diffusion"] is False
 
 
+def test_cached_model_scan_reports_safetensors_component_paths(tmp_path):
+    hf_cache = tmp_path / "hf" / "hub"
+    repo = hf_cache / "models--Comfy-Org--flux2-klein-4B"
+    snapshot = repo / "snapshots" / "rev-1"
+    encoder = snapshot / "split_files" / "text_encoders" / "qwen_3_4b.safetensors"
+    encoder.parent.mkdir(parents=True)
+    encoder.write_bytes(b"encoder")
+    vae = snapshot / "vae" / "ae.safetensors"
+    vae.parent.mkdir()
+    vae.write_bytes(b"vae")
+    (repo / "blobs").mkdir()
+
+    scan_py = tmp_path / "scan_cache_components.py"
+    scan_py.write_text(
+        _cached_model_scan_script(add_hf_cache=str(hf_cache)), encoding="utf-8"
+    )
+    proc = subprocess.run(
+        [sys.executable, str(scan_py)], check=True, capture_output=True, text=True
+    )
+    model = next(m for m in json.loads(proc.stdout) if m["repo_id"] == "Comfy-Org/flux2-klein-4B")
+
+    assert model["path"] == str(hf_cache)
+    assert [f["rel_path"] for f in model["safetensors_files"]] == [
+        "rev-1/split_files/text_encoders/qwen_3_4b.safetensors",
+        "rev-1/vae/ae.safetensors",
+    ]
+    assert [f["size_bytes"] for f in model["safetensors_files"]] == [len(b"encoder"), len(b"vae")]
+    assert model["gguf_files"] == []
+
+
 def test_validate_serve_cmd_accepts_find_subshell_for_mmproj():
     """$(find …) for mmproj path should be accepted, same as $(printf %s …)."""
     cmd = (

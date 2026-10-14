@@ -8,12 +8,29 @@ Vulkan is never chosen implicitly. Both use the same upstream server API and
 accept model weights as runtime arguments. The upstream MIT license is at
 `/usr/share/licenses/stable-diffusion.cpp/LICENSE` in the image.
 
+Linux x86_64 images also bundle zVram `a464b0293918bf9715f0af1d3830622512377ff2`
+and expose `/usr/local/bin/sd-server-zvram`. It launches `sd-server-vulkan`
+through zVram's compatibility mode for allocation telemetry and AMD memory
+overallocation. This mode disables live control and automatic paging/recovery;
+it does not add physical VRAM or make an unsupported Vulkan queue compatible.
+The zVram MIT license is at `/usr/share/licenses/zvram/LICENSE`. Other image
+architectures keep the normal Vulkan server and report that the bundled zVram
+layer is unavailable if its wrapper is selected.
+
 Model files are not in the container image. In **Cookbook → Download**, download
 a supported single-checkpoint Stable Diffusion 1.x/2.x/XL model into the
-persistent model cache. Select **stable-diffusion.cpp** under **Launch**, choose
-CPU or Vulkan, then start the model. When its status is **Ready**, choose the
-image model under **Settings → AI → Image Generation**; it can then be selected
-for image requests in chat. The first download can be several gigabytes.
+persistent model cache. For FLUX.2, choose the targeted Klein 4B or Klein Base
+4B recipe; it downloads only the diffusion checkpoint, the recommended
+Qwen3-4B encoder, and the shared Klein VAE from the public Comfy-Org component
+repository. These are the component files expected by stable-diffusion.cpp,
+not a duplicate full Hugging Face repository. Use CFG 1 and 4 steps for
+distilled Klein 4B, or CFG 4 and 20 steps for Klein Base 4B. Select
+**stable-diffusion.cpp** under **Launch**, choose CPU or Vulkan, then start the
+model. When its status is **Ready**, choose the image model under
+**Settings → AI → Image Generation**; it can then be selected for image requests
+in chat. This recipe supports only the two 4B variants. The first download can
+be several gigabytes. See the pinned upstream
+[FLUX.2 support notes](https://github.com/leejet/stable-diffusion.cpp/blob/1d0a58a35050d285b1d6fb1bc68a92924d35825e/docs/flux2.md).
 
 The engine's OpenAI-compatible endpoint is `POST /v1/images/generations`.
 The server also offers its native async API at `/sdcpp/v1/` and WebUI
@@ -37,6 +54,17 @@ installs need a separately built runtime; the helper below builds the CPU or
 Vulkan variant for the current host. Windows native installs must follow
 upstream's Windows build instructions.
 
+For FLUX.2 in stable-diffusion.cpp, use the zVram compatibility wrapper only
+with explicit CPU text encoder/VAE backends and `--auto-fit off`. The Vulkan
+layer can report a virtual heap to applications, so automatic VRAM fitting
+could otherwise overestimate usable memory.
+
+Native Linux installs can put `scripts/sd-server-zvram` on `PATH` (for example,
+`install -m 0755 scripts/sd-server-zvram ~/.local/bin/`) when both `zvram` and
+`sd-server-vulkan` are already installed and on `PATH`. The wrapper forces
+`--no-live-control` and `--auto-fit off`; it does not enable active paging or
+recovery.
+
 Native Linux/macOS build prerequisites are CMake, a C/C++ compiler, Git and
 recursive submodule network access. Vulkan additionally needs the Vulkan SDK
 or the distribution packages `libvulkan-dev`, `glslc`, and `spirv-headers`.
@@ -58,7 +86,9 @@ Upstream references: [build guide](https://github.com/leejet/stable-diffusion.cp
 ## Verified integration
 
 A downloaded SD 1.5 Q4 checkpoint generated real 512×512 PNGs with both CPU
-and RX 7900 XTX Vulkan execution. The installed backend was also checked through
+and RX 7900 XTX Vulkan execution. FLUX.2 Klein Base 4B also generated a real
+512×512 image on an RX 7900 XTX using the compatibility wrapper, with Vulkan
+diffusion and CPU text encoder/VAE backends. The installed backend was also checked through
 Cookbook launch, readiness, image generation, authenticated Gallery retrieval,
 stop (including port release), and a same-port restart. An existing cloud image
 default remained unchanged. The UI defaults this engine to 512×512 when a tool

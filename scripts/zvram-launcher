@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if [ ! -x /opt/zvram/zvram ] || [ ! -f /opt/zvram/build/libzvram_layer.so ]; then
+    if [ -f /opt/zvram/UNSUPPORTED_ARCH ]; then
+        cat /opt/zvram/UNSUPPORTED_ARCH >&2
+    else
+        echo 'The bundled zVram Vulkan layer is unavailable; use sd-server-vulkan.' >&2
+    fi
+    exit 126
+fi
+
+exec python3 /opt/zvram/zvram "$@"

@@ -14,6 +14,7 @@ from src.tools import cookbook as cookbook_tools
     [
         "sd-server -m /models/checkpoint.safetensors --listen-port 8100 --backend cpu",
         "sd-server-vulkan -m /models/checkpoint.safetensors --listen-port=8101 --backend diffusion=vulkan0",
+        "sd-server-zvram -m /models/checkpoint.safetensors --listen-port=8102",
         "CUDA_VISIBLE_DEVICES=0 sd-server --listen-ip 127.0.0.1 --listen-port 1234",
     ],
 )
@@ -38,12 +39,20 @@ def test_stable_diffusion_cpp_server_uses_fixed_model_id_and_native_default_port
     assert cookbook_routes._SD_CPP_IMAGE_MODEL_ID == "sd-cpp-local"
     assert cookbook_tools._infer_serve_port("sd-server -m model.safetensors") == 1234
     assert cookbook_tools._infer_serve_port("sd-server --listen-port 8100") == 8100
+    assert cookbook_tools._is_stable_diffusion_cpp_cmd("sd-server-zvram --listen-port 8102")
 
 
 def test_missing_native_stable_diffusion_binary_has_actionable_helper_guidance():
     message = cookbook_routes._missing_binary_message("sd-server-vulkan", "local server")
     assert "scripts/build-stable-diffusion.sh vulkan <output-dir>" in message
     assert "<output-dir>/vulkan/sd-server" in message
+    assert "sd-server-vulkan" in message
+
+
+def test_missing_zvram_stable_diffusion_launcher_has_actionable_guidance():
+    message = cookbook_routes._missing_binary_message("sd-server-zvram", "local server")
+    assert "sd-server-zvram" in message
+    assert "zvram" in message
     assert "sd-server-vulkan" in message
 
 

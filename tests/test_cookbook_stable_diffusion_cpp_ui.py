@@ -25,8 +25,11 @@ const assert = (ok, message) => { if (!ok) throw new Error(message); };
 assert(_isStableDiffusionCppCandidate({repo_id:'kostakoff/stable-diffusion-v1-5-GGUF',_tag:'image'}), 'SD GGUF should be offered');
 assert(_isStableDiffusionCppCandidate({repo_id:'kostakoff/stable-diffusion-v1-5-GGUF'}), 'SD GGUF should not depend on scan flags');
 assert(_isStableDiffusionCppCandidate({repo_id:'org/stable-diffusion-xl',is_diffusion:true}), 'SDXL should be offered');
+assert(_isStableDiffusionCppCandidate({repo_id:'black-forest-labs/FLUX.2-klein-4B',is_diffusion:true}), 'FLUX.2 Klein 4B should be offered');
+assert(_isStableDiffusionCppCandidate({repo_id:'black-forest-labs/FLUX.2-klein-base-4B',is_diffusion:true}), 'FLUX.2 Klein base 4B should be offered');
 assert(!_isStableDiffusionCppCandidate({repo_id:'meta-llama/llama-2-7b-GGUF',_tag:'llm'}), 'arbitrary GGUF LLM must stay excluded');
 assert(!_isStableDiffusionCppCandidate({repo_id:'black-forest-labs/FLUX.1-dev',is_diffusion:true}), 'FLUX pipeline must stay excluded');
+assert(!_isStableDiffusionCppCandidate({repo_id:'black-forest-labs/FLUX.2-klein-9B',is_diffusion:true}), 'Klein 9B should stay excluded');
 assert(!_isStableDiffusionCppCandidate({repo_id:'org/stable-diffusion-video',is_diffusion:true,is_video:true}), 'video models must stay excluded');
 """
     result = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=20)
@@ -61,6 +64,53 @@ def test_sd_cpp_is_local_only_and_uses_safe_checkpoint_defaults():
     assert "_selectedGgufExpr(m, repo, selectedGguf.rel_path)" in serve
     assert 'data-field="sd_gguf_file"' in serve
     assert "Choose a cached GGUF checkpoint or enter a local .safetensors/.ckpt path first." in serve
-    assert "--backend ${useVulkan ? 'diffusion=vulkan0' : 'cpu'}" in cookbook
-    assert "const binary = useVulkan ? 'sd-server-vulkan' : 'sd-server';" in cookbook
+    assert "--backend ${sdBackend}`" in cookbook
+    assert "const binary = useVulkan ? (useZVramCompatibility ? 'sd-server-zvram' : 'sd-server-vulkan') : 'sd-server';" in cookbook
     assert "does not load arbitrary Diffusers pipelines, FLUX, or video models" in serve
+
+
+def test_flux2_klein_components_and_launch_defaults():
+    serve = SERVE.read_text(encoding="utf-8")
+    cookbook = COOKBOOK.read_text(encoding="utf-8")
+    assert "safetensors_files" in serve
+    assert "data-field=\"flux2_diffusion_file\"" in serve
+    assert "data-field=\"flux2_llm_file\"" in serve
+    assert "data-field=\"flux2_vae_file\"" in serve
+    assert "f._flux2_llm_path && f._flux2_vae_path" in serve
+    assert "Choose cached FLUX.2 diffusion, Qwen3 4B, and VAE files" in serve
+    assert "--diffusion-model" in cookbook
+    assert "--llm ${llm}" in cookbook
+    assert "--vae ${vae}" in cookbook
+    assert "--cfg-scale ${cfg}" in cookbook
+    assert "--steps ${steps}" in cookbook
+    assert "sd-server-zvram" in cookbook
+    assert "Use zVram compatibility mode (Vulkan)" in serve
+    assert "Paging is disabled for this engine." in serve
+    assert "diffusion=vulkan0,te=cpu,vae=cpu" in cookbook
+    assert "if (useZVramCompatibility) cmd += ' --auto-fit off';" in cookbook
+    assert "flux2MissingAtRender.length" in serve
+    assert "downloadFlux2KleinBundle(panel, variant, undefined, missingKinds)" in serve
+
+
+def test_flux2_cache_accepts_alias_and_exact_qwen_encoder():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is unavailable")
+    source = SERVE.read_text(encoding="utf-8")
+    match = re.search(r"function _cachedFlux2Files\(kind, selectedRepo = ''\) \{.*?\n\}", source, re.S)
+    assert match, "expected the cached FLUX.2 component filter"
+    script = "const _cachedAllModels = " + r"""[
+{repo_id:'Comfy-Org/flux2-klein-4B',status:'ready',safetensors_files:[
+  {name:'qwen_3_4b.safetensors',rel_path:'snap/split_files/text_encoders/qwen_3_4b.safetensors'},
+  {name:'qwen_3_4b_fp4.safetensors',rel_path:'snap/split_files/text_encoders/qwen_3_4b_fp4.safetensors'},
+  {name:'flux2-vae.safetensors',rel_path:'snap/split_files/vae/flux2-vae.safetensors'}]},
+{repo_id:'other/Qwen3-4B',status:'ready',safetensors_files:[{name:'qwen_3_4b.safetensors',rel_path:'qwen_3_4b.safetensors'}]}
+];
+""" + match.group(0) + r"""
+const assert = (ok, message) => { if (!ok) throw new Error(message); };
+assert(_cachedFlux2Files('llm').length === 1, 'only exact cached Qwen3 4B encoder should match');
+assert(_cachedFlux2Files('llm')[0].file.name === 'qwen_3_4b.safetensors', 'wrong encoder selected');
+assert(_cachedFlux2Files('vae').length === 1, 'Klein VAE from the downloaded alias should match');
+"""
+    result = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr

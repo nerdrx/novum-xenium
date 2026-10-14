@@ -33,6 +33,51 @@ let _saveTasks;
 // Storage keys
 const SERVE_STATE_KEY = 'cookbook-serve-state';
 
+// Target only the files stable-diffusion.cpp needs. The Comfy-Org repo is the
+// public Klein component bundle; the upstream FLUX.2-dev VAE repo is gated.
+const FLUX2_KLEIN_SHARED_COMPONENTS = [
+  {
+    repo_id: 'Comfy-Org/vae-text-encorder-for-flux-klein-4b',
+    include: 'split_files/text_encoders/qwen_3_4b.safetensors',
+    name: 'Qwen3 4B encoder',
+  },
+  {
+    repo_id: 'Comfy-Org/vae-text-encorder-for-flux-klein-4b',
+    include: 'split_files/vae/flux2-vae.safetensors',
+    name: 'FLUX.2 Klein VAE',
+  },
+];
+
+/** Return the three explicitly targeted files required for a Klein 4B model. */
+export function flux2KleinDownloadRecipe(variant) {
+  const base = variant === 'base4b';
+  if (!base && variant !== 'klein4b') throw new RangeError('Unknown FLUX.2 Klein 4B variant');
+  const model = base
+    ? { repo_id: 'black-forest-labs/FLUX.2-klein-base-4B', include: 'flux-2-klein-base-4b.safetensors', name: 'Base 4B diffusion model' }
+    : { repo_id: 'black-forest-labs/FLUX.2-klein-4B', include: 'flux-2-klein-4b.safetensors', name: 'Klein 4B diffusion model' };
+  return [model, ...FLUX2_KLEIN_SHARED_COMPONENTS].map(component => ({ ...component }));
+}
+
+/** Queue selected exact-file downloads for a FLUX.2 Klein bundle. */
+export async function downloadFlux2KleinBundle(panel, variant, hostOverride, missingKinds = []) {
+  const recipe = flux2KleinDownloadRecipe(variant);
+  const allowedKinds = new Set(['diffusion', 'llm', 'vae']);
+  const requestedKinds = new Set(missingKinds);
+  if ([...requestedKinds].some(kind => !allowedKinds.has(kind))) {
+    throw new RangeError('Unknown FLUX.2 Klein component kind');
+  }
+  const selected = missingKinds.length
+    ? recipe.filter((_, index) => requestedKinds.has(['diffusion', 'llm', 'vae'][index]))
+    : recipe;
+  for (const component of selected) {
+    await _runModelDownload(panel, {
+      name: component.repo_id,
+      download_include: component.include,
+      required_gb: 10,
+    }, 'stable-diffusion.cpp', hostOverride);
+  }
+}
+
 // ── Panel field helpers ──
 
 export function _setPanelField(panel, field, value) {
@@ -132,7 +177,7 @@ export function _buildDownloadCmd(model, backend) {
       cmd = _missingGgufCommand(model);
     } else {
       const repo = ggufSource?.repo || model.name;
-      const includePattern = backend === 'llamacpp' ? _ggufIncludePattern(model, ggufSource) : null;
+      const includePattern = backend === 'llamacpp' ? _ggufIncludePattern(model, ggufSource) : (model.download_include || null);
       const includeArg = includePattern ? `, allow_patterns=["${includePattern.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]` : '';
       // Reflect the server's download target in the preview (matches the real
       // download path built server-side). '' = default HF cache.
@@ -475,7 +520,7 @@ export async function _runModelDownload(panel, model, backend, hostOverride) {
   const repo = backend === 'ollama'
     ? (model.ollama || model.ollama_name || model.name)
     : (ggufSource?.repo || model.quant_repo || model.name);
-  const include = backend === 'llamacpp' ? _ggufIncludePattern(model, ggufSource) : null;
+  const include = backend === 'llamacpp' ? _ggufIncludePattern(model, ggufSource) : (model.download_include || null);
 
   _syncEnvFromPanel(panel);
 
@@ -560,7 +605,10 @@ export async function _runModelDownload(panel, model, backend, hostOverride) {
     if (!t || t.type !== 'download') return false;
     const tRepo = t?.payload?.repo_id || t?.repo_id || t?.repo || t?.name || '';
     const tHost = t?.remoteHost || t?.payload?.remote_host || 'local';
-    return String(tRepo) === String(payload.repo_id) && String(tHost || 'local') === String(targetHost);
+    const tInclude = t?.payload?.include || '';
+    return String(tRepo) === String(payload.repo_id)
+      && String(tHost || 'local') === String(targetHost)
+      && String(tInclude) === String(payload.include || '');
   };
   const duplicate = tasks.find(t => sameDownload(t) && (t.status === 'running' || t.status === 'queued'));
   if (duplicate) {

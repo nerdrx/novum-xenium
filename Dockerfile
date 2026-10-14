@@ -7,6 +7,16 @@ COPY scripts/build-stable-diffusion.sh /usr/local/bin/build-stable-diffusion.sh
 RUN sh /usr/local/bin/build-stable-diffusion.sh cpu /out
 RUN sh /usr/local/bin/build-stable-diffusion.sh vulkan /out
 
+# ---- builder: pinned zVram Vulkan layer (Linux x86_64 only) ----
+FROM ubuntu:24.04 AS zvram-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates cmake git libvulkan-dev libzstd-dev \
+    pkg-config glslc spirv-headers python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/build-zvram.sh /usr/local/bin/build-zvram.sh
+ARG TARGETARCH
+RUN sh /usr/local/bin/build-zvram.sh "$TARGETARCH" /out
+
 # ---- builder: patch + build wheels for Real-ESRGAN's broken-on-3.14 deps ----
 # basicsr/gfpgan/facexlib read their version via exec()+locals()['__version__'],
 # which raises KeyError on Python 3.13+ (PEP 667). Build patched wheels here so
@@ -50,6 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmagic1 \
     libgomp1 \
     libvulkan1 \
+    libzstd1 \
     mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/*
 
@@ -93,9 +104,13 @@ COPY --from=stable-diffusion-build /out/cpu/ /opt/stable-diffusion/cpu/
 COPY --from=stable-diffusion-build /out/vulkan/ /opt/stable-diffusion/vulkan/
 COPY --from=stable-diffusion-build /out/licenses/stable-diffusion.cpp-LICENSE /usr/share/licenses/stable-diffusion.cpp/LICENSE
 COPY --from=stable-diffusion-build /out/licenses/ggml-LICENSE /usr/share/licenses/stable-diffusion.cpp/ggml-LICENSE
+COPY --from=zvram-build /out/ /opt/zvram/
+COPY scripts/zvram-launcher /usr/local/bin/zvram
+COPY scripts/sd-server-zvram /usr/local/bin/sd-server-zvram
+COPY --from=zvram-build /out/LICENSE /usr/share/licenses/zvram/LICENSE
 RUN printf '#!/bin/sh\nexec /opt/stable-diffusion/cpu/sd-server "$@"\n' > /usr/local/bin/sd-server \
     && printf '#!/bin/sh\nexec /opt/stable-diffusion/vulkan/sd-server "$@"\n' > /usr/local/bin/sd-server-vulkan \
-    && chmod 0755 /usr/local/bin/sd-server /usr/local/bin/sd-server-vulkan
+    && chmod 0755 /usr/local/bin/sd-server /usr/local/bin/sd-server-vulkan /usr/local/bin/zvram /usr/local/bin/sd-server-zvram
 
 # Keep GitHub CLI credentials in persistent app data, isolated from host login
 # state and outside the paths exposed to agent file tools.

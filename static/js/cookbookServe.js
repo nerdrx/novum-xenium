@@ -12,6 +12,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 import { openCookbookDependencies } from './cookbook-diagnosis.js';
 import { _hwfitCache } from './cookbook-hwfit.js';
 import { topPortalZ } from './toolWindowZOrder.js';
+import { downloadFlux2KleinBundle } from './cookbookDownload.js';
 
 // Shared state/functions injected by init()
 let _envState;
@@ -747,11 +748,67 @@ function _remoteWindowsDiffusersUnsupported(target) {
 
 function _isStableDiffusionCppCandidate(model) {
   const id = `${model?.repo_id || ''} ${model?.name || ''} ${model?.path || ''}`.toLowerCase();
+  if (/flux[._-]?2.*klein.*4b/.test(id) && !/9b/.test(id)) return !model?.is_video;
   const isImage = !!(model?.is_diffusion || model?.is_image_gen || model?._tag === 'image')
     || /(?:stable[-_ ]?diffusion|sdxl|sd[-_ ]?(?:1[.-]?5|2(?:[.-]\d+)?))/.test(id);
   return isImage && !model?.is_video
     && /(?:stable[-_ ]?diffusion|sdxl|sd[-_ ]?(?:1[.-]?5|2(?:[.-]\d+)?))/.test(id)
     && !/(?:flux|ltx|video|upscal|z-image|qwen-image)/.test(id);
+}
+
+function _isFlux2Klein4b(model) {
+  return /flux[._-]?2.*klein.*(?:base[-_ ]?)?4b/i.test(String(model?.repo_id || model?.name || '')) && !model?.is_video;
+}
+
+function _cachedFlux2Files(kind, selectedRepo = '') {
+  const matcher = kind === 'llm' ? /qwen[_-]?3[_-]?4b/i
+    : kind === 'vae' ? /(?:flux2[-_]?vae|(?:flux2[_-]?)?ae)\.safetensors$/i
+    : /flux[-_]?2[-_]klein.*4b.*\.safetensors$/i;
+  return (_cachedAllModels || []).flatMap(model => {
+    if (!model || (model.status && model.status !== 'ready')) return [];
+    if (selectedRepo && model.repo_id !== selectedRepo) return [];
+    const repo = String(model.repo_id || '').toLowerCase();
+    const files = Array.isArray(model.safetensors_files) ? model.safetensors_files : [];
+    const sharedRepo = ['comfy-org/flux2-klein-4b', 'comfy-org/vae-text-encorder-for-flux-klein-4b'].includes(repo);
+    if (kind === 'llm' && !sharedRepo) return [];
+    if (kind === 'vae' && !sharedRepo && repo !== 'black-forest-labs/flux.2-dev') return [];
+    return files.filter(file => file?.rel_path && matcher.test(`${file.name || ''} ${file.rel_path}`)
+      && (kind !== 'llm' || /(?:^|\/)qwen_3_4b\.safetensors$/i.test(file.rel_path)))
+      .map(file => ({ model, file }));
+  });
+}
+
+function _selectedCachedFileExpr(model, relPath) {
+  const rel = String(relPath || '').replace(/^\/+/, '');
+  if (!rel || rel.startsWith('../') || rel.includes('/../') || rel.includes('\0')) return '';
+  if (model.is_local_dir && model.path) return _shellPathExpr(`${String(model.path).replace(/\/+$/, '')}/${model.repo_id}/${rel}`);
+  if (model.path) return _shellPathExpr(`${String(model.path).replace(/\/+$/, '')}/models--${model.repo_id.replace(/\//g, '--')}/snapshots/${rel}`);
+  return `"$HOME/.cache/huggingface/hub/models--${model.repo_id.replace(/\//g, '--')}/snapshots/${rel}"`;
+}
+
+function _flux2FileSelect(kind, current = '') {
+  const options = _cachedFlux2Files(kind);
+  const preferred = /Comfy-Org\/(?:flux2-klein-4B|vae-text-encorder-for-flux-klein-4b)/i;
+  const chosen = options.find(({ model, file }) => `${model.repo_id}/${file.rel_path}` === current)
+    || options.find(({ model }) => preferred.test(model.repo_id || ''))
+    || options[0];
+  const html = options.map(({ model, file }) => {
+    const key = `${model.repo_id}/${file.rel_path}`;
+    const label = `${model.repo_id} · ${file.name || file.rel_path}`;
+    return `<option value="${esc(key)}"${chosen && chosen.model === model && chosen.file === file ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+  return { options, chosen, html: `<option value="">${options.length ? 'Choose cached file…' : 'No cached compatible files'}</option>${html}` };
+}
+
+function _resolveFlux2Selection(value) {
+  // Repo ids contain a slash, so match the longest cached repo prefix.
+  const hit = (_cachedAllModels || []).filter(m => String(value || '').startsWith(`${m.repo_id}/`))
+    .sort((a, b) => String(b.repo_id).length - String(a.repo_id).length)[0];
+  if (!hit) return '';
+  const rel = String(value).slice(hit.repo_id.length + 1);
+  const files = Array.isArray(hit.safetensors_files) ? hit.safetensors_files : [];
+  if (!files.some(file => file.rel_path === rel)) return '';
+  return _selectedCachedFileExpr(hit, rel);
 }
 
 function _backendChoicesForTarget(target, model = null) {
@@ -1438,7 +1495,8 @@ function _rerenderCachedModels() {
       const _allowedBackends = new Set(_backendChoices.map(([v]) => v));
       const _sdCppCandidate = _isStableDiffusionCppCandidate(m);
       const _sdCppHasGguf = _sdCppCandidate && _stableDiffusionCppGgufFiles(m).length > 0;
-      const detectedBackend = _sdCppHasGguf ? 'stable-diffusion.cpp' : _detectBackend(m).backend;
+      const _flux2Klein = _isFlux2Klein4b(m);
+      const detectedBackend = (_sdCppHasGguf || _flux2Klein) ? 'stable-diffusion.cpp' : _detectBackend(m).backend;
       const _imageBackend = detectedBackend === 'mlx_image' || detectedBackend === 'diffusers';
       const _forcedSdCppBackend = _repoForcedBackend && ss.backend === 'stable-diffusion.cpp' && _allowedBackends.has(ss.backend);
       let defaultBackend = _forcedSdCppBackend
@@ -1609,8 +1667,27 @@ function _rerenderCachedModels() {
         } else if (_defaultSdCppGguf) {
           panelHtml += `<input type="hidden" class="hwfit-sf hwfit-backend-stable-diffusion.cpp" data-field="sd_gguf_file" value="${esc(_defaultSdCppGguf)}" />`;
         }
-        panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label style="grid-column:1 / -1;">Checkpoint override (optional)${_h('Use a full Stable Diffusion 1.x/2.x or SDXL single checkpoint (.safetensors/.ckpt). Leave blank to use the selected cached GGUF above. This engine does not load arbitrary Diffusers pipelines, FLUX, or video models.')}<input type="text" class="hwfit-sf hwfit-sf-wide" data-field="sd_model_path" value="${esc(sv('sd_model_path', ''))}" placeholder="${esc(_defaultSdCppGguf ? `Using cached ${_defaultSdCppGguf.split('/').pop()}` : '/path/to/model.safetensors or .ckpt')}" /></label></div>`;
-        panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="sd_vulkan"${sv('sd_vulkan', false) ? ' checked' : ''} /> Use optional Vulkan build${_h('Off by default: CPU mode works everywhere. Enable only when sd-server-vulkan is installed and the host has Vulkan access; uses --backend diffusion=vulkan0.')}</label><span style="grid-column:1 / -1;font-size:11px;color:var(--fg-muted);">Built-in engine serves one checkpoint file. CPU is the safe default; Vulkan needs the optional build.</span></div>`;
+        if (!_flux2Klein) panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label style="grid-column:1 / -1;">Checkpoint override (optional)${_h('Use a full Stable Diffusion 1.x/2.x or SDXL single checkpoint (.safetensors/.ckpt). Leave blank to use the selected cached GGUF above. This engine does not load arbitrary Diffusers pipelines, FLUX, or video models.')}<input type="text" class="hwfit-sf hwfit-sf-wide" data-field="sd_model_path" value="${esc(sv('sd_model_path', ''))}" placeholder="${esc(_defaultSdCppGguf ? `Using cached ${_defaultSdCppGguf.split('/').pop()}` : '/path/to/model.safetensors or .ckpt')}" /></label></div>`;
+        if (_flux2Klein) {
+          const diffusionFiles = _cachedFlux2Files('diffusion', repo);
+          const savedDiffusion = sv('flux2_diffusion_file', '');
+          const diffusionFile = diffusionFiles.find(({ file }) => file.rel_path === savedDiffusion)
+            || diffusionFiles.find(({ file }) => /\.safetensors$/i.test(file.rel_path || ''));
+          const llmFiles = _flux2FileSelect('llm', sv('flux2_llm_file', ''));
+          const vaeFiles = _flux2FileSelect('vae', sv('flux2_vae_file', ''));
+          const flux2MissingAtRender = [
+            ...(!diffusionFiles.length && !String(sv('sd_model_path', '')).trim() ? ['diffusion'] : []),
+            ...(!llmFiles.options.length && !String(sv('flux2_llm_path', '')).trim() ? ['llm'] : []),
+            ...(!vaeFiles.options.length && !String(sv('flux2_vae_path', '')).trim() ? ['vae'] : []),
+          ];
+          const diffusionOptions = diffusionFiles.map(({ file }) => `<option value="${esc(file.rel_path)}"${diffusionFile?.file === file ? ' selected' : ''}>${esc(file.name || file.rel_path)}</option>`).join('');
+          panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp" style="grid-template-columns:repeat(2,minmax(0,1fr));"><label style="grid-column:1 / -1;min-width:0;">FLUX.2 Klein diffusion weights<select class="hwfit-sf hwfit-sf-wide" data-field="flux2_diffusion_file" style="width:100%;max-width:none;min-width:0;"><option value="">Choose cached file…</option>${diffusionOptions}</select><input type="text" class="hwfit-sf hwfit-sf-wide" data-field="sd_model_path" value="${esc(sv('sd_model_path', ''))}" placeholder="Optional local diffusion model path override" style="width:100%;max-width:none;min-width:0;" /></label></div>`;
+          panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp" style="grid-template-columns:repeat(2,minmax(0,1fr));"><label style="min-width:0;">Qwen3 4B encoder<select class="hwfit-sf hwfit-sf-wide" data-field="flux2_llm_file" style="width:100%;max-width:none;min-width:0;">${llmFiles.html}</select><input type="text" class="hwfit-sf hwfit-sf-wide" data-field="flux2_llm_path" value="${esc(sv('flux2_llm_path', ''))}" placeholder="Optional local Qwen3-4B path override" style="width:100%;max-width:none;min-width:0;" /></label><label style="min-width:0;">FLUX.2 VAE<select class="hwfit-sf hwfit-sf-wide" data-field="flux2_vae_file" style="width:100%;max-width:none;min-width:0;">${vaeFiles.html}</select><input type="text" class="hwfit-sf hwfit-sf-wide" data-field="flux2_vae_path" value="${esc(sv('flux2_vae_path', ''))}" placeholder="Optional local flux2_ae.safetensors path override" style="width:100%;max-width:none;min-width:0;" /></label></div>`;
+          panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label>Guidance scale<input type="number" step="0.1" class="hwfit-sf" data-field="flux2_cfg" value="${esc(sv('flux2_cfg', /base/i.test(repo) ? '4' : '1'))}" /></label><label>Steps<input type="number" min="1" class="hwfit-sf" data-field="flux2_steps" value="${esc(sv('flux2_steps', /base/i.test(repo) ? '20' : '4'))}" /></label></div>`;
+          panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="sd_zvram"${sv('sd_zvram', false) && sv('sd_vulkan', false) ? ' checked' : ''}${sv('sd_vulkan', false) ? '' : ' disabled'} /> Use zVram compatibility mode (Vulkan)${_h('Uses zVram allocation tracking and AMD overallocation support with live control disabled. Paging is disabled for this engine.')}</label></div>`;
+          if (flux2MissingAtRender.length) panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><button type="button" class="hwfit-action-btn" data-flux2-download style="grid-column:1 / -1;width:auto;min-height:36px;height:auto;white-space:normal;padding:6px 10px;">Download missing FLUX.2 Klein components</button></div>`;
+        }
+        panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="sd_vulkan"${sv('sd_vulkan', false) ? ' checked' : ''} /> Use optional Vulkan build${_h('Off by default: CPU mode works everywhere. Enable only when sd-server-vulkan is installed and the host has Vulkan access; uses --backend diffusion=vulkan0.')}</label><span style="grid-column:1 / -1;font-size:11px;color:var(--fg-muted);">${_flux2Klein ? 'FLUX.2 Klein uses separate diffusion, text encoder, and VAE weights.' : 'Built-in engine serves one checkpoint file.'} CPU is the safe default; Vulkan needs the optional build.</span></div>`;
       }
       // Row 2: Core settings — the handful you actually touch every launch.
       // TP / Context / GPU / GPU Mem / Max Seqs / Dtype. Everything else
@@ -1903,14 +1980,23 @@ function _rerenderCachedModels() {
         const hostField = panel.querySelector('[data-field="host"]');
         if (hostField) hostField.value = f.host;
         const backend = f.backend || 'vllm';
+        f.flux2 = _flux2Klein;
         const serveModel = (f.model_path || '').trim() || (m.is_local_dir && m.path ? `${m.path}/${repo}` : repo);
         if (backend === 'stable-diffusion.cpp') {
           const selectedGguf = _stableDiffusionCppGgufFiles(m).find(file => file.rel_path === f.sd_gguf_file);
           const manualPath = String(f.sd_model_path || '').trim();
+          const selectedFluxDiffusion = (m.safetensors_files || []).find(file => file.rel_path === f.flux2_diffusion_file);
           f._sd_model_path = manualPath
             ? _shellQuote(manualPath)
-            : (selectedGguf ? _selectedGgufExpr(m, repo, selectedGguf.rel_path) : '');
-          panel._sdModelPathAvailable = !!(manualPath || selectedGguf);
+            : (_flux2Klein && selectedFluxDiffusion ? _selectedCachedFileExpr(m, selectedFluxDiffusion.rel_path)
+              : selectedGguf ? _selectedGgufExpr(m, repo, selectedGguf.rel_path) : '');
+          f._flux2_llm_path = String(f.flux2_llm_path || '').trim()
+            ? _shellQuote(String(f.flux2_llm_path).trim()) : _resolveFlux2Selection(f.flux2_llm_file);
+          f._flux2_vae_path = String(f.flux2_vae_path || '').trim()
+            ? _shellQuote(String(f.flux2_vae_path).trim()) : _resolveFlux2Selection(f.flux2_vae_file);
+          panel._sdModelPathAvailable = _flux2Klein
+            ? !!(f._sd_model_path && f._flux2_llm_path && f._flux2_vae_path)
+            : !!(manualPath || selectedGguf);
         } else {
           panel._sdModelPathAvailable = false;
         }
@@ -3164,9 +3250,35 @@ function _rerenderCachedModels() {
       }
 
       // Update preview on input change
+      panel.querySelector('[data-flux2-download]')?.addEventListener('click', async () => {
+        const variant = /base/i.test(repo) ? 'base4b' : 'klein4b';
+        const missingKinds = [];
+        if (!String(panel.querySelector('[data-field="sd_model_path"]')?.value || '').trim() && !_cachedFlux2Files('diffusion', repo).length) missingKinds.push('diffusion');
+        if (!String(panel.querySelector('[data-field="flux2_llm_path"]')?.value || '').trim() && !_cachedFlux2Files('llm').length) missingKinds.push('llm');
+        if (!String(panel.querySelector('[data-field="flux2_vae_path"]')?.value || '').trim() && !_cachedFlux2Files('vae').length) missingKinds.push('vae');
+        if (!missingKinds.length) {
+          uiModule.showToast('All FLUX.2 Klein components are cached or have a path override.');
+          return;
+        }
+        const button = panel.querySelector('[data-flux2-download]');
+        if (button) button.disabled = true;
+        try {
+          await downloadFlux2KleinBundle(panel, variant, undefined, missingKinds);
+          uiModule.showToast(`Queued missing FLUX.2 Klein components: ${missingKinds.join(', ')}.`);
+        } finally {
+          if (button) button.disabled = false;
+        }
+      });
       panel.querySelectorAll('.hwfit-sf').forEach(el => {
         el.addEventListener('input', updateCmd);
         el.addEventListener('change', (e) => {
+          if (e.target.dataset.field === 'sd_vulkan') {
+            const zvram = panel.querySelector('[data-field="sd_zvram"]');
+            if (zvram) {
+              zvram.disabled = !e.target.checked;
+              if (!e.target.checked) zvram.checked = false;
+            }
+          }
           if (e.target.dataset.field === 'backend') {
             const extraEl = panel.querySelector('[data-field="extra"]');
             if (extraEl) extraEl.value = '';
@@ -3388,7 +3500,9 @@ function _rerenderCachedModels() {
         const launchTarget = _selectedServeTarget(panel);
         if (serveState.backend === 'stable-diffusion.cpp' && !panel._sdModelPathAvailable && !_cmdManuallyEdited) {
           _restoreLaunchBtn();
-          uiModule.showToast('Choose a cached GGUF checkpoint or enter a local .safetensors/.ckpt path first.', 8000);
+          uiModule.showToast(_flux2Klein
+            ? 'Choose cached FLUX.2 diffusion, Qwen3 4B, and VAE files or enter paths for all three.'
+            : 'Choose a cached GGUF checkpoint or enter a local .safetensors/.ckpt path first.', 8000);
           return;
         }
         if (serveState.backend === 'llamacpp' && serveState.vision && !/(?:^|\s)(?:--mmproj|--clip_model_path)\b/.test(launchCmd)) {

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def _is_stable_diffusion_cpp_cmd(cmd: str | None) -> bool:
-    return bool(re.search(r"(?:^|[\s/])sd-server(?:-cpu|-vulkan)?(?:\.exe)?(?:\s|$)", cmd or ""))
+    return bool(re.search(r"(?:^|[\s/])sd-server(?:-cpu|-vulkan|-zvram)?(?:\.exe)?(?:\s|$)", cmd or ""))
 
 
 def _string_arg(value: Any) -> str:

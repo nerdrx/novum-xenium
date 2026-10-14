@@ -4285,8 +4285,9 @@ async function _pollBackgroundStatus() {
       const localTask = localTasks.find(lt => lt.sessionId === t.session_id);
 
       let host = _connectHostFromRemote(localTask?.remoteHost || t.remote);
-      const portMatch = localTask?.payload?._cmd?.match(/--(?:listen-)?port[=\s]+(\d+)/)
-        || localTask?.payload?._cmd?.match(/OLLAMA_HOST=[^\s:]+:(\d+)/);
+      const command = localTask?.payload?._cmd || t.cmd || '';
+      const portMatch = command.match(/--(?:listen-)?port[=\s]+(\d+)/)
+        || command.match(/OLLAMA_HOST=[^\s:]+:(\d+)/);
       let port = portMatch ? portMatch[1] : '8000';
       let baseUrl = `http://${host}:${port}/v1`;
       const snapshot = t.output || localTask?.output || '';
@@ -4295,7 +4296,7 @@ async function _pollBackgroundStatus() {
         const endpoint = _endpointFromAdvertisedUrl(ollamaUrlMatch[1], host, '11434');
         if (endpoint) ({ host, port, baseUrl } = endpoint);
       }
-      const _isDiffusion = _isImageServeTask(localTask);
+      const _isDiffusion = _isImageServeTask(localTask || { payload: { _cmd: command } });
 
       _updateTask(t.session_id, { _serveReady: true });
       if (localTask) _autoSaveWorkingConfig(localTask);   // remember working settings (modal may be closed)
@@ -4305,14 +4306,14 @@ async function _pollBackgroundStatus() {
       // `--enable-auto-tool-choice`; local-only models otherwise
       // hallucinate a fake [TOOL_CALL]...[/TOOL_CALL] text format
       // the backend can't parse.
-      const _cmd = localTask?.payload?._cmd || '';
+      const _cmd = command;
       const _supportsTools = _cmd.includes('--enable-auto-tool-choice') || _isDiffusion === false && /(?:^|\s)(?:deepseek|gpt-[45o]|claude|gemini|qwen3|qwen2\.5|mixtral|llama-[34]|minimax|kimi|hermes|glm-4)/i.test(t.model);
 
       fetch('/api/model-endpoints', { credentials: 'same-origin' })
         .then(r => r.json())
         .then(eps => {
-          const hostPort = `${host}:${port}`;
-          const existing = eps.find(e => e.base_url === baseUrl || e.base_url.includes(hostPort) || e.name === t.model);
+          // Friendly names are not endpoint identities: old serves may share a name.
+          const existing = eps.find(e => e.base_url.replace(/\/$/, '') === baseUrl);
           if (existing) {
             const taskForMatch = localTask || { sessionId: t.session_id, name: t.model, model: t.model, payload: { repo_id: t.model, _cmd } };
             if (!_endpointMatchesServe(existing, taskForMatch)) {

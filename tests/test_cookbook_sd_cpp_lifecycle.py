@@ -75,3 +75,25 @@ for (const flag of ['--listen-port 18123', '--listen-port=18123', '--port 18123'
     result = subprocess.run([node, '-e', script], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert 'match(/--port' not in source
+
+
+def test_background_registration_matches_address_not_reused_name():
+    source = RUNNING.read_text()
+    block = source[source.index('const readyServes ='):]
+    assert "localTask?.payload?._cmd || t.cmd || ''" in block
+    assert 'e.name === t.model' not in block
+    assert 'e.base_url.includes(hostPort)' not in block
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node.js is unavailable')
+    statement = re.search(r"const existing = eps.find\(.*?;", block).group(0)
+    script = """
+const baseUrl = 'http://localhost:18123/v1';
+const eps = [
+ {id:'old',name:'FLUX',base_url:'http://localhost:8000/v1'},
+ {id:'other',name:'FLUX',base_url:'http://localhost:181230/v1'},
+ {id:'right',name:'FLUX',base_url:baseUrl}
+];
+""" + statement + "\nif (existing.id !== 'right') throw new Error('wrong server');"
+    result = subprocess.run([node, '-e', script], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr

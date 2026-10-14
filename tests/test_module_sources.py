@@ -11,6 +11,7 @@ from src import module_sources
 
 
 COMMIT = "a" * 40
+UPDATED_COMMIT = "b" * 40
 MANIFEST = {"api_version": 1, "id": "focus-timer", "name": "Focus Timer", "version": "1.2.0",
             "description": "Timer panel", "panel": "panel.html", "mcp_server_ids": []}
 FILES = {
@@ -92,6 +93,53 @@ def test_add_refresh_install_disabled_and_provenance(tmp_path, monkeypatch):
     assert store.get("focus-timer") is not None
 
 
+def test_same_repository_can_update_across_commit_pins(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.module_sources.httpx.Client", FakeClient)
+    store = ModuleStore(tmp_path)
+    sources = ModuleSources(tmp_path, store)
+    original = sources.add("https://github.com/acme/tools")
+    first = sources.install(original["id"], "focus-timer")
+    assert first["source"]["commit"] == COMMIT
+
+    branch_url = "https://api.github.com/repos/acme/tools/branches/main"
+    monkeypatch.setitem(FILES, branch_url, {"commit": {"sha": UPDATED_COMMIT}})
+    monkeypatch.setitem(FILES, f"https://raw.githubusercontent.com/acme/tools/{UPDATED_COMMIT}/modules/index.json", {
+        "api_version": 1,
+        "modules": [{"path": "focus-timer", "files": ["module.json", "panel.html"]}],
+    })
+    monkeypatch.setitem(FILES, f"https://raw.githubusercontent.com/acme/tools/{UPDATED_COMMIT}/modules/focus-timer/module.json",
+                        dict(MANIFEST, version="1.3.0"))
+    monkeypatch.setitem(FILES, f"https://raw.githubusercontent.com/acme/tools/{UPDATED_COMMIT}/modules/focus-timer/panel.html",
+                        "<h1>Timer update</h1>")
+    refreshed = sources.add("https://github.com/acme/tools")
+    assert refreshed["commit"] == UPDATED_COMMIT
+    assert refreshed["modules"][0]["conflict"] is False
+    assert refreshed["modules"][0]["installed_version"] == "1.2.0"
+
+    updated = sources.install(original["id"], "focus-timer")
+    assert updated["version"] == "1.3.0"
+    assert updated["source"] == {"id": original["id"], "url": original["url"], "commit": UPDATED_COMMIT}
+    assert updated["enabled"] is False
+
+
+def test_other_repository_cannot_replace_installed_module_source(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.module_sources.httpx.Client", FakeClient)
+    store = ModuleStore(tmp_path)
+    sources = ModuleSources(tmp_path, store)
+    source = sources.add("https://github.com/acme/tools")
+    sources.install(source["id"], "focus-timer")
+
+    different_repo_package = io.BytesIO()
+    with zipfile.ZipFile(different_repo_package, "w") as archive:
+        archive.writestr("module.json", json.dumps(dict(MANIFEST, version="1.3.0")))
+        archive.writestr("panel.html", "<h1>Different origin</h1>")
+    with pytest.raises(ModulePackageError, match="another source") as conflict:
+        store.install(different_repo_package.getvalue(), source={
+            "id": "different-source", "url": "https://github.com/acme/other", "commit": COMMIT,
+        })
+    assert conflict.value.status_code == 409
+
+
 def test_catalog_rejects_invalid_manifest_permissions_and_duplicate_module_ids(tmp_path, monkeypatch):
     monkeypatch.setattr("src.module_sources.httpx.Client", FakeClient)
     sources = ModuleSources(tmp_path, ModuleStore(tmp_path))
@@ -126,6 +174,9 @@ def test_foreign_install_is_reported_as_conflict(tmp_path, monkeypatch):
     assert advertised["conflict"] is True
     assert advertised["installed_version"] is None
     assert advertised["enabled"] is False
+    with pytest.raises(ModulePackageError, match="another source") as conflict:
+        sources.install(source["id"], "focus-timer")
+    assert conflict.value.status_code == 409
 
 
 def test_raw_file_path_is_quoted_and_expired_deadline_fails_closed(tmp_path, monkeypatch):

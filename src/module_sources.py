@@ -191,7 +191,9 @@ class ModuleSources:
         modules = []
         for module in source["modules"]:
             current = installed.get(module["id"])
-            conflict = bool(current and (current.get("source") or {}).get("id") != source["id"])
+            conflict = bool(current and not self.store.same_source(
+                current.get("source"), {"id": source["id"], "url": source["url"]}
+            ))
             modules.append({"id": module["id"], "name": module["name"], "version": module["version"],
                             "description": module["description"],
                             "permissions": module.get("permissions", []),

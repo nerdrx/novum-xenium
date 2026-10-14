@@ -207,6 +207,17 @@ class ModuleStore:
     def _package_key(module_id: str, version: str, digest: str) -> str:
         return f"{module_id}/{version}/{digest}"
 
+    @staticmethod
+    def same_source(current: dict | None, incoming: dict | None) -> bool:
+        """Compare source ownership, ignoring a repository's moving commit pin."""
+        if current is None or incoming is None:
+            return current is None and incoming is None
+        return (
+            isinstance(current, dict) and isinstance(incoming, dict)
+            and current.get("id") == incoming.get("id")
+            and current.get("url") == incoming.get("url")
+        )
+
     def list(self) -> list[dict]:
         with _LOCK:
             return [dict(item) for item in self._state()["modules"].values()]
@@ -226,7 +237,7 @@ class ModuleStore:
         with _LOCK:
             state = self._state()
             current = state["modules"].get(module_id)
-            if current and current.get("source") != source:
+            if current and not self.same_source(current.get("source"), source):
                 raise ModulePackageError(409, "Module id is already installed from another source")
             if current and current["version"] == version:
                 if current["digest"] != digest:

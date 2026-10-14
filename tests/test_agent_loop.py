@@ -798,3 +798,30 @@ def test_latest_restriction_stays_in_task_retrieval():
                 {'role': 'user', 'content': latest}]
     result = _classify_agent_request(messages, latest)
     assert result['retrieval_query'].endswith(latest)
+
+
+@pytest.mark.parametrize("reply", [
+    "Yes, proceed with implementation. Complete the original CLI task and run python3 qa_check.py.",
+    "Proceed with the implementation.",
+    "Okay, please proceed with implementation. Keep the original requirements.",
+])
+def test_implementation_confirmation_keeps_original_task(reply):
+    original = "Implement solution.py as a Python command-line app reading JSON from stdin."
+    messages = [{"role": "user", "content": original}, {"role": "user", "content": reply}]
+    result = _classify_agent_request(messages, reply)
+    assert result["task_anchor"] == original
+    assert original in result["retrieval_query"]
+    assert reply in result["retrieval_query"]
+
+
+@pytest.mark.parametrize("reply", [
+    "Proceed with a new implementation of an email tool.",
+    "Instead, implement an email tool.",
+    "Yes, send an email to Chris.",
+])
+def test_new_task_is_not_an_implementation_confirmation(reply):
+    original = "Search the web for camera reviews."
+    result = _classify_agent_request([
+        {"role": "user", "content": original}, {"role": "user", "content": reply},
+    ], reply)
+    assert result["task_anchor"] != original

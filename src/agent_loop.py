@@ -1553,6 +1553,14 @@ def _is_explicit_continuation(text: str) -> bool:
     return bool(
         _EXPLICIT_CONTINUATION_RE.match(value)
         or _NATURAL_EXPLICIT_CONTINUATION_RE.match(value)
+        # Implementation confirmations can include another sentence restating
+        # checks. Those details must not replace the original task anchor.
+        # This affects retrieval only; execution still requires its own approval.
+        or re.match(
+            r"^(?:(?:yes|yeah|yep|ok|okay|sure)[, ]+)?(?:please\s+)?"
+            r"proceed\s+with\s+(?:the\s+)?implementation(?:[.!](?:\s|$)|$)",
+            value, re.I,
+        )
     )
 
 

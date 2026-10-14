@@ -64,7 +64,9 @@ Native Linux installs can put `scripts/sd-server-zvram` on `PATH` (for example,
 `install -m 0755 scripts/sd-server-zvram ~/.local/bin/`) when both `zvram` and
 `sd-server-vulkan` are already installed and on `PATH`. The wrapper forces
 `--vulkan-recover-local` and `--auto-fit off`; paging can be slow when it spills
-into system memory.
+into system memory. It also sets `GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1` so
+GGML uses device-local allocations eligible for paging instead of host-visible
+ReBAR allocations, which the layer deliberately leaves unmanaged.
 
 Native Linux/macOS build prerequisites are CMake, a C/C++ compiler, Git and
 recursive submodule network access. Vulkan additionally needs the Vulkan SDK
@@ -88,9 +90,16 @@ Upstream references: [build guide](https://github.com/leejet/stable-diffusion.cp
 
 A downloaded SD 1.5 Q4 checkpoint generated a real 512×512 PNG with 20 steps
 using RX 7900 XTX Vulkan execution and zVram local paging. FLUX.2 Klein Base 4B
-was tested earlier with the compatibility wrapper and CPU text encoder/VAE,
-before local paging was enabled; FLUX paging has not been tested. The installed
-backend was also checked through
+generated a 512×512 PNG at 20 steps with the pageable allocation setting and
+CPU text encoder/VAE. A separate 256×256, 4-step pressure test stayed below
+a 6 GiB managed-residency cap with 1,641 evictions and 1,844 restores, producing
+the byte-identical baseline PNG. A 4 GiB cap failed because the active working
+set did not fit; extra cold storage alone did not fix that. These caps cover
+eligible allocations, not total GPU usage. Paging added latency (117 seconds
+versus 33 seconds without that pressure). This is bounded validation of these
+models and sizes, not a guarantee for arbitrary models or memory limits.
+
+The installed backend was also checked through
 Cookbook launch, readiness, image generation, authenticated Gallery retrieval,
 stop (including port release), and a same-port restart. An existing cloud image
 default remained unchanged. The UI defaults this engine to 512×512 when a tool

@@ -1,6 +1,8 @@
 """Focused UI guards for Cookbook's built-in Stable Diffusion engine."""
 
 import re
+import os
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -115,3 +117,15 @@ assert(_cachedFlux2Files('vae').length === 1, 'Klein VAE from the downloaded ali
 """
     result = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+def test_zvram_launcher_requests_pageable_allocations(tmp_path):
+    stub = tmp_path / "zvram"
+    stub.write_text("#!/usr/bin/env python3\nimport json, os, sys\nprint(json.dumps([os.environ.get('GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM'), sys.argv[1:]]))\n")
+    stub.chmod(0o755)
+    env = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
+               GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM="0")
+    result = subprocess.run(["sh", str(ROOT / "scripts/sd-server-zvram"), "-m", "/models/a b.gguf"],
+                            env=env, capture_output=True, text=True, check=True, timeout=10)
+    assert json.loads(result.stdout) == ["1", ["--vulkan-recover-local", "--", "sd-server-vulkan",
+                                              "-m", "/models/a b.gguf", "--auto-fit", "off"]]

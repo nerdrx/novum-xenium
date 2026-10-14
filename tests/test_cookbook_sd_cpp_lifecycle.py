@@ -58,3 +58,20 @@ def test_sd_cpp_command_parser_and_gpu_preflight_include_native_server():
     assert "const ownedEndpointId = task.payload?._endpointId || '';" in source
     assert "e.id === ownedEndpointId" in source
     assert "return 'sd-cpp-local';" in source
+
+
+def test_native_listen_port_used_by_every_endpoint_lookup():
+    source = RUNNING.read_text()
+    endpoint = _function(source, r"function _endpointUrlForTask\(task, outputText = ''\) \{", None)
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is unavailable")
+    script = "const _taskLooksOllama=()=>false; const _taskRemoteHost=()=>''; const _connectHostFromRemote=()=> 'localhost';\n" + endpoint + "\n" + r"""
+for (const flag of ['--listen-port 18123', '--listen-port=18123', '--port 18123']) {
+ const url = _endpointUrlForTask({payload:{_cmd:'sd-server-zvram '+flag}});
+ if (url !== 'http://localhost:18123/v1') throw new Error(url);
+}
+"""
+    result = subprocess.run([node, '-e', script], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert 'match(/--port' not in source

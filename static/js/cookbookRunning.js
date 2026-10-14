@@ -1176,7 +1176,7 @@ function _endpointUrlForTask(task, outputText = '') {
     return _ollamaBaseUrlForTask(task, outputText) + '/v1';
   }
   const host = _connectHostFromRemote(_taskRemoteHost(task));
-  const portMatch = task.payload?._cmd?.match(/--port\s+(\d+)/);
+  const portMatch = task.payload?._cmd?.match(/--(?:listen-)?port[=\s]+(\d+)/);
   const port = portMatch ? portMatch[1] : '8000';
   return `http://${host}:${port}/v1`;
 }
@@ -1265,7 +1265,7 @@ function _redactPresetForStorage(preset) {
 
 function _saveTaskAsPreset(task, label) {
   const host = task.remoteHost || 'localhost';
-  const portMatch = task.payload?._cmd?.match(/--port\s+(\d+)/);
+  const portMatch = task.payload?._cmd?.match(/--(?:listen-)?port[=\s]+(\d+)/);
   const port = portMatch ? portMatch[1] : '8000';
   const presets = _loadPresets();
   if (presets.some(p => p.cmd === task.payload._cmd)) return false;
@@ -1319,7 +1319,7 @@ function _autoSaveWorkingConfig(task) {
   // Respect the per-model cap the manual save flow uses (max 5).
   if (_presetsForModelLocal(presets, model).length >= 5) { task._autoSaved = true; return; }
   const host = task.remoteHost || 'localhost';
-  const portMatch = cmd.match(/--port[=\s]+(\d+)/);
+  const portMatch = cmd.match(/--(?:listen-)?port[=\s]+(\d+)/);
   const port = portMatch ? portMatch[1] : '8000';
   presets.push(_redactPresetForStorage({
     name: task.name, model, backend: 'vllm', host, port,
@@ -1954,12 +1954,12 @@ export async function _launchServeTask(shortName, repo, cmd, fields, hostOverrid
   // old one instead of leaving a dead duplicate behind. (The retry buttons
   // already removed their own task, so this is a no-op for them.)
   if (!_launchAnyway) try {
-    const _pm = cmd.match(/--port[=\s]+(\d+)/) || cmd.match(/(?:^|\s)-p[=\s]+(\d+)/);
+    const _pm = cmd.match(/--(?:listen-)?port[=\s]+(\d+)/) || cmd.match(/(?:^|\s)-p[=\s]+(\d+)/);
     const _newPort = _pm ? _pm[1] : '';
     if (_newPort) {
       for (const _t of _loadTasks()) {
         if (_t.type !== 'serve' || !_t.payload || !_t.payload._cmd) continue;
-        const _tm = _t.payload._cmd.match(/--port[=\s]+(\d+)/) || _t.payload._cmd.match(/(?:^|\s)-p[=\s]+(\d+)/);
+        const _tm = _t.payload._cmd.match(/--(?:listen-)?port[=\s]+(\d+)/) || _t.payload._cmd.match(/(?:^|\s)-p[=\s]+(\d+)/);
         if ((_tm ? _tm[1] : '') === _newPort && (_t.remoteHost || '') === _host) {
           try {
             await fetch('/api/shell/exec', {
@@ -2662,7 +2662,7 @@ export function _renderRunningTab() {
         if (task.type === 'serve' && task.payload?._cmd) {
           items.push({ group: 'endpoint', label: 'Register endpoint', action: 'register-endpoint', custom: async () => {
             const host = _connectHostFromRemote(task.remoteHost);
-            const portMatch = task.payload?._cmd?.match(/--port\s+(\d+)/);
+            const portMatch = task.payload?._cmd?.match(/--(?:listen-)?port[=\s]+(\d+)/);
             const port = portMatch ? portMatch[1] : '8000';
             const baseUrl = `http://${host}:${port}/v1`;
             try {
@@ -3627,7 +3627,7 @@ async function _reconnectTask(el, task) {
         if (task.type === 'serve' && !task._endpointAdded && !task._endpointAddInFlight && task._serveReady) {
           task._endpointAddInFlight = true;
           let host = _connectHostFromRemote(task.remoteHost);
-          const portMatch = task.payload?._cmd?.match(/--port[=\s]+(\d+)/)
+          const portMatch = task.payload?._cmd?.match(/--(?:listen-)?port[=\s]+(\d+)/)
             || task.payload?._cmd?.match(/(?:^|\s)-p[=\s]+(\d+)/)
             || snapshot.match(/Uvicorn running on\D*?:(\d+)/i)
             || snapshot.match(/running on\D*?:(\d+)/i)
@@ -3858,7 +3858,7 @@ async function _checkServeReachability() {
     ]);
     for (const task of serveTasks) {
       const host = _connectHostFromRemote(task.remoteHost);
-      const portMatch = task.payload?._cmd?.match(/--port\s+(\d+)/);
+      const portMatch = task.payload?._cmd?.match(/--(?:listen-)?port[=\s]+(\d+)/);
       const port = portMatch ? portMatch[1] : '8000';
       const baseUrl = `http://${host}:${port}/v1`;
       const ep = (eps || []).find(e => e.base_url === baseUrl);
@@ -4285,7 +4285,7 @@ async function _pollBackgroundStatus() {
       const localTask = localTasks.find(lt => lt.sessionId === t.session_id);
 
       let host = _connectHostFromRemote(localTask?.remoteHost || t.remote);
-      const portMatch = localTask?.payload?._cmd?.match(/--port\s+(\d+)/)
+      const portMatch = localTask?.payload?._cmd?.match(/--(?:listen-)?port[=\s]+(\d+)/)
         || localTask?.payload?._cmd?.match(/OLLAMA_HOST=[^\s:]+:(\d+)/);
       let port = portMatch ? portMatch[1] : '8000';
       let baseUrl = `http://${host}:${port}/v1`;

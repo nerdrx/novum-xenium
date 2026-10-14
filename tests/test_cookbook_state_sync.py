@@ -101,7 +101,8 @@ async def test_explicit_removed_task_tombstone_removes_running_server(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_local_terminal_serve_rechecks_tmux_before_endpoint_cleanup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("alive", [True, False])
+async def test_local_terminal_serve_preserves_provider_during_status_poll(tmp_path, monkeypatch, alive):
     state_path = tmp_path / "cookbook-state.json"
     command = "sd-server-vulkan --listen-port 8123 --backend diffusion=vulkan0"
     state_path.write_text(
@@ -125,7 +126,7 @@ async def test_local_terminal_serve_rechecks_tmux_before_endpoint_cleanup(tmp_pa
     def fake_run(args, **_kwargs):
         tmux_calls.append(args)
         if args[1] == "has-session":
-            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return type("Result", (), {"returncode": 0 if alive else 1, "stdout": "", "stderr": ""})()
         if args[1] == "capture-pane":
             return type("Result", (), {"returncode": 0, "stdout": "realimage started", "stderr": ""})()
         raise AssertionError(f"Unexpected process call: {args!r}")
@@ -156,6 +157,6 @@ async def test_local_terminal_serve_rechecks_tmux_before_endpoint_cleanup(tmp_pa
     )
     result = await status_endpoint(_status_request())
 
-    assert [call[1] for call in tmux_calls] == ["has-session", "capture-pane"]
-    assert result["tasks"][0]["status"] == "ready"
+    assert [call[1] for call in tmux_calls] == (["has-session", "capture-pane"] if alive else ["has-session"])
+    assert result["tasks"][0]["status"] == ("ready" if alive else "stopped")
     assert deleted_endpoints == []

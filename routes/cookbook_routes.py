@@ -4773,23 +4773,9 @@ def setup_cookbook_routes() -> APIRouter:
                 diagnosis = {"message": "No matching files were downloaded. The model repo or filename/quant pattern may be wrong (for example a ':Q4_K_M' tag that does not exist in the repo). Check the repo and the include/quant pattern."}
             output_tail = error_aware_output_tail(full_snapshot, status)
 
-            # The status route is also the lifecycle reconciliation path for
-            # Cookbook serves (including UI stop actions). Delete only the row
-            # keyed by this command's deterministic ID, even if another process
-            # later binds the same port.
-            task_cmd = _payload.get("_cmd") or ""
-            if task_type == "serve" and not is_alive and _is_stable_diffusion_cpp_command(task_cmd):
-                # Tool-launched tasks may have fallen back to /api/model-endpoints
-                # and persist that exact ID at the task root. UI launches use the
-                # session-bound deterministic ID returned by our registration.
-                _delete_stable_diffusion_cpp_endpoint(
-                    task_cmd,
-                    remote or None,
-                    session_id,
-                    task.get("_endpointId")
-                    or _payload.get("_endpointId")
-                    or _payload.get("endpoint_id"),
-                )
+            # A missing process (for example after a backend restart) is offline,
+            # not an instruction to forget the user's configured image provider.
+            # Explicit stop/crash ownership cleanup remains separate from this GET.
 
             results.append({
                 "session_id": session_id,

@@ -4071,6 +4071,15 @@ async def _run_verifier_subagent(
 
 
 
+def _unexecuted_image_notice(response: str, tool_events: list) -> str:
+    """Flag plain image placeholders when the turn executed no tools."""
+    if tool_events:
+        return ""
+    if re.search(r"(?im)(?:^\s*|:\s*)\[(?:new\s+)?image\]\s*$", response or ""):
+        return "No image was generated: the model returned a text placeholder without calling an image tool."
+    return ""
+
+
 def _empty_response_fallback(
     full_response: str,
     round_reasoning: str,
@@ -9189,6 +9198,12 @@ async def stream_agent_loop(
     if _exhausted_rounds:
         logger.info("[agent] round cap (%d) reached mid-task — emitting rounds_exhausted", max_rounds)
         yield f'data: {json.dumps({"type": "rounds_exhausted", "rounds": max_rounds})}\n\n'
+
+    image_notice = _unexecuted_image_notice(full_response, tool_events)
+    if image_notice:
+        notice = "\n\n" + image_notice
+        full_response += notice
+        yield 'data: ' + json.dumps({"delta": notice}) + '\n\n'
 
     # If the response is completely empty and no tools were executed,
     # yield a fallback message so the user is not left hanging.

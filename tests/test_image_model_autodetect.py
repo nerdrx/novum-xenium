@@ -50,7 +50,7 @@ async def test_auto_detect_uses_bridge_auth_and_endpoint_name(monkeypatch, empty
     [
         ("chatgpt-image-codex", "512x512", "1024x1024", "high"),
         ("flux-schnell", "512x512", "512x512", "high"),
-        ("sd-cpp-local", "", "512x512", "high"),
+        ("sd-cpp-local", "", "1024x1024", "high"),
         ("sd-cpp-local", "768x768", "768x768", "high"),
     ],
 )
@@ -136,4 +136,4 @@ async def test_mcp_preserves_local_diffusion_size(monkeypatch, size):
     await image_gen_server.call_tool("generate_image", {
         "prompt": "a cat", "model": "sd-cpp-local", **({"size": size} if size else {}),
     })
-    assert calls[0]["size"] == (size or "512x512")
+    assert calls[0]["size"] == (size or "1024x1024")

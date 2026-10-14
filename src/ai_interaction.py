@@ -1071,7 +1071,7 @@ async def do_generate_image(content: str | Dict, session_id: Optional[str] = Non
     _model_leaf = model_id_leaf(model_id)
     size_was_provided = bool(content.get("size")) if isinstance(content, dict) else bool(len(lines) > 2 and lines[2].strip())
     if _model_leaf == "sd-cpp-local" and not size_was_provided:
-        size = "512x512"
+        size = "1024x1024"
     is_gpt_image = is_gpt_image_model(_model_leaf)
     is_dalle = _model_leaf.startswith("dall-e")
     is_local_diffusion = not is_gpt_image and not is_dalle

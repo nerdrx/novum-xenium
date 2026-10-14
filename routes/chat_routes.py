@@ -2344,7 +2344,7 @@ def setup_chat_routes(
                         progress_callback=_image_progress_callback,
                     ))
                 else:
-                    _img_task = asyncio.create_task(do_generate_image(f"{_user_msg}\n{sess.model}\n512x512", session, owner=_user))
+                    _img_task = asyncio.create_task(do_generate_image(f"{_user_msg}\n{sess.model}\n1024x1024", session, owner=_user))
                 try:
                     _img_started = time.time()
                     _img_tick = 0

@@ -273,7 +273,7 @@
     {
       "evidence_directory": "cli-assembly-20261014-072524",
       "assessment": "incomplete",
-      "notes": "Adding the CLI around the untouched model-generated function stalled on an unnecessary request to confirm already-specified defaults. No source changes.",
+      "notes": "Adding the CLI around the untouched model-generated function stalled on an unnecessary request to confirm already-specified defaults. No source changes. After confirming the defaults in a bounded continuation, the model repeatedly requested nonexistent CLI skills; progress guard paused it. Source remained unchanged.",
       "adapter_status": "waiting_user",
       "adapter_exit": 2,
       "external_exit": 1,
@@ -283,5 +283,17 @@
       },
       "source_sha256": "70865d46e66aad3d847028558de55b3a6952ae9dc1f5bedc2063453d621b9c1d"
     }
-  ]
+  ],
+  "closing_check": {
+    "checked_at_utc": "2026-10-14T05:54:08.821842+00:00",
+    "authenticated_chat_status": "All 102 currently listed chats idle.",
+    "owned_evaluation_python_processes": 0,
+    "user_services_restarted_during_closing_check": false,
+    "deadline_utc": "2026-10-14T06:00:00Z",
+    "remaining_limitations": [
+      "No autonomous end-to-end success for the tested CLI; decomposition completed only the validation/sorting function.",
+      "Streaming parser, async cancellation, mixed Unicode indices, and insertion-order preservation remain demonstrated model weaknesses.",
+      "Review verdicts must not substitute for independent acceptance evidence."
+    ]
+  }
 }

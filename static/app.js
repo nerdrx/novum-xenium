@@ -36,7 +36,7 @@ import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js?v=20261007toolqueue1';
 import settingsModule from './js/settings.js';
-import { initUsage, refreshUsage } from './js/usage.js';
+import { initUsage, refreshUsage, resolveUsageModelName } from './js/usage.js';
 import { initModules } from './js/modules.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
@@ -4332,6 +4332,7 @@ function startOdysseusApp() {
   initUsage({
     openChat: id => sessionModule.selectSession(id),
     openAnalytics: () => settingsModule.open('usage'),
+    modelLabel: model => resolveUsageModelName(model, modelsModule.getCachedItems(), chatRenderer.modelRouteLabel),
   });
   const welcome = document.getElementById('welcome-screen');
   const dashboard = document.getElementById('home-dashboard');
@@ -4406,6 +4407,7 @@ function startOdysseusApp() {
   runNonCriticalStartup(() => {
     modelsModule.refreshModels(false).then(() => {
       try { sessionModule.updateModelPicker(); } catch (_) {}
+      refreshUsage();
     }).catch(() => {});
   }, 3500);
   runNonCriticalStartup(() => modelsModule.refreshProviders(), 6500);

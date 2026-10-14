@@ -63,7 +63,7 @@ function payload(days, mode) {
     if (day.user_messages) activeDays++;
   }
   const active = totals.messages > 0;
-  const modelName = mode === 'hostile' ? hostile : 'Fixture Chat Model';
+  const modelName = mode === 'hostile' ? hostile : 'nx-model-5';
   const models = active ? [{
     model: modelName,
     ...zeroCounts(),
@@ -171,9 +171,13 @@ function assertNoOverflow(metrics, name) {
         window.__usageCalls = [];
         const usage = await import('/static/js/usage.js');
         window.__usage = usage;
+        window.__modelLabel = (model) => usage.resolveUsageModelName(model, [
+          { models: ['nx-model-5'], models_display: ['Llama 3.1 8B'] },
+        ], (requested, actual) => String(actual || requested || '').split('/').pop());
         await usage.initUsage({
           openChat: id => window.__usageCalls.push(['chat', id]),
           openAnalytics: () => window.__usageCalls.push(['analytics']),
+          modelLabel: window.__modelLabel,
         });
         return true;
       });
@@ -191,6 +195,8 @@ function assertNoOverflow(metrics, name) {
           contentRight: dashboard.getBoundingClientRect().right,
           dailyDays: document.querySelectorAll('#home-dashboard .usage-chart-day').length,
           recentText: document.querySelector('#home-dashboard .usage-recent-chat').textContent,
+          favouriteModel: [...document.querySelectorAll('#home-dashboard .usage-facts dt')]
+            .find(label => label.textContent === 'Most used model')?.nextElementSibling.textContent,
           modelText: document.querySelector('#usage-panel .usage-table tbody th')?.textContent,
           hostileImgCount: document.querySelectorAll('#home-dashboard img[src="x"], #usage-panel img[src="x"]').length,
           xss: window.__usageXss,
@@ -198,7 +204,19 @@ function assertNoOverflow(metrics, name) {
       });
       assert.equal(initial.dailyDays, 7, 'dashboard shows seven daily bars');
       assert.ok(initial.recentText.includes('Product planning'), 'dashboard shows recent chats');
-      assert.equal(initial.modelText, 'Fixture Chat Model', 'dashboard shows model breakdown');
+      assert.equal(initial.favouriteModel, 'Llama 3.1 8B', 'dashboard resolves internal model ids to catalog display names');
+      assert.equal(initial.modelText, 'Llama 3.1 8B', 'usage table uses the same readable model name');
+      const modelLabelCases = await page.evaluate(() => ({
+        namespaced: window.__usage.resolveUsageModelName('vendor/nx-model-5', [
+          { models: ['nx-model-5'], models_display: ['Llama 3.1 8B'] },
+        ], (requested, actual) => String(actual || requested || '').split('/').pop()),
+        ambiguous: window.__usage.resolveUsageModelName('nx-model-5', [
+          { models: ['nx-model-5'], models_display: ['Llama 3.1 8B'] },
+          { models: ['nx-model-5'], models_display: ['Qwen 3.5'] },
+        ], (requested, actual) => String(actual || requested || '').split('/').pop()),
+      }));
+      assert.equal(modelLabelCases.namespaced, 'Llama 3.1 8B', 'short model matching resolves provider-prefixed historical IDs');
+      assert.equal(modelLabelCases.ambiguous, 'nx-model-5', 'conflicting catalog names keep the safe shortened ID');
       assertNoOverflow(initial, `${viewport.name} dashboard`);
       await page.screenshot({ path: path.join(screenshotDir, `usage-dashboard-${viewport.name}.png`), fullPage: true });
 

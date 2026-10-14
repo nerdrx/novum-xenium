@@ -29,6 +29,29 @@ function card(label, value, detail) {
   if (detail) element.append(node('span', 'usage-detail', detail));
   return element;
 }
+export function resolveUsageModelName(modelId, items = [], routeLabel = (value) => value) {
+  const raw = String(modelId || '').trim();
+  if (!raw) return 'Unknown model';
+  const normalized = String(routeLabel(raw, raw) || raw).trim().toLowerCase();
+  let match = null;
+  let ambiguous = false;
+  for (const item of Array.isArray(items) ? items : []) {
+    const ids = [...(Array.isArray(item.models) ? item.models : []), ...(Array.isArray(item.models_extra) ? item.models_extra : [])];
+    const labels = [...(Array.isArray(item.models_display) ? item.models_display : []), ...(Array.isArray(item.models_extra_display) ? item.models_extra_display : [])];
+    ids.forEach((id, index) => {
+      if (id !== raw && String(routeLabel(id, id) || id).trim().toLowerCase() !== normalized) return;
+      const label = String(labels[index] || id || '').trim();
+      if (match && match !== label) ambiguous = true;
+      else match = label;
+    });
+  }
+  const name = match && !ambiguous ? match : raw;
+  return routeLabel(name, name) || name;
+}
+
+function modelName(value) {
+  return callbacks.modelLabel ? callbacks.modelLabel(value) : String(value || 'Unknown model');
+}
 function stats(data, home = false) {
   const totals = data.totals;
   const group = node('div', 'usage-stats');
@@ -102,7 +125,7 @@ function analytics(data) {
     const body = node('tbody');
     data.models.forEach(model => {
       const row = node('tr');
-      const name = node('th', '', model.model || 'Unknown model'); name.scope = 'row'; row.append(name);
+      const name = node('th', '', modelName(model.model)); name.scope = 'row'; row.append(name);
       const hasTokens = model.measured_messages + model.estimated_messages + (model.unknown_metrics_messages || 0) > 0;
       row.append(node('td', '', number(model.assistant_messages)));
       [model.input_tokens, model.output_tokens].forEach(value => row.append(node('td', '', hasTokens ? number(value) : 'Unavailable')));
@@ -133,7 +156,7 @@ function dashboard(data) {
   const list = node('dl', 'usage-facts');
   const facts = [
     ['Chat streak', `${number(data.insights.streak_days)} day${data.insights.streak_days === 1 ? '' : 's'}`],
-    ['Most used model', data.insights.favourite_model || 'No favourite yet'],
+    ['Most used model', data.insights.favourite_model ? modelName(data.insights.favourite_model) : 'No favourite yet'],
     ['Busiest day', data.insights.busiest_day ? `${dateLabel(data.insights.busiest_day.date)} · ${number(data.insights.busiest_day.messages)} messages` : 'No activity yet'],
   ];
   if (Number.isFinite(data.insights.words_written)) facts.push(['Words you wrote', number(data.insights.words_written)]);

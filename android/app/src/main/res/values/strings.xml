@@ -32,4 +32,17 @@
     <string name="download_response_error">Server returned %1$d; open the direct file link</string>
     <string name="welcome_title">Your workspace, wherever you are</string>
     <string name="welcome_body">Connect your server to continue your chats, files, and tools. The private connection stays inside Novum Xenium.</string>
+    <string name="retry">Retry</string>
+    <string name="check_connection">Check connection</string>
+    <string name="checking_connection">Checking network, Tailscale, and server…</string>
+    <string name="close">Close</string>
+    <string name="no_network">No network connection. Connect to Wi-Fi or mobile data, then retry.</string>
+    <string name="private_connection_retry">Private connection is not ready. Retry, then sign in to Tailscale if asked.</string>
+    <string name="add_to_chat">Add to chat</string>
+    <string name="discard_share">Discard shared content</string>
+    <string name="shared_ready">Shared content · %1$d files · %2$d pending</string>
+    <string name="share_open_chat">Sign in and open a chat, then tap Add to chat. Nothing is sent automatically.</string>
+    <string name="share_failed">Could not read the shared content. Try sharing it again.</string>
+    <string name="share_too_large">Shared files exceed the 50 MB limit.</string>
+    <string name="too_many_shares">Finish adding or discard pending shares before sharing more.</string>
 </resources>

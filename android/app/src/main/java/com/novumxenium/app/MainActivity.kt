@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.OpenableColumns
+import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
@@ -27,7 +29,10 @@ import java.net.NetworkInterface
 import java.net.Proxy
 import java.net.URI
 import java.util.Collections
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
@@ -38,6 +43,7 @@ class MainActivity : Activity() {
     private var server: URI? = null
     private var proxyAddress = ""
     private var loginUrl = ""
+    private var starting = false
     private var connected = false
     private var proxyReady = false
     private var generation = 0
@@ -53,6 +59,13 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var signIn: Button
     private lateinit var welcome: LinearLayout
+    private lateinit var retry: Button
+    private lateinit var sharedBar: LinearLayout
+    private lateinit var sharedLabel: TextView
+    private lateinit var addShared: Button
+    private val shares = java.util.ArrayDeque<SharedContent>()
+    private var armedShare: SharedContent? = null
+    private var activeShareTransfer: String? = null
     private var chooser: ValueCallback<Array<Uri>>? = null
     private data class Download(val url: String, val cookie: String?, val userAgent: String)
     private var download: Download? = null
@@ -116,6 +129,11 @@ class MainActivity : Activity() {
         root.addView(header)
         status = TextView(this).apply { text = getString(R.string.connection_prompt); setPadding(dp(16), dp(8), dp(16), dp(8)); setTextColor(Color.LTGRAY) }
         header.addView(status)
+        val recovery = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(12), 0, dp(12), dp(8)) }
+        retry = Button(this).apply { text = getString(R.string.retry); styleButton(this, false); setOnClickListener { retryConnection() } }
+        recovery.addView(retry)
+        recovery.addView(Button(this).apply { text = getString(R.string.check_connection); styleButton(this, false); setOnClickListener { checkConnection() } })
+        header.addView(recovery)
         signIn = Button(this).apply {
             text = getString(R.string.tailscale_sign_in); styleButton(this, true)
             visibility = View.GONE; setOnClickListener { openExternal(loginUrl) }
@@ -123,6 +141,19 @@ class MainActivity : Activity() {
         root.addView(signIn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
             setMargins(dp(16), dp(4), dp(16), dp(12))
         })
+        sharedBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(4)); visibility = View.GONE
+        }
+        sharedLabel = TextView(this).apply { setTextColor(Color.LTGRAY); textSize = 13f }
+        sharedBar.addView(sharedLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addShared = Button(this).apply { text = getString(R.string.add_to_chat); styleButton(this, true); setOnClickListener { addSharedContent() } }
+        sharedBar.addView(addShared)
+        sharedBar.addView(Button(this).apply {
+            text = "×"; contentDescription = getString(R.string.discard_share); styleButton(this, false)
+            setOnClickListener { if (armedShare == null) { shares.pollFirst(); updateSharedContent() } }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        root.addView(sharedBar)
         val content = FrameLayout(this)
         web = WebView(this).apply { visibility = View.GONE }
         content.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -146,9 +177,181 @@ class MainActivity : Activity() {
         root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
         setupWebView()
+        if (savedInstanceState != null) {
+            val savedShares = savedInstanceState.getString("pendingShares")
+            if (savedShares != null) {
+                val items = JSONArray(savedShares)
+                for (index in 0 until items.length()) {
+                    val item = items.getJSONObject(index)
+                    val files = item.getJSONArray("files")
+                    shares.add(SharedContent(item.getString("text"), (0 until files.length()).map { Uri.parse(files.getString(it)) }.toMutableList()))
+                }
+                updateSharedContent()
+            } else receiveSharedContent(intent)
+        } else receiveSharedContent(intent)
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkChanges)
         handler.post(poll)
         if (saved.isNotBlank()) connect(saved) else configure()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveSharedContent(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        val items = JSONArray()
+        shares.forEach { items.put(JSONObject().put("text", it.text).put("files", JSONArray(it.files.map(Uri::toString)))) }
+        outState.putString("pendingShares", items.toString())
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun receiveSharedContent(intent: Intent) {
+        try {
+            val share = SharedContent.fromIntent(intent) ?: return
+            require(shares.size < 10 && shares.sumOf { it.text.length } + share.text.length <= 100_000 &&
+                shares.sumOf { it.files.size } + share.files.size <= 10) { getString(R.string.too_many_shares) }
+            shares.add(share)
+            updateSharedContent()
+        } catch (error: Exception) {
+            Toast.makeText(this, error.message ?: getString(R.string.share_failed), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun updateSharedContent() {
+        while (shares.peekFirst()?.isEmpty() == true) shares.removeFirst()
+        sharedBar.visibility = if (shares.isEmpty()) View.GONE else View.VISIBLE
+        val current = shares.peekFirst() ?: return
+        sharedLabel.text = getString(R.string.shared_ready, current.files.size, shares.size)
+        addShared.isEnabled = armedShare == null
+    }
+
+    private fun addSharedContent() {
+        val share = shares.peekFirst() ?: return
+        val target = server ?: return shareNotReady()
+        if (!pageReady || !ServerAddress.sameOrigin(target, web.url.orEmpty())) return shareNotReady()
+        if (armedShare != null) return
+        if (share.files.isNotEmpty()) {
+            armedShare = share
+            addShared.isEnabled = false
+            val transferId = UUID.randomUUID().toString()
+            activeShareTransfer = transferId
+            work.execute {
+                var failure: String? = null
+                try {
+                    val descriptors = JSONArray()
+                    share.files.forEach { uri ->
+                        val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                            ?.use { if (it.moveToFirst()) it.getString(0) else null }
+                            ?.takeIf { it.isNotBlank() } ?: uri.lastPathSegment ?: "shared-file"
+                        descriptors.put(JSONObject().put("name", name).put("type", contentResolver.getType(uri).orEmpty()))
+                    }
+                    check(evaluateShareScript(SharedContent.beginFileTransferScript(target.toString(), transferId, descriptors)))
+                    var total = 0L
+                    share.files.forEachIndexed { index, uri ->
+                        val input = contentResolver.openInputStream(uri) ?: error("Unable to open shared file")
+                        input.use { stream ->
+                            val buffer = ByteArray(256 * 1024)
+                            while (true) {
+                                val count = stream.read(buffer)
+                                if (count < 0) break
+                                total += count
+                                if (total > MAX_SHARED_FILE_BYTES) throw SharedFileTooLarge()
+                                val encoded = Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP)
+                                check(evaluateShareScript(SharedContent.appendFileChunkScript(target.toString(), transferId, index, encoded)))
+                            }
+                        }
+                    }
+                    check(evaluateShareScript(SharedContent.finishFileTransferScript(target.toString(), transferId, share.text)))
+                } catch (error: Exception) {
+                    failure = if (error is SharedFileTooLarge) getString(R.string.share_too_large) else getString(R.string.share_failed)
+                    runCatching { evaluateShareScript(SharedContent.clearFileTransferScript(target.toString(), transferId)) }
+                }
+                runOnUiThread {
+                    if (closed) return@runOnUiThread
+                    if (activeShareTransfer == transferId) activeShareTransfer = null
+                    if (armedShare !== share) return@runOnUiThread
+                    armedShare = null
+                    if (failure == null) {
+                        share.text = ""
+                        share.files.clear()
+                        updateSharedContent()
+                    } else {
+                        updateSharedContent()
+                        Toast.makeText(this, failure, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            return
+        }
+        addShared.isEnabled = false
+        web.evaluateJavascript(SharedContent.script(target.toString(), share.text)) { result ->
+            if (result == "true") {
+                share.text = ""
+                updateSharedContent()
+            } else {
+                updateSharedContent()
+                shareNotReady()
+            }
+        }
+    }
+
+    private fun evaluateShareScript(script: String): Boolean {
+        val latch = CountDownLatch(1)
+        var success = false
+        runOnUiThread {
+            if (!closed) web.evaluateJavascript(script) { result -> success = result == "true"; latch.countDown() }
+            else latch.countDown()
+        }
+        return latch.await(10, TimeUnit.SECONDS) && success
+    }
+
+    private class SharedFileTooLarge : Exception()
+
+    companion object { private const val MAX_SHARED_FILE_BYTES = 50L * 1024 * 1024 }
+
+    private fun shareNotReady(message: String = getString(R.string.share_open_chat)) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+
+    private fun retryConnection() {
+        if (starting) return
+        val saved = prefs.getString("server", "").orEmpty()
+        if (saved.isBlank()) configure() else connect(saved)
+    }
+
+    private fun checkConnection() {
+        val target = server ?: prefs.getString("server", "")?.let { runCatching { ServerAddress.parse(it) }.getOrNull() }
+        val token = generation
+        val client = bridge
+        val proxy = proxyAddress
+        val message = TextView(this).apply { text = getString(R.string.checking_connection); setPadding(dp(24), dp(16), dp(24), dp(16)) }
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.check_connection).setView(message)
+            .setNegativeButton(R.string.close, null)
+            .setNeutralButton(R.string.connection) { _, _ -> configure() }
+            .setPositiveButton(R.string.retry) { _, _ -> retryConnection() }.show()
+        work.execute {
+            val result = runCatching {
+                val manager = getSystemService(ConnectivityManager::class.java)
+                when {
+                    manager.activeNetwork == null -> getString(R.string.no_network)
+                    target == null -> getString(R.string.connection_prompt)
+                    client == null -> getString(R.string.private_connection_retry)
+                    else -> {
+                        val state = JSONObject(client.statusJSON()).optString("state")
+                        when (state) {
+                            "NeedsLogin" -> getString(R.string.tailscale_login_needed)
+                            "NeedsMachineAuth" -> getString(R.string.machine_approval_needed)
+                            "Running" -> ConnectionCheck.check(target, proxy).message
+                            else -> getString(R.string.private_connection_retry)
+                        }
+                    }
+                }
+            }.getOrDefault(getString(R.string.connection_status_unavailable))
+            runOnUiThread { if (!closed && token == generation && dialog.isShowing) message.text = result }
+        }
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
@@ -208,12 +411,14 @@ class MainActivity : Activity() {
     // Feature availability is checked before any asynchronous bridge work starts.
     @android.annotation.SuppressLint("RequiresFeature")
     private fun connect(address: String) {
+        if (starting) return
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
             status.text = getString(R.string.update_webview)
             return
         }
         val target = ServerAddress.parse(address)
         val token = ++generation
+        starting = true; retry.isEnabled = false
         pageReady = false; pageFailed = false; showConnectionControls()
         connected = false; proxyReady = false; loginUrl = ""; signIn.visibility = View.GONE
         web.stopLoading(); web.loadUrl("about:blank")
@@ -234,6 +439,7 @@ class MainActivity : Activity() {
                 require(addressOfProxy.startsWith("127.0.0.1:")) { getString(R.string.private_proxy_unavailable) }
                 runOnUiThread {
                     if (closed || token != generation) { work.execute { client.stop() }; return@runOnUiThread }
+                    starting = false; retry.isEnabled = true
                     bridge = client; server = target; proxyAddress = addressOfProxy
                     prefs.edit().putString("server", target.toString()).apply()
                     val config = ProxyConfig.Builder().addProxyRule(addressOfProxy).removeImplicitRules().build()
@@ -243,7 +449,7 @@ class MainActivity : Activity() {
                 }
             } catch (e: Exception) {
                 runCatching { started?.stop() }
-                runOnUiThread { if (token == generation && !closed) status.text = getString(R.string.connection_failed, e.message ?: getString(R.string.try_again)) }
+                runOnUiThread { if (token == generation && !closed) { starting = false; retry.isEnabled = true; status.text = getString(R.string.connection_failed, e.message ?: getString(R.string.try_again)) } }
             }
         }
     }
@@ -298,6 +504,10 @@ class MainActivity : Activity() {
                 openExternal(address); return true
             }
             override fun onPageStarted(view: WebView, address: String, icon: android.graphics.Bitmap?) {
+                activeShareTransfer?.let { id ->
+                    server?.let { view.evaluateJavascript(SharedContent.clearFileTransferScript(it.toString(), id), null) }
+                    activeShareTransfer = null
+                }
                 pageReady = false; pageFailed = false
                 handler.removeCallbacks(hideHeader)
             }

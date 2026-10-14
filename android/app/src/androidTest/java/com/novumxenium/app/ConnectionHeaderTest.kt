@@ -24,7 +24,13 @@ class ConnectionHeaderTest : Instrumentation() {
             val app = activity
             fun cancelDialog() {
                 waitForIdleSync()
-                val cancel = uiAutomation.rootInActiveWindow.findAccessibilityNodeInfosByText(app.getString(R.string.cancel)).first()
+                val deadline = SystemClock.uptimeMillis() + 5000
+                var cancel = uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText(app.getString(R.string.cancel))?.firstOrNull()
+                while (cancel == null && SystemClock.uptimeMillis() < deadline) {
+                    SystemClock.sleep(50)
+                    cancel = uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText(app.getString(R.string.cancel))?.firstOrNull()
+                }
+                checkNotNull(cancel) { "Connection dialog did not become visible" }
                 check(cancel.performAction(AccessibilityNodeInfo.ACTION_CLICK))
                 SystemClock.sleep(350)
                 waitForIdleSync()
@@ -100,7 +106,8 @@ class ConnectionHeaderTest : Instrumentation() {
             }
             waitForIdleSync()
             visible(false)
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "PASS: restart peek, connected hiding, navigation, disconnect recovery, Back settings, page-error recovery\n") })
+            ShareFlowChecks.run(this, app)
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "PASS: header timing/recovery; text-only, one and multiple shared file bytes, draft preservation, no automatic send\n") })
         } catch (error: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "FAIL: ${error.stackTraceToString()}\n") })
         } finally {

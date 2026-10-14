@@ -5,3 +5,4 @@ app/libs/*.aar
 *.keystore
 keystore.properties
 app/libs/*-sources.jar
+.kotlin/

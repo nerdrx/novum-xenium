@@ -17,6 +17,12 @@ Tailscale runs inside this app. It does not create an Android VPN service or red
 
 Connection identity is stored in Android's private app storage, excluded from backups. Closing or reconnecting preserves the identity; clearing app storage removes the local identity. You can also revoke the device in your Tailscale admin console. This app is not a Novum backend or a local model runtime.
 
+## Share and connection recovery
+
+Choose Novum Xenium from Android’s Share menu to stage text, links, or up to ten files (50 MiB total per share). Sign in and open a chat, then tap **Add to chat**. Existing draft text is preserved; sharing never sends the message automatically. Discard dismisses pending shared content.
+
+Use **Check connection** to inspect network availability, Tailscale state, and server reachability through the app’s private proxy. **Retry** reconnects using your saved address and identity. Checks never fall back to a direct LAN connection.
+
 ## Build
 
 Use the isolated toolchain to avoid installing Android development tools on your host:

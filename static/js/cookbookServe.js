@@ -745,14 +745,29 @@ function _remoteWindowsDiffusersUnsupported(target) {
   return !!(target?.host && target?.platform === 'windows');
 }
 
-function _backendChoicesForTarget(target) {
+function _isStableDiffusionCppCandidate(model) {
+  const id = `${model?.repo_id || ''} ${model?.name || ''} ${model?.path || ''}`.toLowerCase();
+  const isImage = !!(model?.is_diffusion || model?.is_image_gen || model?._tag === 'image')
+    || /(?:stable[-_ ]?diffusion|sdxl|sd[-_ ]?(?:1[.-]?5|2(?:[.-]\d+)?))/.test(id);
+  return isImage && !model?.is_video
+    && /(?:stable[-_ ]?diffusion|sdxl|sd[-_ ]?(?:1[.-]?5|2(?:[.-]\d+)?))/.test(id)
+    && !/(?:flux|ltx|video|upscal|z-image|qwen-image)/.test(id);
+}
+
+function _backendChoicesForTarget(target, model = null) {
+  let choices;
   if (target?.platform === 'windows') {
-    if (_remoteWindowsDiffusersUnsupported(target)) return [['llamacpp','llama.cpp']];
-    return [['llamacpp','llama.cpp'],['diffusers','Diffusers']];
+    if (_remoteWindowsDiffusersUnsupported(target)) choices = [['llamacpp','llama.cpp']];
+    else choices = [['llamacpp','llama.cpp'],['diffusers','Diffusers']];
+  } else {
+    choices = _isMetal()
+      ? [['mlx','MLX'],['mlx_image','MLX Image'],['llamacpp','llama.cpp'],['ollama','Ollama']]
+      : [['vllm','vLLM'],['sglang','SGLang'],['llamacpp','llama.cpp'],['ollama','Ollama'],['mlx','MLX'],['mlx_image','MLX Image'],['diffusers','Diffusers']];
   }
-  return _isMetal()
-    ? [['mlx','MLX'],['mlx_image','MLX Image'],['llamacpp','llama.cpp'],['ollama','Ollama']]
-    : [['vllm','vLLM'],['sglang','SGLang'],['llamacpp','llama.cpp'],['ollama','Ollama'],['mlx','MLX'],['mlx_image','MLX Image'],['diffusers','Diffusers']];
+  if (!target?.host && _isStableDiffusionCppCandidate(model)) {
+    choices.push(['stable-diffusion.cpp','stable-diffusion.cpp (built in)']);
+  }
+  return choices;
 }
 
 function _dependencyPkgForServeBackend(backend, modelName = '') {
@@ -928,6 +943,14 @@ function _runnableGgufFiles(model) {
   const files = _ggufFilesForModel(model);
   const primary = files.filter(f => (f.role || 'model') === 'model');
   return primary.length ? primary : files;
+}
+
+function _stableDiffusionCppGgufFiles(model) {
+  return _runnableGgufFiles(model).filter(file => {
+    const name = `${file.rel_path || ''} ${file.name || ''}`.toLowerCase();
+    return !file.split && Number(file.parts || 0) <= 1
+      && !/(?:mmproj|clip[_-]?[lg]?|vae|t5xxl|controlnet|unet|text[_-]?encoder|llm)/i.test(name);
+  });
 }
 
 function _selectedGgufSizeGb(model, relPath) {
@@ -1411,15 +1434,18 @@ function _rerenderCachedModels() {
       const _expertParallelDefault = _isMiniMaxMSeries || _isStepFunStep;
       const svm = (k, def) => (_modelSs && _hasOwn(_modelSs, k)) ? _modelSs[k] : def;
       const _serveTarget = _selectedServeTarget();
-      const _backendChoices = _backendChoicesForTarget(_serveTarget);
+      const _backendChoices = _backendChoicesForTarget(_serveTarget, m);
       const _allowedBackends = new Set(_backendChoices.map(([v]) => v));
-      const detectedBackend = _detectBackend(m).backend;
+      const _sdCppCandidate = _isStableDiffusionCppCandidate(m);
+      const _sdCppHasGguf = _sdCppCandidate && _stableDiffusionCppGgufFiles(m).length > 0;
+      const detectedBackend = _sdCppHasGguf ? 'stable-diffusion.cpp' : _detectBackend(m).backend;
       const _imageBackend = detectedBackend === 'mlx_image' || detectedBackend === 'diffusers';
-      let defaultBackend = (!_imageBackend && _repoForcedBackend && ss.backend && _allowedBackends.has(ss.backend))
+      const _forcedSdCppBackend = _repoForcedBackend && ss.backend === 'stable-diffusion.cpp' && _allowedBackends.has(ss.backend);
+      let defaultBackend = _forcedSdCppBackend
         ? ss.backend
-        : detectedBackend;
+        : ((!_imageBackend && _repoForcedBackend && ss.backend && _allowedBackends.has(ss.backend)) ? ss.backend : detectedBackend);
       if (!_allowedBackends.has(defaultBackend)) defaultBackend = _backendChoices[0]?.[0] || detectedBackend;
-      const savedMatchesBackend = !_imageBackend && (_repoForcedBackend || (ss.backend || 'vllm') === detectedBackend);
+      const savedMatchesBackend = _forcedSdCppBackend || (!_imageBackend && (_repoForcedBackend || (ss.backend || 'vllm') === detectedBackend));
       const sv = (k, def) => (ss[k] !== undefined && savedMatchesBackend) ? ss[k] : def;
       const defaultTp = defaultBackend === 'llamacpp' ? '1' : sv('tp', _isMiniMaxMSeries ? '8' : '1');
       const detectedGpuIds = _allGpuIds(_getGpuToggleTotal?.());
@@ -1440,7 +1466,15 @@ function _rerenderCachedModels() {
       const vllmKvCacheOpts = ['auto','fp8'].map(d => `<option value="${d}"${_kvSelected===d?' selected':''}>${d}</option>`).join('');
       const _l = (name, tip) => `<span>${name}<span class="hwfit-hint" title="${tip}">?</span></span>`;
       const _ggufChoices = _runnableGgufFiles(m);
+      const _sdCppGgufChoices = _sdCppCandidate ? _stableDiffusionCppGgufFiles(m) : [];
       const _savedGguf = String(sv('gguf_file', '') || '');
+      const _savedSdCppGguf = String(sv('sd_gguf_file', '') || '');
+      const _defaultSdCppGguf = _sdCppGgufChoices.some(file => file.rel_path === _savedSdCppGguf)
+        ? _savedSdCppGguf
+        : (_sdCppGgufChoices[0]?.rel_path || '');
+      const _sdCppGgufOptions = _sdCppGgufChoices.map(file =>
+        `<option value="${esc(file.rel_path)}"${file.rel_path === _defaultSdCppGguf ? ' selected' : ''}>${esc(_ggufFileLabel(file))}</option>`
+      ).join('');
       const _preferredGgufInclude = String(sv('_preferredGgufInclude', '') || '').replace(/\*/g, '').toLowerCase();
       const _preferredGguf = _preferredGgufInclude
         ? (_ggufChoices.find(f => String(f.rel_path || '').toLowerCase().includes(_preferredGgufInclude))
@@ -1568,6 +1602,15 @@ function _rerenderCachedModels() {
         panelHtml += `</div>`;
       } else if (_defaultGguf) {
         panelHtml += `<input type="hidden" class="hwfit-sf" data-field="gguf_file" value="${esc(_defaultGguf)}" />`;
+      }
+      if (_sdCppCandidate) {
+        if (_sdCppGgufChoices.length > 1) {
+          panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label>${_l('Checkpoint GGUF','Choose a single full-checkpoint GGUF; split components and sharded files are excluded.')}<select class="hwfit-sf hwfit-sf-wide" data-field="sd_gguf_file">${_sdCppGgufOptions}</select></label></div>`;
+        } else if (_defaultSdCppGguf) {
+          panelHtml += `<input type="hidden" class="hwfit-sf hwfit-backend-stable-diffusion.cpp" data-field="sd_gguf_file" value="${esc(_defaultSdCppGguf)}" />`;
+        }
+        panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label style="grid-column:1 / -1;">Checkpoint override (optional)${_h('Use a full Stable Diffusion 1.x/2.x or SDXL single checkpoint (.safetensors/.ckpt). Leave blank to use the selected cached GGUF above. This engine does not load arbitrary Diffusers pipelines, FLUX, or video models.')}<input type="text" class="hwfit-sf hwfit-sf-wide" data-field="sd_model_path" value="${esc(sv('sd_model_path', ''))}" placeholder="${esc(_defaultSdCppGguf ? `Using cached ${_defaultSdCppGguf.split('/').pop()}` : '/path/to/model.safetensors or .ckpt')}" /></label></div>`;
+        panelHtml += `<div class="hwfit-serve-row hwfit-backend-stable-diffusion.cpp"><label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="sd_vulkan"${sv('sd_vulkan', false) ? ' checked' : ''} /> Use optional Vulkan build${_h('Off by default: CPU mode works everywhere. Enable only when sd-server-vulkan is installed and the host has Vulkan access; uses --backend diffusion=vulkan0.')}</label><span style="grid-column:1 / -1;font-size:11px;color:var(--fg-muted);">Built-in engine serves one checkpoint file. CPU is the safe default; Vulkan needs the optional build.</span></div>`;
       }
       // Row 2: Core settings — the handful you actually touch every launch.
       // TP / Context / GPU / GPU Mem / Max Seqs / Dtype. Everything else
@@ -1861,6 +1904,16 @@ function _rerenderCachedModels() {
         if (hostField) hostField.value = f.host;
         const backend = f.backend || 'vllm';
         const serveModel = (f.model_path || '').trim() || (m.is_local_dir && m.path ? `${m.path}/${repo}` : repo);
+        if (backend === 'stable-diffusion.cpp') {
+          const selectedGguf = _stableDiffusionCppGgufFiles(m).find(file => file.rel_path === f.sd_gguf_file);
+          const manualPath = String(f.sd_model_path || '').trim();
+          f._sd_model_path = manualPath
+            ? _shellQuote(manualPath)
+            : (selectedGguf ? _selectedGgufExpr(m, repo, selectedGguf.rel_path) : '');
+          panel._sdModelPathAvailable = !!(manualPath || selectedGguf);
+        } else {
+          panel._sdModelPathAvailable = false;
+        }
         if (backend === 'llamacpp') {
           const ggufChoices = _runnableGgufFiles(m);
           const selectedGguf = ggufChoices.find(file => file.rel_path === f.gguf_file);
@@ -2152,6 +2205,7 @@ function _rerenderCachedModels() {
         llamacpp: '<svg width="14" height="14" viewBox="0 0 600 600" fill="none" aria-hidden="true"><path d="M600 392L504.249 558L504.137 557.929C487.252 584.069 458.193 600 426.864 600H120L240 392H600Z" fill="currentColor"/><path d="M240 392H0L199.602 46.0254C216.032 17.5463 246.411 0 279.29 0H466.154L240 392Z" fill="currentColor"/></svg>',
         ollama: '<span aria-hidden="true" style="display:block;width:14px;height:14px;background:currentColor;-webkit-mask:url(/static/icons/ollama-mark-crop.png) center/contain no-repeat;mask:url(/static/icons/ollama-mark-crop.png) center/contain no-repeat;"></span>',
         diffusers: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>',
+        'stable-diffusion.cpp': '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
       };
 
       // ── Custom Backend picker wiring ────────────────────────────────
@@ -3332,6 +3386,11 @@ function _rerenderCachedModels() {
         });
         serveState.backend = serveState.backend || (_detectBackend(m).backend) || 'vllm';
         const launchTarget = _selectedServeTarget(panel);
+        if (serveState.backend === 'stable-diffusion.cpp' && !panel._sdModelPathAvailable && !_cmdManuallyEdited) {
+          _restoreLaunchBtn();
+          uiModule.showToast('Choose a cached GGUF checkpoint or enter a local .safetensors/.ckpt path first.', 8000);
+          return;
+        }
         if (serveState.backend === 'llamacpp' && serveState.vision && !/(?:^|\s)(?:--mmproj|--clip_model_path)\b/.test(launchCmd)) {
           _restoreLaunchBtn();
           uiModule.showToast('Vision is checked, but no mmproj projector is in the launch command. Refresh cached models after downloading mmproj, or add --mmproj manually.', 8000);

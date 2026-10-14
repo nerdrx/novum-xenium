@@ -23,6 +23,10 @@ from src.tools._common import _parse_tool_args
 logger = logging.getLogger(__name__)
 
 
+def _is_stable_diffusion_cpp_cmd(cmd: str | None) -> bool:
+    return bool(re.search(r"(?:^|[\s/])sd-server(?:-cpu|-vulkan)?(?:\.exe)?(?:\s|$)", cmd or ""))
+
+
 def _string_arg(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
@@ -213,6 +217,12 @@ def _infer_serve_port(cmd: str) -> int:
     """Infer likely listen port from a serve command."""
     if not cmd:
         return 8080
+    m = re.search(r"--listen-port(?:=|\s+)(\d+)", cmd)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            pass
     m = re.search(r"--port\\s+(\\d+)", cmd)
     if m:
         try:
@@ -227,6 +237,8 @@ def _infer_serve_port(cmd: str) -> int:
             pass
     if "ollama" in cmd:
         return 11434
+    if _is_stable_diffusion_cpp_cmd(cmd):
+        return 1234
     return 8080
 
 
@@ -251,14 +263,27 @@ async def _ensure_served_endpoint(
     port = _infer_serve_port(cmd)
     base_url = f"http://{endpoint_host}:{port}/v1"
     short_name = model.split("/")[-1] if "/" in model else model
-    is_image = "diffusion_server.py" in (cmd or "") or "mlx_image_server.py" in (cmd or "")
+    is_sd_cpp = _is_stable_diffusion_cpp_cmd(cmd)
+    is_image = is_sd_cpp or (
+        "diffusion_server.py" in (cmd or "")
+        or "mlx_image_server.py" in (cmd or "")
+    )
+    display_name = short_name
+    if is_sd_cpp:
+        display_name = f"{short_name} (stable-diffusion.cpp)"
+    elif is_image:
+        display_name = f"{short_name} (image)"
     payload = {
-        "name": short_name if not is_image else f"{short_name} (image)",
+        "name": display_name,
         "base_url": base_url,
         "skip_probe": "true",
         "model_type": "image" if is_image else "llm",
         "container_local": "true" if container_local else "false",
     }
+    if is_sd_cpp:
+        # stable-diffusion.cpp intentionally advertises one fixed API model ID;
+        # never pin the human-readable Hugging Face repo as the request model.
+        payload["pinned_models"] = "sd-cpp-local"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -364,6 +389,7 @@ async def _cookbook_register_task(
 # the cookbook's task tracker. Each entry: (label, substring-list).
 # Match is case-insensitive against the FULL cmdline. First-match wins.
 _MODEL_PROCESS_PATTERNS = [
+    ("stable-diffusion.cpp", ["sd-server", "sd-server-cpu", "sd-server-vulkan"]),
     ("vLLM",            ["vllm.entrypoints", "vllm serve", "/vllm/", "vllm-openai"]),
     ("SGLang",          ["sglang.launch_server", "sglang/launch_server"]),
     ("MLX Image",       ["mlx_image_server.py", "mflux-generate-qwen", "mflux-generate"]),
@@ -737,6 +763,10 @@ async def do_serve_model(content: str, owner: Optional[str] = None) -> Dict:
             endpoint_id = data.get("endpoint_id") or ""
             if endpoint_id:
                 endpoint_added = True
+            elif _is_stable_diffusion_cpp_cmd(cmd):
+                # The serve route owns the session-scoped endpoint ID. Do not
+                # create a second, unscoped row if that registration failed.
+                endpoint_added = False
             else:
                 endpoint_meta = await _ensure_served_endpoint(model=repo_id, cmd=cmd, host=host)
                 endpoint_added = bool(endpoint_meta.get("added"))

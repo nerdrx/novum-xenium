@@ -717,8 +717,10 @@ async function initImageSettings() {
       backendMsg.textContent = 'This saved model is not in the enabled endpoint inventory. Enable its provider and refresh the model list.';
     } else if (selectedModel && selectedModel.toLowerCase().includes('chatgpt-image')) {
       backendMsg.textContent = 'For chatgpt-image-codex, configure the optional host Codex bridge. Quality and size guide generation; Codex may choose the final resolution.';
+    } else if (selectedModel === 'sd-cpp-local') {
+      backendMsg.textContent = 'Local stable-diffusion.cpp engine. Keep its Cookbook server running; image size is supported, but the cloud quality setting is ignored.';
     } else if (!selectedModel && !Array.from(modelSel.options).some(function(option) { return option.value; })) {
-      backendMsg.textContent = 'No image-generation backend detected. Add and enable an image provider under Settings → AI, then refresh its model list.';
+      backendMsg.textContent = 'For local images, download a compatible Stable Diffusion checkpoint in Cookbook and launch its built-in engine. You can also add an image provider under Settings → AI.';
     } else {
       backendMsg.textContent = 'Quality and size support depend on the selected provider.';
     }

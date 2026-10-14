@@ -985,6 +985,12 @@ export function _buildServeCmd(f, modelName, backend) {
     if (_mlxLoraPaths.length) cmd += ` --lora-paths ${_mlxLoraPaths.map(_shellQuote).join(' ')}`;
     const _mlxLoraScales = _listField(f.mlx_lora_scales).filter(s => /^-?\d+(?:\.\d+)?$/.test(s));
     if (_mlxLoraScales.length) cmd += ` --lora-scales ${_mlxLoraScales.map(_shellQuote).join(' ')}`;
+  } else if (backend === 'stable-diffusion.cpp') {
+    const listenIp = f.host ? '0.0.0.0' : '127.0.0.1';
+    const modelFile = String(f._sd_model_path || '').trim();
+    const useVulkan = !!f.sd_vulkan;
+    const binary = useVulkan ? 'sd-server-vulkan' : 'sd-server';
+    cmd += `${binary}${modelFile ? ` -m ${modelFile}` : ''} --listen-ip ${listenIp} --listen-port ${f.port || '1234'} --backend ${useVulkan ? 'diffusion=vulkan0' : 'cpu'}`;
   } else if (backend === 'mlx') {
     const mlxPy = _isWindows() ? 'python' : _py3Bin;
     const mlxHost = f.host ? '0.0.0.0' : '127.0.0.1';

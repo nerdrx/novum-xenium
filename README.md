@@ -80,6 +80,12 @@ Open the same workspace on your phone. The Android app includes its own Tailscal
 
 Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. [Connection, build, and compatibility details](android/README.md).
 
+## Local image generation
+
+The Docker backend includes stable-diffusion.cpp with CPU and optional Vulkan builds. Download a compatible Stable Diffusion checkpoint in Cookbook, choose the built-in engine, and launch it. Cookbook registers the image provider for chat and Gallery. Model weights are downloaded separately, under their own licenses.
+
+[Local image setup and GPU support](docs/local-images.md). The Android companion uses this same server-side engine.
+
 ## Built around doing the work
 
 ### Clearer activity

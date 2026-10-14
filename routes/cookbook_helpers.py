@@ -609,6 +609,8 @@ OLLAMA_MISSING_HINT = (
 # Anything else is rejected before the cmd is interpolated into a tmux/PowerShell wrapper.
 _SERVE_CMD_ALLOWLIST = {
     "vllm", "llama-server", "llama-server.exe", "llama_server", "llama.cpp", "ollama",
+    "sd-server", "sd-server.exe", "sd-server-cpu", "sd-server-cpu.exe",
+    "sd-server-vulkan", "sd-server-vulkan.exe",
     "python", "python3",
     "sglang", "lmdeploy",
     "node", "npx",

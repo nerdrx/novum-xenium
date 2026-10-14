@@ -1,3 +1,12 @@
+# ---- builder: stable-diffusion.cpp CPU + optional Vulkan binaries ----
+FROM ubuntu:24.04 AS stable-diffusion-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates cmake git libvulkan-dev glslc spirv-headers \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/build-stable-diffusion.sh /usr/local/bin/build-stable-diffusion.sh
+RUN sh /usr/local/bin/build-stable-diffusion.sh cpu /out
+RUN sh /usr/local/bin/build-stable-diffusion.sh vulkan /out
+
 # ---- builder: patch + build wheels for Real-ESRGAN's broken-on-3.14 deps ----
 # basicsr/gfpgan/facexlib read their version via exec()+locals()['__version__'],
 # which raises KeyError on Python 3.13+ (PEP 667). Build patched wheels here so
@@ -39,6 +48,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0t64 \
     libxcb1 \
     libmagic1 \
+    libgomp1 \
+    libvulkan1 \
+    mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/*
 
 # libgl1/libglib2.0-0t64/libxcb1 are runtime shared libs (libGL.so.1,
@@ -74,6 +86,16 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && rm -rf /tmp/docker /tmp/docker.tgz
 
 WORKDIR /app
+
+# Stable Diffusion runtime is available in every Docker backend. CPU is the
+# portable default; use sd-server-vulkan only with explicit Linux GPU passthrough.
+COPY --from=stable-diffusion-build /out/cpu/ /opt/stable-diffusion/cpu/
+COPY --from=stable-diffusion-build /out/vulkan/ /opt/stable-diffusion/vulkan/
+COPY --from=stable-diffusion-build /out/licenses/stable-diffusion.cpp-LICENSE /usr/share/licenses/stable-diffusion.cpp/LICENSE
+COPY --from=stable-diffusion-build /out/licenses/ggml-LICENSE /usr/share/licenses/stable-diffusion.cpp/ggml-LICENSE
+RUN printf '#!/bin/sh\nexec /opt/stable-diffusion/cpu/sd-server "$@"\n' > /usr/local/bin/sd-server \
+    && printf '#!/bin/sh\nexec /opt/stable-diffusion/vulkan/sd-server "$@"\n' > /usr/local/bin/sd-server-vulkan \
+    && chmod 0755 /usr/local/bin/sd-server /usr/local/bin/sd-server-vulkan
 
 # Keep GitHub CLI credentials in persistent app data, isolated from host login
 # state and outside the paths exposed to agent file tools.

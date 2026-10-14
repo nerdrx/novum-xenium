@@ -1,0 +1,9 @@
+# Optional Vulkan passthrough for stable-diffusion.cpp on Linux Docker hosts.
+# Select sd-server-vulkan explicitly; the normal `sd-server` always uses CPU.
+# This overlay is not for Docker Desktop on macOS/Windows.
+services:
+  odysseus:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-video}"

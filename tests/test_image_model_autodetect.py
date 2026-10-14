@@ -50,6 +50,8 @@ async def test_auto_detect_uses_bridge_auth_and_endpoint_name(monkeypatch, empty
     [
         ("chatgpt-image-codex", "512x512", "1024x1024", "high"),
         ("flux-schnell", "512x512", "512x512", "high"),
+        ("sd-cpp-local", "", "512x512", "high"),
+        ("sd-cpp-local", "768x768", "768x768", "high"),
     ],
 )
 async def test_direct_image_generation_uses_model_specific_size_policy(
@@ -111,3 +113,27 @@ async def test_mcp_auto_detect_forwards_bridge_auth_and_quality(monkeypatch):
                       {"model": "chatgpt-image-codex", "prompt": "a cat", "n": 1,
                        "size": "1024x1024", "quality": "high"},
                       {"Authorization": "Bearer test-token"})]
+
+
+@pytest.mark.parametrize("size", [None, "512x512", "768x768"])
+async def test_mcp_preserves_local_diffusion_size(monkeypatch, size):
+    from mcp_servers import image_gen_server
+    import src.settings as settings
+    monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda owner: False)
+    monkeypatch.setattr(images, "_resolve_model", lambda *a, **k: (
+        "http://127.0.0.1:8090/v1/chat/completions", "sd-cpp-local", {}))
+    monkeypatch.setattr(settings, "load_settings", lambda: {})
+    monkeypatch.setattr(settings, "get_setting", lambda key, default=None: default)
+    calls = []
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, *, json, headers):
+            calls.append(json)
+            return httpx.Response(400, json={"error": {"message": "fixture"}})
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    await image_gen_server.call_tool("generate_image", {
+        "prompt": "a cat", "model": "sd-cpp-local", **({"size": size} if size else {}),
+    })
+    assert calls[0]["size"] == (size or "512x512")

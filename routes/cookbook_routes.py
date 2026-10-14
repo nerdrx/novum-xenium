@@ -1,6 +1,7 @@
 """Cookbook routes — model download, serve, cache scanning, and cookbook state sync."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -45,6 +46,95 @@ from routes.cookbook_output import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SD_CPP_IMAGE_MODEL_ID = "sd-cpp-local"
+
+
+def _is_stable_diffusion_cpp_command(command: str | None) -> bool:
+    """Recognize the packaged stable-diffusion.cpp server executable."""
+    try:
+        parts = shlex.split(command or "")
+    except ValueError:
+        return False
+    env_assignment = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+    executable = next((part for part in parts if not env_assignment.match(part)), "")
+    return os.path.basename(executable).lower() in {
+        "sd-server", "sd-server.exe", "sd-server-cpu", "sd-server-cpu.exe",
+        "sd-server-vulkan", "sd-server-vulkan.exe",
+    }
+
+
+def _is_image_server_command(command: str | None) -> bool:
+    command = command or ""
+    return (
+        "diffusion_server.py" in command
+        or "mlx_image_server.py" in command
+        or _is_stable_diffusion_cpp_command(command)
+    )
+
+
+def _stable_diffusion_cpp_endpoint(
+    command: str, remote: str | None = None, launch_id: str | None = None
+) -> tuple[str, str]:
+    """Return the base URL and stable owned endpoint ID for an sd.cpp serve."""
+    port_match = re.search(r"--listen-port(?:=|\s+)(\d+)", command or "")
+    port = int(port_match.group(1)) if port_match else 1234
+    host = (remote.split("@")[-1] if remote else "localhost")
+    base_url = f"http://{host}:{port}/v1"
+    # Bind ownership to this Cookbook launch, not only its port: a stopped old
+    # task must never delete a newer server that reused the same address.
+    ownership_key = f"{base_url}\0{launch_id or 'unscoped'}"
+    endpoint_id = f"img-sdcpp-{hashlib.sha256(ownership_key.encode()).hexdigest()[:12]}"
+    return base_url, endpoint_id
+
+
+def _delete_stable_diffusion_cpp_endpoint(
+    command: str,
+    remote: str | None = None,
+    launch_id: str | None = None,
+    endpoint_id: str | None = None,
+) -> None:
+    """Remove only the image endpoint owned by this Cookbook sd.cpp serve."""
+    base_url, owned_endpoint_id = _stable_diffusion_cpp_endpoint(command, remote, launch_id)
+    if endpoint_id and endpoint_id != owned_endpoint_id:
+        logger.warning(
+            "Ignoring unscoped stable-diffusion.cpp endpoint ID %s during stop cleanup",
+            endpoint_id,
+        )
+        return
+    endpoint_id = owned_endpoint_id
+    try:
+        from core.database import SessionLocal, ModelEndpoint
+        db = SessionLocal()
+        try:
+            endpoint = db.query(ModelEndpoint).filter(
+                ModelEndpoint.id == endpoint_id,
+                ModelEndpoint.base_url == base_url,
+                ModelEndpoint.model_type == "image",
+            ).first()
+            if endpoint:
+                from src.settings import load_settings, save_settings
+                endpoint_name = endpoint.name
+                db.delete(endpoint)
+                db.flush()
+                same_name_endpoint = db.query(ModelEndpoint).filter(
+                    ModelEndpoint.name == endpoint_name,
+                    ModelEndpoint.model_type == "image",
+                    ModelEndpoint.is_enabled == True,
+                ).first()
+                settings = load_settings()
+                if (
+                    not same_name_endpoint
+                    and settings.get("image_model") == f"{_SD_CPP_IMAGE_MODEL_ID}@{endpoint_name}"
+                ):
+                    settings["image_model"] = ""
+                    save_settings(settings)
+                db.commit()
+                logger.info("Removed stopped Cookbook stable-diffusion.cpp endpoint %s", endpoint_id)
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("Failed to remove stopped stable-diffusion.cpp endpoint: %r", exc)
 
 from routes.cookbook_helpers import (
     _SESSION_ID_RE, _validate_repo_id, _validate_serve_model_id, _validate_include, _validate_token,
@@ -237,6 +327,16 @@ def _missing_binary_message(
         return (
             f"Docker is required by this Cookbook launch command on {target}, but the docker CLI was not found. "
             "Install Docker and make sure this user can run `docker`, then retry."
+        )
+    binary_name = os.path.basename(binary).lower()
+    if binary_name in {"sd-server", "sd-server.exe", "sd-server-cpu", "sd-server-cpu.exe", "sd-server-vulkan", "sd-server-vulkan.exe"}:
+        mode = "vulkan" if "vulkan" in binary_name else "cpu"
+        produced = f"<output-dir>/{'vulkan' if mode == 'vulkan' else 'cpu'}/sd-server"
+        wrapper = "sd-server-vulkan" if mode == "vulkan" else "sd-server"
+        return (
+            f"The stable-diffusion.cpp {mode} server is missing on {target}. "
+            f"Build it with `scripts/build-stable-diffusion.sh {mode} <output-dir>`; the binary is "
+            f"`{produced}`. Put it on PATH as `{wrapper}`, or use an install that bundles the engine."
         )
     return f"{binary} is required on {target}, but it was not found."
 
@@ -1518,11 +1618,54 @@ def setup_cookbook_routes() -> APIRouter:
 
         return {"models": models, "host": host or "local"}
 
-    def _auto_register_image_endpoint(req: ServeRequest, remote: str | None) -> str | None:
+    def _auto_register_image_endpoint(
+        req: ServeRequest, remote: str | None, launch_id: str | None = None
+    ) -> str | None:
         """Register a diffusion model as an image endpoint so it appears in the model selector."""
         import re
         from core.database import SessionLocal, ModelEndpoint
         from src.settings import load_settings, save_settings
+
+        if _is_stable_diffusion_cpp_command(req.cmd):
+            base_url, ep_id = _stable_diffusion_cpp_endpoint(req.cmd, remote, launch_id)
+            short_name = req.repo_id.split("/")[-1] if "/" in req.repo_id else req.repo_id
+            display_name = f"{short_name or 'Stable Diffusion'} (sd.cpp {str(launch_id or '')[-4:]})"
+            db = SessionLocal()
+            try:
+                # This deterministic ID is the ownership boundary for lifecycle
+                # cleanup. Never adopt a different/manual endpoint merely because
+                # it happens to use the same port.
+                ep = db.query(ModelEndpoint).filter(ModelEndpoint.id == ep_id).first()
+                previous_name = ep.name if ep else ""
+                if ep is None:
+                    ep = ModelEndpoint(id=ep_id, name=display_name, base_url=base_url)
+                    db.add(ep)
+                ep.name = display_name
+                ep.base_url = base_url
+                ep.api_key = None
+                ep.is_enabled = True
+                ep.model_type = "image"
+                ep.endpoint_kind = "local"
+                ep.model_refresh_mode = "manual"
+                ep.cached_models = json.dumps([_SD_CPP_IMAGE_MODEL_ID])
+                ep.pinned_models = json.dumps([_SD_CPP_IMAGE_MODEL_ID])
+                db.commit()
+                settings = load_settings()
+                settings["image_gen_enabled"] = True
+                if (
+                    not settings.get("image_model")
+                    or settings.get("image_model") == f"{_SD_CPP_IMAGE_MODEL_ID}@{previous_name}"
+                ):
+                    settings["image_model"] = f"{_SD_CPP_IMAGE_MODEL_ID}@{display_name}"
+                save_settings(settings)
+                logger.info("Auto-registered stable-diffusion.cpp image endpoint: %s @ %s", display_name, base_url)
+                return ep_id
+            except Exception as exc:
+                logger.error("Failed to auto-register stable-diffusion.cpp endpoint: %r", exc)
+                db.rollback()
+                return None
+            finally:
+                db.close()
 
         # Parse port from command (--port NNNN), default 8100 for diffusion_server
         port_match = re.search(r'--port\s+(\d+)', req.cmd)
@@ -1652,6 +1795,7 @@ def setup_cookbook_routes() -> APIRouter:
         remote: str | None,
         ssh_port: str | None,
         is_windows: bool,
+        stable_diffusion_command: str | None = None,
     ) -> None:
         """Drop a freshly-registered endpoint when the cookbook serve dies early.
 
@@ -1719,6 +1863,14 @@ def setup_cookbook_routes() -> APIRouter:
                 # the same form. Don't drop the endpoint on a clean exit;
                 # let the probe layer mark it offline if nothing's listening.
                 logger.info(f"crash-watchdog: serve {session_id} exited cleanly (0); leaving endpoint {endpoint_id}")
+                return
+            if stable_diffusion_command and _is_stable_diffusion_cpp_command(stable_diffusion_command):
+                # A newer server may already answer on this same port. The
+                # session-scoped endpoint is ours regardless of reachability;
+                # use common cleanup so its selected default is reconciled too.
+                _delete_stable_diffusion_cpp_endpoint(
+                    stable_diffusion_command, remote, session_id, endpoint_id
+                )
                 return
             # Non-zero exit — drop the endpoint.
             try:
@@ -2054,6 +2206,21 @@ def setup_cookbook_routes() -> APIRouter:
         # LOCAL execution on a native-Windows host never uses tmux (detached
         # process path below), regardless of the UI-supplied platform.
         local_windows = IS_WINDOWS and not remote
+        if _is_stable_diffusion_cpp_command(req.cmd):
+            try:
+                tokens = shlex.split(req.cmd)
+            except ValueError:
+                tokens = []
+            env_assignment = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+            executable = next((part for part in tokens if not env_assignment.match(part)), "sd-server")
+            binary = executable if "/" in executable or "\\" in executable else os.path.basename(executable)
+            if not await _binary_available(binary, remote, req.ssh_port, windows=is_windows):
+                hint_binary = "sd-server-vulkan" if "vulkan" in binary.lower() else "sd-server"
+                return {
+                    "ok": False,
+                    "error": _missing_binary_message(hint_binary, remote or "local server"),
+                    "session_id": session_id,
+                }
         if is_windows and remote and "diffusion_server.py" in req.cmd:
             raise HTTPException(
                 400,
@@ -2786,9 +2953,10 @@ def setup_cookbook_routes() -> APIRouter:
         # endpoint; any other real model serve (i.e. not a pip-install task) gets
         # a local LLM endpoint pointed at its /v1.
         endpoint_id = None
-        is_image_endpoint = "diffusion_server.py" in req.cmd or "mlx_image_server.py" in req.cmd
+        is_sd_cpp_endpoint = _is_stable_diffusion_cpp_command(req.cmd)
+        is_image_endpoint = _is_image_server_command(req.cmd)
         if is_image_endpoint:
-            endpoint_id = _auto_register_image_endpoint(req, remote)
+            endpoint_id = _auto_register_image_endpoint(req, remote, session_id if is_sd_cpp_endpoint else None)
         elif not is_pip_install:
             endpoint_id = _auto_register_llm_endpoint(req, remote)
 
@@ -2803,13 +2971,14 @@ def setup_cookbook_routes() -> APIRouter:
         # if N != 0 within the watch window, delete the endpoint we just
         # created. Skipped for diffusion (different image-endpoint cleanup
         # path) and pip-install tasks (no endpoint to drop).
-        if endpoint_id and not is_image_endpoint and not is_pip_install:
+        if endpoint_id and (not is_image_endpoint or is_sd_cpp_endpoint) and not is_pip_install:
             asyncio.create_task(_serve_crash_watchdog(
                 endpoint_id=endpoint_id,
                 session_id=session_id,
                 remote=remote,
                 ssh_port=req.ssh_port,
                 is_windows=is_windows,
+                stable_diffusion_command=req.cmd if is_sd_cpp_endpoint else None,
             ))
 
         # Log to assistant
@@ -3812,6 +3981,7 @@ def setup_cookbook_routes() -> APIRouter:
                 except Exception:
                     cur = []
                 LIVE_PROCS = {"python", "python3", "vllm", "llama-server",
+                              "sd-server", "sd-server-cpu", "sd-server-vulkan",
                               "llama_cpp_main", "sglang", "mlx_lm", "lmdeploy",
                               "ollama", "node", "uvicorn"}
                 if not any(c in LIVE_PROCS for c in cur):
@@ -4552,6 +4722,34 @@ def setup_cookbook_routes() -> APIRouter:
 
             # Parse structured phase info — single source of truth for the UI
             phase_info = _parse_serve_phase(full_snapshot, task_type) if (task_type == "serve" and full_snapshot) else {}
+            if task_type == "serve" and is_alive and _is_stable_diffusion_cpp_command(_payload.get("_cmd") or ""):
+                probe_base, _ = _stable_diffusion_cpp_endpoint(_payload.get("_cmd") or "", remote or None)
+                sd_cpp_ready = False
+                try:
+                    with urllib.request.urlopen(probe_base.rstrip("/") + "/models", timeout=2) as response:
+                        models = json.loads(response.read().decode("utf-8", errors="replace"))
+                    entries = models.get("data", []) if isinstance(models, dict) else []
+                    if any(
+                        isinstance(entry, dict) and entry.get("id") == _SD_CPP_IMAGE_MODEL_ID
+                        for entry in entries
+                    ):
+                        sd_cpp_ready = True
+                        status = "ready"
+                        serve_phase = "ready"
+                        phase_info["status"] = "ready"
+                        phase_info["phase"] = "ready"
+                except Exception:
+                    # An alive process can still be loading its checkpoint; do
+                    # not advertise it as ready until the OpenAI model route
+                    # answers with the stable server's fixed model ID.
+                    pass
+                if not sd_cpp_ready and phase_info.get("status") == "ready":
+                    # Generic startup log markers are not sufficient for this
+                    # server: only its model-list route proves it finished
+                    # loading and can accept image-generation requests.
+                    status = "running"
+                    phase_info["status"] = "running"
+                    phase_info["phase"] = "starting"
             if phase_info.get("status") == "ready" and is_alive:
                 status = "ready"
             serve_phase = phase_info.get("phase", "")
@@ -4561,6 +4759,24 @@ def setup_cookbook_routes() -> APIRouter:
             if download_zero_files:
                 diagnosis = {"message": "No matching files were downloaded. The model repo or filename/quant pattern may be wrong (for example a ':Q4_K_M' tag that does not exist in the repo). Check the repo and the include/quant pattern."}
             output_tail = error_aware_output_tail(full_snapshot, status)
+
+            # The status route is also the lifecycle reconciliation path for
+            # Cookbook serves (including UI stop actions). Delete only the row
+            # keyed by this command's deterministic ID, even if another process
+            # later binds the same port.
+            task_cmd = _payload.get("_cmd") or ""
+            if task_type == "serve" and not is_alive and _is_stable_diffusion_cpp_command(task_cmd):
+                # Tool-launched tasks may have fallen back to /api/model-endpoints
+                # and persist that exact ID at the task root. UI launches use the
+                # session-bound deterministic ID returned by our registration.
+                _delete_stable_diffusion_cpp_endpoint(
+                    task_cmd,
+                    remote or None,
+                    session_id,
+                    task.get("_endpointId")
+                    or _payload.get("_endpointId")
+                    or _payload.get("endpoint_id"),
+                )
 
             results.append({
                 "session_id": session_id,

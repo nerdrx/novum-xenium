@@ -115,8 +115,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 raise
             url, model_id, headers = await asyncio.to_thread(_resolve_model, model_spec, owner=owner)
 
-        from src.image_model_ids import is_gpt_image_model
+        from src.image_model_ids import is_gpt_image_model, model_id_leaf
         is_gpt_image = is_gpt_image_model(model_id)
+        if model_id_leaf(model_id) == "sd-cpp-local" and not arguments.get("size"):
+            size = "512x512"
         base_url = url.replace("/chat/completions", "").replace("/v1/messages", "").rstrip("/")
         images_url = base_url + "/images/generations"
 
@@ -124,7 +126,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         valid_dalle3_sizes = {"1024x1024", "1024x1792", "1792x1024"}
         if is_gpt_image and size not in valid_gpt_sizes:
             size = "1024x1024"
-        elif not is_gpt_image and size not in valid_dalle3_sizes:
+        elif model_id_leaf(model_id).startswith("dall-e") and size not in valid_dalle3_sizes:
             size = "1024x1024"
 
         payload = {"model": model_id, "prompt": prompt, "n": 1, "size": size}

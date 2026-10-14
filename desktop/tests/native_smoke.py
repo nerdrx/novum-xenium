@@ -347,9 +347,9 @@ try:
     print('PASS: native config/status/logs/workbench; remote management blocked',flush=True)
     if options.browser_probe:
         for _ in range(100):
-            if execute("return document.documentElement.dataset.nxWindowFrame === 'custom'"): break
+            if execute("return ['custom', 'native'].includes(document.documentElement.dataset.nxWindowFrame)"): break
             time.sleep(.1)
-        assert execute("return document.documentElement.dataset.nxWindowFrame === 'custom'"), 'custom window controls did not mount'
+        assert execute("return ['custom', 'native'].includes(document.documentElement.dataset.nxWindowFrame)"), 'window frame did not initialize'
         probe_url = 'https://example.com/?a=1&b=2'
         execute('window.location.href=' + json.dumps(probe_url))
         for _ in range(100):

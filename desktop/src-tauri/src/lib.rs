@@ -1122,23 +1122,13 @@ fn update_workbench_chrome(window: &WebviewWindow) {
     }
 }
 
+fn native_wayland_frame() -> bool {
+    cfg!(target_os = "linux")
+        && std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && !std::env::var("GDK_BACKEND").is_ok_and(|value| value == "x11")
+}
+
 fn set_window_decorations(window: &WebviewWindow, decorated: bool) -> tauri::Result<()> {
-    #[cfg(target_os = "linux")]
-    window.with_webview(move |webview| {
-        use gtk::prelude::*;
-        if let Some(window) = webview.inner().toplevel().and_then(|widget| widget.downcast::<gtk::Window>().ok()) {
-            if window.display().type_().name() == "GdkWaylandDisplay" {
-                // Tao installs this CSD hint only at creation. We switch frames
-                // after the web controls mount, so update the hint here too.
-                if decorated {
-                    window.set_titlebar(None::<&gtk::Widget>);
-                } else {
-                    window.set_titlebar(Some(&gtk::EventBox::new()));
-                }
-                window.set_decorated(decorated);
-            }
-        }
-    })?;
     window.set_decorations(decorated)
 }
 
@@ -1148,7 +1138,7 @@ fn handle_workbench_window_action(
     action: &str,
 ) -> tauri::Result<()> {
     match action {
-        "ready" if !cfg!(target_os = "macos") => {
+        "ready" if !cfg!(target_os = "macos") && !native_wayland_frame() => {
             set_window_decorations(window, false)?;
             // If injection cannot complete, immediately retain native controls.
             if let Err(error) =

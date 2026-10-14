@@ -128,3 +128,11 @@ managed provider; the standalone zVram manager remains a separate app.
 These host controls require the Linux desktop app. Browser-only clients and
 other platforms can use an already-running compatible provider through the
 ordinary model endpoint settings.
+
+### Linux window identity
+
+The native Wayland window uses `novum-xenium` as its application identity.
+Desktop launchers should use `StartupWMClass=novum-xenium` and the packaged NX
+icon. For compositors that resolve icons by filename, install the desktop entry
+as `novum-xenium.desktop`. Keep the native Wayland frame: changing GTK titlebar
+widgets after realization can leave the WebKit surface blank.

@@ -9,6 +9,8 @@ An Android companion for your existing Novum Xenium server. The workspace stays 
 3. Choose **Sign in to Tailscale** and authorize this app's device in your browser. Approve the device in your tailnet if your policy requires it.
 4. Sign in to Novum in the workspace.
 
+The connection header hides when the server page appears. On app restart it stays visible for at least two seconds, then hides once connected. Connection errors restore the controls. To change the server while connected, use Android Back at the first workspace page to open Connection settings.
+
 For a LAN address, your router must advertise the relevant subnet route, that route must be approved in Tailscale, and your tailnet policy must permit this device to reach the server. The embedded node accepts subnet routes. The server must listen on a reachable LAN address rather than only `127.0.0.1`.
 
 Tailscale runs inside this app. It does not create an Android VPN service or redirect other apps. The WebView uses a loopback proxy restricted to your configured server's host and port. There is no direct-network fallback when Tailscale is unavailable. External HTTPS links open in your normal browser. Third-party embedded resources are not routed through this proxy.

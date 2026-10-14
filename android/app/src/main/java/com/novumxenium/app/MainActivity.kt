@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
@@ -41,6 +42,13 @@ class MainActivity : Activity() {
     private var proxyReady = false
     private var generation = 0
     private var closed = false
+    private lateinit var header: LinearLayout
+    private var pageReady = false
+    private var pageFailed = false
+    private var startupPeekUntil = 0L
+    private val hideHeader = Runnable {
+        if (pageReady && connected && !closed) header.visibility = View.GONE
+    }
     private lateinit var web: WebView
     private lateinit var status: TextView
     private lateinit var signIn: Button
@@ -84,6 +92,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val saved = prefs.getString("server", "") ?: ""
+        if (saved.isNotBlank()) startupPeekUntil = SystemClock.uptimeMillis() + 2000
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(17, 16, 21))
@@ -101,9 +111,11 @@ class MainActivity : Activity() {
             text = getString(R.string.connection); styleButton(this, false)
             setOnClickListener { configure() }
         })
-        root.addView(bar)
+        header = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        header.addView(bar)
+        root.addView(header)
         status = TextView(this).apply { text = getString(R.string.connection_prompt); setPadding(dp(16), dp(8), dp(16), dp(8)); setTextColor(Color.LTGRAY) }
-        root.addView(status)
+        header.addView(status)
         signIn = Button(this).apply {
             text = getString(R.string.tailscale_sign_in); styleButton(this, true)
             visibility = View.GONE; setOnClickListener { openExternal(loginUrl) }
@@ -136,7 +148,6 @@ class MainActivity : Activity() {
         setupWebView()
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkChanges)
         handler.post(poll)
-        val saved = prefs.getString("server", "") ?: ""
         if (saved.isNotBlank()) connect(saved) else configure()
     }
 
@@ -160,7 +171,20 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showConnectionControls() {
+        handler.removeCallbacks(hideHeader)
+        header.visibility = View.VISIBLE
+    }
+
+    private fun hideConnectionControlsWhenReady() {
+        handler.removeCallbacks(hideHeader)
+        if (pageReady && connected) {
+            handler.postDelayed(hideHeader, (startupPeekUntil - SystemClock.uptimeMillis()).coerceAtLeast(0))
+        }
+    }
+
     private fun configure() {
+        showConnectionControls()
         val input = EditText(this).apply {
             hint = getString(R.string.server_hint)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
@@ -177,6 +201,7 @@ class MainActivity : Activity() {
                 catch (e: Exception) { input.error = e.message ?: getString(R.string.invalid_server) }
             }
         }
+        dialog.setOnDismissListener { hideConnectionControlsWhenReady() }
         dialog.show()
     }
 
@@ -189,6 +214,7 @@ class MainActivity : Activity() {
         }
         val target = ServerAddress.parse(address)
         val token = ++generation
+        pageReady = false; pageFailed = false; showConnectionControls()
         connected = false; proxyReady = false; loginUrl = ""; signIn.visibility = View.GONE
         web.stopLoading(); web.loadUrl("about:blank")
         web.visibility = View.GONE; welcome.visibility = View.VISIBLE
@@ -227,17 +253,28 @@ class MainActivity : Activity() {
         val phase = state.optString("state")
         signIn.visibility = if (phase == "NeedsLogin" && safeExternal(loginUrl)) View.VISIBLE else View.GONE
         status.text = when (phase) {
-            "Running" -> getString(R.string.connection_ready, server?.host.orEmpty())
+            "Running" -> if (pageFailed) getString(R.string.server_unavailable) else getString(R.string.connection_ready, server?.host.orEmpty())
             "NeedsLogin" -> getString(R.string.tailscale_login_needed)
             "NeedsMachineAuth" -> getString(R.string.machine_approval_needed)
             "Stopped" -> getString(R.string.disconnected)
             else -> state.optString("error").ifBlank { getString(R.string.connecting) }
+        }
+        if (phase != "Running") {
+            connected = false
+            pageReady = false
+            showConnectionControls()
         }
         if (phase == "Running" && proxyReady && !connected) {
             connected = true
             welcome.visibility = View.GONE; web.visibility = View.VISIBLE
             web.loadUrl(server.toString())
         }
+    }
+
+    private fun showPageFailure() {
+        pageReady = false; pageFailed = true
+        showConnectionControls()
+        status.text = getString(R.string.server_unavailable)
     }
 
     private fun setupWebView() {
@@ -260,8 +297,21 @@ class MainActivity : Activity() {
                 if (server?.let { ServerAddress.sameOrigin(it, address) } == true) return false
                 openExternal(address); return true
             }
+            override fun onPageStarted(view: WebView, address: String, icon: android.graphics.Bitmap?) {
+                pageReady = false; pageFailed = false
+                handler.removeCallbacks(hideHeader)
+            }
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (request.isForMainFrame) showPageFailure()
+            }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) status.text = getString(R.string.server_unavailable)
+                if (request.isForMainFrame) showPageFailure()
+            }
+            override fun onPageCommitVisible(view: WebView, address: String) {
+                if (!pageFailed && server?.let { ServerAddress.sameOrigin(it, address) } == true) {
+                    pageReady = true
+                    hideConnectionControlsWhenReady()
+                }
             }
             override fun onPageFinished(view: WebView, address: String) { CookieManager.getInstance().flush() }
         }
@@ -375,9 +425,13 @@ class MainActivity : Activity() {
         catch (_: Exception) { status.text = getString(R.string.no_browser) }
     }
     @Deprecated("Legacy back dispatch")
-    override fun onBackPressed() { if (web.canGoBack()) web.goBack() else super.onBackPressed() }
+    override fun onBackPressed() {
+        if (web.canGoBack()) web.goBack()
+        else if (header.visibility == View.GONE) configure()
+        else super.onBackPressed()
+    }
     override fun onDestroy() {
-        closed = true; generation++; handler.removeCallbacks(poll)
+        closed = true; generation++; handler.removeCallbacks(poll); handler.removeCallbacks(hideHeader)
         runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkChanges) }
         chooser?.onReceiveValue(null); chooser = null
         web.stopLoading(); web.destroy()

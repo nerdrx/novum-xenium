@@ -256,6 +256,32 @@
         "test_solution.py": true
       },
       "source_sha256": "57ca18092dadccf2a33f5a86081a0121b28adecf9064e82156f57aedc16fb071"
+    },
+    {
+      "evidence_directory": "cli-slice-20261014-072403",
+      "assessment": "decomposed_function_pass",
+      "notes": "Smaller select_records slice passed 6 checks; no command-line application yet.",
+      "adapter_status": "complete",
+      "adapter_exit": 0,
+      "external_exit": 0,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "70865d46e66aad3d847028558de55b3a6952ae9dc1f5bedc2063453d621b9c1d"
+    },
+    {
+      "evidence_directory": "cli-assembly-20261014-072524",
+      "assessment": "incomplete",
+      "notes": "Adding the CLI around the untouched model-generated function stalled on an unnecessary request to confirm already-specified defaults. No source changes.",
+      "adapter_status": "waiting_user",
+      "adapter_exit": 2,
+      "external_exit": 1,
+      "protected_files_unchanged": {
+        "qa_check.py": true,
+        "test_solution.py": true
+      },
+      "source_sha256": "70865d46e66aad3d847028558de55b3a6952ae9dc1f5bedc2063453d621b9c1d"
     }
   ]
 }

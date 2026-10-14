@@ -4020,6 +4020,18 @@ async def _run_verifier_subagent(
         retry_max_tokens = (
             4096 if response_diagnostics.get("finish_reason") == "length" else 2048
         )
+        # Recover an automatic-mode reasoning overrun without changing the model.
+        # llm_core applies this only when the local endpoint confirms support;
+        # explicit user reasoning choices and strict verdict parsing stay intact.
+        reasoning_chars = response_diagnostics.get("reasoning_chars", 0)
+        retry_reasoning_mode = (
+            "off"
+            if reasoning_mode == "auto"
+            and response_diagnostics.get("finish_reason") == "length"
+            and isinstance(reasoning_chars, (int, float))
+            and reasoning_chars > 0
+            else reasoning_mode
+        )
         response_diagnostics = {}
         try:
             retry_raw = await llm_call_async(
@@ -4027,7 +4039,7 @@ async def _run_verifier_subagent(
                 messages=[{"role": "user", "content": retry_prompt}],
                 headers=headers, temperature=0.0, max_tokens=retry_max_tokens, timeout=60,
                 response_diagnostics=response_diagnostics,
-                reasoning_mode=reasoning_mode,
+                reasoning_mode=retry_reasoning_mode,
             )
         except Exception as e:
             logger.warning(f"[agent] verifier format retry failed: {e}")

@@ -412,6 +412,68 @@ def test_verifier_length_retry_increases_budget_but_still_fails_closed(monkeypat
                       "completed checks remain recorded, but independent review is unfinished."]
 
 
+def test_auto_reasoning_length_retry_disables_reasoning_and_stays_unverified_without_verdict(monkeypatch):
+    import asyncio
+    import src.agent_loop as agent_loop
+    import src.llm_core
+
+    calls = []
+
+    async def truncated_call(**kwargs):
+        calls.append(kwargs)
+        kwargs["response_diagnostics"].update({
+            "finish_reason": "length", "reasoning_chars": 321,
+        })
+        return ""
+
+    monkeypatch.setattr(src.llm_core, "llm_call_async", truncated_call)
+    issues = asyncio.run(agent_loop._run_verifier_subagent(
+        "Create the GUI", "same evidence", endpoint_url="http://localhost",
+        model="test-model", headers={}, reasoning_mode="auto",
+    ))
+
+    assert [call["reasoning_mode"] for call in calls] == ["auto", "off"]
+    assert [call["max_tokens"] for call in calls] == [2048, 4096]
+    assert all(call["model"] == "test-model" for call in calls)
+    assert "same evidence" in calls[1]["messages"][0]["content"]
+    assert issues == ["Unverified: the completion reviewer reached its output limit without a verdict; "
+                      "completed checks remain recorded, but independent review is unfinished."]
+
+
+@pytest.mark.parametrize(("reasoning_mode", "finish_reason", "reasoning_chars", "expected_retry_mode"), [
+    ("on", "length", 321, "on"),
+    ("auto", "stop", 321, "auto"),
+])
+def test_retry_preserves_explicit_on_and_non_length_auto_modes(
+    monkeypatch, reasoning_mode, finish_reason, reasoning_chars, expected_retry_mode,
+):
+    import asyncio
+    import src.agent_loop as agent_loop
+    import src.llm_core
+
+    calls = []
+    responses = iter(["malformed output", "VERIFICATION: FAIL: missing evidence"])
+
+    async def fake_call(**kwargs):
+        calls.append(kwargs)
+        kwargs["response_diagnostics"].update({
+            "finish_reason": finish_reason, "reasoning_chars": reasoning_chars,
+        })
+        return next(responses)
+
+    monkeypatch.setattr(src.llm_core, "llm_call_async", fake_call)
+    issues = asyncio.run(agent_loop._run_verifier_subagent(
+        "Create the GUI", "same evidence", endpoint_url="http://localhost",
+        model="test-model", headers={}, reasoning_mode=reasoning_mode,
+    ))
+
+    assert [call["reasoning_mode"] for call in calls] == [reasoning_mode, expected_retry_mode]
+    assert [call["max_tokens"] for call in calls] == [
+        2048, 4096 if finish_reason == "length" else 2048,
+    ]
+    assert issues == ["Failed: missing evidence"]
+
+
 def test_valid_unverified_verdict_does_not_retry_format(monkeypatch):
     import asyncio
     import src.agent_loop as agent_loop

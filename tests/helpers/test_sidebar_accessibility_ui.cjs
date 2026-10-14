@@ -7,6 +7,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 const repo = path.resolve(__dirname, '../..');
 const source = fs.readFileSync(path.join(repo, 'static/index.html'), 'utf8');
+const appSource = fs.readFileSync(path.join(repo, 'static/app.js'), 'utf8');
 const start = source.indexOf('<nav class="sidebar" id="sidebar"');
 const end = source.indexOf('</nav>', start) + '</nav>'.length;
 assert(start >= 0 && end > start, 'sidebar markup is present in index.html');
@@ -18,6 +19,10 @@ const menuEnd = source.indexOf('</div></span></div>', menuStart) + '</div>'.leng
 assert(triggerStart >= 0 && triggerEnd > triggerStart && menuStart >= 0 && menuEnd > menuStart, 'export controls are present in index.html');
 const exportTrigger = source.slice(triggerStart, triggerEnd);
 const exportMenu = source.slice(menuStart, menuEnd);
+const placementStart = appSource.indexOf('const rect = exportDlBtn.getBoundingClientRect();', appSource.indexOf('// Export dropdown button'));
+const placementEnd = appSource.indexOf('closeExportMenu = bindMenuDismiss', placementStart);
+assert(placementStart >= 0 && placementEnd > placementStart, 'app.js export placement logic is present');
+const exportPlacement = appSource.slice(placementStart, placementEnd);
 const controls = [
   ['sidebar-brand-btn', 'Home'], ['sidebar-new-chat-btn', 'New Chat'],
   ['sidebar-search-btn', 'Search'], ['tool-memory-btn', 'Brain'],
@@ -43,11 +48,10 @@ const setOpen = open => { menu.classList.toggle('open', open); trigger.setAttrib
 trigger.addEventListener('click', event => {
   event.stopPropagation();
   if (menu.classList.contains('open')) return close();
-  const rect = trigger.getBoundingClientRect();
-  menu.style.top = (rect.bottom + 4) + 'px';
-  menu.style.left = 'auto';
-  menu.style.right = (window.innerWidth - rect.right) + 'px';
-  setOpen(true);
+  const exportDlBtn = trigger;
+  const exportMenu = menu;
+  const setExportMenuOpen = setOpen;
+  ${exportPlacement}
   close = bindMenuDismiss(menu, () => {
     const restore = menu.contains(document.activeElement);
     setOpen(false);
@@ -145,6 +149,66 @@ const server = http.createServer((req, res) => {
     await exportTriggerButton.click();
     await page.locator('#outside').click();
     assert.equal(await exportTriggerButton.getAttribute('aria-expanded'), 'false', 'outside click still closes the popup');
+
+    // Run the exact placement statements extracted from app.js against a
+    // trigger near the left edge, where right-anchoring used to clip the menu.
+    await page.locator('#sidebar').evaluate(el => el.classList.add('hidden'));
+    await page.evaluate(() => {
+      const fixture = document.getElementById('fixture-export');
+      fixture.style.left = '115px';
+      fixture.style.right = 'auto';
+      fixture.style.top = '12px';
+    });
+    for (const width of [320, 390, 576]) {
+      await page.setViewportSize({ width, height: 844 });
+      if (width === 320) {
+        await page.locator('#export-dropdown-menu button').evaluateAll(buttons => {
+          buttons.forEach(button => { button.style.fontSize = '24px'; });
+        });
+      }
+      await exportTriggerButton.click();
+      const bounds = await page.locator('#export-dropdown-menu').boundingBox();
+      assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width,
+        `menu stays horizontally in bounds at ${width}px with a near-left trigger`);
+      const actionBounds = await page.locator('#export-dropdown-menu button').evaluateAll(buttons =>
+        buttons.map(button => {
+          const rect = button.getBoundingClientRect();
+          return { left: rect.left, right: rect.right };
+        }));
+      assert(actionBounds.every(box => box.left >= bounds.x && box.right <= bounds.x + bounds.width),
+        `all menu actions fit the menu at ${width}px`);
+      if (width === 390 && process.env.MENU_SCREENSHOT) {
+        await page.screenshot({ animations: 'disabled', path: process.env.MENU_SCREENSHOT });
+      }
+      await page.keyboard.press('Escape');
+      assert.equal(await exportTriggerButton.getAttribute('aria-expanded'), 'false');
+      if (width === 320) {
+        await page.locator('#export-dropdown-menu button').evaluateAll(buttons => {
+          buttons.forEach(button => { button.style.fontSize = ''; });
+        });
+      }
+    }
+    await page.setViewportSize({ width: 576, height: 260 });
+    await exportTriggerButton.click();
+    const shortBounds = await page.locator('#export-dropdown-menu').boundingBox();
+    const scrollMetrics = await page.locator('#export-dropdown-menu').evaluate(menu => ({
+      scrollHeight: menu.scrollHeight,
+      clientHeight: menu.clientHeight,
+      overflowY: getComputedStyle(menu).overflowY,
+    }));
+    assert(shortBounds && shortBounds.x >= 0 && shortBounds.y >= 0
+      && shortBounds.x + shortBounds.width <= 576 && shortBounds.y + shortBounds.height <= 260,
+    'menu stays inside the short-landscape viewport');
+    assert.equal(scrollMetrics.overflowY, 'auto');
+    assert(scrollMetrics.scrollHeight > scrollMetrics.clientHeight, 'short landscape menu remains scrollable');
+    await page.locator('#export-dropdown-menu').evaluate(menu => { menu.scrollTop = menu.scrollHeight; });
+    const lastAction = await page.locator('#export-delete-btn').boundingBox();
+    const menuBounds = await page.locator('#export-dropdown-menu').boundingBox();
+    assert(lastAction && menuBounds && lastAction.y + lastAction.height <= menuBounds.y + menuBounds.height,
+      'the final menu action is reachable by scrolling');
+    await page.keyboard.press('Escape');
+    await page.locator('#sidebar').evaluate(el => el.classList.remove('hidden'));
+
     if (process.env.UI_CAPTURE_DIR) {
       fs.mkdirSync(process.env.UI_CAPTURE_DIR, { recursive: true });
       await page.locator('#tool-notes-btn').hover();
@@ -172,7 +236,7 @@ const server = http.createServer((req, res) => {
     }
     await page.keyboard.press('Escape');
     assert.deepEqual(errors, [], 'sidebar and a11y shim load without browser errors');
-    console.log('PASS: sidebar and export controls expose native semantics, preserve mouse clicks, support keyboard activation/focus, avoid nested buttons, and fit mobile viewport');
+    console.log('PASS: sidebar and export controls preserve semantics and input, while app.js menu placement stays in bounds at phone and short-landscape sizes');
   } finally {
     await browser.close();
     await new Promise(resolve => server.close(resolve));

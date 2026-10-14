@@ -424,10 +424,19 @@ function initializeEventListeners() {
         // Move menu to body so it's not affected by ancestor transforms
         if (exportMenu.parentElement !== document.body) document.body.appendChild(exportMenu);
         const rect = exportDlBtn.getBoundingClientRect();
-        exportMenu.style.top = (rect.bottom + 4) + 'px';
-        exportMenu.style.left = 'auto';
-        exportMenu.style.right = (window.innerWidth - rect.right) + 'px';
+        const viewport = window.visualViewport;
+        const left = (viewport?.offsetLeft || 0) + 8;
+        const top = (viewport?.offsetTop || 0) + 8;
+        const width = Math.max(0, (viewport?.width || window.innerWidth) - 16);
+        const height = Math.max(0, (viewport?.height || window.innerHeight) - 16);
+        exportMenu.style.maxWidth = width + 'px';
+        exportMenu.style.minWidth = width < 200 ? width + 'px' : '';
+        exportMenu.style.maxHeight = height + 'px';
+        exportMenu.style.right = 'auto';
         setExportMenuOpen(true);
+        // Measure the open menu, then keep every action inside the visible viewport.
+        exportMenu.style.left = Math.max(left, Math.min(rect.right - exportMenu.offsetWidth, left + width - exportMenu.offsetWidth)) + 'px';
+        exportMenu.style.top = Math.max(top, Math.min(rect.bottom + 4, top + height - exportMenu.offsetHeight)) + 'px';
         closeExportMenu = bindMenuDismiss(exportMenu, () => {
           const returnFocus = exportMenu.contains(document.activeElement);
           setExportMenuOpen(false);
@@ -436,6 +445,8 @@ function initializeEventListeners() {
         if (e.detail === 0) exportMenu.querySelector('button:not(:disabled)')?.focus();
       }
     });
+    window.addEventListener('resize', () => closeExportMenu());
+    window.visualViewport?.addEventListener('resize', () => closeExportMenu());
     // Opening the sidebar should dismiss any open popup. Many code paths open
     // the sidebar (toggle button, swipe, keyboard, rail), so watch its class
     // for a hidden→visible transition rather than hooking each one.

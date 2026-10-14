@@ -463,6 +463,8 @@ body.bg-pattern-sparkles {
       z-index: 300;
       color: var(--fg);
     }
+    .export-dropdown-menu { box-sizing: border-box; overflow-y: auto; overflow-x: hidden; }
+    .export-dropdown-menu .export-dropdown-item { white-space: normal; overflow-wrap: anywhere; }
     .export-dropdown-menu.open { display: block; }
     .export-dropdown-item {
       padding: 6px 8px; font-size: 11px; cursor: pointer;

@@ -1407,6 +1407,7 @@ fn open_chromium_workbench(window: WebviewWindow, app: AppHandle) -> Result<Work
         let url = app_url(&config);
         let profile = app.path().app_config_dir().map_err(|e| e.to_string())?.join("chromium-workbench");
         let mut command = chromium_workbench::command(&url, &profile)?;
+        chromium_workbench::install_window_identity(&url, &profile, &app.path().data_dir().map_err(|e| e.to_string())?)?;
         if let Some(appdir) = std::env::var_os("APPDIR") {
             host_browser_environment(&mut command, Path::new(&appdir), std::env::vars_os());
         }

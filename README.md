@@ -17,6 +17,10 @@ This started with [Odysseus](https://github.com/odysseus-dev/odysseus), then NX-
 
 <sub>The workspace, with example activity. Colours, fonts and background effects are yours to change.</sub>
 
+![Novum Xenium sign-in page](assets/branding/login.png)
+
+<sub>The sign-in page uses the Novum Xenium name and app mark.</sub>
+
 ## Get started
 
 Install Git and Docker Compose, then:
@@ -49,6 +53,8 @@ That's the setup: clone, copy the environment file, run Compose. Authentication 
 Start the backend, open the workspace, get on with it. Mouse back and forward move through your chats and Home. Close the window and it stays in the tray. Reopen it without losing the page.
 
 The app uses your system webview. It can check backend health, show logs, review updates, back up application data and help recover a failed startup. Chat, memory and tools live in the backend, so you don't end up managing a second desktop copy.
+
+On Linux, the embedded workspace keeps its native Wayland window. If Chrome or Chromium is installed, you can instead open the same workspace in an optional Chromium app window with its own persistent profile.
 
 Copy an image to another app, save it with a native file dialog or open it in your default browser. Ordinary web links open there too. Desktop notifications are optional and off by default; enable them in Settings while the app is running.
 
@@ -128,7 +134,7 @@ The optional **Solar system** background places eight monochrome planets using t
 
 Images have their own provider settings. The optional [Codex image bridge](docs/codex-image-bridge.md) uses an existing host login for generation and attached-image edits. It needs separate setup; quality and size settings are guidance.
 
-Odysseus also brings documents, email, notes, tasks, calendar, model comparison, deep research, MCP and a gallery. Those haven't disappeared behind the new name.
+Novum Xenium also includes documents, email, notes, tasks, calendar, model comparison, deep research, MCP and a gallery.
 
 [Workflow guide](docs/nx-workflows.md) · [Full change record](FORK-CHANGES.md) · [Hermes comparison](docs/hermes-comparison.md) — Hermes itself isn't a dependency.
 

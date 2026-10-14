@@ -136,3 +136,10 @@ Desktop launchers should use `StartupWMClass=novum-xenium` and the packaged NX
 icon. For compositors that resolve icons by filename, install the desktop entry
 as `novum-xenium.desktop`. Keep the native Wayland frame: changing GTK titlebar
 widgets after realization can leave the WebKit surface blank.
+
+The Chromium app-window renderer enables Chromium's
+`WaylandExternalBeginFrameSource` on Wayland to use compositor frame callbacks.
+This upstream opt-in timing path preserves vsync; it does not force a fixed FPS
+or guarantee that every frame reaches the monitor refresh rate. The launcher
+registers a hidden desktop entry for Chromium's URL-derived window identity so
+the compositor can find the NX icon.

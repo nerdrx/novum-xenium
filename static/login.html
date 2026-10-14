@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-visual">
-<title>Odysseus — Login</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 4L16 22L6 22Z' fill='%23e06c75'/%3E%3Cpath d='M16 8L16 22L24 22Z' fill='%23e06c75' opacity='0.6'/%3E%3Cpath d='M4 24Q10 20 16 24Q22 28 28 24' stroke='%23e06c75' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Novum Xenium — Sign in</title>
+<link rel="icon" type="image/png" href="/static/icons/icon-192.png">
 <link rel="manifest" href="static/manifest.json">
 <link rel="apple-touch-icon" href="static/icons/icon-192.png">
 <script nonce="{{CSP_NONCE}}">
@@ -32,13 +32,13 @@
   // static/js/theme.js so login picks the same default pattern as the
   // main app for users who never explicitly chose one.
   var THEME_DEFAULT_PATTERN = {
-    dark:'none', light:'dots', midnight:'rain', paper:'dots',
+    'novum-xenium':'orbits', nx:'synapse', dark:'none', light:'dots', midnight:'rain', paper:'dots',
     cyberpunk:'synapse', retrowave:'embers', forest:'petals',
     ocean:'constellations', terminal:'perlin-flow', organs:'rain',
     ume:'petals', cute:'sparkles'
   };
   var THEME_DEFAULT_EFFECT_COLOR = {
-    midnight:'#ffffff', organs:'#451616', cute:'#ff8cb8', ume:'#f5a0c0'
+    'novum-xenium':'#e9e6ef', midnight:'#ffffff', organs:'#451616', cute:'#ff8cb8', ume:'#f5a0c0'
   };
   var THEME_DEFAULT_INTENSITY = { midnight:0.5, terminal:0.8, organs:0.65 };
   try {
@@ -75,16 +75,17 @@
       };
       for (var k in ADV) { if (a[k]) s.setProperty(ADV[k], a[k]); }
     }
-    // Background effect — pick ONE at random from the main app's 8
-    // patterns each load (matches the old login behavior, but uses the
-    // same effect implementations the main theme system exposes so the
-    // login feels consistent with the rest of the app). Per-theme
-    // bgEffectColor/Intensity defaults still apply so the random
-    // pattern picks up theme-appropriate tinting.
-    var name = (t && t.name) || '';
-    // perlin-flow excluded — too visually intense for a login screen.
-    var PATTERNS = ['dots','synapse','rain','constellations','petals','sparkles','embers'];
-    var pattern = PATTERNS[Math.floor(Math.random() * PATTERNS.length)];
+    // Follow the active theme's saved pattern, or its default from theme.js.
+    var name = (t && t.name) || 'novum-xenium';
+    var pattern = (t && t.bgPattern) || THEME_DEFAULT_PATTERN[name] || 'none';
+    var FONT_FAMILY = {
+      sans: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+      mono: "'Fira Code', monospace",
+      serif: "Georgia, 'Times New Roman', serif",
+      opendyslexic: "'OpenDyslexic', sans-serif"
+    };
+    var font = (t && t.font) || (name === 'novum-xenium' ? 'sans' : 'mono');
+    s.setProperty('--font-family', FONT_FAMILY[font] || FONT_FAMILY.sans);
     var effColor = (t && t.bgEffectColor) || THEME_DEFAULT_EFFECT_COLOR[name] || '';
     var effInt = (t && t.bgEffectIntensity !== undefined)
       ? t.bgEffectIntensity
@@ -106,13 +107,14 @@
 <style>
   @font-face { font-family: 'Fira Code'; font-weight: 400; font-style: normal; font-display: swap; src: url('static/fonts/FiraCode-Regular.woff2') format('woff2'); }
   @font-face { font-family: 'Fira Code'; font-weight: 600; font-style: normal; font-display: swap; src: url('static/fonts/FiraCode-SemiBold.woff2') format('woff2'); }
-  /* Mirror the main app's :root defaults (static/style.css ~line 18) so an
+  /* Mirror the Novum Xenium defaults (static/style.css) so an
      uncustomized theme — or a fresh browser with no `odysseus-theme` in
      localStorage — renders the login page in the same palette as the rest
-     of the app instead of a different greys+offwhite scheme. */
+     of the app instead of a different palette. */
   :root {
-    --bg: #282c34; --fg: #9cdef2; --panel: #111; --border: #355a66;
-    --red: #e06c75; --green: #50fa7b;
+    --bg: #100f14; --fg: #e9e6ef; --panel: #19171e; --border: #37323e;
+    --red: #a88bd6; --green: #50fa7b;
+    --font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
     --bg-effect-intensity: 1;
   }
   /* Background patterns — mirrors static/style.css "Background Patterns"
@@ -134,7 +136,7 @@
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: 'Fira Code', monospace;
+    font-family: var(--font-family, system-ui, -apple-system, 'Segoe UI', sans-serif);
     background: var(--bg); color: var(--fg);
     display: flex; justify-content: center; align-items: flex-start;
     min-height: 100vh; min-height: 100dvh;
@@ -150,13 +152,14 @@
     position: relative; z-index: 1;
   }
   .logo {
-    text-align: center; margin-bottom: 1.5rem;
+    display: flex; align-items: center; justify-content: center; gap: 0.65rem;
+    margin-bottom: 1.5rem;
   }
   .logo span {
-    font-family: 'Fira Code', monospace;
-    font-size: 2rem; font-weight: 600;
-    letter-spacing: 0.04em;
-    /* Same gradient as the main app's welcome-screen "Odysseus" title
+    font-family: inherit;
+    font-size: clamp(1.25rem, 6vw, 1.7rem); font-weight: 600;
+    letter-spacing: 0.02em;
+    /* Same gradient as the main app's welcome-screen "Novum Xenium" title
        (static/style.css #welcome-screen .welcome-name) so the brand
        wordmark is consistent across login + first-launch screens. */
     background: linear-gradient(135deg, var(--brand-color, var(--red)), color-mix(in srgb, var(--brand-color, var(--red)) 60%, var(--fg)));
@@ -169,7 +172,7 @@
   input:not(.remember-check) {
     width: 100%; padding: 0.6rem 0.8rem; margin-bottom: 1rem;
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    color: var(--fg); font-size: 0.95rem; font-family: 'Fira Code', monospace;
+    color: var(--fg); font-size: 0.95rem; font-family: inherit;
   }
   input:focus { outline: none; border-color: var(--red); }
   /* On touch devices keep inputs at >=16px so iOS Safari doesn't zoom the whole
@@ -191,10 +194,10 @@
        the button's total height the same as 0.7rem all-around. */
     padding: calc(0.7rem + 1px) 0.7rem calc(0.7rem - 1px);
     border: none; border-radius: 6px;
-    /* Darken the brand red slightly so #fff label text clears the WCAG AA
-       4.5:1 contrast threshold (plain --red #e06c75 only reaches ~3.2:1). */
+    /* Darken the brand accent so the white label clears the WCAG AA contrast
+       threshold while keeping the button in the selected theme color. */
     background: color-mix(in srgb, var(--red) 78%, #000); color: #fff; font-size: 1rem; cursor: pointer;
-    font-weight: 600; font-family: 'Fira Code', monospace;
+    font-weight: 600; font-family: inherit;
   }
   button:hover { background: color-mix(in srgb, var(--red) 66%, black); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -247,7 +250,7 @@
   .remember-toggle:hover .remember-dot {
     border-color: color-mix(in srgb, var(--fg) 40%, transparent);
   }
-  .logo-boat { width: 1.6rem; height: 1.6rem; margin-right: 0.4rem; vertical-align: -0.15em; color: var(--red); }
+  .logo-mark { width: 2rem; height: 2rem; flex: 0 0 auto; object-fit: contain; }
   .version-label {
     position: fixed; bottom: 12px; right: 16px;
     font-size: 0.7rem; opacity: 0.25;
@@ -272,7 +275,7 @@
 <body>
 <main class="card">
   <h1 class="logo">
-    <svg class="logo-boat" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path d="M16 4L16 22L6 22Z" fill="currentColor"/><path d="M16 8L16 22L24 22Z" fill="currentColor" opacity="0.6"/><path d="M4 24Q10 20 16 24Q22 28 28 24" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg><span>Odysseus</span>
+    <img class="logo-mark" src="/static/icons/icon-192.png" alt="" aria-hidden="true"><span>Novum Xenium</span>
   </h1>
   <p class="setup-note" id="setupNote" style="display:none"></p>
 

@@ -3317,7 +3317,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       if (!opts.keepOpen) _closeOdysseusAttachMenu();
     } catch (err) {
       console.error('Failed to attach Odysseus item:', err);
-      if (uiModule) uiModule.showError('Failed to attach from Odysseus');
+      if (uiModule) uiModule.showError('Failed to attach from Novum Xenium');
     }
   }
 
@@ -3362,11 +3362,11 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
           added += 1;
         }
       }
-      _afterOdysseusAttachmentsAdded(added, zip ? 'odysseus-attachments.zip' : undefined);
+      _afterOdysseusAttachmentsAdded(added, zip ? 'novum-xenium-attachments.zip' : undefined);
       _closeOdysseusAttachMenu();
     } catch (err) {
       console.error('Failed to attach selected Odysseus items:', err);
-      if (uiModule) uiModule.showError(added ? `Attached ${added}, then failed` : 'Failed to attach from Odysseus');
+      if (uiModule) uiModule.showError(added ? `Attached ${added}, then failed` : 'Failed to attach from Novum Xenium');
       _renderComposeAttachments();
     } finally {
       if (btn) {

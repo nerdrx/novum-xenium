@@ -193,6 +193,7 @@ function assertNoOverflow(metrics, name) {
           documentWidth: document.documentElement.scrollWidth,
           bodyWidth: document.body.scrollWidth,
           contentRight: dashboard.getBoundingClientRect().right,
+          scrollRight: document.querySelector("#welcome-screen").getBoundingClientRect().right,
           dailyDays: document.querySelectorAll('#home-dashboard .usage-chart-day').length,
           recentText: document.querySelector('#home-dashboard .usage-recent-chat').textContent,
           favouriteModel: [...document.querySelectorAll('#home-dashboard .usage-facts dt')]
@@ -218,6 +219,7 @@ function assertNoOverflow(metrics, name) {
       assert.equal(modelLabelCases.namespaced, 'Llama 3.1 8B', 'short model matching resolves provider-prefixed historical IDs');
       assert.equal(modelLabelCases.ambiguous, 'nx-model-5', 'conflicting catalog names keep the safe shortened ID');
       assertNoOverflow(initial, `${viewport.name} dashboard`);
+      assert.ok(initial.viewportWidth - initial.scrollRight <= 24, "dashboard scrollbar stays at the workspace edge");
       await page.screenshot({ path: path.join(screenshotDir, `usage-dashboard-${viewport.name}.png`), fullPage: true });
 
       await page.locator('#home-dashboard .usage-recent-chat').click();

@@ -41380,6 +41380,61 @@ body.theme-frosted .modal {
 }
 /* flex/overflow inherited from base .modal-body; only the padding differs. */
 .workspace-body { padding: 6px 0; }
+.workspace-file-search {
+  border-top: 1px solid var(--border);
+  padding: 9px 10px 10px;
+  min-width: 0;
+}
+.workspace-file-search > label {
+  display: block;
+  margin: 0 0 5px;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+#workspace-file-query {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0 0 5px;
+  font-size: 13px;
+}
+#workspace-file-results {
+  max-height: 22vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.workspace-file-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+.workspace-file-result > span { min-width: 0; overflow-wrap: anywhere; }
+.workspace-file-result small { color: var(--muted, var(--fg)); opacity: .72; }
+.workspace-file-result a {
+  flex: 0 0 auto;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.workspace-file-result a:hover,
+.workspace-file-result a:focus-visible {
+  border-color: var(--red);
+  outline: 2px solid color-mix(in srgb, var(--red) 30%, transparent);
+}
+#workspace-file-results > .workspace-empty { padding: 8px 2px; }
 .workspace-row {
   width: 100%;
   text-align: left;
@@ -41415,6 +41470,12 @@ body.theme-frosted .modal {
   border-top: 1px solid var(--border);
 }
 .workspace-note { margin: 0 0 8px; font-size: 11px; line-height: 1.4; }
+@media (max-width: 768px) {
+  .workspace-file-search { padding: 8px 6px; }
+  #workspace-file-results { max-height: 18vh; }
+  .workspace-file-result { align-items: flex-start; gap: 6px; padding: 7px 4px; }
+  .workspace-file-result a { min-height: 40px; padding: 0 12px; }
+}
 
 /* Real-time Diagnostics Log Terminal UI Styles */
 .settings-system-logs-svg {

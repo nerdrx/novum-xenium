@@ -66,6 +66,89 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
   const saveButton = button("Save checks");
   panel.append(configTitle, configHelp, checkList, addCheckButton, advanced, autoRunLabel, saveButton);
 
+  const preferencesTitle = el("h3", "Project preferences");
+  const preferencesHelp = el("p", "Saved guidance is added to project context. Model and mode are applied only when you start a new chat; this never sends a message or grants tools.");
+  const modelLabel = el("label", "Preferred model ");
+  const modelSelect = el("select");
+  const noModel = el("option", "No preferred model"); noModel.value = "";
+  modelSelect.append(noModel);
+  modelLabel.append(modelSelect);
+  const modeLabel = el("label", "Preferred chat mode ");
+  const modeSelect = el("select");
+  for (const [value, label] of [["", "Keep current mode"], ["agent", "Agent"], ["chat", "Chat"]]) {
+    const option = el("option", label); option.value = value; modeSelect.append(option);
+  }
+  modeLabel.append(modeSelect);
+  const toolPreferencesLabel = el("label", "Tool preferences (guidance only) ");
+  const toolPreferences = el("textarea"); toolPreferences.rows = 3; toolPreferences.maxLength = 2000;
+  toolPreferencesLabel.append(toolPreferences);
+  const instructionsLabel = el("label", "Project instructions ");
+  const instructions = el("textarea"); instructions.rows = 4; instructions.maxLength = 4000;
+  instructionsLabel.append(instructions);
+  const savePreferencesButton = button("Save project preferences");
+  const applyPreferencesButton = button("Start new chat with project preferences");
+  panel.append(preferencesTitle, preferencesHelp, modelLabel, modeLabel,
+    toolPreferencesLabel, instructionsLabel, savePreferencesButton, applyPreferencesButton);
+
+  let modelChoices = [];
+  let staleModelPreference = null;
+  const loadModelChoices = async (selectedId = "", selectedEndpointId = "") => {
+    const response = await fetcher("/api/models?background=false", {
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!response.ok) throw new Error(`Model list unavailable (${response.status})`);
+    const data = await response.json();
+    modelChoices = [];
+    for (const endpoint of data.items || []) {
+      if (endpoint.offline || endpoint.model_type === "image") continue;
+      for (const id of [...(endpoint.models || []), ...(endpoint.models_extra || [])]) {
+        if (typeof id !== "string" || !id) continue;
+        const choice = { id, endpointId: String(endpoint.endpoint_id || ""), url: endpoint.url,
+          name: endpoint.endpoint_name || endpoint.name || "Model endpoint" };
+        if (choice.endpointId && choice.url) modelChoices.push(choice);
+      }
+    }
+    modelSelect.replaceChildren(noModel);
+    for (const [index, choice] of modelChoices.entries()) {
+      const option = el("option", `${choice.id} · ${choice.name}`);
+      option.value = String(index);
+      modelSelect.append(option);
+    }
+    let index = modelChoices.findIndex(choice => choice.id === selectedId
+      && choice.endpointId === String(selectedEndpointId || ""));
+    if (index < 0 && selectedId) {
+      staleModelPreference = { id: selectedId, endpointId: String(selectedEndpointId || "") };
+      const unavailable = el("option", `${selectedId} · unavailable`);
+      unavailable.value = "unavailable";
+      modelSelect.append(unavailable);
+      modelSelect.value = "unavailable";
+    } else {
+      staleModelPreference = null;
+      modelSelect.value = index < 0 ? "" : String(index);
+    }
+  };
+  const loadPreferences = async (saved) => {
+    toolPreferences.value = saved.tool_preferences || "";
+    instructions.value = saved.instructions || "";
+    modeSelect.value = saved.preferred_mode || "";
+    try {
+      await loadModelChoices(saved.preferred_model_id || "", saved.preferred_endpoint_id || "");
+    } catch (error) {
+      modelChoices = [];
+      modelSelect.replaceChildren(noModel);
+      staleModelPreference = saved.preferred_model_id
+        ? { id: saved.preferred_model_id, endpointId: String(saved.preferred_endpoint_id || "") } : null;
+      if (staleModelPreference) {
+        const unavailable = el("option", `${staleModelPreference.id} · unavailable`);
+        unavailable.value = "unavailable";
+        modelSelect.append(unavailable);
+        modelSelect.value = "unavailable";
+      }
+      throw error;
+    }
+  };
+
   let jsonEdited = false;
   config.addEventListener("input", () => { jsonEdited = true; });
   const renderChecks = (checks) => {
@@ -211,7 +294,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
     if (closed) return;
     if (isBusy) statusGeneration++;
     busy = !!isBusy;
-    for (const node of panel.querySelectorAll("button, input, textarea")) node.disabled = busy;
+    for (const node of panel.querySelectorAll("button, input, select, textarea")) node.disabled = busy;
     status(message);
   };
   const refreshWorktrees = async (force = false) => {
@@ -305,7 +388,11 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
       config.value = JSON.stringify(saved.checks || [], null, 2);
       renderChecks(saved.checks || []);
       autoRun.checked = saved.auto_run_on_completion === true;
-      status("Inspection ready. Review the returned guidance and map.");
+      const preferences = await api(`/api/project-workflows/preferences?workspace=${encodeURIComponent(selectedWorkspace)}`);
+      let modelWarning = "";
+      try { await loadPreferences(preferences); }
+      catch (_) { modelWarning = " Model choices could not be loaded; the saved model preference is preserved as unavailable."; }
+      status(`Inspection ready. Review the returned guidance and map.${modelWarning}`);
     } catch (error) { status(error.message); }
     finally { setBusy(false, live.textContent); }
   });
@@ -341,6 +428,94 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
         method: "PUT", body: JSON.stringify({ workspace, checks, auto_run_on_completion: autoRun.checked }),
       }));
       status(autoRun.checked ? "Checks saved. They will gate completion after agent edits." : "Checks saved. Automatic completion checks are off.");
+    } catch (error) { status(error.message); }
+    finally { setBusy(false, live.textContent); }
+  });
+
+  const readPreferences = () => {
+    const choice = modelSelect.value && modelSelect.value !== "unavailable"
+      ? modelChoices[Number(modelSelect.value)] : null;
+    return {
+      workspace: selectedWorkspace || pathInput.value.trim(),
+      preferred_model_id: choice?.id || (modelSelect.value === "unavailable" ? staleModelPreference?.id || "" : ""),
+      preferred_endpoint_id: choice?.endpointId || (modelSelect.value === "unavailable" ? staleModelPreference?.endpointId || "" : ""),
+      preferred_mode: modeSelect.value,
+      tool_preferences: toolPreferences.value,
+      instructions: instructions.value,
+    };
+  };
+  modelSelect.addEventListener("change", () => { if (modelSelect.value !== "unavailable") staleModelPreference = null; });
+  savePreferencesButton.addEventListener("click", async () => {
+    if (busy || closed) return;
+    const values = readPreferences();
+    if (!values.workspace) { status("Inspect a workspace first."); return; }
+    setBusy(true, "Saving project preferences…");
+    try {
+      const saved = await api("/api/project-workflows/preferences", {
+        method: "PUT", body: JSON.stringify(values),
+      });
+      await loadPreferences(saved).catch(() => {});
+      status("Project preferences saved. They are used when this project workspace is active.");
+    } catch (error) { status(error.message); }
+    finally { setBusy(false, live.textContent); }
+  });
+  applyPreferencesButton.addEventListener("click", async () => {
+    if (busy || closed) return;
+    const values = readPreferences();
+    if (!values.workspace) { status("Inspect a workspace first."); return; }
+    if (document.querySelector('#chat-history[aria-busy="true"]')) {
+      status("Wait for the current response to finish before applying project defaults."); return;
+    }
+    setBusy(true, "Saving preferences before applying them…");
+    try {
+      const saved = await api("/api/project-workflows/preferences", {
+        method: "PUT", body: JSON.stringify(values),
+      });
+      await loadPreferences(saved).catch(() => {});
+      let selectedModel = null;
+      if (saved.preferred_model_id) {
+        selectedModel = modelChoices.find(item => item.id === saved.preferred_model_id
+          && item.endpointId === String(saved.preferred_endpoint_id || ""));
+        if (!selectedModel) throw new Error("The saved model is not currently available. Choose a model from the list and try again.");
+      }
+      const session = window.sessionModule;
+      if (!session?.createDirectChat) throw new Error("The chat session module is unavailable.");
+      const draft = document.getElementById("message");
+      if (draft?.value.trim() || document.getElementById("attach-strip")?.children.length) {
+        throw new Error("Save or clear the current draft and attachments before starting a new chat.");
+      }
+      if (!selectedModel) {
+        const pending = session.getPendingChat?.();
+        const sessionId = session.getCurrentSessionId?.();
+        const current = (session.getSessions?.() || []).find(item => item.id === sessionId);
+        const modelId = pending?.modelId || current?.model;
+        const endpointId = String(pending?.endpointId || current?.endpoint_id || "");
+        const endpointUrl = pending?.url || current?.endpoint_url;
+        selectedModel = modelChoices.find(item => item.id === modelId
+          && ((endpointId && item.endpointId === endpointId) || (!endpointId && item.url === endpointUrl)));
+        if (!selectedModel) throw new Error("Choose an available model before starting a project chat.");
+      }
+      const projectWorkspace = saved.repository || values.workspace;
+      if (!projectWorkspace) throw new Error("The saved project workspace is unavailable.");
+      const activeWorkspace = localStorage.getItem("odysseus-workspace") || "";
+      if (activeWorkspace !== projectWorkspace && !onSelectWorkspace) {
+        throw new Error("Select this project as the active workspace before starting its chat.");
+      }
+      let preferredModeButton = null;
+      if (saved.preferred_mode) {
+        if (saved.preferred_mode === "agent" && window._userPrivileges?.can_use_agent === false) {
+          throw new Error("Agent mode is unavailable for this account; no permissions were changed.");
+        }
+        preferredModeButton = document.getElementById(saved.preferred_mode === "agent" ? "mode-agent-btn" : "mode-chat-btn");
+        const modeContainer = preferredModeButton?.closest(".chat-input-toggle, .mode-toggle") || preferredModeButton;
+        if (!preferredModeButton || preferredModeButton.disabled || getComputedStyle(modeContainer).display === "none") {
+          throw new Error("The preferred chat mode is unavailable in this view.");
+        }
+      }
+      if (activeWorkspace !== projectWorkspace) onSelectWorkspace(projectWorkspace);
+      if (preferredModeButton && !preferredModeButton.classList.contains("active")) preferredModeButton.click();
+      session.createDirectChat(selectedModel.url, selectedModel.id, selectedModel.endpointId);
+      status("Started a new chat with project preferences. The message was not sent.");
     } catch (error) { status(error.message); }
     finally { setBusy(false, live.textContent); }
   });

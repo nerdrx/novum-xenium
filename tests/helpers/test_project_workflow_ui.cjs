@@ -7,16 +7,19 @@ const {chromium} = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
 const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"></head>
-<body><button id="workspace-open">Workspace</button><script type="module">
+<body><button id="workspace-open">Workspace</button><button id="mode-agent-btn" class="mode-toggle-btn">Agent</button><button id="mode-chat-btn" class="mode-toggle-btn">Chat</button><script type="module">
 localStorage.setItem('odysseus-workspace','/workspace');
 localStorage.setItem('currentSessionId','fixture-session');
-window.sessionModule={getCurrentSessionId:()=> 'fixture-session'};
+window.sessionModule={getCurrentSessionId:()=> 'fixture-session',getSessions:()=>[{id:'fixture-session',model:'model-a',endpoint_id:'endpoint-1',endpoint_url:'http://model.local/v1'}],createDirectChat:(url,model,endpoint)=>{window.createdProjectChat={url,model,endpoint};window.createdProjectChatCount=(window.createdProjectChatCount||0)+1;}};
+window._userPrivileges={can_use_agent:true};
+document.getElementById('mode-chat-btn').addEventListener('click',event=>{event.currentTarget.dataset.clicked='true';});
 import workspace from '/static/js/workspace.js';
 document.getElementById('workspace-open').onclick=()=>workspace.openWorkspaceBrowser();
 window.fixtureReady=true;
 </script></body></html>`;
 const calls = [];
 let savedConfig = {checks: [], auto_run_on_completion: false};
+let savedPreferences = {preferred_model_id: '', preferred_endpoint_id: '', preferred_mode: '', tool_preferences: '', instructions: ''};
 let worktree = null;
 const json = (res, data, status = 200) => {
   res.statusCode = status;
@@ -58,12 +61,18 @@ const server = http.createServer(async (req, res) => {
       savedConfig = body;
       return json(res, savedConfig);
     }
+    if (url.pathname === '/api/project-workflows/preferences' && req.method === 'GET') return json(res, savedPreferences);
+    if (url.pathname === '/api/project-workflows/preferences' && req.method === 'PUT') {
+      savedPreferences = body;
+      return json(res, {repository: '/workspace', ...savedPreferences});
+    }
     if (url.pathname.endsWith('/verify') && req.method === 'POST') {
       return json(res, {required_checks_passed: true, complete: true,
         results: [{name: 'Smoke', required: true, passed: true, output: 'check passed'}]});
     }
     return json(res, {detail: `Unexpected project workflow request: ${req.method} ${url.pathname}`}, 404);
   }
+  if (url.pathname === '/api/models') return json(res, {items: [{endpoint_id: 'endpoint-1', url: 'http://model.local/v1', endpoint_name: 'Fixture', model_type: 'llm', models: ['model-a']}]});
   if (url.pathname.startsWith('/api/harness/preflight/')) {
     calls.push({method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams)});
     return json(res, {model: {id: 'fixture-model', tool_calling: {status: 'claimed'}, context_window: {tokens: 16000, reason: 'Endpoint serving limit may differ'}}, endpoint: {configured: true, enabled: true}, backends: {search: {status: 'configured_unverified'}, browser: {status: 'disabled'}, image_generation: {status: 'unavailable'}}, execution: {mode: 'local_process'}, tools: {items: [{name: 'python', availability: 'available'}, {name: 'web_fetch', availability: 'disabled'}]}, workspace: url.searchParams.get('workspace')});
@@ -93,6 +102,10 @@ const server = http.createServer(async (req, res) => {
     await page.locator('#workspace-open').click();
     await page.locator('.workspace-project-tools > summary').click();
     const panel = page.locator('.project-workflow-panel');
+    await panel.getByRole('button', {name: 'Start new chat with project preferences'}).click();
+    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [role="status"]')?.textContent.includes('message was not sent'));
+    assert.deepEqual(await page.evaluate(() => window.createdProjectChat), {url: 'http://model.local/v1', model: 'model-a', endpoint: 'endpoint-1'}, 'can apply defaults from the entered workspace without Inspect first');
+    assert.equal(await page.evaluate(() => localStorage.getItem('odysseus-workspace')), '/workspace', 'no-inspect apply keeps the matching active workspace');
     await panel.getByRole('button', {name: 'Inspect project'}).click();
     const report = panel.getByLabel('Project workflow results');
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('AGENTS.md'));
@@ -101,6 +114,22 @@ const server = http.createServer(async (req, res) => {
     assert.match(await report.textContent(), /Guidance \(filename unavailable\)/);
     assert.match(await report.textContent(), /Retained guidance/);
     assert.equal(await report.locator('#injected').count(), 0, 'repo text must render as text, not HTML');
+
+    assert.equal(await panel.getByLabel('Preferred model').inputValue(), '');
+    await panel.getByLabel('Preferred model').selectOption('0');
+    await panel.getByLabel('Preferred chat mode').selectOption('chat');
+    await panel.getByLabel('Tool preferences (guidance only)').fill('Prefer web search for current facts.');
+    await panel.getByLabel('Project instructions').fill('Keep changes small.');
+    assert.equal(await page.evaluate(() => window.createdProjectChatCount), 1, 'inspection and editing do not start another chat');
+    await panel.getByRole('button', {name: 'Save project preferences'}).click();
+    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [role="status"]')?.textContent.includes('Project preferences saved'));
+    assert.equal(savedPreferences.preferred_model_id, 'model-a');
+    assert.equal(savedPreferences.preferred_endpoint_id, 'endpoint-1');
+    assert.equal(savedPreferences.instructions, 'Keep changes small.');
+    await panel.getByRole('button', {name: 'Start new chat with project preferences'}).click();
+    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [role="status"]')?.textContent.includes('message was not sent'));
+    assert.deepEqual(await page.evaluate(() => window.createdProjectChat), {url: 'http://model.local/v1', model: 'model-a', endpoint: 'endpoint-1'});
+    assert.equal(await page.locator('#mode-chat-btn').getAttribute('data-clicked'), 'true');
 
     await panel.getByRole('button', {name: 'Create worktree'}).click();
     await panel.getByRole('button', {name: 'Use this worktree'}).waitFor();

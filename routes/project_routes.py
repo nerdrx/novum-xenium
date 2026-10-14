@@ -11,11 +11,13 @@ from src.tool_security import owner_is_admin_or_single_user
 from src.project_workflows import (
     ProjectWorkflowError,
     create_worktree,
+    get_project_preferences,
     get_verification_config,
     inspect_project,
     list_worktrees,
     remove_worktree,
     run_verification,
+    save_project_preferences,
     save_verification_config,
 )
 
@@ -35,9 +37,9 @@ def setup_project_routes() -> APIRouter:
             raise HTTPException(401, "Project workflow owner is unavailable")
         return owner
 
-    def call(fn, *args):
+    def call(fn, *args, **kwargs):
         try:
-            return fn(*args)
+            return fn(*args, **kwargs)
         except ProjectWorkflowError as exc:
             text = str(exc)
             raise HTTPException(409 if any(term in text.lower() for term in ("modified", "untracked", "preserved")) else 400, text) from exc
@@ -91,6 +93,24 @@ def setup_project_routes() -> APIRouter:
             raise HTTPException(400, "Workspace is required")
         return call(save_verification_config, owner, workspace, data.get("checks"),
                     data.get("auto_run_on_completion", False))
+
+    @router.get("/preferences")
+    def project_preferences(request: Request, workspace: str):
+        return call(get_project_preferences, scope(request), workspace)
+
+    @router.put("/preferences")
+    def project_preferences_save(request: Request, body: dict):
+        owner = scope(request)
+        data = body_object(body)
+        workspace = data.get("workspace")
+        if not isinstance(workspace, str):
+            raise HTTPException(400, "Workspace is required")
+        return call(save_project_preferences, owner, workspace,
+                    preferred_model_id=data.get("preferred_model_id", ""),
+                    preferred_endpoint_id=data.get("preferred_endpoint_id", ""),
+                    preferred_mode=data.get("preferred_mode", ""),
+                    tool_preferences=data.get("tool_preferences", ""),
+                    instructions=data.get("instructions", ""))
 
     @router.post("/worktrees/{identifier}/verify")
     async def verification_run(request: Request, identifier: str):

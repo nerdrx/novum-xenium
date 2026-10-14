@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 from core.database import Base, McpServer
 from core.middleware import SecurityHeadersMiddleware
 from routes import module_routes
+from routes import module_data_routes
 from src.module_store import MAX_EXPANDED_BYTES, ModulePackageError, ModuleStore
 
 
@@ -263,3 +264,37 @@ def test_module_data_routes_require_enabled_grant_and_admin_for_git(client):
     client.post("/api/modules/sample-module/enabled", headers=admin(client), json={"enabled": True})
     assert client.get("/api/modules/sample-module/data/research", headers={"x-test-user": "reader"}).status_code == 403
     assert client.get("/api/modules/sample-module/data/git", headers={"x-test-user": "reader"}).status_code == 403
+
+
+def test_run_inbox_returns_latest_owner_scoped_session_and_live_status(tmp_path, monkeypatch):
+    import sqlite3
+    import types
+    import src
+
+    database = tmp_path / "agent_runs.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE agent_run_checkpoints (run_id TEXT, session_id TEXT, owner TEXT, status TEXT, updated REAL)")
+        connection.executemany("INSERT INTO agent_run_checkpoints VALUES (?, ?, ?, ?, ?)", [
+            ("old", "chat-running", "alice", "done", 1),
+            ("new", "chat-running", "alice", "interrupted", 2),
+            ("stale", "chat-stale", "alice", "running", 3),
+            ("other", "chat-private", "bob", "error", 3),
+        ])
+    monkeypatch.setattr(module_data_routes, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(src, "agent_runs", types.SimpleNamespace(
+        is_active=lambda session: session == "chat-running",
+        get_run_owner=lambda session: "alice" if session == "chat-running" else None,
+    ), raising=False)
+    monkeypatch.setattr(module_data_routes, "_session_names", lambda _owner, _ids: {
+        "chat-running": "Live chat", "chat-stale": "Stale chat",
+    })
+
+    runs = module_data_routes._runs("alice")
+
+    assert runs == [{
+        "title": "Stale chat", "session_id": "chat-stale", "updated": 3,
+        "status": "interrupted", "can_resume": False,
+    }, {
+        "title": "Live chat", "session_id": "chat-running", "updated": 2,
+        "status": "running", "can_resume": True,
+    }]

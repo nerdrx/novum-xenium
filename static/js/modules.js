@@ -15,7 +15,7 @@ let activeFrame = null;
 let activeId = null;
 let activeVersion = null;
 let activeModule = null;
-let visibleSubagents = new Set();
+let visibleSessions = new Set();
 let returnFocus = null;
 let statusText = '';
 let statusError = false;
@@ -98,7 +98,7 @@ function openPanel(item) {
   activeId = item.id;
   activeVersion = item.version;
   activeModule = item;
-  visibleSubagents.clear();
+  visibleSessions.clear();
   document.getElementById('module-window-title').textContent = item.name;
   const tools = element('div', 'modules-frame-controls');
   const granted = (item.permissions || []).filter(value => ['downloads', 'git', 'models', 'images', 'research', 'runs', 'subagents'].includes(value));
@@ -130,7 +130,7 @@ function moduleMessage(event) {
   if (!frame?.contentWindow || event.source !== frame.contentWindow || !item || !request || typeof request !== 'object') return;
   if (request.type === 'novum:open') {
     if (request.action === 'session') {
-      if (!item.permissions?.includes('subagents') || typeof request.session_id !== 'string' || !visibleSubagents.has(request.session_id)) return;
+      if (!(item.permissions?.includes('subagents') || item.permissions?.includes('runs')) || typeof request.session_id !== 'string' || !visibleSessions.has(request.session_id)) return;
       const sessionId = request.session_id;
       closePanel();
       options.openChat?.(sessionId);
@@ -161,7 +161,9 @@ function moduleMessage(event) {
   api(`/api/modules/${encodeURIComponent(moduleId)}/data/${encodeURIComponent(capability)}${workspace}`)
     .then(data => {
       if (activeFrame !== frame || activeId !== moduleId || activeModule !== item || frame.contentWindow !== event.source) return;
-      if (capability === 'subagents') visibleSubagents = new Set((data.items || []).map(child => child.session_id).filter(id => typeof id === 'string'));
+      if (capability === 'subagents' || capability === 'runs') {
+        for (const child of data.items || []) if (typeof child.session_id === 'string') visibleSessions.add(child.session_id);
+      }
       frame.contentWindow.postMessage({ type: 'novum:response', id: request.id, data }, '*');
     })
     .catch(error => {

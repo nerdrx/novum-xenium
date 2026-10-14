@@ -56,9 +56,46 @@ def _runs(owner):
     if not database.exists():
         return []
     with sqlite3.connect(f'file:{database}?mode=ro', uri=True, timeout=2) as connection:
-        rows = connection.execute('SELECT run_id,session_id,status,updated FROM agent_run_checkpoints '
-                                  'WHERE owner=? ORDER BY updated DESC LIMIT 50', (str(owner or ''),)).fetchall()
-    return [{'title': f'Run {row[0][:12]}', 'detail': f'Chat {row[1]}', 'status': row[2]} for row in rows]
+        rows = connection.execute(
+            'SELECT c.run_id,c.session_id,c.status,c.updated FROM agent_run_checkpoints c '
+            'WHERE c.owner=? AND c.run_id=(SELECT r.run_id FROM agent_run_checkpoints r '
+            'WHERE r.owner=c.owner AND r.session_id=c.session_id '
+            'ORDER BY r.updated DESC,r.run_id DESC LIMIT 1) '
+            'ORDER BY c.updated DESC LIMIT 50', (str(owner or ''),),
+        ).fetchall()
+    names = _session_names(owner, [row[1] for row in rows])
+    result = []
+    for run_id, session_id, status, updated in rows:
+        can_resume = _can_resume_run(session_id, owner)
+        if can_resume:
+            status = 'running'
+        elif status == 'running':
+            status = 'interrupted'
+        result.append({
+            'title': names.get(session_id) or 'Agent run', 'session_id': session_id,
+            'updated': updated,
+            'status': status, 'can_resume': can_resume,
+        })
+    return result
+
+
+def _session_names(owner, session_ids):
+    if not session_ids:
+        return {}
+    from core.database import Session as DbSession, SessionLocal
+    db = SessionLocal()
+    try:
+        return dict(db.query(DbSession.id, DbSession.name).filter(
+            DbSession.owner == str(owner or ''), DbSession.id.in_(session_ids)
+        ).all())
+    finally:
+        db.close()
+
+
+def _can_resume_run(session_id, owner):
+    from src import agent_runs
+    return bool(agent_runs.is_active(session_id)
+                and agent_runs.get_run_owner(session_id) == str(owner or ''))
 
 
 def setup_module_data_routes(store):
@@ -74,9 +111,11 @@ def setup_module_data_routes(store):
             raise HTTPException(403, 'Module has no permission for this data.')
         if capability == 'subagents':
             from src.subagents import list_subagents
-            children = await asyncio.to_thread(list_subagents, storage_owner_for_request(request))
+            owner = storage_owner_for_request(request)
+            children = await asyncio.to_thread(list_subagents, owner)
             items = [{'title': child['name'], 'session_id': child['session_id'],
                       'model': child.get('model', ''), 'status': child['status'],
+                      'can_resume': _can_resume_run(child['session_id'], owner),
                       'detail': f"Parent chat: {child['parent_session_id']}"}
                      for child in children]
             return {'title': 'Subagents', 'summary': {'Tasks': len(items)}, 'items': items}

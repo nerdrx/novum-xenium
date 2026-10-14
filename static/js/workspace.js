@@ -17,6 +17,8 @@ let _modal = null;
 let _curPath = '';
 let _snapshotPreview = null;
 let _browseController = null;
+let _searchController = null;
+let _searchTimer = null;
 let _snapshotListVersion = 0;
 let _snapshotLoading = false;
 let _snapshotBusy = '';
@@ -106,6 +108,37 @@ async function _load(path, signal) {
   return res.json();
 }
 
+async function _searchFiles(query) {
+  _searchController?.abort();
+  const controller = new AbortController();
+  _searchController = controller;
+  const resultsEl = _modal.querySelector('#workspace-file-results');
+  const root = _curPath;
+  if (query.trim().length < 2) {
+    resultsEl.textContent = 'Enter at least two characters to search this folder and its subfolders.';
+    return;
+  }
+  resultsEl.textContent = 'Searching…';
+  try {
+    const params = new URLSearchParams({ workspace: root, q: query.trim() });
+    const response = await fetch(`${API_BASE}/api/workspace/search?${params}`, {
+      credentials: 'same-origin', signal: controller.signal,
+    });
+    if (!response.ok) throw new Error('Search failed. Check workspace access and retry.');
+    const data = await response.json();
+    if (_searchController !== controller || controller.signal.aborted || root !== _curPath) return;
+    let rows = data.results.map(item =>
+      `<div class="workspace-file-result"><span><strong>${uiModule.esc(item.name)}</strong><br><small>${uiModule.esc(item.path)}</small></span><a href="${uiModule.esc(item.url)}" target="_blank" rel="noopener">Download</a></div>`
+    ).join('');
+    if (data.truncated) rows += '<div class="workspace-empty">Search limit reached. Refine the filename to see more.</div>';
+    resultsEl.innerHTML = rows || '<div class="workspace-empty">No matching files found.</div>';
+  } catch (error) {
+    if (error.name !== 'AbortError' && _searchController === controller) {
+      resultsEl.textContent = error.message || 'Search failed. Retry.';
+    }
+  }
+}
+
 function _render(data) {
   _curPath = data.path;
   const body = _modal.querySelector('#workspace-body');
@@ -141,6 +174,8 @@ function _render(data) {
 }
 
 async function _navigate(path) {
+  _searchController?.abort();
+  _modal.querySelector('#workspace-file-results').textContent = 'Search this folder by filename.';
   _browseController?.abort();
   const controller = new AbortController();
   _browseController = controller;
@@ -350,6 +385,11 @@ function _getModal() {
              aria-label="Workspace folder path" placeholder="Type or paste a folder path, then press Enter" />
       <p class="muted workspace-note">File tools are <strong>confined</strong> to this folder. Shell commands start here but are <strong>not sandboxed</strong> and can reach outside it. A workspace scopes the tools; it is not a security boundary.</p>
       <div class="modal-body workspace-body" id="workspace-body" aria-live="polite"></div>
+      <section class="workspace-file-search" aria-label="Workspace file search">
+        <label for="workspace-file-query">Find a file in this folder</label>
+        <input id="workspace-file-query" type="search" class="styled-prompt-input" maxlength="128" autocomplete="off" placeholder="Search filenames…" />
+        <div id="workspace-file-results" role="status" aria-live="polite">Search this folder by filename.</div>
+      </section>
       <section class="workspace-snapshots" aria-label="Workspace snapshots">
         <div class="workspace-snapshot-actions">
           <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-snapshot-create">Snapshot</button>
@@ -389,6 +429,11 @@ function _getModal() {
   _modal.querySelector('#workspace-snapshot-review').addEventListener('click', _reviewSnapshot);
   _modal.querySelector('#workspace-snapshot-restore').addEventListener('click', _restoreSnapshot);
   _modal.querySelector('#workspace-snapshot-select').addEventListener('change', _clearSnapshotPreview);
+  _modal.querySelector('#workspace-file-query').addEventListener('input', event => {
+    clearTimeout(_searchTimer);
+    const query = event.target.value;
+    _searchTimer = setTimeout(() => _searchFiles(query), 250);
+  });
   // Editable path bar: Enter navigates to a typed/pasted folder.
   _modal.querySelector('#workspace-cur-path').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {

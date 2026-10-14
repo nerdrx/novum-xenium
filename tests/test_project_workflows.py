@@ -265,6 +265,55 @@ def test_verification_config_changes_invalidate_saved_evidence(repo, change):
     assert stored["complete"] is True
 
 
+def test_project_preferences_are_owner_scoped_bounded_and_preserve_verification(repo):
+    preferences = workflows.save_project_preferences(
+        "alice", str(repo), preferred_model_id="model-a", preferred_endpoint_id="endpoint-1",
+        preferred_mode="agent", tool_preferences="Prefer web search when current sources matter.",
+        instructions="Use the project's existing style.",
+    )
+    assert preferences["preferred_model_id"] == "model-a"
+    assert workflows.get_project_preferences("alice", str(repo))["preferred_endpoint_id"] == "endpoint-1"
+    assert workflows.get_project_preferences("bob", str(repo))["instructions"] == ""
+
+    workflows.save_verification_config("alice", str(repo), [
+        {"name": "check", "argv": [sys.executable, "-c", "pass"]},
+    ])
+    assert workflows.get_project_preferences("alice", str(repo))["instructions"] == "Use the project's existing style."
+    assert workflows.get_verification_config("alice", str(repo))["checks"][0]["name"] == "check"
+    context = workflows.project_prompt_context("alice", str(repo))
+    assert "Preferred model (user preference): model-a on endpoint endpoint-1" in context
+    assert "Tool preferences (user preference)" in context
+    assert "do not grant tool access" in context
+
+    with pytest.raises(workflows.ProjectWorkflowError, match="Preferred mode"):
+        workflows.save_project_preferences("alice", str(repo), preferred_mode="bash")
+    with pytest.raises(workflows.ProjectWorkflowError, match="4,000 characters"):
+        workflows.save_project_preferences("alice", str(repo), instructions="x" * 4001)
+
+
+def test_project_preferences_api_keeps_interactive_admin_gate(repo, monkeypatch):
+    from routes import project_routes
+    app = FastAPI()
+    app.include_router(setup_project_routes())
+    monkeypatch.setattr(project_routes, "get_current_user", lambda _request: "admin")
+    monkeypatch.setattr(project_routes, "storage_owner_for_request", lambda _request: "alice")
+    monkeypatch.setattr(project_routes, "owner_is_admin_or_single_user", lambda _user: True)
+    client = TestClient(app)
+    url = f"/api/project-workflows/preferences?workspace={repo}"
+
+    monkeypatch.setattr(project_routes, "is_delegated_credential", lambda _request: True)
+    assert client.get(url).status_code == 403
+
+    monkeypatch.setattr(project_routes, "is_delegated_credential", lambda _request: False)
+    saved = client.put("/api/project-workflows/preferences", json={
+        "workspace": str(repo), "preferred_model_id": "model-a", "preferred_endpoint_id": "endpoint-1",
+        "preferred_mode": "chat", "tool_preferences": "Use search sparingly", "instructions": "Keep changes small",
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["preferred_model_id"] == "model-a"
+    assert client.get(url).json()["instructions"] == "Keep changes small"
+
+
 def test_equivalent_verification_check_defaults_keep_evidence_current(repo):
     created = workflows.create_worktree("alice", str(repo))
     workflows.save_verification_config("alice", str(repo), [{

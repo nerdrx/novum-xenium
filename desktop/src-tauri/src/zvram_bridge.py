@@ -196,6 +196,41 @@ def _model_rows(model_helper, backend_checkout):
             rows.append(row)
         except (KeyError, OSError, TypeError, ValueError):
             continue
+    # Explicit user-owned GGUF directories let the router serve local libraries
+    # such as Hugging Face snapshots without importing them into Ollama.
+    config_path = Path.home() / ".config/dev.novum.xenium/config.json"
+    try:
+        config = json.loads(config_path.read_text())
+        configured_checkout = Path(config["checkout"]).expanduser().resolve()
+        roots = config.get("model_roots", []) if configured_checkout == Path(backend_checkout).resolve() else []
+    except (OSError, ValueError, KeyError, TypeError):
+        roots = []
+    if not isinstance(roots, list):
+        roots = []
+    seen = {row["name"] for row in rows}
+    for value in roots:
+        if not isinstance(value, str):
+            continue
+        try:
+            root = Path(value).expanduser().resolve(strict=True)
+            if not root.is_dir():
+                continue
+            for candidate in sorted(root.rglob("*.gguf")):
+                path = candidate.resolve(strict=True)
+                if not path.is_file():
+                    continue
+                with path.open("rb") as stream:
+                    if stream.read(4) != b"GGUF":
+                        continue
+                repository = next((part.removeprefix("models--").replace("--", "/")
+                                   for part in candidate.parts if part.startswith("models--")), None)
+                name = f"{repository}:{candidate.stem}" if repository else f"{root.name}:{candidate.stem}"
+                if name in seen or not _ALIAS_RE.fullmatch(name):
+                    continue
+                rows.append({"name": name, "path": str(path), "size": path.stat().st_size})
+                seen.add(name)
+        except (OSError, ValueError):
+            continue
     return rows
 
 

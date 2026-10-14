@@ -105,6 +105,32 @@ class ManagerHelpers:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_model_rows_discovers_configured_gguf_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            checkout = home / "checkout"
+            checkout.mkdir()
+            repo = home / "hub/models--owner--Dolphin/snapshots/revision"
+            repo.mkdir(parents=True)
+            target = home / "hub/blobs/model-blob"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"GGUFfixture")
+            model = repo / "Dolphin.F16.gguf"
+            model.symlink_to(target)
+            (repo / "ignore.gguf").write_bytes(b"not GGUF")
+            config = home / ".config/dev.novum.xenium/config.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({"checkout": str(checkout), "model_roots": [str(repo.parent.parent)]}))
+
+            class EmptyModels:
+                def discover_models(self, _checkout):
+                    return []
+
+            with mock.patch.object(bridge.Path, "home", return_value=home):
+                rows = bridge._model_rows(EmptyModels(), checkout)
+            self.assertEqual(rows, [{"name": "owner/Dolphin:Dolphin.F16",
+                                     "path": str(target.resolve()), "size": 11}])
+
     def router_command(self, model, alias, **options):
         command = ['zvram']
         if not options.get('live_control', False):

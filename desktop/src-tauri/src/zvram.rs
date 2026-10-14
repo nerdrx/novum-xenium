@@ -252,7 +252,7 @@ fn run_bridge(
     Ok(result)
 }
 
-fn filtered_library_path(appdir: Option<&Path>, value: &OsStr) -> OsString {
+pub(super) fn filtered_library_path(appdir: Option<&Path>, value: &OsStr) -> OsString {
     let Some(appdir) = appdir else {
         return value.to_os_string();
     };

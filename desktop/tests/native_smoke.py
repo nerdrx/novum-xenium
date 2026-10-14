@@ -11,6 +11,7 @@ parser.add_argument('--project', required=True)
 parser.add_argument('--backend-port', type=int, default=7000)
 parser.add_argument('--driver', default='tauri-driver')
 parser.add_argument('--screenshot')
+parser.add_argument('--browser-probe', action='store_true', help='capture an external link with an isolated fake host opener')
 parser.add_argument('--tray-host', choices=('none', 'fake'), help='optional isolated close/tray test; needs dbus-run-session, dbus-python/GLib, python-xlib and xdotool')
 options = parser.parse_args()
 
@@ -154,6 +155,15 @@ class FakeStatusNotifierWatcher:
 private_config = tempfile.TemporaryDirectory(prefix='novum-native-config-')
 private_runtime = tempfile.TemporaryDirectory(prefix='novum-native-runtime-') if options.tray_host else None
 app_env = {**os.environ, 'XDG_CONFIG_HOME':private_config.name}
+if options.browser_probe:
+    probe_bin = Path(private_config.name) / 'bin'
+    probe_bin.mkdir()
+    browser_capture = Path(private_config.name) / 'browser-launch.json'
+    opener = probe_bin / 'xdg-open'
+    opener.write_text('#!/usr/bin/python3\nimport os,json,sys\nfrom pathlib import Path\nPath(' + repr(str(browser_capture)) + ').write_text(json.dumps({"args":sys.argv[1:],"library":os.environ.get("LD_LIBRARY_PATH",""),"appdir":os.environ.get("APPDIR","")}))\n')
+    opener.chmod(0o755)
+    app_env['PATH'] = str(probe_bin) + os.pathsep + app_env['PATH']
+
 if private_runtime:
     app_env.update(XDG_RUNTIME_DIR=private_runtime.name,
                    XDG_DATA_HOME=str(Path(private_runtime.name) / 'data'),
@@ -322,18 +332,30 @@ try:
             time.sleep(.1)
         raise AssertionError('workspace did not reload')
 
-    workbench_window = window_ids('Novum Xenium Workbench')[0]
-    subprocess.run(['xdotool', 'windowfocus', '--sync', workbench_window], check=True)
-    for key in ['ctrl+r', 'F5']:
-        before = execute('return performance.timeOrigin')
-        subprocess.run(['xdotool', 'key', '--clearmodifiers', key], check=True)
-        wait_for_reload(before)
-    if watcher:
-        before = execute('return performance.timeOrigin')
-        watcher.click_menu_item('Reload workspace')
-        wait_for_reload(before)
-    print('PASS: native workspace Ctrl+R, F5 and available tray reload', flush=True)
+    if not options.browser_probe:
+        workbench_window = window_ids('Novum Xenium Workbench')[0]
+        subprocess.run(['xdotool', 'windowfocus', '--sync', workbench_window], check=True)
+        for key in ['ctrl+r', 'F5']:
+            before = execute('return performance.timeOrigin')
+            subprocess.run(['xdotool', 'key', '--clearmodifiers', key], check=True)
+            wait_for_reload(before)
+        if watcher:
+            before = execute('return performance.timeOrigin')
+            watcher.click_menu_item('Reload workspace')
+            wait_for_reload(before)
+        print('PASS: native workspace Ctrl+R, F5 and available tray reload', flush=True)
     print('PASS: native config/status/logs/workbench; remote management blocked',flush=True)
+    if options.browser_probe:
+        probe_url = 'https://example.com/?a=1&b=2'
+        execute('window.location.href=' + json.dumps(probe_url))
+        for _ in range(100):
+            if browser_capture.exists(): break
+            time.sleep(.1)
+        captured = json.loads(browser_capture.read_text())
+        assert captured['args'] == [probe_url], captured
+        assert captured['appdir'] and captured['appdir'] not in captured['library'], captured
+        print('PASS: native external link reaches host opener without bundled libraries', flush=True)
+
     if options.tray_host == 'none':
         workbench_ids=window_ids('Novum Xenium Workbench')
         owned_pids=[int(subprocess.check_output(['xdotool','getwindowpid',window],text=True).strip()) for window in workbench_ids + window_ids('Novum Xenium')]

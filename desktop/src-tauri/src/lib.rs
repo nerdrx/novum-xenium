@@ -475,7 +475,7 @@ fn host_network_command_matches(network: &str, command: &[String], port: u16) ->
         .and_then(|args| args[1].parse::<u16>().ok());
     host.is_some_and(|host| {
         host.parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
+            .is_ok_and(|address| address.is_loopback() || address.is_unspecified())
     }) && command_port == Some(port)
 }
 
@@ -1028,6 +1028,61 @@ fn workbench_notice(window: &WebviewWindow, message: &str) {
     }})()"#));
 }
 
+#[cfg(target_os = "linux")]
+fn host_browser_environment(command: &mut Command, appdir: &Path,
+    values: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>) {
+    for (key, value) in values {
+        if matches!(key.to_str(), Some("LD_LIBRARY_PATH" | "GTK_PATH" | "QT_PLUGIN_PATH" |
+            "QT_QPA_PLATFORM_PLUGIN_PATH" | "GIO_EXTRA_MODULES" | "GIO_MODULE_DIR" |
+            "PYTHONHOME" | "PYTHONPATH" | "PATH")) {
+            let filtered = zvram::filtered_library_path(Some(appdir), &value);
+            if filtered.is_empty() { command.env_remove(key); }
+            else { command.env(key, filtered); }
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn browser_launcher_keeps_host_environment_and_literal_url() {
+    let mut command = Command::new("xdg-open");
+    let url = "https://example.com/?q=a&b=2";
+    command.arg(url);
+    host_browser_environment(&mut command, Path::new("/bundle"), [
+        ("LD_LIBRARY_PATH".into(), "/bundle/usr/lib".into()),
+        ("PATH".into(), "/bundle/usr/bin:/usr/bin".into()),
+        ("PYTHONHOME".into(), "/bundle/usr".into()),
+        ("DISPLAY".into(), ":1".into()),
+    ]);
+    let env: HashMap<_, _> = command.get_envs().collect();
+    assert_eq!(env[std::ffi::OsStr::new("LD_LIBRARY_PATH")], None);
+    assert_eq!(env[std::ffi::OsStr::new("PYTHONHOME")], None);
+    assert_eq!(env[std::ffi::OsStr::new("PATH")], Some(std::ffi::OsStr::new("/usr/bin")));
+    assert!(!env.contains_key(std::ffi::OsStr::new("DISPLAY")));
+    assert_eq!(command.get_args().next().unwrap(), url);
+}
+
+fn open_host_browser(url: &str) -> std::io::Result<()> {
+    #[cfg(not(target_os = "linux"))]
+    return open::that(url);
+    #[cfg(target_os = "linux")]
+    {
+        let mut last_error = std::io::Error::other("No browser launcher available");
+        for mut command in open::commands(url) {
+            // Host launchers must not load AppImage's bundled OpenSSL/GTK libraries.
+            if let Some(appdir) = std::env::var_os("APPDIR") {
+                host_browser_environment(&mut command, Path::new(&appdir), std::env::vars_os());
+            }
+            match command.status() {
+                Ok(status) if status.success() => return Ok(()),
+                Ok(status) => last_error = std::io::Error::other(format!("Browser launcher exited with {status}")),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
+    }
+}
+
 fn open_workbench_browser(app: &AppHandle, url: &tauri::Url) {
     if !browser_url_allowed(url) {
         if let Some(window) = app.get_webview_window("workbench") {
@@ -1045,7 +1100,7 @@ fn open_workbench_browser(app: &AppHandle, url: &tauri::Url) {
     let app = app.clone();
     let url = url.to_string();
     thread::spawn(move || {
-        if let Err(error) = open::that(&url) {
+        if let Err(error) = open_host_browser(&url) {
             eprintln!("Cannot open default browser: {error}");
             if let Some(window) = app.get_webview_window("workbench") {
                 workbench_notice(
@@ -2824,7 +2879,7 @@ mod tests {
             ],
             7010,
         ));
-        assert!(!host_network_command_matches(
+        assert!(host_network_command_matches(
             "host",
             &[
                 "uvicorn".into(),

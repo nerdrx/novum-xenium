@@ -43,6 +43,11 @@ def test_composer_drafts_are_bounded_and_account_scoped():
       assert.equal(saveComposerDraft('chat-40', 'draft', {{ accountId: 'alice', storage }}).reason, 'count');
       assert.equal(getComposerDraft('chat-40', {{ accountId: 'alice', storage }}), 'draft');
       assert.equal([...values.keys()].filter(key => key.startsWith('ody-composer-drafts:alice:')).length, 40);
+      saveComposerDraft('deleted-chat', 'old', {{ accountId: 'alice', storage }});
+      deleteComposerDraft('deleted-chat', {{ accountId: 'alice', storage }});
+      assert.equal(getComposerDraft('deleted-chat', {{ accountId: 'alice', storage }}), '');
+      assert.equal(saveComposerDraft('deleted-chat', 'stale tab', {{ accountId: 'alice', storage }}).reason, 'deleted');
+      assert.equal(saveComposerDraft('deleted-chat', 'other account', {{ accountId: 'bob', storage }}).persisted, true);
       const brokenStorage = {{ length: 0, key: () => null, getItem: () => null, removeItem: () => {{}}, setItem: () => {{ throw new Error('quota'); }} }};
       const failed = 'kept in memory';
       assert.equal(saveComposerDraft('chat-fail', failed, {{ accountId: 'alice', storage: brokenStorage }}).reason, 'storage');

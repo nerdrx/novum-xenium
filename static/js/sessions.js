@@ -11,7 +11,7 @@ import spinnerModule from './spinner.js';
 import { installSessionHistory, setSessionHistory } from './sessionHistory.js';
 import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';
 import { resetBrowserPreview } from './browserPreview.js';
-import { getComposerDraft, saveComposerDraft } from './composerDrafts.js';
+import { deleteComposerDraft, getComposerDraft, saveComposerDraft } from './composerDrafts.js';
 
 const API_BASE = window.location.origin;
 
@@ -68,7 +68,7 @@ function _clearComposerDraft(sessionId) {
   _composerDraftWarnings.delete(`${sessionId}:size`);
   _composerDraftWarnings.delete(`${sessionId}:count`);
   _composerDraftWarnings.delete(`${sessionId}:storage`);
-  saveComposerDraft(sessionId, '', _composerDraftOptions(sessionId));
+  deleteComposerDraft(sessionId, _composerDraftOptions(sessionId));
 }
 
 export async function deleteSessionById(sessionId, options = {}) {

@@ -17,7 +17,7 @@ const imports = new Map([
   ["import { installSessionHistory, setSessionHistory } from './sessionHistory.js';", "import { installSessionHistory, setSessionHistory } from '/stubs/sessionHistory.js';"],
   ["import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';", "import { applySubagentInspector, clearSubagentInspector } from '/stubs/subagentInspector.js';"],
   ["import { resetBrowserPreview } from './browserPreview.js';", "import { resetBrowserPreview } from '/stubs/browserPreview.js';"],
-  ["import { getComposerDraft, saveComposerDraft } from './composerDrafts.js';", "import { getComposerDraft, saveComposerDraft } from '/static/js/composerDrafts.js';"],
+  ["import { deleteComposerDraft, getComposerDraft, saveComposerDraft } from './composerDrafts.js';", "import { deleteComposerDraft, getComposerDraft, saveComposerDraft } from '/static/js/composerDrafts.js';"],
 ]);
 const stubs = {
   'storage.js': `const Storage={get:(k,f=null)=>localStorage.getItem(k)??f,set:(k,v)=>localStorage.setItem(k,v),remove:k=>localStorage.removeItem(k)};export default Storage;`,
@@ -89,7 +89,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const context = await browser.newContext();
     await context.addInitScript(() => {
-      localStorage.setItem('odysseus-auth-user', 'alice');
+      localStorage.setItem('odysseus-auth-user', new URL(location.href).searchParams.get('account') || 'alice');
       if (!localStorage.getItem('__composer_draft_test_seeded')) {
         localStorage.setItem('ody-composer-drafts:alice:chat-a', JSON.stringify({ text: 'saved A' }));
         localStorage.setItem('ody-composer-drafts:alice:chat-b', JSON.stringify({ text: 'saved B' }));
@@ -154,6 +154,43 @@ const server = http.createServer(async (req, res) => {
     assert.notEqual(await page.evaluate(() => localStorage.getItem('ody-composer-drafts:alice:fail-delete')), null,
       'failed chat deletion retains its saved draft');
 
+    const deletingTab = await context.newPage();
+    const typingTab = await context.newPage();
+    const otherAccountTab = await context.newPage();
+    await deletingTab.goto(`${origin}/?session=multi-tab-delete`);
+    await typingTab.goto(`${origin}/?session=multi-tab-delete`);
+    await otherAccountTab.goto(`${origin}/?session=multi-tab-delete&account=bob`);
+    await Promise.all([
+      deletingTab.waitForFunction(() => window.integrationReady),
+      typingTab.waitForFunction(() => window.integrationReady),
+      otherAccountTab.waitForFunction(() => window.integrationReady),
+    ]);
+    await typingTab.locator('#message').fill('stale tab draft');
+    await otherAccountTab.locator('#message').fill('bob draft');
+    assert.notEqual(await otherAccountTab.evaluate(() => localStorage.getItem('ody-composer-drafts:bob:multi-tab-delete')), null,
+      'other account draft setup succeeds');
+    // Auth identity is shared localStorage in this app, so restore Alice as
+    // the deleting tab's active account before exercising the broadcast.
+    await deletingTab.evaluate(() => localStorage.setItem('odysseus-auth-user', 'alice'));
+    await deletingTab.evaluate(async () => window.testSessions.deleteSessionById('multi-tab-delete'));
+    await typingTab.waitForFunction(() => localStorage.getItem('ody-composer-drafts:alice:multi-tab-delete') === null);
+    await typingTab.locator('#message').fill('typing after deletion');
+    assert.equal(await typingTab.evaluate(() => localStorage.getItem('ody-composer-drafts:alice:multi-tab-delete')), null,
+      'successful deletion invalidates a stale tab and blocks later draft saves');
+    assert.notEqual(await otherAccountTab.evaluate(() => localStorage.getItem('ody-composer-drafts:bob:multi-tab-delete')), null,
+      'deletion invalidation is scoped to the authenticated account');
+
+    await deletingTab.goto(`${origin}/?session=fail-delete`);
+    await typingTab.goto(`${origin}/?session=fail-delete`);
+    await Promise.all([
+      deletingTab.waitForFunction(() => window.integrationReady),
+      typingTab.waitForFunction(() => window.integrationReady),
+    ]);
+    await deletingTab.evaluate(async () => window.testSessions.deleteSessionById('fail-delete'));
+    await typingTab.locator('#message').fill('still editable after failed delete');
+    assert.notEqual(await typingTab.evaluate(() => localStorage.getItem('ody-composer-drafts:alice:fail-delete')), null,
+      'failed deletion does not invalidate another tab draft');
+
     await page.evaluate(() => window.testSessions.selectSession('delayed-delete', { showLoading: false }));
     await input.fill('old chat text');
     await page.evaluate(() => { window.deletePending = window.testSessions.deleteSessionById('delayed-delete'); });
@@ -162,6 +199,9 @@ const server = http.createServer(async (req, res) => {
     await page.evaluate(() => window.deletePending);
     assert.equal(await input.inputValue(), 'new chat text', 'late deletion does not clear the newly selected chat composer');
     assert.deepEqual(errors, []);
+    await deletingTab.close();
+    await typingTab.close();
+    await otherAccountTab.close();
     await context.close();
     console.log('PASS: composer drafts session wiring');
   } finally {

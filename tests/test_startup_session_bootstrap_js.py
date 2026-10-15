@@ -39,8 +39,8 @@ _IMPORT_REWRITES = {
     "import { resetBrowserPreview } from './browserPreview.js';": (
         "import { resetBrowserPreview } from './browserPreview.mjs';"
     ),
-    "import { getComposerDraft, saveComposerDraft } from './composerDrafts.js';": (
-        "import { getComposerDraft, saveComposerDraft } from './composerDrafts.mjs';"
+    "import { deleteComposerDraft, getComposerDraft, saveComposerDraft } from './composerDrafts.js';": (
+        "import { deleteComposerDraft, getComposerDraft, saveComposerDraft } from './composerDrafts.mjs';"
     ),
     "import themeModule from './theme.js';": "import themeModule from './theme.mjs';",
     "import spinnerModule from './spinner.js';": "import spinnerModule from './spinner.mjs';",

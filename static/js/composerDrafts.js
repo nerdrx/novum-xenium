@@ -3,6 +3,31 @@ const STORAGE_PREFIX = 'ody-composer-drafts:';
 const MAX_DRAFTS = 40;
 const MAX_DRAFT_CHARS = 20000;
 const memoryDrafts = new Map();
+const deletedDrafts = new Set();
+const deleteChannel = (() => {
+  try {
+    return typeof window !== 'undefined' && 'BroadcastChannel' in window
+      ? new BroadcastChannel('ody-composer-draft-deletes') : null;
+  } catch { return null; }
+})();
+
+function _deletedKey(accountId, sessionId) {
+  return `${String(accountId || '')}\u0000${String(sessionId || '')}`;
+}
+
+function _applyDraftDeletion(accountId, sessionId, storage) {
+  const key = _draftKey(accountId, sessionId);
+  deletedDrafts.add(_deletedKey(accountId, sessionId));
+  memoryDrafts.delete(key);
+  try { storage?.removeItem(key); } catch {}
+}
+
+if (deleteChannel) {
+  deleteChannel.addEventListener('message', ({ data }) => {
+    if (!data || typeof data.accountId !== 'string' || typeof data.sessionId !== 'string') return;
+    _applyDraftDeletion(data.accountId, data.sessionId, _getStorage());
+  });
+}
 
 function _accountPrefix(accountId) {
   return `${STORAGE_PREFIX}${encodeURIComponent(String(accountId || ''))}:`;
@@ -32,6 +57,7 @@ export function saveComposerDraft(sessionId, text, { accountId, incognito = fals
   if (!sessionId || !accountId) return { persisted: false, reason: 'unavailable' };
   const storage = _getStorage(providedStorage);
   const memoryKey = _draftKey(accountId, sessionId);
+  if (deletedDrafts.has(_deletedKey(accountId, sessionId))) return { persisted: false, reason: 'deleted' };
   const value = String(text || '');
   if (!value) {
     memoryDrafts.delete(memoryKey);
@@ -71,6 +97,7 @@ export function saveComposerDraft(sessionId, text, { accountId, incognito = fals
 
 export function getComposerDraft(sessionId, { accountId, incognito = false, storage: providedStorage } = {}) {
   if (!sessionId || !accountId) return '';
+  if (deletedDrafts.has(_deletedKey(accountId, sessionId))) return '';
   const key = _draftKey(accountId, sessionId);
   if (memoryDrafts.has(key)) return memoryDrafts.get(key);
   if (incognito) return '';
@@ -81,4 +108,11 @@ export function getComposerDraft(sessionId, { accountId, incognito = false, stor
   } catch {
     return '';
   }
+}
+
+export function deleteComposerDraft(sessionId, { accountId, storage: providedStorage } = {}) {
+  if (!sessionId || !accountId) return;
+  const storage = _getStorage(providedStorage);
+  _applyDraftDeletion(accountId, sessionId, storage);
+  deleteChannel?.postMessage({ accountId: String(accountId), sessionId: String(sessionId) });
 }

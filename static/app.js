@@ -2344,6 +2344,12 @@ function initializeEventListeners() {
       collapsibleBtns.forEach(btn => btn.classList.remove('toolbar-collapsed'));
       overflowMirrors.forEach(m => m.style.display = 'none');
 
+      // Narrow composers wrap tools onto their own row instead of clipping them.
+      if (inputBottom.clientWidth <= 640) {
+        syncMirrorStates();
+        return;
+      }
+
       // Temporarily allow overflow for accurate measurement
       const prevOverflow = inputLeft.style.overflow;
       inputLeft.style.overflow = 'visible';

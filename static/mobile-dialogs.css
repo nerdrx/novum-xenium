@@ -1,0 +1,164 @@
+/* Mobile sheet sizing and safe areas for settings and image gallery. */
+@media (max-width: 768px) {
+  #settings-modal .settings-modal-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    box-sizing: border-box;
+    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+  }
+
+  #settings-modal .settings-layout {
+    flex: 1 1 0;
+    min-height: 0;
+    max-height: none;
+  }
+
+  #settings-modal .settings-panels {
+    min-height: 0;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #gallery-modal .gallery-modal-content {
+    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+  }
+}
+
+/* In landscape and short tablet windows, keep settings navigation reachable
+   in a horizontal rail and give the active panel the remaining scroll area. */
+@media (max-width: 900px) and (max-height: 600px) {
+  /* A phone in landscape can exceed the portrait mobile width breakpoint.
+     Keep its modal and drawer geometry mobile-sized by available height. */
+  #settings-modal,
+  #gallery-modal {
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+  }
+
+  #settings-modal .settings-modal-content,
+  #gallery-modal .gallery-modal-content {
+    width: 100% !important;
+    max-width: none;
+    margin: 0 !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    box-sizing: border-box;
+  }
+
+  #settings-modal .settings-layout {
+    flex: 1 1 0;
+    flex-direction: column;
+    min-height: 0;
+    max-height: none;
+  }
+
+  #settings-modal .settings-sidebar {
+    flex: 0 0 auto;
+    width: auto;
+    max-height: 48px;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: none;
+  }
+
+  #settings-modal .settings-sidebar-content {
+    min-width: 0;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  #settings-modal .settings-sidebar-content::-webkit-scrollbar {
+    display: none;
+  }
+
+  #settings-modal .settings-sidebar::-webkit-scrollbar {
+    display: none;
+  }
+
+  #settings-modal .settings-sidebar-divider,
+  #settings-modal .settings-sidebar-label,
+  #settings-modal .settings-nav-search-wrap,
+  #settings-modal .settings-sidebar-resize-handle,
+  #settings-modal .settings-sidebar-toggle {
+    display: none;
+  }
+
+  #settings-modal .settings-nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 40px;
+  }
+
+  #settings-modal .settings-panels {
+    flex: 1 1 0;
+    padding-block: 8px;
+  }
+
+  .sidebar {
+    position: fixed !important;
+    inset: 0 auto 0 0;
+    z-index: 400;
+    width: 80% !important;
+    max-width: 340px;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+    transition: transform 0.25s ease, opacity 0.25s ease !important;
+    opacity: 1 !important;
+    overflow: visible !important;
+    background: var(--panel) !important;
+    backdrop-filter: none !important;
+  }
+
+  .sidebar.hidden {
+    width: 80% !important;
+    transform: translateX(-100%);
+    pointer-events: none;
+    overflow: hidden !important;
+  }
+
+  .sidebar.right-side {
+    inset: 0 0 0 auto;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.5);
+  }
+
+  .sidebar.right-side.hidden {
+    transform: translateX(100%);
+  }
+
+  html.ody-sidebar-off .sidebar,
+  html.ody-mobile-startup-sidebar-hidden .sidebar {
+    transform: translateX(-100%) !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
+  }
+
+  html.ody-sidebar-off .sidebar.right-side,
+  html.ody-mobile-startup-sidebar-hidden .sidebar.right-side {
+    transform: translateX(100%) !important;
+  }
+}
+
+@media (max-height: 420px) and (orientation: landscape) {
+  body:has(#authForm) {
+    align-items: center;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  body:has(#authForm) .card {
+    max-height: 100dvh;
+    overflow-y: auto;
+  }
+}

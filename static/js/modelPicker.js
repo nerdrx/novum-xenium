@@ -213,6 +213,21 @@ function _initModelPickerDropdown() {
   btn.setAttribute('aria-controls', menu.id);
   search.setAttribute('aria-label', 'Search models and providers');
 
+  // Keep the upward-opening picker inside the visible area when the keyboard
+  // or a short landscape window leaves little room above the composer.
+  function fitPickerHeight() {
+    if (menu.classList.contains('hidden')) return;
+    const top = window.visualViewport?.offsetTop || 0;
+    const available = Math.max(0, wrap.getBoundingClientRect().top - top - 24);
+    menu.style.boxSizing = 'border-box';
+    menu.style.maxHeight = `${available}px`;
+    menu.style.overflowY = 'auto';
+  }
+  window.addEventListener('resize', fitPickerHeight);
+  window.visualViewport?.addEventListener('resize', fitPickerHeight);
+  window.visualViewport?.addEventListener('scroll', fitPickerHeight);
+  new ResizeObserver(fitPickerHeight).observe(wrap);
+
   let closeTimer = null;
   function _close({ restoreFocus = false } = {}) {
     if (menu.classList.contains('hidden')) return;
@@ -816,6 +831,7 @@ async function _pick(m) {
       // Force-clear any in-progress close animation
       menu.classList.remove('closing', 'hidden');
       btn.setAttribute('aria-expanded', 'true');
+      fitPickerHeight();
       const hasCache = _hasModelCache();
       if (hasCache) {
         _populate('');

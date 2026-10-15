@@ -35,7 +35,7 @@ const server = http.createServer((req,res) => {
   assert.equal(await page.locator('.workspace-dock img,.workspace-dock iframe,.workspace-dock a').count(),0);
   assert.match(await page.locator('[role=tabpanel]').textContent(),/<img onerror/);
   await page.keyboard.press('End');
-  assert.equal(await page.locator('.workspace-dock a').getAttribute('href'),'#session-child-1');
+  assert.equal(await page.locator('.workspace-dock a').getAttribute('href'),'#child-1');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('.workspace-dock').count(),0);
   assert.equal(await page.evaluate(()=>document.activeElement.className),'workspace-dock-toggle');
@@ -44,6 +44,10 @@ const server = http.createServer((req,res) => {
   await page.locator('#workspace-tab-Files').click();
   assert.match(await page.locator('[role=tabpanel]').textContent(),/beta secret/);
   assert.doesNotMatch(await page.locator('[role=tabpanel]').textContent(),/main.py/);
+  await page.evaluate(()=>dock.resetWorkspaceDock('alpha'));
+  assert.equal(await page.locator('.workspace-dock').count(), 1, 'Switching chats keeps workspace open');
+  assert.match(await page.locator('[role=tabpanel]').textContent(), /main.py/);
+  assert.doesNotMatch(await page.locator('[role=tabpanel]').textContent(), /beta secret/);
   await page.setViewportSize({width:390,height:700});
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'0px');
   assert.ok((await page.locator('.workspace-dock').boundingBox()).width<=390);

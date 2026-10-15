@@ -49,7 +49,7 @@ function renderContent() {
     if (!state?.children.size) content.append(el('p', 'No subagent activity received for this chat yet.'));
     for (const [id, title] of state?.children || []) {
       const link = el('a', title || 'Subagent chat');
-      link.href = `#session-${id}`;
+      link.href = `#${id}`;
       content.append(link);
     }
   } else {
@@ -134,7 +134,9 @@ function init() {
 export function resetWorkspaceDock(sessionId) {
   current = validId(sessionId);
   if (!current) sessions.clear();
-  init(); close(false);
+  init();
+  if (panel && current) renderContent();
+  else close(false);
 }
 export function updateWorkspaceDock(event, sessionId) {
   const id = validId(sessionId);

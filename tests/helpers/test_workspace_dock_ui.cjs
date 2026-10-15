@@ -51,6 +51,12 @@ const server = http.createServer((req,res) => {
   await page.setViewportSize({width:390,height:700});
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'0px');
   assert.ok((await page.locator('.workspace-dock').boundingBox()).width<=390);
+  assert.equal(await page.locator('.workspace-dock-tabs').evaluate(e=>e.scrollWidth<=e.clientWidth),true);
+  await page.setViewportSize({width:320,height:700});
+  assert.equal(await page.locator('.workspace-dock-tabs').evaluate(e=>e.scrollWidth<=e.clientWidth),true);
+  for (const tab of await page.locator('.workspace-dock-tabs button').all()) {
+    const box=await tab.boundingBox(); assert.ok(box.x>=0 && box.x+box.width<=320);
+  }
   await page.route('**/api/chat/evidence/alpha', route => route.fulfill({json:{runs:[{status:'error',model:'test-model',duration_seconds:2,events:[{tool:'test_tool',exit_code:1}]}]}}));
   await page.locator('#workspace-tab-Runs').click();
   await page.getByRole('button', {name:'Refresh runs'}).waitFor();

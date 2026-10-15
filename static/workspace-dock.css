@@ -49,3 +49,8 @@
 .workspace-file-result { flex-wrap: wrap; gap: 8px; }
 .workspace-file-result > span { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
 .workspace-preview-file, #workspace-file-preview button { min-height: 44px; }
+
+@media (max-width: 480px) {
+  .workspace-dock-tabs { flex-wrap: wrap; overflow: visible; }
+  .workspace-dock-tabs button { flex: 1 1 28%; min-width: 0; }
+}

@@ -19,6 +19,8 @@ let _snapshotPreview = null;
 let _browseController = null;
 let _searchController = null;
 let _searchTimer = null;
+let _filePreviewController = null;
+let _filePreviewOpener = null;
 let _snapshotListVersion = 0;
 let _snapshotLoading = false;
 let _snapshotBusy = '';
@@ -108,6 +110,67 @@ async function _load(path, signal) {
   return res.json();
 }
 
+function _closeFilePreview(restoreFocus = false) {
+  _filePreviewController?.abort(); _filePreviewController = null;
+  const preview = _modal?.querySelector('#workspace-file-preview');
+  if (preview) { preview.hidden = true; preview.replaceChildren(); }
+  if (restoreFocus && _filePreviewOpener?.isConnected) _filePreviewOpener.focus();
+  _filePreviewOpener = null;
+}
+
+async function _previewFile(root, path) {
+  const opener = document.activeElement;
+  _closeFilePreview();
+  _filePreviewOpener = opener;
+  const controller = new AbortController(); _filePreviewController = controller;
+  const preview = _modal.querySelector('#workspace-file-preview');
+  preview.hidden = false;
+  const title = document.createElement('strong'); title.textContent = path;
+  const close = document.createElement('button'); close.type = 'button'; close.textContent = 'Close preview';
+  close.addEventListener('click', () => _closeFilePreview(true));
+  const status = document.createElement('p'); status.setAttribute('role', 'status'); status.textContent = 'Loading file…';
+  const body = document.createElement('pre'); body.tabIndex = 0;
+  body.setAttribute('aria-label', 'Read-only file preview');
+  preview.append(title, close, status, body);
+  preview.scrollIntoView({ block: 'nearest' });
+  body.focus({ preventScroll: true });
+  try {
+    const params = new URLSearchParams({ workspace: root, path });
+    const response = await fetch(`${API_BASE}/api/workspace/open?${params}`, {
+      credentials: 'same-origin', signal: controller.signal,
+    });
+    if (!response.ok || !response.body) throw new Error('File unavailable. Check access and try again.');
+    const reader = response.body.getReader();
+    const limit = 64 * 1024;
+    const chunks = []; let length = 0; let truncated = false;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const remaining = limit - length;
+        chunks.push(value.subarray(0, remaining)); length += Math.min(value.length, remaining);
+        if (value.length > remaining) { truncated = true; break; }
+      }
+    } finally { await reader.cancel(); }
+    if (controller.signal.aborted || root !== _curPath) return;
+    const bytes = new Uint8Array(length); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    if (bytes.includes(0)) throw new Error('This file is not plain text. Use Download to open it in another app.');
+    let content;
+    try { content = new TextDecoder('utf-8', { fatal: !truncated }).decode(bytes, { stream: truncated }); }
+    catch { throw new Error('This file is not UTF-8 text. Use Download to open it in another app.'); }
+    body.textContent = content || '(Empty file)';
+    status.textContent = 'Read-only preview loaded.';
+    if (truncated) {
+      const note = document.createElement('p');
+      note.textContent = 'Preview limited to the first 64 KiB. Download the file to read all of it.';
+      preview.append(note);
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) status.textContent = error.message || 'Could not preview this file.';
+  }
+}
+
 async function _searchFiles(query) {
   _searchController?.abort();
   const controller = new AbortController();
@@ -128,10 +191,13 @@ async function _searchFiles(query) {
     const data = await response.json();
     if (_searchController !== controller || controller.signal.aborted || root !== _curPath) return;
     let rows = data.results.map(item =>
-      `<div class="workspace-file-result"><span><strong>${uiModule.esc(item.name)}</strong><br><small>${uiModule.esc(item.path)}</small></span><a href="${uiModule.esc(item.url)}" target="_blank" rel="noopener">Download</a></div>`
+      `<div class="workspace-file-result"><span><strong>${uiModule.esc(item.name)}</strong><br><small>${uiModule.esc(item.path)}</small></span><button type="button" class="workspace-preview-file" data-path="${uiModule.esc(item.path)}">Preview</button><a href="${uiModule.esc(item.url)}" target="_blank" rel="noopener">Download</a></div>`
     ).join('');
     if (data.truncated) rows += '<div class="workspace-empty">Search limit reached. Refine the filename to see more.</div>';
     resultsEl.innerHTML = rows || '<div class="workspace-empty">No matching files found.</div>';
+    resultsEl.querySelectorAll('.workspace-preview-file').forEach(button => {
+      button.addEventListener('click', () => _previewFile(root, button.dataset.path));
+    });
   } catch (error) {
     if (error.name !== 'AbortError' && _searchController === controller) {
       resultsEl.textContent = error.message || 'Search failed. Retry.';
@@ -140,6 +206,7 @@ async function _searchFiles(query) {
 }
 
 function _render(data) {
+  _closeFilePreview();
   _curPath = data.path;
   const body = _modal.querySelector('#workspace-body');
   const pathEl = _modal.querySelector('#workspace-cur-path');
@@ -174,6 +241,7 @@ function _render(data) {
 }
 
 async function _navigate(path) {
+  _closeFilePreview();
   _searchController?.abort();
   _modal.querySelector('#workspace-file-results').textContent = 'Search this folder by filename.';
   _browseController?.abort();
@@ -390,6 +458,7 @@ function _getModal() {
         <input id="workspace-file-query" type="search" class="styled-prompt-input" maxlength="128" autocomplete="off" placeholder="Search filenames…" />
         <div id="workspace-file-results" role="status" aria-live="polite">Search this folder by filename.</div>
       </section>
+      <section id="workspace-file-preview" hidden aria-label="File preview"></section>
       <section class="workspace-snapshots" aria-label="Workspace snapshots">
         <div class="workspace-snapshot-actions">
           <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-snapshot-create">Snapshot</button>
@@ -465,6 +534,7 @@ export async function openWorkspaceBrowser() {
 }
 
 export function closeWorkspaceBrowser() {
+  _closeFilePreview();
   _projectCleanup?.(); _projectCleanup = null;
   if (_modal) _modal.querySelector(".workspace-project-tools").open = false;
   ++_snapshotViewVersion;

@@ -4,9 +4,17 @@
 
 This guide covers the NX controls and their operating boundaries. The main page introduces the product; this page keeps the detailed behavior available for day-to-day use.
 
+## Quick navigation and drafts
+
+Open Search (Ctrl+K) for New chat, Files & project tools, Settings, or matching conversations. Arrow keys choose an option; Enter opens it and Escape returns focus. Search failures remain visible instead of leaving a loading message behind.
+
+Unsent text in existing chats is saved on this device, separately for each signed-in account. Switching chats restores its draft. Up to 40 drafts of 20,000 characters each can survive reload; larger drafts or unavailable storage keep the full text only while this page stays open and show a warning. Private-chat drafts stay in memory only. Attachments and unsaved New Chat text are not persisted. Successfully deleting a chat also removes its local draft.
+
 ## Working on a repository
 
 Open the top-bar **Workspace → Files & project tools**, then expand **Project tools, checks and run evidence**. Inspect the repository, create a managed worktree and select **Use this worktree**. Describe a bounded change, then review the diff and actual test output before publishing. Dirty or ignored work is preserved when removing a worktree.
+
+In the file search results, **Preview** opens a read-only UTF-8 text preview without downloading a separate file. Code is shown as text, never executed. Previews show at most 64 KiB; Download remains available for full files and other formats.
 
 The standard Docker workspace is `/workspace` inside the container and `data/agent_workspace/workspace/` on the host. File tools stay within the selected folder; the shell starts there but is not an operating-system sandbox. Native writes use pinned POSIX directory descriptors and preserve existing mode, owner/group and supported user/ACL metadata. They fail if those safety APIs or metadata preservation are unavailable; Docker uses Linux, including Docker on Windows/macOS. Multi-file patches validate first but remain non-atomic on later I/O failure: inspect the workspace diff when warned. Agent writes and shell tools require a bounded snapshot, so use a sparse source checkout when a repository contains large benchmark captures or generated artifacts.
 

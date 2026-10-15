@@ -6,7 +6,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
-const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"></head>
+const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/workspace-dock.css"></head>
 <body><button id="workspace-open">Workspace</button><button id="mode-chat-btn"></button>
 <script type="module">localStorage.setItem('odysseus-workspace','/workspace');
 import workspace from '/static/js/workspace.js';
@@ -25,6 +25,7 @@ const server = http.createServer((req, res) => {
     return json(res, { results: [{ name: 'report.txt', path: 'nested/report.txt',
       url: '/api/workspace/open?workspace=%2Fworkspace&path=nested%2Freport.txt' }], truncated: false });
   }
+  if (url.pathname === '/api/workspace/open') { res.setHeader('Content-Type','text/plain'); return res.end('<script>window.previewExecuted=true</script>\nSource file contents'); }
   if (url.pathname === '/api/workspace/snapshots') return json(res, { snapshots: [] });
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404).end(); return; }
@@ -48,6 +49,20 @@ const server = http.createServer((req, res) => {
     const result = page.locator('.workspace-file-result');
     assert.match(await result.textContent(), /report\.txt[\s\S]*nested\/report\.txt/);
     assert.match(await result.getByRole('link', { name: 'Download' }).getAttribute('href'), /workspace=%2Fworkspace.*path=nested%2Freport\.txt/);
+    await result.getByRole('button', {name:'Preview', exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#workspace-file-preview pre')?.textContent.includes('Source file contents'));
+    assert.equal(await page.evaluate(()=>window.previewExecuted), undefined, 'Source is text, never executed');
+    await page.locator('#workspace-file-preview').getByRole('button', {name:'Close preview'}).click();
+    assert.equal(await page.locator('#workspace-file-preview').isVisible(), false);
+    assert.equal(await result.getByRole('button', {name:'Preview', exact:true}).evaluate(e=>e===document.activeElement), true);
+    await page.route('**/api/workspace/open?*', route=>route.fulfill({body:'x'.repeat(100000),contentType:'text/plain'}));
+    await result.getByRole('button', {name:'Preview', exact:true}).click();
+    await page.getByText('Preview limited to the first 64 KiB.', {exact:false}).waitFor();
+    assert.equal((await page.locator('#workspace-file-preview pre').textContent()).length, 65536);
+    await page.unroute('**/api/workspace/open?*');
+    await page.route('**/api/workspace/open?*', route=>route.fulfill({body:Buffer.from([0,1,2]),contentType:'application/octet-stream'}));
+    await result.getByRole('button', {name:'Preview', exact:true}).click();
+    await page.getByText('This file is not plain text.', {exact:false}).waitFor();
     assert.deepEqual(calls, [{ q: 'report', workspace: '/workspace' }]);
     assert.equal(await result.evaluate(el => getComputedStyle(el).display), 'flex');
     const modal = page.locator('#workspace-modal .modal-content');

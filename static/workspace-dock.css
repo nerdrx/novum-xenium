@@ -41,3 +41,11 @@
   .workspace-dock { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
   .workspace-dock button { min-height: 44px; }
 }
+
+#workspace-file-preview { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+#workspace-file-preview[hidden] { display: none; }
+#workspace-file-preview strong { display: block; overflow-wrap: anywhere; margin-bottom: 8px; }
+#workspace-file-preview pre { max-height: 40dvh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
+.workspace-file-result { flex-wrap: wrap; gap: 8px; }
+.workspace-file-result > span { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
+.workspace-preview-file, #workspace-file-preview button { min-height: 44px; }

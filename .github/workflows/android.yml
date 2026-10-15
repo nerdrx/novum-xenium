@@ -38,7 +38,7 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/novum-android.jks"
           test -s "$RUNNER_TEMP/novum-android.jks"
           docker run --rm -v "$PWD:/workspace" -v "$RUNNER_TEMP/novum-android.jks:/signing/release.jks:ro" -e ANDROID_KEYSTORE_FILE=/signing/release.jks -e ANDROID_KEYSTORE_PASSWORD -e ANDROID_KEY_ALIAS -e ANDROID_KEY_PASSWORD novum-android-build ./tools/sign-apk.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: android-build
           path: |
@@ -53,7 +53,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: android-build
           path: artifacts

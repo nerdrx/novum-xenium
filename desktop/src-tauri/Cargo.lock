@@ -2150,6 +2150,7 @@ dependencies = [
  "gtk",
  "javascriptcore-rs",
  "libloading",
+ "notify-rust",
  "open",
  "rfd",
  "serde",
@@ -2159,6 +2160,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
  "tempfile",
+ "tokio",
  "webkit2gtk",
  "zbus",
 ]

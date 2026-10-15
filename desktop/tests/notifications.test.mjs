@@ -26,6 +26,15 @@ test('desktop notifications require opt-in, persist, and reuse existing calls', 
     assert.equal(url.protocol, 'nx-workbench:');
     assert.equal(url.hostname, 'notify');
     assert.equal(url.searchParams.get('title'), 'Novum Xenium');
+    await page.evaluate(() => new Notification('Response Complete', {tag:'stream-chat_123'}));
+    const linked = new URL(await page.evaluate(() => sent.at(-1)));
+    assert.equal(linked.searchParams.get('session'), 'chat_123');
+    await page.evaluate(() => new Notification('Response Complete', {tag:'unknown-chat_123'}));
+    const unlinked = new URL(await page.evaluate(() => sent.at(-1)));
+    assert.equal(unlinked.searchParams.has('session'), false);
+    await page.evaluate(() => new Notification('Response Complete', {tag:'stream-chat/123'}));
+    const invalidTag = new URL(await page.evaluate(() => sent.at(-1)));
+    assert.equal(invalidTag.searchParams.has('session'), false);
     await page.reload();
     assert.equal(await page.locator('#nx-notifications-enabled').isChecked(), true);
     await page.evaluate(() => new Notification('T'.repeat(140), {body:'B'.repeat(600)}));

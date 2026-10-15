@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -96,6 +96,7 @@ struct NativeState {
     zvram_operation: Arc<Mutex<()>>,
     workbench_port: Arc<std::sync::atomic::AtomicU16>,
     last_workbench_notification: Mutex<Option<Instant>>,
+    notification_action_listeners: Arc<AtomicUsize>,
     zoom_levels: Mutex<HashMap<String, usize>>,
     tray_created: AtomicBool,
     tray_icon: Mutex<Option<TrayIcon>>,
@@ -833,6 +834,7 @@ fn apply_window_zoom(
 struct WorkbenchNotification {
     title: String,
     body: String,
+    session_id: Option<String>,
 }
 
 fn workbench_notification(url: &tauri::Url) -> Option<WorkbenchNotification> {
@@ -854,15 +856,20 @@ fn workbench_notification(url: &tauri::Url) -> Option<WorkbenchNotification> {
     }
 
     let query = url.query()?;
-    if query.split('&').count() != 2 {
+    if query.split('&').count() < 2
+        || query.split('&').count() > 3
+        || query.split('&').any(str::is_empty)
+    {
         return None;
     }
     let mut title = None;
     let mut body = None;
+    let mut session_id = None;
     for (key, value) in url.query_pairs() {
         let target = match key.as_ref() {
             "title" if title.is_none() => &mut title,
             "body" if body.is_none() => &mut body,
+            "session" if session_id.is_none() => &mut session_id,
             _ => return None,
         };
         *target = Some(value.into_owned());
@@ -873,10 +880,133 @@ fn workbench_notification(url: &tauri::Url) -> Option<WorkbenchNotification> {
         || title.trim().is_empty()
         || title.chars().count() > 120
         || body.chars().count() > 500
+        || session_id.as_deref().is_some_and(|id| !valid_notification_session_id(id))
     {
         return None;
     }
-    Some(WorkbenchNotification { title, body })
+    Some(WorkbenchNotification {
+        title,
+        body,
+        session_id,
+    })
+}
+
+fn valid_notification_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn notification_action_session(action: &str, session_id: Option<String>) -> Option<String> {
+    (action == "default").then_some(session_id).flatten()
+}
+
+fn reserve_notification_action_listener(listeners: &AtomicUsize) -> bool {
+    loop {
+        let count = listeners.load(Ordering::Acquire);
+        if count >= 8 {
+            return false;
+        }
+        if listeners
+            .compare_exchange(count, count + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+fn notification_action_session_id(
+    session_id: Option<String>,
+    listeners: &AtomicUsize,
+) -> Option<String> {
+    session_id.filter(|_| reserve_notification_action_listener(listeners))
+}
+
+fn open_notification_session(app: &AppHandle, session_id: String, origin_port: u16) {
+    let Ok(path) = config_path(app) else { return; };
+    let Ok(Some(config)) = load_config_at(&path) else { return; };
+    if config.port != origin_port {
+        return;
+    }
+    let state = app.state::<NativeState>();
+    let window = if let Some(window) = app.get_webview_window("workbench") {
+        window
+    } else {
+        if open_saved_workbench(app, &state).is_err() {
+            return;
+        }
+        let Some(window) = app.get_webview_window("workbench") else {
+            return;
+        };
+        window
+    };
+    if state.workbench_port.load(Ordering::Acquire) != origin_port
+        || !window
+            .url()
+            .is_ok_and(|url| workbench_control_origin_allowed(&url, origin_port))
+    {
+        return;
+    }
+    if window.show().is_err() || window.unminimize().is_err() || window.set_focus().is_err() {
+        return;
+    }
+    // The workspace resolves this route only after loading the signed-in user's
+    // own session list, preserving its normal ownership and archive checks.
+    let hash = serde_json::to_string(&format!("#{session_id}")).unwrap();
+    let _ = window.eval(&format!("window.location.hash={hash};"));
+}
+
+#[cfg(target_os = "linux")]
+fn show_workbench_notification(
+    app: &AppHandle,
+    notification: WorkbenchNotification,
+    origin_port: u16,
+) {
+    use notify_rust::{Notification, NotificationResponse, Timeout};
+    let listeners = app.state::<NativeState>().notification_action_listeners.clone();
+    let session_id = notification_action_session_id(notification.session_id, &listeners);
+    let has_action_listener = session_id.is_some();
+    let mut native = Notification::new();
+    native
+        .summary(&notification.title)
+        .body(&notification.body)
+        .timeout(Timeout::Milliseconds(10_000));
+    if has_action_listener {
+        native.action("default", "default");
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = tokio::time::timeout(Duration::from_secs(5), native.show_async()).await;
+        let Ok(Ok(handle)) = result else {
+            if has_action_listener {
+                listeners.fetch_sub(1, Ordering::AcqRel);
+            }
+            if let Some(window) = app.get_webview_window("workbench") {
+                workbench_notice(&window, "Could not show the desktop notification.");
+            }
+            return;
+        };
+        let Some(session_id) = session_id else { return; };
+        let wait = handle.wait_for_action_async(move |response| {
+            let action = match response {
+                NotificationResponse::Default => "default",
+                NotificationResponse::Action(action) => action.as_str(),
+                _ => "",
+            };
+            let Some(session_id) = notification_action_session(action, Some(session_id)) else {
+                return;
+            };
+            let target_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                open_notification_session(&target_app, session_id, origin_port)
+            });
+        });
+        let _ = tokio::time::timeout(Duration::from_secs(11), wait).await;
+        listeners.fetch_sub(1, Ordering::AcqRel);
+    });
 }
 
 fn allow_workbench_notification(state: &NativeState) -> bool {
@@ -1314,19 +1444,15 @@ fn open_saved_workbench(app: &AppHandle, state: &NativeState) -> Result<Workbenc
                         if let Some(notification) = workbench_notification(next) {
                             let state = navigation_app.state::<NativeState>();
                             if allow_workbench_notification(&state) {
-                                use tauri_plugin_notification::NotificationExt;
-                                if navigation_app
-                                    .notification()
-                                    .builder()
-                                    .title(&notification.title)
-                                    .body(&notification.body)
-                                    .show()
-                                    .is_err()
+                                #[cfg(target_os = "linux")]
+                                show_workbench_notification(&navigation_app, notification, port);
+                                #[cfg(not(target_os = "linux"))]
                                 {
-                                    workbench_notice(
-                                        &window,
-                                        "Could not show the desktop notification.",
-                                    );
+                                    use tauri_plugin_notification::NotificationExt;
+                                    if navigation_app.notification().builder()
+                                        .title(&notification.title).body(&notification.body).show().is_err() {
+                                        workbench_notice(&window, "Could not show the desktop notification.");
+                                    }
                                 }
                             }
                         } else if let Some(action) = workbench_window_action(next) {
@@ -2446,7 +2572,19 @@ mod tests {
             Some(WorkbenchNotification {
                 title: "Ready".into(),
                 body: "Done now".into(),
+                session_id: None,
             })
+        );
+        let linked = tauri::Url::parse(
+            "nx-workbench://notify?title=Ready&body=Done&session=chat_123-abc",
+        )
+        .unwrap();
+        assert_eq!(
+            workbench_notification(&linked)
+                .unwrap()
+                .session_id
+                .as_deref(),
+            Some("chat_123-abc")
         );
         let long_title = format!("nx-workbench://notify?title={}&body=x", "a".repeat(121));
         let long_body = format!("nx-workbench://notify?title=x&body={}", "a".repeat(501));
@@ -2459,6 +2597,8 @@ mod tests {
         for raw in [
             "nx-workbench://notify?title=x", // missing body
             "nx-workbench://notify?title=x&body=y&extra=z",
+            "nx-workbench://notify?title=x&body=y&session=chat%2Fother",
+            "nx-workbench://notify?title=x&body=y&session=%23javascript",
             "nx-workbench://notify?title=x&title=y&body=z",
             "nx-workbench://notify?title=x&body=y&",
             "nx-workbench://notify/path?title=x&body=y",
@@ -2471,6 +2611,40 @@ mod tests {
             let url = tauri::Url::parse(raw).unwrap();
             assert!(workbench_notification(&url).is_none(), "accepted {raw}");
         }
+    }
+
+    #[test]
+    fn notification_click_only_routes_default_action_with_a_session() {
+        assert_eq!(
+            notification_action_session("default", Some("chat-1".into())),
+            Some("chat-1".into())
+        );
+        assert_eq!(
+            notification_action_session("open-url", Some("chat-1".into())),
+            None
+        );
+        assert_eq!(notification_action_session("default", None), None);
+    }
+
+    #[test]
+    fn notification_action_listeners_have_a_hard_concurrency_cap() {
+        let listeners = AtomicUsize::new(0);
+        for _ in 0..8 {
+            assert!(reserve_notification_action_listener(&listeners));
+        }
+        assert!(!reserve_notification_action_listener(&listeners));
+        listeners.fetch_sub(1, Ordering::AcqRel);
+        assert!(reserve_notification_action_listener(&listeners));
+    }
+
+    #[test]
+    fn notification_listener_cap_falls_back_to_visible_no_action_notice() {
+        let listeners = AtomicUsize::new(8);
+        assert_eq!(
+            notification_action_session_id(Some("chat-1".into()), &listeners),
+            None
+        );
+        assert_eq!(listeners.load(Ordering::Acquire), 8);
     }
 
     #[test]

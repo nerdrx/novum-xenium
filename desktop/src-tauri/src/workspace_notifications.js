@@ -19,6 +19,9 @@
       const url = new URL('nx-workbench://notify');
       url.searchParams.set('title', this.title);
       url.searchParams.set('body', this.body);
+      const tag = String(options.tag || '');
+      const session = /^(?:stream|research)-([A-Za-z0-9_-]{1,128})$/.exec(tag);
+      if (session) url.searchParams.set('session', session[1]);
       const link = document.createElement('a');
       link.href = url.href;
       link.hidden = true;

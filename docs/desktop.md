@@ -53,7 +53,7 @@ See the official Tauri prerequisites for Linux system packages and the Windows C
 
 ## Native smoke check
 
-`desktop/tests/native_smoke.py` uses Python's standard library and a running `tauri-driver` installation. It writes configuration only to temporary directories, reads status/logs from an existing healthy backend, opens the workbench, and verifies that the workbench cannot invoke native management commands. It does not start, stop or update the backend.
+`desktop/tests/native_smoke.py` uses Python's standard library and a running `tauri-driver` installation. It writes configuration only to temporary directories, reads status/logs from an existing healthy backend, opens the workbench, and verifies that the workbench cannot invoke native management commands. It does not start, stop or update the backend. Optional `--notification-probe` captures an existing admin session cookie internally, adds it to the WebDriver session, and reads the signed-in session list; it runs inside a private D-Bus session with a fake notification server to check unknown-action rejection and restoration of an existing chat.
 
 On Linux with Gamescope and WebKitWebDriver installed:
 
@@ -98,7 +98,7 @@ Validation: an isolated Linux KWin/WebKit session verified an actual PNG OS-clip
 
 Settings → Communications → Reminders has a desktop-notifications switch and a test button in the desktop app. It starts off and is saved on this device. Existing background-response, research, task and reminder alerts use system notifications when enabled; in-app notices keep working when it is off. The app must remain running. OS notification settings and Do Not Disturb can suppress alerts.
 
-Notifications use a small native route restricted to the configured local backend, with bounded text and a one-per-second limit. The workbench still has no container-management IPC access. Notification clicks do not currently navigate to the related chat. Linux delivery was checked against a private D-Bus notification service; Windows runtime behavior is not yet verified.
+Notifications use a small native route restricted to the configured local backend, with bounded text and a one-per-second limit. In the embedded Linux workbench, clicking a response or research notification restores the workspace and selects that chat through its normal signed-in session list; stale notifications are ignored after the configured backend changes. At most eight action listeners can wait concurrently; when all are busy, later notices still appear without a click action. Delivery waits are cancelled after five seconds and action waits after eleven seconds, releasing their listener slots; the desktop notification itself expires after ten seconds. Chromium uses its own browser notification permission and click handling; this embedded WebKit setting and native route do not apply there. The workbench still has no container-management IPC access. Linux notification delivery was previously checked against a private D-Bus service. Run the optional `--notification-probe` for the authenticated click-routing smoke test; Windows runtime behavior is not yet verified.
 
 
 ## Local model provider (Linux)

@@ -12,7 +12,40 @@ fn chromium_executable() -> Option<PathBuf> {
         PathBuf::from("/usr/bin/chromium"),
         PathBuf::from("/usr/bin/chromium-browser"),
     ];
-    candidates.into_iter().find(|path| path.is_file())
+    candidates
+        .into_iter()
+        .find(|path| is_executable(path))
+        .or_else(|| chromium_from_path(std::env::var_os("PATH")))
+}
+
+fn chromium_from_path(path: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    std::env::split_paths(path.as_ref()?).find_map(|directory| {
+        [
+            "google-chrome-stable",
+            "google-chrome",
+            "chromium",
+            "chromium-browser",
+        ]
+        .into_iter()
+        .map(|name| directory.join(name))
+        .find(|candidate| is_executable(candidate))
+    })
+}
+
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return metadata.permissions().mode() & 0o111 != 0;
+    }
+    #[cfg(not(unix))]
+    true
 }
 
 fn trusted_workbench_url(url: &str) -> Result<(), String> {
@@ -48,7 +81,8 @@ pub fn command(url: &str, profile_dir: &Path) -> Result<Command, String> {
         .arg("--no-first-run");
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         // Use compositor callbacks instead of the timer-based Linux frame source.
-        command.arg("--ozone-platform=wayland")
+        command
+            .arg("--ozone-platform=wayland")
             .arg("--enable-features=WaylandExternalBeginFrameSource");
     }
     Ok(command)
@@ -67,22 +101,52 @@ pub fn install_window_identity(url: &str, profile: &Path, data: &Path) -> Result
     fs::create_dir_all(&applications).map_err(|e| e.to_string())?;
     let entry = applications.join(format!("{identity}.desktop"));
     const MARKER: &str = "X-Novum-Workbench=true";
-    if entry.exists() && !fs::read_to_string(&entry).map_err(|e| e.to_string())?.contains(MARKER) {
+    if entry.exists()
+        && !fs::read_to_string(&entry)
+            .map_err(|e| e.to_string())?
+            .contains(MARKER)
+    {
         // Do not replace another application's launcher for the same local URL.
         return Ok(());
     }
     let icon = profile.join("nx-icon.png");
     fs::write(&icon, include_bytes!("../icons/icon.png")).map_err(|e| e.to_string())?;
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let quoted = executable.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"").replace('`', "\\`").replace('$', "\\$").replace('%', "%%");
-    let icon_path = icon.to_string_lossy().replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r");
+    let quoted = executable
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('`', "\\`")
+        .replace('$', "\\$")
+        .replace('%', "%%");
+    let icon_path = icon
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
     fs::write(entry, format!("[Desktop Entry]\nType=Application\nName=Novum Xenium\nNoDisplay=true\nExec=\"{quoted}\"\nIcon={icon_path}\nStartupWMClass={identity}\n{MARKER}\n"))
         .map_err(|e| format!("Cannot register workbench icon: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{install_window_identity, trusted_workbench_url};
+    use super::{chromium_from_path, install_window_identity, trusted_workbench_url};
+
+    #[test]
+    fn finds_chromium_installed_on_path() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("chromium");
+        std::fs::write(&executable, "stub").unwrap();
+        let path = std::env::join_paths([root.path()]).unwrap();
+        assert_eq!(chromium_from_path(Some(path.clone())), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(chromium_from_path(Some(path)), Some(executable));
+        assert_eq!(chromium_from_path(None), None);
+    }
 
     #[test]
     fn registers_icon_without_overwriting_foreign_launcher() {
@@ -90,7 +154,9 @@ mod tests {
         let profile = root.path().join("profile");
         std::fs::create_dir(&profile).unwrap();
         install_window_identity("http://127.0.0.1:7000/", &profile, root.path()).unwrap();
-        let entry = root.path().join("applications/chrome-127.0.0.1__-Default.desktop");
+        let entry = root
+            .path()
+            .join("applications/chrome-127.0.0.1__-Default.desktop");
         let text = std::fs::read_to_string(&entry).unwrap();
         assert!(text.contains("StartupWMClass=chrome-127.0.0.1__-Default"));
         assert!(profile.join("nx-icon.png").is_file());

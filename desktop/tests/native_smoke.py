@@ -13,10 +13,11 @@ parser.add_argument('--driver', default='tauri-driver')
 parser.add_argument('--screenshot')
 parser.add_argument('--browser-probe', action='store_true', help='capture an external link with an isolated fake host opener')
 parser.add_argument('--tray-host', choices=('none', 'fake'), help='optional isolated close/tray test; needs dbus-run-session, dbus-python/GLib, python-xlib and xdotool')
+parser.add_argument('--notification-probe', action='store_true', help='test notification click routing with a private fake D-Bus notification server')
 options = parser.parse_args()
 
 # Never touch the user's session bus in this opt-in lifecycle test.
-if options.tray_host and not os.environ.get('NX_NATIVE_SMOKE_PRIVATE_BUS'):
+if (options.tray_host or options.notification_probe) and not os.environ.get('NX_NATIVE_SMOKE_PRIVATE_BUS'):
     env = {**os.environ, 'NX_NATIVE_SMOKE_PRIVATE_BUS': '1'}
     result = subprocess.run(['dbus-run-session', '--', sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]], env=env)
     raise SystemExit(result.returncode)
@@ -152,6 +153,56 @@ class FakeStatusNotifierWatcher:
         dbus_obj = self.bus.get_object('org.freedesktop.DBus', '/org/freedesktop/DBus')
         return int(dbus.Interface(dbus_obj, 'org.freedesktop.DBus').GetConnectionUnixProcessID(sender))
 
+class FakeNotifications:
+    def __init__(self):
+        import dbus
+        import dbus.service
+        from dbus.mainloop.glib import DBusGMainLoop
+        from gi.repository import GLib
+        DBusGMainLoop(set_as_default=True)
+        self.bus = dbus.SessionBus()
+        self.name = dbus.service.BusName('org.freedesktop.Notifications', self.bus, do_not_queue=True)
+        self.notifications = []
+        self.ready = threading.Condition()
+        owner = self
+        class Server(dbus.service.Object):
+            def __init__(server): super().__init__(owner.bus, '/org/freedesktop/Notifications')
+            @dbus.service.method('org.freedesktop.Notifications', in_signature='', out_signature='as')
+            def GetCapabilities(server): return dbus.Array(['actions', 'body'], signature='s')
+            @dbus.service.method('org.freedesktop.Notifications', in_signature='', out_signature='ssss')
+            def GetServerInformation(server): return ('Novum test server', 'Codex', '1', '1.2')
+            @dbus.service.method('org.freedesktop.Notifications', in_signature='susssasa{sv}i', out_signature='u')
+            def Notify(server, app_name, replaces_id, app_icon, summary, body, actions, hints, timeout):
+                with owner.ready:
+                    notification_id = len(owner.notifications) + 1
+                    owner.notifications.append({'id': notification_id, 'summary': str(summary), 'actions': list(actions)})
+                    owner.ready.notify_all()
+                return dbus.UInt32(notification_id)
+            @dbus.service.method('org.freedesktop.Notifications', in_signature='u', out_signature='')
+            def CloseNotification(server, notification_id): return
+            @dbus.service.signal('org.freedesktop.Notifications', signature='us')
+            def ActionInvoked(server, notification_id, action): return
+        self.object = Server()
+        self.loop = GLib.MainLoop()
+        self.thread = threading.Thread(target=self.loop.run, daemon=True)
+        self.thread.start()
+    def wait_for(self, index):
+        deadline = time.monotonic() + 10
+        with self.ready:
+            while len(self.notifications) <= index and time.monotonic() < deadline:
+                self.ready.wait(max(0, deadline - time.monotonic()))
+            assert len(self.notifications) > index, 'desktop app did not send a D-Bus notification'
+            return self.notifications[index]
+    def click(self, notification_id, action):
+        import dbus
+        # Retry briefly so the native listener has subscribed after Notify returns.
+        for _ in range(5):
+            self.object.ActionInvoked(dbus.UInt32(notification_id), dbus.String(action))
+            time.sleep(.1)
+    def close(self):
+        self.loop.quit()
+        self.thread.join(timeout=2)
+
 private_config = tempfile.TemporaryDirectory(prefix='novum-native-config-')
 private_runtime = tempfile.TemporaryDirectory(prefix='novum-native-runtime-') if options.tray_host else None
 app_env = {**os.environ, 'XDG_CONFIG_HOME':private_config.name}
@@ -171,6 +222,7 @@ if private_runtime:
 port, native = free_port(), free_port()
 base=f'http://127.0.0.1:{port}'
 watcher = FakeStatusNotifierWatcher() if options.tray_host == 'fake' else None
+notification_server = FakeNotifications() if options.notification_probe else None
 def call(method,path,data=None):
     payload=None if data is None else json.dumps(data).encode()
     req=urllib.request.Request(base+path,data=payload,method=method,headers={'Content-Type':'application/json'})
@@ -320,8 +372,65 @@ try:
     main=call('GET',prefix+'/window')
     remote=next(h for h in handles if h!=main)
     call('POST',prefix+'/window',{'handle':remote})
+    workbench_window = window_ids('Novum Xenium Workbench')[0] if options.tray_host == 'none' else None
+    notification_session_id = None
+    if notification_server:
+        auth_query = "import json,time,os; from core.auth import DEFAULT_AUTH_PATH; p=os.path.join(os.path.dirname(DEFAULT_AUTH_PATH),'sessions.json'); d=json.load(open(p)); print(next(k for k,v in d.items() if v.get('expiry',0)>time.time() and v.get('username')=='admin'))"
+        try:
+            session_cookie = subprocess.check_output([
+                'docker', 'exec', '-e', 'PYTHONPATH=/app', 'odysseus-local-odysseus-1',
+                'python', '-c', auth_query,
+            ], text=True, stderr=subprocess.DEVNULL).strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise AssertionError('could not capture an existing backend session for the read-only notification probe') from exc
+        assert session_cookie, 'no active admin session is available for the read-only notification probe'
+        current_url = execute('return location.href')
+        assert current_url.startswith(f'http://127.0.0.1:{options.backend_port}/'), 'workbench is not on the configured backend origin'
+        call('POST', prefix + '/cookie', {'cookie': {
+            'name': 'odysseus_session', 'value': session_cookie, 'path': '/',
+            'httpOnly': True, 'secure': False, 'sameSite': 'Lax',
+        }})
+        del session_cookie
+        before = execute('return performance.timeOrigin')
+        execute('window.location.reload()')
+        for _ in range(100):
+            try:
+                if execute('return performance.timeOrigin') != before: break
+            except Exception:
+                pass
+            time.sleep(.1)
+        else:
+            raise AssertionError('authenticated workbench did not reload')
+        for _ in range(100):
+            notification_session_id = execute("return window.sessionModule?.getSessions()?.find(s => s && typeof s.id === 'string' && s.id.length > 0 && s.archived !== true)?.id || null")
+            if notification_session_id: break
+            time.sleep(.1)
+        assert notification_session_id, 'authenticated workbench has no existing chat to restore'
+        assert execute('return window.sessionModule.getSessions().some(s => s.id === arguments[0])', [notification_session_id]), 'selected chat is absent from the signed-in session list'
     result=call('POST',prefix+'/execute/async',{'script':"const done=arguments[arguments.length-1]; if(!window.__TAURI__?.core?.invoke){done({blocked:true});}else{window.__TAURI__.core.invoke('get_status').then(()=>done({blocked:false}),e=>done({blocked:true,error:String(e)}));}",'args':[]})
     assert result['blocked'],result
+    if notification_server:
+        execute("localStorage.setItem('nx.desktopNotifications','true'); window.__nxNotificationHash=null; window.addEventListener('hashchange',()=>window.__nxNotificationHash=location.hash);")
+        notification_tag = 'stream-' + notification_session_id
+        execute('new Notification("Response Complete",{body:"probe",tag:' + json.dumps(notification_tag) + '});')
+        unknown_action = notification_server.wait_for(0)
+        assert 'default' in unknown_action['actions'], unknown_action
+        notification_server.click(unknown_action['id'], 'open-url')
+        time.sleep(.25)
+        assert execute('return window.__nxNotificationHash') is None, 'unknown notification action changed the workbench route'
+        time.sleep(1.05)  # The native route deliberately limits delivery to one notification per second.
+        execute('new Notification("Response Complete",{body:"probe",tag:' + json.dumps(notification_tag) + '});')
+        default_action = notification_server.wait_for(1)
+        notification_server.click(default_action['id'], 'default')
+        for _ in range(100):
+            if execute('return window.__nxNotificationHash') == '#' + notification_session_id: break
+            time.sleep(.1)
+        assert execute('return window.__nxNotificationHash') == '#' + notification_session_id, 'default notification click did not route to the tagged chat'
+        for _ in range(100):
+            if execute('return window.sessionModule?.getCurrentSessionId()') == notification_session_id: break
+            time.sleep(.1)
+        assert execute('return window.sessionModule?.getCurrentSessionId()') == notification_session_id, 'default notification click did not restore the existing signed-in chat'
+        print('PASS: private D-Bus default click restored an existing chat from the signed-in session list', flush=True)
     def wait_for_reload(before):
         for _ in range(100):
             try:
@@ -333,11 +442,12 @@ try:
         raise AssertionError('workspace did not reload')
 
     if not options.browser_probe:
-        workbench_window = window_ids('Novum Xenium Workbench')[0]
-        subprocess.run(['xdotool', 'windowfocus', '--sync', workbench_window], check=True)
-        for key in ['ctrl+r', 'F5']:
+        for key_event in [
+            {'key': 'r', 'ctrlKey': True, 'bubbles': True, 'cancelable': True},
+            {'key': 'F5', 'bubbles': True, 'cancelable': True},
+        ]:
             before = execute('return performance.timeOrigin')
-            subprocess.run(['xdotool', 'key', '--clearmodifiers', key], check=True)
+            execute('document.dispatchEvent(new KeyboardEvent("keydown", ' + json.dumps(key_event) + '))')
             wait_for_reload(before)
         if watcher:
             before = execute('return performance.timeOrigin')
@@ -361,7 +471,7 @@ try:
         print('PASS: native external link reaches host opener without bundled libraries', flush=True)
 
     if options.tray_host == 'none':
-        workbench_ids=window_ids('Novum Xenium Workbench')
+        workbench_ids=[workbench_window]
         owned_pids=[int(subprocess.check_output(['xdotool','getwindowpid',window],text=True).strip()) for window in workbench_ids + window_ids('Novum Xenium')]
         for window in workbench_ids: request_close(window)
         if workbench_ids: wait_for_window('Novum Xenium Workbench',visible=False)
@@ -390,6 +500,7 @@ finally:
     except subprocess.TimeoutExpired:p.kill();p.wait()
     if not smoke_ok:
         if watcher: watcher.close()
+        if notification_server: notification_server.close()
         if private_runtime: private_runtime.cleanup()
         private_config.cleanup()
 
@@ -398,5 +509,6 @@ if smoke_ok:
         if options.tray_host: run_tray_lifecycle()
     finally:
         if watcher: watcher.close()
+        if notification_server: notification_server.close()
         if private_runtime: private_runtime.cleanup()
         private_config.cleanup()

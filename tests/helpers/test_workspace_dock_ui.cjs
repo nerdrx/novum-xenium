@@ -34,7 +34,7 @@ const server = http.createServer((req,res) => {
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('.workspace-dock img,.workspace-dock iframe,.workspace-dock a').count(),0);
   assert.match(await page.locator('[role=tabpanel]').textContent(),/<img onerror/);
-  await page.keyboard.press('End');
+  await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('.workspace-dock a').getAttribute('href'),'#child-1');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('.workspace-dock').count(),0);
@@ -51,6 +51,16 @@ const server = http.createServer((req,res) => {
   await page.setViewportSize({width:390,height:700});
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'0px');
   assert.ok((await page.locator('.workspace-dock').boundingBox()).width<=390);
+  await page.route('**/api/chat/evidence/alpha', route => route.fulfill({json:{runs:[{status:'error',model:'test-model',duration_seconds:2,events:[{tool:'test_tool',exit_code:1}]}]}}));
+  await page.locator('#workspace-tab-Runs').click();
+  await page.getByRole('button', {name:'Refresh runs'}).waitFor();
+  assert.match(await page.locator('[role=tabpanel]').textContent(), /Failed · 2s/);
+  assert.match(await page.locator('[role=tabpanel]').textContent(), /test_tool · exit 1/);
+  await page.route('**/api/chat/evidence/beta', route => route.fulfill({status:503,body:'unavailable'}));
+  await page.evaluate(()=>dock.resetWorkspaceDock('beta'));
+  await page.getByRole('button', {name:'Refresh runs'}).waitFor();
+  assert.match(await page.locator('[role=tabpanel]').textContent(), /Could not load runs/);
+  assert.doesNotMatch(await page.locator('[role=tabpanel]').textContent(), /test_tool/);
   await page.getByRole('button', {name:'Files & project tools'}).click();
   await page.waitForFunction(() => window.projectToolsOpened === true);
   assert.equal(await page.locator('.workspace-dock').count(), 0);

@@ -1,10 +1,11 @@
-// Observed activity only: this drawer neither polls nor infers workspace state.
+// Live activity plus explicitly requested, owner-scoped run evidence. No polling.
 const sessions = new Map();
-const tabs = ['Preview', 'Files', 'Browser', 'Subagents'];
+const tabs = ['Preview', 'Files', 'Browser', 'Subagents', 'Runs'];
 let current = '';
 let activeTab = 'Preview';
 let panel;
 let opener;
+let evidenceRequest;
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : '';
 const text = (value, limit = 240) => typeof value === 'string' ? value.slice(0, limit) : '';
 function screenshot(value) {
@@ -25,18 +26,65 @@ function el(tag, value, className) {
   return node;
 }
 function close(restore = true) {
+  evidenceRequest?.abort(); evidenceRequest = null;
   panel?.remove(); panel = null;
   document.getElementById('chat-container')?.classList.remove('workspace-dock-open');
   opener?.setAttribute('aria-expanded', 'false');
   if (restore) opener?.focus();
 }
+async function renderRuns(content) {
+  if (!current) { content.append(el('p', 'Open a chat to see its runs.')); return; }
+  const controller = new AbortController(); evidenceRequest = controller;
+  const session = current;
+  const status = el('p', 'Loading recorded runs…'); status.setAttribute('role', 'status');
+  content.append(status);
+  const refresh = el('button', 'Refresh runs'); refresh.type = 'button';
+  refresh.addEventListener('click', renderContent);
+  try {
+    const response = await fetch(`/api/chat/evidence/${encodeURIComponent(session)}`, {
+      credentials: 'same-origin', signal: controller.signal,
+    });
+    if (!response.ok) throw new Error('unavailable');
+    const data = await response.json();
+    if (!Array.isArray(data.runs)) throw new Error('invalid');
+    if (controller.signal.aborted || current !== session || !content.isConnected) return;
+    status.textContent = data.runs.length ? 'Recorded runs. Refresh to see newer activity.' : 'No recorded runs for this chat yet.';
+    const labels = { done: 'Finished', running: 'Running', error: 'Failed', stopped: 'Stopped',
+      interrupted: 'Interrupted', awaiting_approval: 'Needs approval', awaiting_input: 'Needs your answer',
+      paused: 'Paused at a limit', unverified: 'Verification incomplete' };
+    for (const run of data.runs.slice(0, 20)) {
+      if (!run || typeof run !== 'object') continue;
+      const card = el('details');
+      const duration = Number.isFinite(run.duration_seconds) ? `${Math.max(0, run.duration_seconds)}s` : 'Duration unavailable';
+      card.append(el('summary', `${labels[run.status] || 'Unknown status'} · ${duration}`));
+      card.append(el('p', text(run.model) || 'Unknown model'));
+      const events = Array.isArray(run.events) ? run.events.slice(-256) : [];
+      if (!events.length) card.append(el('p', 'No tool events recorded.'));
+      for (const event of events) {
+        if (!event || typeof event !== 'object') continue;
+        const result = Number.isInteger(event.exit_code) ? ` · exit ${event.exit_code}`
+          : typeof event.passed === 'boolean' ? (event.passed ? ' · passed' : ' · failed')
+          : event.status ? ` · ${text(String(event.status), 100)}` : '';
+        card.append(el('p', `${text(event.tool || event.type, 100) || 'Event'}${result}`));
+      }
+      content.append(card);
+    }
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    status.textContent = 'Could not load runs. Check your connection and try again.';
+  }
+  if (!controller.signal.aborted && content.isConnected) content.append(refresh);
+}
 function renderContent() {
   if (!panel) return;
+  evidenceRequest?.abort(); evidenceRequest = null;
   const content = panel.querySelector('.workspace-dock-content');
   content.replaceChildren();
   content.setAttribute('aria-labelledby', `workspace-tab-${activeTab}`);
   const state = sessions.get(current);
-  if (activeTab === 'Files') {
+  if (activeTab === 'Runs') {
+    void renderRuns(content);
+  } else if (activeTab === 'Files') {
     content.append(el('p', 'Observed edits this visit. This is not a complete Git diff.'));
     if (!state?.diffs.length) content.append(el('p', 'No file edits received for this chat yet.'));
     for (const diff of state?.diffs || []) {
@@ -170,7 +218,7 @@ export function updateWorkspaceDock(event, sessionId) {
   if (!changed) return;
   sessions.delete(id); sessions.set(id, state);
   while (sessions.size > 8) sessions.delete(sessions.keys().next().value);
-  if (id === current) renderContent();
+  if (id === current && activeTab !== 'Runs') renderContent();
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
 else init();

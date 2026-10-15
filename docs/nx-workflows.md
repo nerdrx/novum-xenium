@@ -124,7 +124,7 @@ Select a workspace inside `/workspace`; a different mount requires matching `ODY
 
 **Check capabilities** reports configured providers, tool declarations, backend state and known context information. The report uses readable sections instead of a tool-inventory JSON dump; the complete JSON remains available through Copy report and Download JSON. Unknown stays unknown; registry context values are advisory. This offline check does not start models or prove provider reachability. Existing explicit provider tests remain available in Settings.
 
-**Run evidence** shows recent run status, elapsed time, tool names and exit codes. It retains up to 20 runs per chat and 256 metadata events per run. Prompts, commands, tool output, endpoint URLs and credentials are not copied into this metadata log. Full content remains in the chat's existing history and recovery storage. Deleting the chat deletes its evidence.
+**Workspace → Runs** shows recent run status, elapsed time, tool names, exit codes and verification outcomes. Open it or choose **Refresh runs** to load the latest saved evidence; it does not poll. The project browser also retains its **Run evidence** report. It retains up to 20 runs per chat and 256 metadata events per run. Prompts, commands, tool output, endpoint URLs and credentials are not copied into this metadata log. Full content remains in the chat's existing history and recovery storage. Deleting the chat deletes its evidence.
 
 The small same-model coding evaluation in `scripts/harness_eval.py` checks repair, implementation and a change across multiple files. Use a disposable app and a shared fixture workspace. Supply a browser cookie through `NX_EVAL_COOKIE` when authentication is enabled, select one model/endpoint, and run:
 

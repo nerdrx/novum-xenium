@@ -120,3 +120,9 @@ at 20 steps through Novum, with authenticated Gallery retrieval, while the same
 27B model remained loaded. This avoids requiring users to unload
 their chat model for the tested workload. Different models, resolutions and
 other GPU applications can still exceed the available resources.
+
+A separate 1024×1024 stress request still failed when zVram's live admission
+allowance fell to about 901 MiB during rendering. The segmented recipe is not
+a GPU reservation and does not guarantee coexistence under arbitrary pressure.
+Keep 512×512 as the default; 1024×1024 under that pressure remains unverified
+as a usable end-to-end path. No successful image is claimed for that request.

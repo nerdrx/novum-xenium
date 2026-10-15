@@ -1,4 +1,4 @@
-# NX Odysseus workflow guide
+# Novum Xenium workflow guide
 
 [Back to the main page](../README.md) · [Installation](../website/setup.md) · [Validation record](../FORK-CHANGES.md)
 
@@ -8,7 +8,7 @@ This guide covers the NX controls and their operating boundaries. The main page 
 
 Open Search (Ctrl+K) for New chat, Files & project tools, Settings, or matching conversations. Arrow keys choose an option; Enter opens it and Escape returns focus. Search failures remain visible instead of leaving a loading message behind.
 
-Unsent text in existing chats is saved on this device, separately for each signed-in account. Switching chats restores its draft. Up to 40 drafts of 20,000 characters each can survive reload; larger drafts or unavailable storage keep the full text only while this page stays open and show a warning. Private-chat drafts stay in memory only. Attachments and unsaved New Chat text are not persisted. Successfully deleting a chat also removes its local draft.
+Unsent text in existing chats is saved on this device, separately for each signed-in account. Switching chats restores its draft. Up to 40 drafts of 20,000 characters each can survive reload; larger drafts or unavailable storage keep the full text only while this page stays open and show a warning. Private-chat drafts stay in memory only. Attachments and unsaved New Chat text are not persisted. Successfully deleting a chat also removes its local draft and tells other open tabs to stop restoring it when browser broadcast channels are available.
 
 ## Working on a repository
 

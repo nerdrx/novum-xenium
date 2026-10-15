@@ -16,6 +16,14 @@
   .tool-indicator { max-width: 100%; }
 }
 @media (max-width: 768px) {
+  .msg-actions .msg-action-btn,
+  .msg-actions .footer-copy-btn {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
   .chat-input-top > .model-picker-wrap { max-width: 100%; }
   .approval-mode-panel { max-height: min(360px, 55dvh); overflow-y: auto; }
   .overflow-menu { max-width: calc(100vw - 24px); max-height: 55dvh; overflow-y: auto; }

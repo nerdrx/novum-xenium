@@ -7103,6 +7103,11 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .search-command-detail {
+      margin-left: 8px;
+      color: color-mix(in srgb, var(--fg) 48%, transparent);
+      font-size: 11px;
+    }
     .search-result-time {
       font-size: 10px;
       color: color-mix(in srgb, var(--fg) 35%, transparent);

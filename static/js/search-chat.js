@@ -7,14 +7,26 @@ let API_BASE = '';
 let debounceTimer = null;
 let selectedIndex = -1;
 let results = [];
+let returnFocus = null;
+let restoreMobileNavigation = null;
+let searchGeneration = 0;
+const QUICK_ACTIONS = [
+  { id: 'new_chat', label: 'New chat', detail: 'Start a fresh conversation', keywords: 'new conversation' },
+  { id: 'workspace_files', label: 'Files & project tools', detail: 'Choose a project and review its files', keywords: 'workspace project files repository' },
+  { id: 'settings', label: 'Settings', detail: 'Preferences and shortcuts', keywords: 'preferences shortcuts' },
+];
 
 function el(id) { return document.getElementById(id); }
 
 function hideMobileSidebarForSearch() {
-  if (window.innerWidth >= 768) return;
+  if (window.innerWidth >= 768) return () => {};
   const sidebar = el('sidebar');
   const rail = el('icon-rail');
   const backdrop = el('sidebar-backdrop');
+  const sidebarVisible = sidebar && !sidebar.classList.contains('hidden');
+  const railWasMini = rail?.classList.contains('mobile-mini');
+  const railStyle = rail?.style.cssText;
+  const backdropWasVisible = backdrop?.classList.contains('visible');
   let changed = false;
   if (sidebar && !sidebar.classList.contains('hidden')) {
     sidebar.classList.add('hidden');
@@ -29,30 +41,65 @@ function hideMobileSidebarForSearch() {
   if (changed && typeof window.syncRailSide === 'function') {
     try { window.syncRailSide(); } catch (_) {}
   }
+  return () => {
+    if (sidebar) sidebar.classList.toggle('hidden', !sidebarVisible);
+    if (rail) {
+      rail.classList.toggle('mobile-mini', !!railWasMini);
+      rail.style.cssText = railStyle || '';
+    }
+    if (backdrop) backdrop.classList.toggle('visible', !!backdropWasVisible);
+    if (changed && typeof window.syncRailSide === 'function') {
+      try { window.syncRailSide(); } catch (_) {}
+    }
+  };
 }
 
 export function openSearch() {
-  hideMobileSidebarForSearch();
+  if (isOpen()) return;
   const overlay = el('search-overlay');
   if (!overlay) return;
+  searchGeneration++;
+  if (debounceTimer) clearTimeout(debounceTimer);
+  returnFocus = document.activeElement;
+  restoreMobileNavigation = hideMobileSidebarForSearch();
   overlay.classList.remove('hidden');
   const input = el('search-input');
   if (input) {
+    input.setAttribute('aria-expanded', 'true');
     input.value = '';
     input.focus();
   }
   selectedIndex = -1;
   results = [];
-  el('search-results').innerHTML = '';
+  const container = el('search-results');
+  if (container) {
+    container.setAttribute('aria-busy', 'false');
+  }
+  el('search-input')?.removeAttribute('aria-activedescendant');
+  renderResults([], '');
 }
 
-export function closeSearch() {
+export function closeSearch({ restoreFocus = true, restoreNavigation = true } = {}) {
   const overlay = el('search-overlay');
   if (!overlay) return;
+  searchGeneration++;
+  if (debounceTimer) clearTimeout(debounceTimer);
   overlay.classList.add('hidden');
-  el('search-results').innerHTML = '';
+  const input = el('search-input');
+  input?.setAttribute('aria-expanded', 'false');
+  input?.removeAttribute('aria-activedescendant');
+  const container = el('search-results');
+  if (container) {
+    container.innerHTML = '';
+    container.setAttribute('aria-busy', 'false');
+  }
   selectedIndex = -1;
   results = [];
+  if (restoreNavigation) restoreMobileNavigation?.();
+  restoreMobileNavigation = null;
+  const target = returnFocus;
+  returnFocus = null;
+  if (restoreFocus && target?.isConnected && typeof target.focus === 'function') target.focus();
 }
 
 export function isOpen() {
@@ -83,22 +130,48 @@ function formatTimestamp(iso) {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function renderResults(data, query) {
-  results = data;
-  selectedIndex = -1;
+function actionMarkup(action, index) {
+  return `<div class="search-result-item search-command-item" id="search-option-${index}" role="option" aria-label="${escapeHtml(action.label)} — ${escapeHtml(action.detail)}" aria-selected="false" data-index="${index}" data-action="${action.id}">
+    <div class="search-result-role">Action</div>
+    <div class="search-result-snippet">${escapeHtml(action.label)} <span class="search-command-detail">${escapeHtml(action.detail)}</span></div>
+  </div>`;
+}
+
+function restoreActionSelection(container, actionId) {
+  const items = container.querySelectorAll('.search-result-item');
+  selectedIndex = actionId ? Array.from(items).findIndex(item => item.dataset.action === actionId) : -1;
+  updateSelection();
+}
+
+function showSearchError(query) {
   const container = el('search-results');
   if (!container) return;
+  const selectedAction = container.querySelectorAll('.search-result-item')[selectedIndex]?.dataset.action;
+  const normalizedQuery = query.toLocaleLowerCase();
+  const actions = QUICK_ACTIONS.filter(action =>
+    `${action.label} ${action.detail} ${action.keywords}`.toLocaleLowerCase().includes(normalizedQuery));
+  const html = actions.map(actionMarkup).join('')
+    + '<div class="search-empty" role="status">Conversation search failed. Try again.</div>';
+  container.innerHTML = html;
+  container.setAttribute('aria-busy', 'false');
+  restoreActionSelection(container, selectedAction);
+  container.querySelectorAll('.search-result-item').forEach(item => item.addEventListener('click', () => activateResult(item)));
+}
 
-  if (!data || data.length === 0) {
-    container.innerHTML = query
-      ? '<div class="search-empty">No results found</div>'
-      : '';
-    return;
-  }
+function renderResults(data, query) {
+  const container = el('search-results');
+  if (!container) return;
+  const selectedAction = container.querySelectorAll('.search-result-item')[selectedIndex]?.dataset.action;
+  results = data;
+
+  const normalizedQuery = query.toLocaleLowerCase();
+  const actions = QUICK_ACTIONS.filter(action => !normalizedQuery
+    || `${action.label} ${action.detail} ${action.keywords}`.toLocaleLowerCase().includes(normalizedQuery));
+  const sessionResults = Array.isArray(data) ? data : [];
 
   // Group by session
   const grouped = {};
-  for (const r of data) {
+  for (const r of sessionResults) {
     if (!grouped[r.session_id]) {
       grouped[r.session_id] = { name: r.session_name, items: [] };
     }
@@ -107,11 +180,12 @@ function renderResults(data, query) {
 
   let html = '';
   let idx = 0;
+  for (const action of actions) html += actionMarkup(action, idx++);
   for (const [sessionId, group] of Object.entries(grouped)) {
-    html += `<div class="search-group-header">${escapeHtml(group.name)}</div>`;
+    html += `<div class="search-group-header" role="presentation" aria-hidden="true">${escapeHtml(group.name)}</div>`;
     for (const item of group.items) {
       const roleLabel = item.role === 'user' ? 'You' : 'AI';
-      html += `<div class="search-result-item" data-index="${idx}" data-session="${escapeHtml(sessionId)}">
+      html += `<div class="search-result-item" id="search-option-${idx}" role="option" aria-label="${escapeHtml(group.name)} — ${roleLabel}: ${escapeHtml(item.content_snippet)}" aria-selected="false" data-index="${idx}" data-session="${escapeHtml(sessionId)}">
         <div class="search-result-role">${roleLabel}</div>
         <div class="search-result-snippet">${highlightMatch(item.content_snippet, query)}</div>
         <div class="search-result-time">${formatTimestamp(item.timestamp)}</div>
@@ -119,19 +193,39 @@ function renderResults(data, query) {
       idx++;
     }
   }
+  if (!html && query) html = '<div class="search-empty" role="status">No results found</div>';
   container.innerHTML = html;
+  container.setAttribute('aria-busy', 'false');
+  restoreActionSelection(container, selectedAction);
 
   // Click handlers
   container.querySelectorAll('.search-result-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const sid = item.dataset.session;
-      navigateToSession(sid);
-    });
+    item.addEventListener('click', () => activateResult(item));
   });
 }
 
+function activateResult(item) {
+  if (item.dataset.action) {
+    const action = item.dataset.action;
+    closeSearch({ restoreFocus: false, restoreNavigation: false });
+    if (action === 'new_chat') {
+      (el('sidebar-new-chat-btn') || el('rail-new-session'))?.click();
+    } else if (action === 'settings') {
+      (el('user-bar-settings') || el('rail-settings'))?.click();
+    } else if (action === 'workspace_files') {
+      import('./workspace.js').then(workspace => workspace.openWorkspaceBrowser())
+        .catch(error => {
+          console.error('Could not open project tools:', error);
+          uiModule.showToast('Could not open project tools. Please try again.');
+        });
+    }
+    return;
+  }
+  navigateToSession(item.dataset.session);
+}
+
 function navigateToSession(sessionId) {
-  closeSearch();
+  closeSearch({ restoreFocus: false, restoreNavigation: false });
   if (sessionModule && sessionModule.selectSession) {
     sessionModule.selectSession(sessionId);
   }
@@ -143,7 +237,13 @@ function updateSelection() {
   const items = container.querySelectorAll('.search-result-item');
   items.forEach((item, i) => {
     item.classList.toggle('selected', i === selectedIndex);
+    item.setAttribute('aria-selected', String(i === selectedIndex));
   });
+  const input = el('search-input');
+  if (input) {
+    if (selectedIndex >= 0 && items[selectedIndex]) input.setAttribute('aria-activedescendant', items[selectedIndex].id);
+    else input.removeAttribute('aria-activedescendant');
+  }
   // Scroll selected into view
   if (selectedIndex >= 0 && items[selectedIndex]) {
     items[selectedIndex].scrollIntoView({ block: 'nearest' });
@@ -168,28 +268,51 @@ function handleKeydown(e) {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     if (selectedIndex >= 0 && items[selectedIndex]) {
-      const sid = items[selectedIndex].dataset.session;
-      navigateToSession(sid);
+      activateResult(items[selectedIndex]);
     }
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeSearch();
   }
 }
 
 function handleInput(e) {
   const query = e.target.value.trim();
+  const requestId = ++searchGeneration;
   if (debounceTimer) clearTimeout(debounceTimer);
 
   if (!query) {
+    el('search-results')?.setAttribute('aria-busy', 'false');
     renderResults([], '');
     return;
+  }
+  el('search-results')?.setAttribute('aria-busy', 'true');
+  const container = el('search-results');
+  if (container) {
+    const actions = QUICK_ACTIONS.filter(action => `${action.label} ${action.detail} ${action.keywords}`
+      .toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+    const html = actions.map(actionMarkup).join('');
+    container.innerHTML = html || '<div class="search-empty" role="status">Searching conversations…</div>';
+    container.querySelectorAll('.search-result-item').forEach(item => item.addEventListener('click', () => activateResult(item)));
+    selectedIndex = -1;
+    updateSelection();
   }
 
   debounceTimer = setTimeout(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(query)}&limit=20`);
-      if (!res.ok) return;
+      if (requestId !== searchGeneration || !isOpen() || el('search-input')?.value.trim() !== query) return;
+      if (!res.ok) {
+        showSearchError(query);
+        return;
+      }
       const data = await res.json();
+      if (requestId !== searchGeneration || !isOpen() || el('search-input')?.value.trim() !== query) return;
       renderResults(data, query);
     } catch (err) {
+      if (requestId !== searchGeneration) return;
+      showSearchError(query);
       console.error('Search error:', err);
     }
   }, 300);
@@ -200,8 +323,18 @@ export function init(apiBase) {
 
   const input = el('search-input');
   if (input) {
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-label', 'Search conversations');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-expanded', 'false');
+    input.setAttribute('aria-controls', 'search-results');
     input.addEventListener('input', handleInput);
     input.addEventListener('keydown', handleKeydown);
+  }
+  const resultsList = el('search-results');
+  if (resultsList) {
+    resultsList.setAttribute('role', 'listbox');
+    resultsList.setAttribute('aria-label', 'Conversation search results');
   }
 
   // Close on overlay click (not popup click)
@@ -211,6 +344,7 @@ export function init(apiBase) {
       if (e.target === overlay) closeSearch();
     });
   }
+
 }
 
 const searchChatModule = {

@@ -218,7 +218,7 @@ async function deactivate(teardown) {
     if (sessionIdsToDelete.length > 0) {
       // keepalive ensures requests complete even during page navigation
       await Promise.all(sessionIdsToDelete.map(sid =>
-        fetch(`${state.API_BASE}/api/session/${sid}`, { method: 'DELETE', keepalive: true }).catch(() => {})
+        sessionModule.deleteSessionById(sid, { keepalive: true }).catch(() => {})
       ));
     }
     location.href = location.pathname;

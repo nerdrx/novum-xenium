@@ -204,7 +204,8 @@ export function initKeyboardShortcuts(modules) {
         const idx = allSessions.findIndex(x => x.id === sid);
         const nextSession = allSessions.filter(x => !x.archived && x.id !== sid)[Math.max(0, idx)] ||
                             allSessions.find(x => !x.archived && x.id !== sid);
-        fetch(`${API_BASE}/api/session/${sid}`, { method: 'DELETE' }).then(async () => {
+        sessionModule.deleteSessionById(sid).then(async response => {
+          if (!response.ok) return;
           await sessionModule.loadSessions();
           if (nextSession) {
             await sessionModule.selectSession(nextSession.id);

@@ -2052,7 +2052,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
         if (deleteBtn) deleteBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           if (!await window.styledConfirm('Delete this chat?', { confirmText: 'Delete', danger: true })) return;
-          await fetch(API_BASE + '/api/session/' + session.id, { method: 'DELETE' });
+          await sessionModule.deleteSessionById(session.id);
           card.style.maxHeight = `${Math.max(card.getBoundingClientRect().height, card.scrollHeight)}px`;
           card.classList.add('memory-tidy-removing');
           await new Promise(r => setTimeout(r, 520));
@@ -2128,7 +2128,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
           { label: 'Archive', action: async () => { await fetch(API_BASE + '/api/session/' + s.id + '/archive', { method: 'POST', headers: {'Content-Type':'application/json'} }); _renderLibChats(); } },
           { label: 'Delete', action: async () => {
             if (!await window.styledConfirm('Delete this chat?', { confirmText: 'Delete', danger: true })) return;
-            await fetch(API_BASE + '/api/session/' + s.id, { method: 'DELETE' });
+            await sessionModule.deleteSessionById(s.id);
             card.style.maxHeight = `${Math.max(card.getBoundingClientRect().height, card.scrollHeight)}px`;
             card.classList.add('memory-tidy-removing');
             await new Promise(r => setTimeout(r, 520));
@@ -2253,7 +2253,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
       await new Promise(r => setTimeout(r, 250));
       const ids = [..._chatsSelected];
       const results = await Promise.all(
-        ids.map(sid => fetch(API_BASE + '/api/session/' + sid, { method: 'DELETE' })
+        ids.map(sid => sessionModule.deleteSessionById(sid)
           .then(r => ({ sid, ok: r.ok }))
           .catch(() => ({ sid, ok: false }))
         )
@@ -2483,7 +2483,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
           { label: 'Restore', action: async () => { await fetch(API_BASE + '/api/session/' + s.id + '/unarchive', { method: 'POST' }); _renderLibArchive(); } },
           { label: 'Delete', action: async () => {
             if (!await window.styledConfirm('Delete this chat permanently?', { confirmText: 'Delete', danger: true })) return;
-            await fetch(API_BASE + '/api/session/' + s.id, { method: 'DELETE' });
+            await sessionModule.deleteSessionById(s.id);
             _renderLibArchive();
           }, danger: true },
         ], { onSelect: () => {
@@ -2643,7 +2643,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
       const i = key.indexOf(':'), type = key.slice(0, i), id = key.slice(i + 1);
       if (type === 'documents') return fetch(API_BASE + '/api/document/' + id, { method: 'DELETE', credentials: 'same-origin' });
       if (type === 'research') return fetch('/api/research/' + id, { method: 'DELETE', credentials: 'same-origin' });
-      return fetch(API_BASE + '/api/session/' + id, { method: 'DELETE', credentials: 'same-origin' });
+      return sessionModule.deleteSessionById(id, { credentials: 'same-origin' });
     }
     document.getElementById('doclib-arc-bulk-restore').addEventListener('click', async () => {
       if (!_arcSelected.size) return;

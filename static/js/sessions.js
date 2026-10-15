@@ -11,6 +11,7 @@ import spinnerModule from './spinner.js';
 import { installSessionHistory, setSessionHistory } from './sessionHistory.js';
 import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';
 import { resetBrowserPreview } from './browserPreview.js';
+import { getComposerDraft, saveComposerDraft } from './composerDrafts.js';
 
 const API_BASE = window.location.origin;
 
@@ -37,6 +38,55 @@ const _INCOGNITO_SESSIONS_KEY = 'ody-incognito-sessions'; // sessionStorage key 
 const _isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const _mod = _isMac ? '⌘' : 'Ctrl';
 let _historyPager = null;
+let _composerDraftInput = null;
+const _composerDraftWarnings = new Set();
+const _deletedComposerDraftSessions = new Set();
+
+function _composerDraftOptions(sessionId) {
+  let accountId = '';
+  try { accountId = localStorage.getItem('odysseus-auth-user') || ''; } catch {}
+  return { accountId, incognito: _isIncognitoSession(sessionId) };
+}
+
+function _saveComposerDraft(sessionId, msgInput = document.getElementById('message')) {
+  if (!sessionId || !msgInput || _deletedComposerDraftSessions.has(String(sessionId))) return;
+  const result = saveComposerDraft(sessionId, msgInput.value, _composerDraftOptions(sessionId));
+  if (result?.persisted || !result?.reason || result.reason === 'incognito') return;
+  const warningKey = `${sessionId}:${result.reason}`;
+  if (_composerDraftWarnings.has(warningKey)) return;
+  _composerDraftWarnings.add(warningKey);
+  const reason = result.reason === 'size'
+    ? 'This draft is too large to save for reload. It will stay available while this page is open.'
+    : result.reason === 'count'
+      ? 'Your saved draft limit is full. This draft will stay available while this page is open.'
+      : 'This draft could not be saved for reload. It will stay available while this page is open.';
+  if (uiModule.showToast) uiModule.showToast(reason, { duration: 8000 });
+}
+
+function _clearComposerDraft(sessionId) {
+  if (!sessionId) return;
+  _composerDraftWarnings.delete(`${sessionId}:size`);
+  _composerDraftWarnings.delete(`${sessionId}:count`);
+  _composerDraftWarnings.delete(`${sessionId}:storage`);
+  saveComposerDraft(sessionId, '', _composerDraftOptions(sessionId));
+}
+
+export async function deleteSessionById(sessionId, options = {}) {
+  const response = await fetch(`${API_BASE}/api/session/${encodeURIComponent(sessionId)}`, { ...options, method: 'DELETE' });
+  if (response.ok) {
+    _deletedComposerDraftSessions.add(String(sessionId));
+    _clearComposerDraft(sessionId);
+  }
+  return response;
+}
+const _deleteSessionRequest = deleteSessionById;
+
+function _bindComposerDraftInput(msgInput) {
+  if (!msgInput || _composerDraftInput === msgInput) return;
+  _composerDraftInput = msgInput;
+  // Unsaved New Chat has no stable ID; only materialized chats get reload-safe drafts.
+  msgInput.addEventListener('input', () => _saveComposerDraft(currentSessionId, msgInput));
+}
 
 function _shouldPreserveStartupComposer(msgInput) {
   if (!msgInput || !msgInput.value) return false;
@@ -44,9 +94,9 @@ function _shouldPreserveStartupComposer(msgInput) {
   return !!document.getElementById('app-loader') && document.activeElement === msgInput;
 }
 
-function _clearComposerUnlessStartupTyped(msgInput) {
+function _clearComposerUnlessStartupTyped(msgInput, preserveStartup = true) {
   if (!msgInput) return;
-  if (_shouldPreserveStartupComposer(msgInput)) {
+  if (preserveStartup && _shouldPreserveStartupComposer(msgInput)) {
     msgInput.disabled = false;
     autoResize(msgInput);
     return;
@@ -272,7 +322,7 @@ async function _cleanupIncognitoSessions() {
   const keep = ids.filter(sid => sid === currentSessionId);
   sessionStorage.setItem(_INCOGNITO_SESSIONS_KEY, JSON.stringify(keep));
   await Promise.all(toDelete.map(sid =>
-    fetch(`${API_BASE}/api/session/${sid}`, { method: 'DELETE' }).catch(() => {})
+    _deleteSessionRequest(sid).catch(() => {})
   ));
 }
 
@@ -926,7 +976,7 @@ function createSessionItem(s) {
     }
     // Await API deletion, then reload the authoritative list from the server
     try {
-      await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' });
+      await _deleteSessionRequest(s.id);
     } catch (e) { /* network error — session may still exist server-side */ }
     await loadSessions();
   });
@@ -1261,7 +1311,7 @@ function _renderSessionListImpl() {
       if (!await uiModule.styledConfirm(`Delete folder "${folderName}" and all ${count} session(s) inside it?`, { confirmText: 'Delete', danger: true })) return;
       for (const s of folders[folderName]) {
         try {
-          await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' });
+          await _deleteSessionRequest(s.id);
           _deselectCurrentSession(s.id);
         } catch (err) {
           console.error('Failed to delete session:', s.id, err);
@@ -1384,7 +1434,7 @@ function _renderSessionListImpl() {
       if (!await uiModule.styledConfirm(`Delete all ${unfiled.length} unsorted session(s)?`, { confirmText: 'Delete', danger: true })) return;
       for (const s of unfiled) {
         try {
-          await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' });
+          await _deleteSessionRequest(s.id);
           _deselectCurrentSession(s.id);
         } catch (err) {
           console.error('Failed to delete session:', s.id, err);
@@ -1697,7 +1747,7 @@ function _initBulkSelect() {
       const deletedIds = [];
       for (const sid of _selectedIds) {
         try {
-          const res = await fetch(`${API_BASE}/api/session/${sid}`, { method: 'DELETE' });
+          const res = await _deleteSessionRequest(sid);
           if (res.ok) deletedIds.push(sid);
         } catch (_) {}
       }
@@ -1901,6 +1951,10 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     clearSubagentInspector();
     const navToken = ++_sessionNavToken;
     const prevSessionId = currentSessionId;
+    const msgInput = document.getElementById('message');
+    const preserveStartupText = !prevSessionId && _shouldPreserveStartupComposer(msgInput);
+    _bindComposerDraftInput(msgInput);
+    _saveComposerDraft(prevSessionId, msgInput);
     // Selecting a real persisted chat cancels any deferred "New Chat" model
     // pick. Otherwise the next send can materialize that pending chat instead
     // of posting into the session the user just opened.
@@ -1963,10 +2017,15 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
       if (window.compareModule.isActive()) window.compareModule.deactivate(true);
       else if (window.compareModule.hasVisibleResults()) window.compareModule.cleanupResults();
     }
-    const msgInput = document.getElementById('message');
     if (msgInput) {
       msgInput.disabled = false;
-      _clearComposerUnlessStartupTyped(msgInput);
+      const draft = getComposerDraft(id, _composerDraftOptions(id));
+      if (draft && !preserveStartupText) {
+        msgInput.value = draft;
+        msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        if (!preserveStartupText) _clearComposerUnlessStartupTyped(msgInput, !prevSessionId);
+      }
       msgInput.style.height = '';
       msgInput.style.overflow = '';
       autoResize(msgInput);
@@ -2272,6 +2331,10 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
     return;
   }
   _sessionNavToken++;
+  const msgInput = document.getElementById('message');
+  const preserveStartupText = !currentSessionId && _shouldPreserveStartupComposer(msgInput);
+  _bindComposerDraftInput(msgInput);
+  _saveComposerDraft(currentSessionId, msgInput);
   // Detach any active stream so it doesn't interfere with the new chat
   if (window.chatModule && window.chatModule.detachCurrentStream) {
     window.chatModule.detachCurrentStream(currentSessionId);
@@ -2327,10 +2390,9 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
   }
 
   // Enable input
-  const msgInput = document.getElementById('message');
   if (msgInput) {
     msgInput.disabled = false;
-    _clearComposerUnlessStartupTyped(msgInput);
+    _clearComposerUnlessStartupTyped(msgInput, preserveStartupText);
     msgInput.focus();
   }
 }
@@ -2385,7 +2447,7 @@ export async function materializePendingSession() {
     // currentSessionId and make the next send land in a brand-new chat.
     if (_pendingChat !== pending) {
       if (payload.id) {
-        fetch(`${API_BASE}/api/session/${encodeURIComponent(payload.id)}`, { method: 'DELETE' }).catch(() => {});
+        _deleteSessionRequest(payload.id).catch(() => {});
       }
       return false;
     }
@@ -2507,7 +2569,7 @@ export async function deleteCurrentSessionFromTopMenu() {
     if (pm.removePersistentChat) pm.removePersistentChat(sid);
   } catch (e) {}
   try {
-    const res = await fetch(`${API_BASE}/api/session/${sid}`, { method: 'DELETE' });
+    const res = await _deleteSessionRequest(sid);
     if (!res.ok) throw new Error('Failed');
     uiModule.showToast('Session deleted');
   } catch (e) {
@@ -2554,7 +2616,7 @@ async function _onSessionListKeydown(e) {
     if (!ok) return;
     _sessionListFocused = true;
     (async () => {
-      await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' });
+      await _deleteSessionRequest(s.id);
       _deselectCurrentSession(s.id);
       await loadSessions();
     })();
@@ -3115,7 +3177,7 @@ async function _arcRestore(sid) {
 async function _arcDelete(sid) {
   if (!await window.styledConfirm('Delete this session permanently?', { confirmText: 'Delete', danger: true })) return;
   try {
-    const res = await fetch(`${API_BASE}/api/session/${sid}`, { method: 'DELETE' });
+    const res = await _deleteSessionRequest(sid);
     if (!res.ok) throw new Error('Failed');
     await _animateSessionRowsRemoving([sid], '#archive-grid .archive-row[data-session-id]');
     _arcRemove(sid);
@@ -3167,7 +3229,7 @@ async function _arcBulkDelete() {
   const deletedIds = [];
   for (const sid of ids) {
     try {
-      const res = await fetch(`${API_BASE}/api/session/${sid}`, { method: 'DELETE' });
+      const res = await _deleteSessionRequest(sid);
       if (res.ok) {
         deletedIds.push(sid);
         _arcRemove(sid);
@@ -3474,7 +3536,7 @@ export function openLibrary(defaultTab) {
   document.getElementById('lib-bulk-delete').addEventListener('click', async () => {
     if (!await uiModule.styledConfirm(`Delete ${_lib.selected.size} items?`, { confirmText: 'Delete', danger: true })) return;
     if (_lib.tab === 'chats' || _lib.tab === 'archive') {
-      for (const sid of _lib.selected) await fetch(`${API_BASE}/api/session/${sid}`, { method: 'DELETE' });
+      for (const sid of _lib.selected) await _deleteSessionRequest(sid);
     } else if (_lib.tab === 'documents') {
       for (const did of _lib.selected) await fetch(`${API_BASE}/api/document/${did}`, { method: 'DELETE' });
     } else if (_lib.tab === 'research') {
@@ -3537,7 +3599,7 @@ function _renderLibChats(grid) {
       _showDropdown(e.currentTarget, [
         { label: 'Open', action: () => { closeLibrary(); selectSession(s.id); } },
         { label: 'Archive', action: async () => { await fetch(`${API_BASE}/api/session/${s.id}/archive`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }); await loadSessions(); _renderLibGrid(); } },
-        { label: 'Delete', action: async () => { if (!await uiModule.styledConfirm('Delete?', { confirmText: 'Delete', danger: true })) return; await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' }); await loadSessions(); _renderLibGrid(); }, danger: true },
+        { label: 'Delete', action: async () => { if (!await uiModule.styledConfirm('Delete?', { confirmText: 'Delete', danger: true })) return; await _deleteSessionRequest(s.id); await loadSessions(); _renderLibGrid(); }, danger: true },
       ]);
     });
     grid.appendChild(card);
@@ -3567,7 +3629,7 @@ async function _renderLibArchive(grid) {
         e.stopPropagation();
         _showDropdown(e.currentTarget, [
           { label: 'Restore', action: async () => { await fetch(`${API_BASE}/api/session/${s.id}/restore`, { method: 'POST' }); await loadSessions(); _renderLibGrid(); } },
-          { label: 'Delete', action: async () => { if (!await uiModule.styledConfirm('Delete?', { confirmText: 'Delete', danger: true })) return; await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' }); _renderLibGrid(); }, danger: true },
+          { label: 'Delete', action: async () => { if (!await uiModule.styledConfirm('Delete?', { confirmText: 'Delete', danger: true })) return; await _deleteSessionRequest(s.id); _renderLibGrid(); }, danger: true },
         ]);
       });
       grid.appendChild(card);
@@ -3846,7 +3908,8 @@ const sessionModule = {
   setSessionHasDocs,
   getSortMode,
   setSortMode,
-  deleteCurrentSessionFromTopMenu
+  deleteCurrentSessionFromTopMenu,
+  deleteSessionById
 };
 
 export { updateModelPicker };

@@ -1032,7 +1032,7 @@ async function _cmdSessionDelete(args, ctx) {
     if (!targets.length) { slashReply('Nothing to delete' + (skipped ? ` (${skipped} starred)` : '')); return true; }
     let deleted = 0, failed = 0;
     for (const s of targets) {
-      const res = await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE', credentials: 'same-origin' });
+      const res = await sessionModule.deleteSessionById(s.id, { credentials: 'same-origin' });
       if (res.ok) deleted++; else failed++;
     }
     await sessionModule.loadSessions();
@@ -1049,7 +1049,7 @@ async function _cmdSessionDelete(args, ctx) {
   const sessions = sessionModule.getSessions();
   const sess = sessions.find(s => s.id === target);
   const label = sess ? `"${ctx.esc(sess.name || target.slice(0,8))}"` : target.slice(0,8);
-  const res = await fetch(`${API_BASE}/api/session/${target}`, { method: 'DELETE', credentials: 'same-origin' });
+  const res = await sessionModule.deleteSessionById(target, { credentials: 'same-origin' });
   if (res.ok) {
     await typewriterReply(`Deleted ${label}`);
     await sessionModule.loadSessions();

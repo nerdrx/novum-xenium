@@ -39,6 +39,9 @@ _IMPORT_REWRITES = {
     "import { resetBrowserPreview } from './browserPreview.js';": (
         "import { resetBrowserPreview } from './browserPreview.mjs';"
     ),
+    "import { getComposerDraft, saveComposerDraft } from './composerDrafts.js';": (
+        "import { getComposerDraft, saveComposerDraft } from './composerDrafts.mjs';"
+    ),
     "import themeModule from './theme.js';": "import themeModule from './theme.mjs';",
     "import spinnerModule from './spinner.js';": "import spinnerModule from './spinner.mjs';",
 }
@@ -332,6 +335,10 @@ def results(tmp_path_factory):
         (module_dir / name).write_text(stub, encoding="utf-8")
     (module_dir / "sessionHistory.mjs").write_text(
         (_REPO / "static" / "js" / "sessionHistory.js").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (module_dir / "composerDrafts.mjs").write_text(
+        (_REPO / "static" / "js" / "composerDrafts.js").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 

@@ -25,7 +25,7 @@
     try { return navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]); }
     catch (error) { return Promise.reject(error); }
   };
-  const showNotice = text => {
+  const showNotice = (text, duration = 2500) => {
     if (!notice) {
       notice = document.createElement('div');
       notice.setAttribute('role', 'status');
@@ -36,11 +36,20 @@
     notice.hidden = false;
     notice.textContent = text;
     clearTimeout(notice.timer);
-    notice.timer = setTimeout(() => { notice.hidden = true; }, 2500);
+    notice.timer = setTimeout(() => { notice.hidden = true; }, duration);
+  };
+  const imageFailureNotice = (url, message, action) => {
+    try {
+      const target = new URL(url, location.href);
+      if (/^https?:$/.test(target.protocol) && target.origin !== location.origin) {
+        return `${message}. If this image is from another site, it may block in-app access; choose Open in browser to ${action} it there.`;
+      }
+    } catch (_) {}
+    return message;
   };
   const close = () => { if (menu) menu.hidden = true; };
   const report = (promise, success, failure) => Promise.resolve(promise).then(
-    () => showNotice(success), error => { console.warn(failure, error); showNotice(failure); });
+    () => showNotice(success), error => { const message = typeof failure === 'function' ? failure() : failure; console.warn(message, error); showNotice(message, 8000); });
   const mount = () => {
     if (menu) return;
     menu = document.createElement('div');
@@ -58,7 +67,7 @@
         const url = source();
         close();
         if (button.dataset.action === 'copy') {
-          report(copyPixels(url), 'Image copied to clipboard', 'Could not copy image pixels');
+          report(copyPixels(url), 'Image copied to clipboard', () => imageFailureNotice(url, 'Could not copy image pixels', 'copy'));
         } else if (button.dataset.action === 'address') {
           let write;
           try {
@@ -83,7 +92,7 @@
               setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
             } catch (error) {
               console.warn('Save image failed', error);
-              showNotice('Could not save image');
+              showNotice(imageFailureNotice(url, 'Could not save image', 'save'), 8000);
             }
           })();
         }

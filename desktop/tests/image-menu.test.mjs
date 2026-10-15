@@ -33,3 +33,43 @@ test('desktop image menu keeps pixels and addresses separate', async () => {
     assert.equal(await page.getByRole('menu').isVisible(), false);
   } finally { await browser.close(); }
 });
+
+test('image failures suggest browser recovery only for cross-origin HTTP images', async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || '/opt/google/chrome/chrome', args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.route('http://127.0.0.1:7000/**', route => route.fulfill({ contentType: 'text/html', body: '<html><body><img id="image" src="http://127.0.0.1:7001/image.png"></body></html>' }));
+    await page.route('http://127.0.0.1:7001/**', route => route.abort());
+    await page.goto('http://127.0.0.1:7000/');
+    await page.evaluate(() => {
+      window.ClipboardItem = class { constructor(data) { this.data = data; } };
+      Object.defineProperty(navigator, 'clipboard', { value: {
+        write: async () => { throw new TypeError('Failed to fetch'); },
+        writeText: async () => { throw new Error('clipboard unavailable'); }
+      }, configurable: true });
+      window.fetch = async () => { throw new TypeError('Failed to fetch'); };
+    });
+    await page.addScriptTag({ content: source });
+
+    await page.locator('#image').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Copy image', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: 'Could not copy image pixels.' }).waitFor();
+    assert.match(await page.getByRole('status').innerText(), /may block in-app access; choose Open in browser to copy it there\./);
+
+    await page.locator('#image').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Save image', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: 'Could not save image.' }).waitFor();
+    assert.match(await page.getByRole('status').innerText(), /may block in-app access; choose Open in browser to save it there\./);
+
+    await page.locator('#image').evaluate(image => { image.src = '/same-origin.png'; });
+    await page.locator('#image').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Save image', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: 'Could not save image' }).waitFor();
+    assert.equal(await page.getByRole('status').innerText(), 'Could not save image');
+
+    await page.locator('#image').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Copy image address', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: 'Could not copy image address' }).waitFor();
+    assert.equal(await page.getByRole('status').innerText(), 'Could not copy image address');
+  } finally { await browser.close(); }
+});

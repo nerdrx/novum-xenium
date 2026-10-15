@@ -6,7 +6,7 @@ This guide covers the NX controls and their operating boundaries. The main page 
 
 ## Working on a repository
 
-Open **Workspace → Project tools, checks and run evidence**. Inspect the repository, create a managed worktree and select **Use this worktree**. Describe a bounded change, then review the diff and actual test output before publishing. Dirty or ignored work is preserved when removing a worktree.
+Open the top-bar **Workspace → Files & project tools**, then expand **Project tools, checks and run evidence**. Inspect the repository, create a managed worktree and select **Use this worktree**. Describe a bounded change, then review the diff and actual test output before publishing. Dirty or ignored work is preserved when removing a worktree.
 
 The standard Docker workspace is `/workspace` inside the container and `data/agent_workspace/workspace/` on the host. File tools stay within the selected folder; the shell starts there but is not an operating-system sandbox. Native writes use pinned POSIX directory descriptors and preserve existing mode, owner/group and supported user/ACL metadata. They fail if those safety APIs or metadata preservation are unavailable; Docker uses Linux, including Docker on Windows/macOS. Multi-file patches validate first but remain non-atomic on later I/O failure: inspect the workspace diff when warned. Agent writes and shell tools require a bounded snapshot, so use a sparse source checkout when a repository contains large benchmark captures or generated artifacts.
 

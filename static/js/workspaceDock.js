@@ -83,6 +83,24 @@ function open() {
   const header = el('header'); header.append(el('h2', 'Workspace'));
   const dismiss = el('button', 'Close'); dismiss.type = 'button';
   dismiss.addEventListener('click', () => close()); header.append(dismiss); panel.append(header);
+  const project = el('section', '', 'workspace-dock-project');
+  project.append(el('p', 'Browse your workspace, choose a project, and review Git changes and checks.'));
+  const browse = el('button', 'Files & project tools'); browse.type = 'button';
+  const notice = el('p'); notice.setAttribute('role', 'status'); notice.hidden = true;
+  browse.addEventListener('click', async () => {
+    browse.disabled = true;
+    try {
+      const workspace = await import('./workspace.js');
+      // The drawer may have been closed while the module was loading.
+      if (!browse.isConnected) return;
+      close();
+      await workspace.openWorkspaceBrowser();
+    } catch {
+      notice.textContent = 'Could not open project tools. Please try again.';
+      notice.hidden = false;
+    } finally { browse.disabled = false; }
+  });
+  project.append(browse, notice); panel.append(project);
   const tablist = el('div', '', 'workspace-dock-tabs'); tablist.setAttribute('role', 'tablist');
   tablist.setAttribute('aria-label', 'Workspace views');
   tabs.forEach(name => {

@@ -17,6 +17,7 @@ const server = http.createServer((req,res) => {
  try {
   const page=await browser.newPage({viewport:{width:1280,height:800}});page.setDefaultTimeout(5000);
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.route('**/static/js/workspace.js', route => route.fulfill({ contentType: 'text/javascript', body: 'export async function openWorkspaceBrowser() { window.projectToolsOpened = true; }' }));
   await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>window.dock);
   await page.evaluate(()=>{
    dock.updateWorkspaceDock({type:'tool_output',tool:'native_preview',screenshot:'data:image/svg+xml;base64,PHN2Zz4=',exit_code:0},'alpha');
@@ -46,6 +47,9 @@ const server = http.createServer((req,res) => {
   await page.setViewportSize({width:390,height:700});
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'0px');
   assert.ok((await page.locator('.workspace-dock').boundingBox()).width<=390);
+  await page.getByRole('button', {name:'Files & project tools'}).click();
+  await page.waitForFunction(() => window.projectToolsOpened === true);
+  assert.equal(await page.locator('.workspace-dock').count(), 0);
   assert.deepEqual(errors,[]);
   console.log('PASS: dock safe content, session isolation, keyboard tabs/Escape focus, desktop/mobile layout');
  } finally {await browser.close();server.closeAllConnections?.();await new Promise(r=>server.close(r));}

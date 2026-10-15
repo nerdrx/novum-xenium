@@ -33,10 +33,15 @@ try {
     });
     await page.waitForTimeout(350);
     if (width <= 640) {
-      for (const selector of ['.chat-input-left', '.chat-input-right']) {
+      for (const selector of ['.chat-input-right']) {
         const fits = await page.locator(selector).evaluate(e => e.scrollWidth <= e.clientWidth + 1);
         assert(fits, `${selector} clips at ${width}x${height}`);
       }
+      const rail = page.locator('.chat-input-left');
+      assert(await rail.evaluate(e => e.clientHeight <= 52), 'Tools must stay in one compact row');
+      await page.locator('#compare-indicator-btn').scrollIntoViewIfNeeded();
+      assert(await page.locator('#compare-indicator-btn').isVisible(), 'Last active tool remains reachable');
+      await rail.evaluate(e => { e.scrollLeft = 0; });
       assert(await page.locator('#mode-agent-btn').isVisible(), 'Agent mode must remain reachable');
     }
     for (const [button, menu] of [['#overflow-plus-btn', '#overflow-menu'], ['.approval-mode-trigger', '.approval-mode-panel'], ['#model-picker-btn', '#model-picker-menu']]) {

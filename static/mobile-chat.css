@@ -1,8 +1,12 @@
 /* Keep every composer action reachable on phones and narrow split panes. */
 @container chatbar (max-width: 640px) {
   .chat-input-bottom { flex-wrap: wrap; gap: 8px; }
-  .chat-input-left { flex: 1 0 100%; flex-wrap: wrap; overflow: visible; gap: 4px; }
-  .chat-input-right { width: 100%; justify-content: flex-end; gap: 8px; }
+  .chat-input-left { flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; gap: 4px;
+    overscroll-behavior-x: contain; scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent; }
+  .chat-input-right { width: 100%; justify-content: flex-end;
+    border-top: 1px solid var(--nx-panel-border);
+    padding-top: 6px; gap: 8px; }
   .chat-input-right .mode-toggle { display: flex !important; }
   .chat-input-left > .input-icon-btn,
   .chat-input-left .overflow-plus-btn { min-width: 44px; min-height: 44px; }
@@ -15,4 +19,36 @@
   .chat-input-top > .model-picker-wrap { max-width: 100%; }
   .approval-mode-panel { max-height: min(360px, 55dvh); overflow-y: auto; }
   .overflow-menu { max-width: calc(100vw - 24px); max-height: 55dvh; overflow-y: auto; }
+}
+
+/* Phone chrome should leave the conversation in charge. */
+@media (max-width: 768px) {
+  html.nx-workspace .chat-input-bar {
+    border-radius: 16px;
+    padding: 10px 12px;
+    gap: 4px;
+    margin-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .chat-input-right > :first-child { margin-right: auto; }
+  html.nx-workspace .chat-input-top { align-items: center; }
+  html.nx-workspace .chat-input-bar textarea#message { font-size: 16px; }
+  html.nx-workspace .chat-history {
+    padding-left: 2px;
+    padding-right: 2px;
+    gap: 12px;
+  }
+  html.nx-workspace .chat-history .msg-ai { max-width: 100%; }
+  html.nx-workspace .chat-history .msg-user { max-width: 90%; }
+  #solar-system-canvas, #constellations-canvas { opacity: .2; }
+  html.nx-workspace .chat-top-bar {
+    padding-top: max(8px, env(safe-area-inset-top));
+    padding-bottom: 8px;
+  }
+  .chat-input-left .tool-indicator { flex-shrink: 0; }
+  .chat-input-left > .overflow-wrapper { position: sticky; left: 0; background: var(--input-bg, var(--panel)); }
+  html.nx-workspace .chat-input-right .send-btn { border-radius: 12px; }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+  .approval-mode-panel { left: 0; right: auto; }
 }

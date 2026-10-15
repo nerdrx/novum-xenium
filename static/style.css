@@ -41962,3 +41962,10 @@ button.export-dropdown-item:focus-visible {
   }
   #export-compact-btn { min-height: 44px; }
 }
+
+/* One readable command surface on touch and keyboard devices. */
+#search-input { min-height: 52px; font-family: inherit; font-size: 16px; }
+#search-results .search-result-item { min-height: 48px; box-sizing: border-box; }
+#search-results .search-command-item { min-height: 60px; align-items: center; }
+#search-results .search-command-item .search-result-snippet { white-space: normal; font-size: 14px; line-height: 1.4; }
+#search-results .search-command-detail { display: block; margin: 3px 0 0; font-size: 12px; }

@@ -324,7 +324,8 @@ export function init(apiBase) {
   const input = el('search-input');
   if (input) {
     input.setAttribute('role', 'combobox');
-    input.setAttribute('aria-label', 'Search conversations');
+    input.setAttribute('aria-label', 'Search chats or actions');
+    input.placeholder = 'Search chats or actions…';
     input.setAttribute('aria-autocomplete', 'list');
     input.setAttribute('aria-expanded', 'false');
     input.setAttribute('aria-controls', 'search-results');

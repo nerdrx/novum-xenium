@@ -59,6 +59,10 @@ For Vulkan launches, zVram is an opt-in memory-management path for ordinary
 Stable Diffusion checkpoints and FLUX.2 Klein. It uses `--auto-fit off` because
 the Vulkan layer can report a virtual heap that overstates immediately
 available VRAM. FLUX.2 Klein also keeps its text encoder and VAE on CPU.
+Its launch recipe uses `--params-backend diffusion=cpu --max-vram 3` to stream
+weights from RAM through memory-limited GPU graph segments, leaving room for
+a resident chat model. zVram remains enabled for eligible GPU allocations;
+3 GiB is the engine budget, not a cap on total system or GPU memory usage.
 
 Native Linux installs can put `scripts/sd-server-zvram` on `PATH` (for example,
 `install -m 0755 scripts/sd-server-zvram ~/.local/bin/`) when both `zvram` and
@@ -104,3 +108,15 @@ Cookbook launch, readiness, image generation, authenticated Gallery retrieval,
 stop (including port release), and a same-port restart. An existing cloud image
 default remained unchanged. The UI defaults this engine to 512×512 when a tool
 does not supply a size.
+
+### Shared-GPU validation
+
+A later real chat exposed a coexistence limit: the resident 27B chat model left
+too little GPU memory for FLUX's unsegmented working set. Both 1024×1024 and
+512×512 requests failed with Vulkan `ErrorOutOfDeviceMemory`; zVram's 4 GiB
+cold store also filled. Increasing image resolution was not the only cause.
+The RAM-backed, 3 GiB segmented recipe above generated a real 512×512 image
+at 20 steps through Novum, with authenticated Gallery retrieval, while the same
+27B model remained loaded. This avoids requiring users to unload
+their chat model for the tested workload. Different models, resolutions and
+other GPU applications can still exceed the available resources.

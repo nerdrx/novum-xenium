@@ -58,7 +58,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "prompt": {"type": "string", "description": "Image description prompt"},
                     "model": {"type": "string", "description": "Model name (auto-detects if omitted)"},
-                    "size": {"type": "string", "description": "Image size (default 1024x1024)"},
+                    "size": {"type": "string", "description": "Optional requested WxH. Set only when the user explicitly requests dimensions; otherwise omit to use the provider default (512x512 for local sd-cpp-local)."},
                     "quality": {"type": "string", "description": "Quality: low, medium, high, auto (default medium)"},
                 },
                 "required": ["prompt"],

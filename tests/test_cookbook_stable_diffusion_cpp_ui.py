@@ -90,6 +90,7 @@ def test_flux2_klein_components_and_launch_defaults():
     assert "Paging can be slow" in serve
     assert "const sdBackend = useZVram ? (f.flux2 ? 'diffusion=vulkan0,te=cpu,vae=cpu' : 'diffusion=vulkan0')" in cookbook
     assert "if (useZVram) cmd += ' --auto-fit off';" in cookbook
+    assert "if (useZVram && f.flux2) cmd += ' --params-backend diffusion=cpu --max-vram 3';" in cookbook
     assert "zvram --vulkan-recover-local -- sd-server-vulkan" in (ROOT / "scripts/sd-server-zvram").read_text(encoding="utf-8")
     assert "flux2MissingAtRender.length" in serve
     assert "downloadFlux2KleinBundle(panel, variant, undefined, missingKinds)" in serve

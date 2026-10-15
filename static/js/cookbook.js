@@ -995,6 +995,8 @@ export function _buildServeCmd(f, modelName, backend) {
     const sdBackend = useZVram ? (f.flux2 ? 'diffusion=vulkan0,te=cpu,vae=cpu' : 'diffusion=vulkan0') : (useVulkan ? 'diffusion=vulkan0' : 'cpu');
     cmd += `${binary}${modelFile ? ` ${modelArg} ${modelFile}` : ''} --listen-ip ${listenIp} --listen-port ${f.port || '1234'} --backend ${sdBackend}`;
     if (useZVram) cmd += ' --auto-fit off';
+    // Segment FLUX weights from RAM so a resident chat model can share the GPU.
+    if (useZVram && f.flux2) cmd += ' --params-backend diffusion=cpu --max-vram 3';
     if (f.flux2) {
       const llm = String(f._flux2_llm_path || '').trim();
       const vae = String(f._flux2_vae_path || '').trim();

@@ -93,7 +93,7 @@ FUNCTION_TOOL_SCHEMAS = [
                 "properties": {
                     "prompt": {"type": "string", "description": "Visual description for a new image, or edit instructions when attachment_id is set"},
                     "model": {"type": "string", "description": "Optional image model; omit to use the configured default"},
-                    "size": {"type": "string", "description": "Optional requested WxH, e.g. 1024x1024"},
+                    "size": {"type": "string", "description": "Optional requested WxH. Set only when the user explicitly requests dimensions; otherwise omit so the provider default is used (512x512 for local sd-cpp-local, 1024x1024 for cloud image models)."},
                     "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"]},
                     "attachment_id": {"type": "string", "description": "ID of an image attached to the current user turn, when transforming that image. Never use a path or an older attachment."}
                 },

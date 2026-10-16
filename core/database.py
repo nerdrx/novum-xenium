@@ -870,7 +870,7 @@ class NotificationFeedItem(Base):
 
 
 class NotificationDevice(Base):
-    """A user's currently registered FCM destination; token never leaves server."""
+    """Legacy notification-device records retained for safe schema compatibility."""
     __tablename__ = "notification_devices"
 
     id = Column(String, primary_key=True)
@@ -885,7 +885,7 @@ class NotificationDevice(Base):
 
 
 class NotificationPushDelivery(Base):
-    """Per-device FCM outbox row; source event IDs let clients suppress retries."""
+    """Legacy push outbox rows retained for safe schema compatibility."""
     __tablename__ = "notification_push_deliveries"
 
     event_id = Column(Integer, primary_key=True)
@@ -913,7 +913,7 @@ class NotificationEmailCursor(Base):
 
 
 class NotificationServerIdentity(Base):
-    """Stable opaque identifier for this server installation."""
+    """Stable opaque installation identifier used to bind notification taps."""
     __tablename__ = "notification_server_identity"
 
     id = Column(Integer, primary_key=True, default=1)

@@ -3,6 +3,7 @@
 import logging
 import threading
 import time
+import uuid
 from datetime import timezone
 
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +34,34 @@ def active_email_watchers():
         return [owner for owner, expiry in _email_watchers.items() if expiry > now]
 
 
+def server_id():
+    """Return a stable opaque installation ID for binding notification taps."""
+    from core.database import SessionLocal, NotificationServerIdentity
+
+    db = SessionLocal()
+    try:
+        row = db.query(NotificationServerIdentity).filter(
+            NotificationServerIdentity.id == 1
+        ).first()
+        if row:
+            return row.server_id
+        value = uuid.uuid4().hex
+        db.add(NotificationServerIdentity(id=1, server_id=value))
+        try:
+            db.commit()
+            return value
+        except Exception:
+            db.rollback()
+            row = db.query(NotificationServerIdentity).filter(
+                NotificationServerIdentity.id == 1
+            ).first()
+            if row:
+                return row.server_id
+            raise
+    finally:
+        db.close()
+
+
 
 def add_notification(owner, kind, title, *, source, source_id, body=None, route=None, status=None):
     """Insert once per source event. Empty owners are intentionally ignored."""
@@ -50,17 +79,6 @@ def add_notification(owner, kind, title, *, source, source_id, body=None, route=
         db.add(item)
         try:
             db.flush()
-            from core.database import NotificationDevice, NotificationPushDelivery
-            preference = {
-                "email": NotificationDevice.email_enabled,
-                "chat": NotificationDevice.chat_enabled,
-            }.get(kind, NotificationDevice.task_enabled)
-            for device in db.query(NotificationDevice.id).filter(
-                NotificationDevice.owner == owner, preference.is_(True),
-            ).all():
-                db.add(NotificationPushDelivery(
-                    event_id=item.id, device_id=device[0], owner=str(owner), status="pending",
-                ))
             cutoff = db.query(NotificationFeedItem.id).filter(
                 NotificationFeedItem.owner == owner
             ).order_by(NotificationFeedItem.id.desc()).offset(5000).limit(1).first()

@@ -1724,22 +1724,31 @@ async def _notification_email_poller():
             await asyncio.sleep(120)
 
 
-async def _notification_push_poller():
+def ensure_notification_email_poller() -> bool:
+    """Start only the feed's email-discovery worker from an authenticated opt-in.
+
+    The ordinary email router starts the scheduled task poller too, but a
+    notification-only client should not implicitly enable that separate loop.
+    """
+    if not _inprocess_pollers_enabled():
+        return False
     import asyncio
-    while True:
-        try:
-            from src.push_notifications import process_pending_push
-            await asyncio.to_thread(process_pending_push, 5)
-            await asyncio.sleep(15)
-        except Exception:
-            logger.warning("Background FCM delivery worker failed", exc_info=True)
-            await asyncio.sleep(15)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+
+    global _notification_email_task
+    if _notification_email_task is None or _notification_email_task.done():
+        _notification_email_task = loop.create_task(_notification_email_poller())
+        logger.info("Started notification email discovery poller")
+    return True
 
 
 _poller_task = None
 _summarize_task = None
 _notification_email_task = None
-_notification_push_task = None
 
 def _inprocess_pollers_enabled() -> bool:
     """Honour `ODYSSEUS_INPROCESS_POLLERS` — set to `0`/`false`/`no`/`off`
@@ -1768,7 +1777,7 @@ def _start_poller():
     import asyncio
 
     def _launch():
-        global _poller_task, _summarize_task, _notification_email_task, _notification_push_task
+        global _poller_task, _summarize_task, _notification_email_task
         loop = asyncio.get_running_loop()
         if _poller_task is None:
             _poller_task = loop.create_task(_scheduled_email_poller())
@@ -1776,8 +1785,6 @@ def _start_poller():
         _summarize_task = None
         if _notification_email_task is None:
             _notification_email_task = loop.create_task(_notification_email_poller())
-        if _notification_push_task is None:
-            _notification_push_task = loop.create_task(_notification_push_poller())
 
     try:
         _launch()

@@ -3211,7 +3211,7 @@ function _setDurableFeedReady(ready) {
   window.__durableNotificationFeedReady = value;
   try {
     window.NovumPushBridge?.postMessage?.(JSON.stringify({
-      method: 'feed-ready', ready: value,
+      method: 'feed-ready', ready: value, owner: value ? _notificationOwner : '',
       request_id: `feed-${Date.now()}-${++_feedReadyMessageSequence}`,
     }));
   } catch (_) {}

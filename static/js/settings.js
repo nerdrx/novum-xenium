@@ -2279,8 +2279,8 @@ function initAccount() {
     logoutBtn.addEventListener('mouseenter', () => { logoutBtn.style.opacity = '1'; logoutBtn.style.borderColor = 'var(--red)'; logoutBtn.style.color = 'var(--red)'; });
     logoutBtn.addEventListener('mouseleave', () => { logoutBtn.style.opacity = ''; logoutBtn.style.borderColor = ''; logoutBtn.style.color = ''; });
     logoutBtn.addEventListener('click', async () => {
-      // Revoke this Android install's push token before invalidating its
-      // session. The native bridge is optional on browser/desktop builds.
+      // Stop Android's background notification connection before invalidating
+      // its session. The native bridge is optional on browser/desktop builds.
       try {
         window.tasksModule?.stopNotificationPolling?.();
         const bridge = window.NovumPushBridge;

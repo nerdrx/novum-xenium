@@ -139,6 +139,7 @@ const server = http.createServer((req, res) => {
     await page.evaluate(() => window.__pollTaskNotifications());
     await page.waitForFunction(() => Object.keys(localStorage).some(key => key.startsWith('odysseus-notification-cursor:alice:')));
     await page.waitForFunction(() => window.__pushBridgeMessages.some(message => message.method === 'feed-ready' && message.ready === true));
+    assert.equal(await page.evaluate(() => window.__pushBridgeMessages.find(message => message.method === 'feed-ready' && message.ready).owner), 'alice', 'native background cursor is scoped to authenticated owner');
     let feedState = await (await page.request.get(`http://127.0.0.1:${server.address().port}/__state`)).json();
     assert.deepEqual(feedState.feedRequests[0], { owner: 'alice', after: null, email: null }, 'first authenticated poll requests no history or email watcher before permission');
     assert.equal(await page.locator('#tool-tasks-btn.task-completion-pending, #tool-tasks-btn.task-failure-pending').count(), 0);

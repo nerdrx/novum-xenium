@@ -4,10 +4,6 @@
 # Note: chromadb-client + fastembed moved to requirements.txt — RAG, semantic
 # memory, and tool selection are core paths, so they ship by default now.
 
-# FCM HTTP v1 notifications. Credentials remain in a server-only service-account
-# file selected with NX_FCM_SERVICE_ACCOUNT_FILE; never ship them to clients.
-google-auth
-
 # Local speech-to-text (microphone -> text) via faster-whisper, for the
 # "local" STT provider. Runs on CPU out of the box (CTranslate2 backend, no
 # torch needed). Install if you want to dictate/transcribe with the mic

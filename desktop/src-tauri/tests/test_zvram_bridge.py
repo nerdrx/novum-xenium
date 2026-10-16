@@ -131,6 +131,148 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(rows, [{"name": "owner/Dolphin:Dolphin.F16",
                                      "path": str(target.resolve()), "size": 11}])
 
+    @staticmethod
+    def text_gguf(architecture='llama'):
+        import struct
+        key = b'general.architecture'
+        arch = architecture.encode()
+        return b'GGUF' + struct.pack('<IQQQ', 3, 0, 1, len(key)) + key + struct.pack('<IQ', 8, len(arch)) + arch
+
+    def test_diffusion_or_missing_architecture_is_not_a_text_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'model.gguf'
+            for contents in (b'GGUFdata', self.text_gguf('clip'), self.text_gguf('sd1'), self.text_gguf('flux')):
+                path.write_bytes(contents)
+                self.assertFalse(bridge._text_gguf_architecture(path))
+            path.write_bytes(self.text_gguf())
+            self.assertTrue(bridge._text_gguf_architecture(path))
+
+    def test_cached_gguf_discovery_maps_only_complete_local_model_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / 'hf'
+            repo = cache / 'hub/models--org--demo/snapshots/revision'
+            repo.mkdir(parents=True)
+            blobs = cache / 'hub/models--org--demo/blobs'
+            blobs.mkdir()
+            model = repo / 'Demo-Q4_K_M.gguf'
+            model_blob = blobs / 'demo-blob'
+            model_blob.write_bytes(self.text_gguf())
+            model.symlink_to(model_blob)
+            split1 = repo / 'Split-00001-of-00002.gguf'
+            split2 = repo / 'Split-00002-of-00002.gguf'
+            split1_blob = blobs / 'split-1'
+            split1_blob.write_bytes(self.text_gguf())
+            split1.symlink_to(split1_blob)
+            # Missing second part must keep this candidate out of the picker.
+            rows = [{
+                'repo_id': 'org/demo', 'path': '/app/.cache/huggingface/hub',
+                'has_incomplete': False, 'is_gguf': True, 'is_diffusion': False,
+                'is_video': False, 'is_adapter': False,
+                'gguf_files': [
+                    {'name': model.name, 'rel_path': f'revision/{model.name}', 'role': 'model'},
+                    {'name': split1.name, 'rel_path': f'revision/{split1.name}',
+                     'role': 'model', 'split': True, 'parts': 2},
+                    {'name': 'mmproj-demo.gguf', 'rel_path': 'revision/mmproj-demo.gguf', 'role': 'projector'},
+                ],
+            }, {
+                'repo_id': 'org/diffusion', 'path': '/app/.cache/huggingface/hub',
+                'has_incomplete': False, 'is_gguf': True, 'is_diffusion': True,
+                'gguf_files': [{'name': 'x.gguf', 'rel_path': 'revision/x.gguf', 'role': 'model'}],
+            }, {
+                'repo_id': 'org/incomplete', 'path': '/app/.cache/huggingface/hub',
+                'has_incomplete': True, 'is_gguf': True, 'gguf_files': [],
+            }, {
+                'repo_id': 'org/escape', 'path': '/tmp/foreign',
+                'has_incomplete': False, 'is_gguf': True,
+                'gguf_files': [{'name': 'x.gguf', 'rel_path': 'revision/x.gguf', 'role': 'model'}],
+            }]
+            class CachedHelper:
+                def session_cookie(self, _path):
+                    return 'odysseus_session=test'
+                def _request(self, url, cookie):
+                    self.request = (url, cookie)
+                    return {'models': rows}
+            helper = CachedHelper()
+            ready = bridge._ready_cached_gguf_rows(
+                helper, Path(directory) / 'cookie', 8000, cache,
+            )
+            self.assertEqual([item['name'] for item in ready], ['org/demo:Demo-Q4_K_M'])
+            self.assertEqual(ready[0]['path'], str(model_blob.resolve()))
+            split2_blob = blobs / 'split-2'
+            split2_blob.write_bytes(b'part2')
+            split2.symlink_to(split2_blob)
+            ready = bridge._ready_cached_gguf_rows(
+                helper, Path(directory) / 'cookie', 8000, cache,
+            )
+            self.assertEqual([item['name'] for item in ready], [
+                'org/demo:Demo-Q4_K_M', 'org/demo:Split',
+            ])
+            self.assertEqual(helper.request, ('http://127.0.0.1:8000/api/model/cached', 'odysseus_session=test'))
+            helper._request = lambda *_args: {'models': [], 'error': 'private scan detail'}
+            with self.assertRaisesRegex(ValueError, 'scan is pending'):
+                bridge._ready_cached_gguf_rows(
+                    helper, Path(directory) / 'cookie', 8000, cache,
+                )
+
+    def test_router_preset_addition_preserves_bytes_and_ids_and_is_idempotent(self):
+        self.start_router()
+        preset = self.home / 'router-models.ini'
+        with preset.open('ab') as stream:
+            stream.write(b'\n[unrelated]\nalias = ignored\nmodel = /tmp/ignored\n'
+                         b'\n[nx-model-4]\nalias = org/repo:kept\nmodel = /models/kept.gguf\n'
+                         b'load-on-startup = false\n')
+        before = preset.read_bytes()
+        model = self.checkout / 'downloaded.gguf'
+        model.write_bytes(self.text_gguf())
+        count, added = bridge._append_router_preset(self.manager, [
+            {'name': 'org/repo:Q4_K_M', 'path': str(model)},
+        ], self.checkout)
+        after = preset.read_bytes()
+        self.assertTrue(after.startswith(before))
+        self.assertEqual((count, added), (3, 1))
+        self.assertIn(f'[nx-model-5]\nalias = org/repo:Q4_K_M\nmodel = {model.resolve()}\nload-on-startup = false',
+                      after.decode())
+        self.assertEqual(bridge._append_router_preset(self.manager, [
+            {'name': 'org/repo:Q4_K_M', 'path': str(model)},
+        ], self.checkout), (3, 0))
+        self.assertEqual(preset.read_bytes(), after)
+
+    def test_router_sync_adds_and_registers_without_starting_or_stopping(self):
+        self.start_router()
+        cache = self.base / 'host-cache'
+        model = cache / 'hub/models--org--repo/snapshots/rev/Model-Q4_K_M.gguf'
+        model.parent.mkdir(parents=True)
+        model.write_bytes(self.text_gguf())
+        cache_row = {
+            'repo_id': 'org/repo', 'path': '/app/.cache/huggingface/hub',
+            'has_incomplete': False, 'is_gguf': True, 'is_diffusion': False,
+            'is_video': False, 'is_adapter': False,
+            'gguf_files': [{'name': model.name, 'rel_path': f'rev/{model.name}', 'role': 'model'}],
+        }
+        with (mock.patch.object(self.model_helper, 'session_cookie', return_value='session', create=True),
+              mock.patch.object(self.model_helper, '_request', return_value={'models': [cache_row]}, create=True),
+              mock.patch.object(bridge, '_router_supported', return_value=True),
+              mock.patch.object(bridge, '_owned_profile_running', return_value=True),
+              mock.patch.object(bridge, '_router_status', return_value={'healthy': True}),
+              mock.patch.object(bridge, '_router_inventory', side_effect=lambda p: [
+                  {'id': alias, 'status': 'unloaded'} for alias in p['model_ids']]),
+              mock.patch.object(bridge, '_local_json', side_effect=[
+                  ValueError('router reload pending'), {'data': []},
+              ]) as local_json,
+              mock.patch.object(bridge, '_register_router') as register,
+              mock.patch.object(bridge, '_status', return_value={'router': {'running': True}})):
+            with self.assertRaisesRegex(ValueError, 'router reload pending'):
+                self.dispatch({'action': 'router_sync'}, cache_root=cache)
+            saved = bridge._read_state(self.manager)['nx-zvram-router']
+            self.assertEqual(saved['model_ids'], ['tiny'])
+            result = self.dispatch({'action': 'router_sync'}, cache_root=cache)
+        self.assertEqual(result['router_sync'], {'added': 0, 'models': 2})
+        self.assertEqual(self.manager.starts, ['nx-zvram-router'])
+        self.assertEqual(self.manager.stops, [])
+        self.assertEqual(local_json.call_count, 2)
+        self.assertEqual(local_json.call_args.args[0], 'http://127.0.0.1:8097/models?reload=1')
+        self.assertEqual(register.call_args.args[1]['model_ids'], ['tiny', 'org/repo:Model-Q4_K_M'])
+
     def router_command(self, model, alias, **options):
         command = ['zvram']
         if not options.get('live_control', False):
@@ -404,9 +546,9 @@ class BridgeTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def dispatch(self, request):
+    def dispatch(self, request, **kwargs):
         return bridge.dispatch(self.root, self.checkout, self.base / "cookie", 8000,
-                               request, helpers=self.helpers, manager=self.manager)
+                               request, helpers=self.helpers, manager=self.manager, **kwargs)
 
     def save_request(self, **extra):
         request = {"action": "save", "model": str(self.model), "profile": "tiny",
@@ -433,6 +575,34 @@ class BridgeTests(unittest.TestCase):
                 result = bridge.main(["/install", "/backend", "/cookie", "7000", '{"action":"status"}'])
         self.assertEqual(result, 1)
         self.assertIn("zvram_control", json.loads(output.getvalue())["error"])
+
+    def test_router_watch_passes_trusted_cache_root_and_retries(self):
+        output = io.StringIO()
+        with (mock.patch.object(bridge, '_load_runtime', return_value=('model', 'manager')),
+              mock.patch.object(bridge, 'dispatch', side_effect=[
+                  ValueError('router not ready'), {'router_sync': {'added': 0, 'models': 1}},
+              ]) as dispatch,
+              mock.patch.object(bridge.time, 'sleep', side_effect=[None, KeyboardInterrupt]),
+              redirect_stdout(output)):
+            self.assertEqual(bridge.main([
+                'watch', '/zvram', '/backend', '/cookie', '8000', '/host/hf', '30',
+            ]), 0)
+        self.assertEqual(dispatch.call_args.kwargs['cache_root'], '/host/hf')
+        self.assertEqual(dispatch.call_args.kwargs['helpers'], ('model', 'manager'))
+        lines = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(lines, [
+            {'sync': 'pending', 'error': 'router not ready'},
+            {'sync': 'ok', 'added': 0, 'models': 1},
+        ])
+        self.assertEqual(dispatch.call_count, 2)
+
+    def test_router_watch_rejects_unbounded_poll_interval(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(bridge.main([
+                'watch', '/zvram', '/backend', '/cookie', '8000', '/host/hf', '1',
+            ]), 1)
+        self.assertIn('between 10 and 300', json.loads(output.getvalue())['error'])
 
     def test_isolated_runtime_can_import_its_sibling_modules(self):
         with tempfile.TemporaryDirectory() as directory:

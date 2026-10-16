@@ -12,6 +12,85 @@ use super::{config_path, ensure_not_quitting, load_config_at, require_main, Nati
 
 const BRIDGE: &str = include_str!("zvram_bridge.py");
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+const MODEL_SYNC_SERVICE: &str = "novum-local-model-sync.service";
+
+#[cfg(target_os = "linux")]
+fn model_sync_unit_contents(
+    checkout: &Path,
+    script: &Path,
+    installation: &Path,
+    cookie_path: &Path,
+    backend_port: u16,
+    cache_root: &Path,
+) -> Result<String, String> {
+    let checkout = checkout
+        .to_str()
+        .ok_or("Configured checkout path is not valid UTF-8.")?;
+    let script = super::alarms::systemd_quote(
+        script.to_str().ok_or("Model-sync script path is not valid UTF-8.")?,
+    )?;
+    let installation = super::alarms::systemd_quote(
+        installation
+            .to_str()
+            .ok_or("zVram installation path is not valid UTF-8.")?,
+    )?;
+    let backend = super::alarms::systemd_quote(
+        checkout,
+    )?;
+    let cookie = super::alarms::systemd_quote(
+        cookie_path
+            .to_str()
+            .ok_or("Session-cookie path is not valid UTF-8.")?,
+    )?;
+    let cache = super::alarms::systemd_quote(
+        cache_root
+            .to_str()
+            .ok_or("Model-cache path is not valid UTF-8.")?,
+    )?;
+    Ok(format!(
+        "[Unit]\nDescription=Novum Xenium local model cache sync\n# Novum-Checkout: {checkout}\n\n[Service]\nType=simple\nUMask=0077\nNoNewPrivileges=true\nRestart=on-failure\nRestartSec=10s\nExecStart=/usr/bin/python3 -I {script} watch {installation} {backend} {cookie} {backend_port} {cache} 30\n\n[Install]\nWantedBy=default.target\n"
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn provision_model_sync_service(
+    app: &AppHandle,
+    config: &super::DesktopConfig,
+    installation: &Path,
+) -> Result<(), String> {
+    let checkout = fs::canonicalize(&config.checkout)
+        .map_err(|_| "The configured backend checkout is unavailable.".to_string())?;
+    let cache_root = super::alarms::hf_cache_source(config)?;
+    let app_data = app
+        .path()
+        .resolve("novum-xenium/zvram/model-sync/v1", BaseDirectory::Data)
+        .map_err(|e| format!("Cannot resolve local model-sync application data: {e}"))?;
+    let systemd_user = app
+        .path()
+        .resolve("systemd/user", BaseDirectory::Config)
+        .map_err(|e| format!("Cannot resolve user systemd configuration: {e}"))?;
+    let cookie_path = app
+        .path()
+        .resolve("cookies", BaseDirectory::AppData)
+        .map_err(|e| format!("Cannot resolve desktop session cookie storage: {e}"))?;
+    let script_path = app_data.join("zvram_bridge.py");
+    let unit = model_sync_unit_contents(
+        &checkout,
+        &script_path,
+        installation,
+        &cookie_path,
+        config.port,
+        &cache_root,
+    )?;
+    super::alarms::provision_owned_service(
+        &checkout,
+        &script_path,
+        BRIDGE,
+        &systemd_user,
+        MODEL_SYNC_SERVICE,
+        &unit,
+    )
+}
 
 #[derive(Debug, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -377,6 +456,14 @@ pub(super) fn monitor_autostart(app: AppHandle) {
         let mut registration_ticks = 0u8;
         let mut last_mode: Option<String> = None;
         let mut first_attempt = true;
+        #[cfg(target_os = "linux")]
+        let mut model_sync_key: Option<(String, String, u16)> = None;
+        #[cfg(target_os = "linux")]
+        let mut model_sync_pending: Option<(String, String, u16)> = None;
+        #[cfg(target_os = "linux")]
+        let mut model_sync_retry_ticks = 0u8;
+        #[cfg(target_os = "linux")]
+        let mut model_sync_retry_delay = 1u8;
         loop {
             if !first_attempt {
                 std::thread::sleep(Duration::from_secs(10));
@@ -453,6 +540,44 @@ pub(super) fn monitor_autostart(app: AppHandle) {
                 };
                 if run_bridge(&app, &installation, &register).is_ok() {
                     registered = true;
+                }
+            }
+            #[cfg(target_os = "linux")]
+            let sync_service_request = if router_running && router["healthy"] == true {
+                let key = (
+                    installation.to_string_lossy().into_owned(),
+                    backend.checkout.clone(),
+                    backend.port,
+                );
+                if model_sync_key.as_ref() == Some(&key) {
+                    None
+                } else {
+                    if model_sync_pending.as_ref() != Some(&key) {
+                        model_sync_pending = Some(key.clone());
+                        model_sync_retry_ticks = 0;
+                        model_sync_retry_delay = 1;
+                    }
+                    if model_sync_retry_ticks > 0 {
+                        model_sync_retry_ticks -= 1;
+                        None
+                    } else {
+                        Some((key, backend.clone(), installation.clone()))
+                    }
+                }
+            } else {
+                None
+            };
+            drop(_guard);
+            #[cfg(target_os = "linux")]
+            if let Some((key, config, installation)) = sync_service_request {
+                if provision_model_sync_service(&app, &config, &installation).is_ok() {
+                    model_sync_key = Some(key.clone());
+                    model_sync_pending = None;
+                    model_sync_retry_ticks = 0;
+                    model_sync_retry_delay = 1;
+                } else {
+                    model_sync_retry_ticks = model_sync_retry_delay;
+                    model_sync_retry_delay = (model_sync_retry_delay.saturating_mul(2)).min(6);
                 }
             }
         }
@@ -563,6 +688,27 @@ mod tests {
             "auto_start": "yes"
         }))
         .is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn model_sync_service_is_checkout_owned_and_only_runs_watch_mode() {
+        let unit = model_sync_unit_contents(
+            Path::new("/srv/novum"),
+            Path::new("/home/test/.local/share/novum-xenium/zvram/model-sync/v1/zvram_bridge.py"),
+            Path::new("/home/test/.local/share/zvram/0.4.2"),
+            Path::new("/home/test/.local/share/novum-xenium/cookies"),
+            8123,
+            Path::new("/srv/novum/data/huggingface"),
+        )
+        .unwrap();
+        assert!(unit.contains("# Novum-Checkout: /srv/novum\n"));
+        assert!(unit.contains("ExecStart=/usr/bin/python3 -I \"/home/test/.local/share/novum-xenium/zvram/model-sync/v1/zvram_bridge.py\" watch "));
+        assert!(unit.contains("\"/home/test/.local/share/zvram/0.4.2\" \"/srv/novum\" \"/home/test/.local/share/novum-xenium/cookies\" 8123 \"/srv/novum/data/huggingface\" 30"));
+        assert!(unit.contains("UMask=0077\nNoNewPrivileges=true\nRestart=on-failure\n"));
+        assert!(!unit.contains("After=default.target"));
+        assert!(!unit.contains("router_start"));
+        assert!(!unit.contains("router_stop"));
     }
 
     #[test]

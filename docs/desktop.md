@@ -120,6 +120,15 @@ branch, Python 3, and a built Vulkan `llama-server`. Novum does not download
 weights or build zVram automatically. Models discovered in the configured
 workspace's Ollama store appear in chat after the provider is ready.
 
+Completed text GGUF downloads in Cookbook's shared local Hugging Face cache
+also appear automatically. A private user service checks the signed-in backend
+about every 30 seconds and adds complete compatible files to the running model
+router without restarting it or loading weights. Split downloads must have every
+part; image models, adapters, projectors, remote caches, and unshared custom
+folders are excluded. The service needs the desktop's valid admin session and
+can keep syncing after the desktop window closes. Signing out pauses discovery
+until that session is available again.
+
 Advanced settings retain the port, context size, BP16 option and memory budgets.
 Paging budgets describe eligible allocation limits, not reserved physical VRAM.
 Validate each model/context/GPU combination. **Stop** applies only to Novum's

@@ -8,8 +8,10 @@ import inspect
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import socket
+import struct
 import shutil
 import subprocess
 import sys
@@ -36,6 +38,7 @@ _IGNORE_SWAP_GUARD_VERSION = (0, 4, 2)
 _ROUTER_NAME = "nx-zvram-router"
 _ROUTER_MODES = {"regular", "zvram"}
 _ROUTER_STOP_TIMEOUT = 10
+_HF_CONTAINER_ROOT = PurePosixPath('/app/.cache/huggingface')
 
 
 def _supports_ignore_swap_guard(root):
@@ -164,7 +167,7 @@ def _request_object(value):
     if unknown:
         raise ValueError("Request contains unsupported fields")
     action = value.get("action")
-    if action not in {"status", "save", "start", "stop", "register", "router_start", "router_stop", "router_register", "router_configure"}:
+    if action not in {"status", "save", "start", "stop", "register", "router_start", "router_stop", "router_register", "router_configure", "router_sync"}:
         raise ValueError("Unsupported zVram action")
     return {key: item for key, item in value.items() if item is not None}
 
@@ -452,6 +455,269 @@ def _write_router_preset(manager, models, backend_checkout):
         temporary.unlink(missing_ok=True)
 
 
+def _text_gguf_architecture(path):
+    """Inspect bounded GGUF metadata, never infer text compatibility from magic alone."""
+    try:
+        with Path(path).open('rb') as stream:
+            data = stream.read(1024 * 1024)
+        offset = 0
+        def take(size):
+            nonlocal offset
+            if size < 0 or offset + size > len(data):
+                raise ValueError('GGUF metadata exceeds the inspection budget')
+            value = data[offset:offset + size]
+            offset += size
+            return value
+        def number(fmt):
+            return struct.unpack('<' + fmt, take(struct.calcsize('<' + fmt)))[0]
+        def string():
+            return take(number('Q')).decode('utf-8')
+        def value(kind, depth=0):
+            if depth > 1:
+                raise ValueError('Unsupported GGUF metadata nesting')
+            if kind == 8:
+                return string()
+            if kind == 9:
+                element, count = number('I'), number('Q')
+                if count > 100000:
+                    raise ValueError('GGUF metadata array exceeds the inspection budget')
+                for _ in range(count):
+                    value(element, depth + 1)
+                return None
+            sizes = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+            take(sizes[kind])
+            return None
+        if take(4) != b'GGUF' or number('I') not in (2, 3):
+            return False
+        number('Q')  # tensor count
+        count = number('Q')
+        if not 1 <= count <= 100000:
+            return False
+        for _ in range(count):
+            key, kind = string(), number('I')
+            item = value(kind)
+            if key == 'general.architecture':
+                return (kind == 8 and isinstance(item, str)
+                        and bool(re.fullmatch(r'[a-z0-9_-]+', item))
+                        and item not in {'clip', 'whisper', 't5', 't5encoder', 'flux', 'sd1', 'sd2', 'sdxl', 'stable-diffusion'})
+    except (OSError, ValueError, KeyError, struct.error, UnicodeError):
+        pass
+    return False
+
+
+def _ready_cached_gguf_rows(model_helper, cookie_path, backend_port, cache_root):
+    """Return only complete model GGUF files mapped from the container HF cache."""
+    host_root = Path(cache_root).expanduser().resolve(strict=True)
+    if not host_root.is_dir():
+        raise ValueError('The configured model cache is unavailable')
+    cookie = model_helper.session_cookie(cookie_path)
+    data = model_helper._request(
+        f'http://127.0.0.1:{backend_port}/api/model/cached', cookie,
+    )
+    if not isinstance(data, dict) or not isinstance(data.get('models'), list):
+        raise ValueError('The cached model scan returned an invalid response')
+    if data.get('error'):
+        raise ValueError('The authenticated cached model scan is pending')
+
+    ready = []
+    for row in data['models']:
+        if not isinstance(row, dict):
+            continue
+        if (row.get('has_incomplete') is not False or row.get('is_gguf') is not True
+                or row.get('is_diffusion') is True or row.get('is_video') is True
+                or row.get('is_adapter') is True):
+            continue
+        repo = row.get('repo_id')
+        container_repo = row.get('path')
+        if (not isinstance(repo, str)
+                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', repo)):
+            continue
+        try:
+            repo_rel = PurePosixPath(container_repo).relative_to(_HF_CONTAINER_ROOT)
+        except (TypeError, ValueError):
+            continue
+        if repo_rel.is_absolute() or any(part in ('', '.', '..') for part in repo_rel.parts):
+            continue
+        mapped_repo = host_root.joinpath(*repo_rel.parts, 'models--' + repo.replace('/', '--'))
+        try:
+            mapped_repo = mapped_repo.resolve(strict=True)
+            mapped_repo.relative_to(host_root)
+        except (OSError, ValueError):
+            continue
+        if not mapped_repo.is_dir():
+            continue
+        files = row.get('gguf_files')
+        if not isinstance(files, list):
+            continue
+        for item in files:
+            if not isinstance(item, dict) or item.get('role') not in ('model', 'main'):
+                continue
+            rel = item.get('rel_path')
+            filename = item.get('name')
+            if not isinstance(rel, str) or not isinstance(filename, str):
+                continue
+            rel_path = PurePosixPath(rel)
+            if (rel_path.is_absolute() or any(part in ('', '.', '..') for part in rel_path.parts)
+                    or rel_path.name != filename or not filename.lower().endswith('.gguf')):
+                continue
+            snapshot_file = mapped_repo / 'snapshots'
+            snapshot_file = snapshot_file.joinpath(*rel_path.parts)
+            try:
+                file_path = snapshot_file.resolve(strict=True)
+                file_path.relative_to(host_root)
+                if not file_path.is_file():
+                    continue
+                if not _text_gguf_architecture(file_path):
+                    continue
+            except (OSError, ValueError):
+                continue
+            parts = item.get('parts', 1)
+            if type(parts) is not int or not 1 <= parts <= 10000:
+                continue
+            split_match = None
+            if item.get('split') is True:
+                split_match = re.fullmatch(r'(.+)-(\d+)-of-(\d+)\.gguf', filename, re.IGNORECASE)
+                if (not split_match or int(split_match.group(2)) != 1
+                        or int(split_match.group(3)) != parts):
+                    continue
+                complete = True
+                for number in range(2, parts + 1):
+                    part_path = snapshot_file.with_name(
+                        f'{split_match.group(1)}-{number:0{len(split_match.group(2))}d}'
+                        f'-of-{parts:0{len(split_match.group(3))}d}.gguf'
+                    )
+                    try:
+                        resolved = part_path.resolve(strict=True)
+                        resolved.relative_to(host_root)
+                        if not resolved.is_file() or resolved.stat().st_size <= 0:
+                            complete = False
+                            break
+                    except (OSError, ValueError):
+                        complete = False
+                        break
+                if not complete:
+                    continue
+            stem = split_match.group(1) if split_match else Path(filename).stem
+            stem = re.sub(r'[^A-Za-z0-9_.-]+', '-', stem).strip('-.')
+            if not stem:
+                continue
+            alias = f'{repo}:{stem}'
+            if len(alias) > 128 or not _ALIAS_RE.fullmatch(alias):
+                continue
+            ready.append({'name': alias, 'path': str(file_path), 'size': file_path.stat().st_size})
+    return ready
+
+
+def _router_preset_entries(path):
+    """Read aliases and paths without rewriting or normalizing existing bytes."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        raise ValueError('The configured router preset is unavailable') from None
+    if path.is_symlink() or not path.is_file() or info.st_uid != os.getuid():
+        raise ValueError('Unsafe model router preset')
+    content = path.read_bytes()
+    try:
+        text = content.decode('utf-8')
+    except UnicodeDecodeError:
+        raise ValueError('The model router preset is invalid') from None
+    entries = {}
+    section = None
+    alias = None
+    model_path = None
+    section_ids = set()
+    max_section = -1
+    def save():
+        if section is not None and alias is not None:
+            if not model_path or alias in entries:
+                raise ValueError('The model router preset has conflicting or incomplete aliases')
+            entries[alias] = (section, model_path)
+    for line in text.splitlines():
+        header = re.fullmatch(r'\s*\[([^\]]+)\]\s*', line)
+        if header:
+            save()
+            match = re.fullmatch(r'nx-model-(\d+)', header.group(1))
+            section = int(match.group(1)) if match else None
+            if section is not None:
+                if section in section_ids:
+                    raise ValueError('The model router preset has duplicate internal model IDs')
+                section_ids.add(section)
+                max_section = max(max_section, section)
+            alias, model_path = None, None
+        elif section is not None:
+            match = re.fullmatch(r'\s*alias\s*=\s*(.*?)\s*', line)
+            if match:
+                alias = match.group(1)
+            match = re.fullmatch(r'\s*model\s*=\s*(.*?)\s*', line)
+            if match:
+                model_path = match.group(1)
+    save()
+    return content, entries, max_section
+
+
+def _append_router_preset(manager, models, backend_checkout):
+    """Append only new model sections, preserving every current preset byte."""
+    path = _router_preset_path(manager)
+    content, entries, max_section = _router_preset_entries(path)
+    seen = dict(entries)
+    next_index = max_section + 1
+    additions = []
+    for model in models:
+        name, raw_path = model['name'], model['path']
+        model_path = Path(raw_path).expanduser().resolve(strict=True)
+        if (not _ALIAS_RE.fullmatch(name) or any(c in str(model_path) for c in '\r\n\0;#')
+                or str(model_path) != str(model_path).strip()):
+            raise ValueError('A discovered model name or path cannot be represented safely in the router preset')
+        previous = seen.get(name)
+        if previous is not None:
+            if previous[1] != str(model_path):
+                continue  # Never replace an existing public alias with another file.
+            continue
+        seen[name] = (next_index, str(model_path))
+        additions.extend([f'[nx-model-{next_index}]', f'alias = {name}', f'model = {model_path}', 'load-on-startup = false', ''])
+        next_index += 1
+    if not additions:
+        return len(entries), 0
+    suffix = ('\n' if content and not content.endswith(b'\n') else '') + ('\n' if content else '')
+    updated = content + suffix.encode() + ('\n'.join(additions)).encode('utf-8')
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(updated)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return len(seen), len(additions) // 5
+
+
+def _sync_router_models(model_helper, manager_helper, manager, params, params_state,
+                        backend_checkout, cookie_path, backend_port, cache_root):
+    if params.get('router') is not True or not _owned_profile_running(manager_helper, manager, _ROUTER_NAME, params):
+        raise ValueError('Start the owned model router before syncing cached models')
+    if not _router_supported(model_helper):
+        raise ValueError('The installed llama-server does not support live model reload')
+    if not _router_status(model_helper, manager_helper, manager, params_state).get('healthy'):
+        raise ValueError('The owned model router is not healthy')
+
+    candidates = _ready_cached_gguf_rows(model_helper, cookie_path, backend_port, cache_root)
+    _, added = _append_router_preset(manager, candidates, backend_checkout)
+    _, preset_entries, _ = _router_preset_entries(_router_preset_path(manager))
+    expected = list(dict.fromkeys([*params.get('model_ids', []), *[
+        row['name'] for row in candidates
+        if row['name'] in preset_entries and preset_entries[row['name']][1] == str(Path(row['path']).resolve())
+    ]]))
+    # Idempotent retry: a preset write can succeed while reload/registration fails.
+    _local_json(f'http://127.0.0.1:{params["port"]}/models?reload=1', timeout=10)
+    updated = {**params, 'model_ids': expected}
+    _router_inventory(updated)
+    params.update(model_ids=expected)
+    params_state[_ROUTER_NAME] = params
+    _write_state(manager, params_state)
+    _register_router(model_helper, params, backend_checkout, cookie_path, backend_port)
+    return {'added': added, 'models': len(expected)}
+
+
 def _router_inventory(params):
     health = _local_json(f'http://127.0.0.1:{params["port"]}/health')
     if not isinstance(health, dict) or health.get('status') not in ('ok', 'healthy'):
@@ -548,10 +814,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _local_json(url):
+def _local_json(url, timeout=0.4):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:
-        with opener.open(url, timeout=0.4) as response:
+        with opener.open(url, timeout=timeout) as response:
             payload = response.read(1024 * 1024 + 1)
         if len(payload) > 1024 * 1024:
             raise ValueError("Local model response is too large")
@@ -726,7 +992,8 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
     }
 
 
-def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, helpers=None, manager=None):
+def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, helpers=None, manager=None,
+             cache_root=None):
     """Execute one allowlisted action; dependencies can be injected by unit tests."""
     root = Path(root).expanduser().resolve(strict=True)
     backend_checkout = Path(backend_checkout).expanduser().resolve(strict=True)
@@ -751,6 +1018,18 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
         action = request["action"]
         if action == "status":
             return _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
+
+        if action == 'router_sync':
+            if cache_root is None:
+                raise ValueError('The shared model cache is not configured')
+            params = params_state.get(_ROUTER_NAME, {})
+            result = _sync_router_models(
+                model_helper, manager_helper, manager, params, params_state,
+                backend_checkout, cookie_path, backend_port, cache_root,
+            )
+            status = _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
+            status['router_sync'] = result
+            return status
 
         if action.startswith('router_'):
             if action in ('router_start', 'router_configure'):
@@ -882,6 +1161,32 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == 'watch':
+        if len(argv) not in (6, 7):
+            print(json.dumps({'error': 'Expected watch ROOT BACKEND_CHECKOUT COOKIE_PATH BACKEND_PORT CACHE_ROOT [INTERVAL]'}))
+            return 1
+        _, root, backend_checkout, cookie_path, backend_port, cache_root, *interval_value = argv
+        try:
+            interval = int(interval_value[0]) if interval_value else 30
+            if not 10 <= interval <= 300:
+                raise ValueError('Watch interval must be between 10 and 300 seconds')
+            helpers = _load_runtime(root)
+            while True:
+                try:
+                    result = dispatch(
+                        root, backend_checkout, cookie_path, backend_port,
+                        {'action': 'router_sync'}, cache_root=cache_root, helpers=helpers,
+                    )
+                    summary = result.get('router_sync', {})
+                    print(json.dumps({'sync': 'ok', **summary}, separators=(',', ':')), flush=True)
+                except (OSError, ValueError, KeyError, TypeError, ImportError, AttributeError, RuntimeError) as exc:
+                    print(json.dumps({'sync': 'pending', 'error': _clean_text(exc, 180)}, separators=(',', ':')), flush=True)
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            return 0
+        except (OSError, ValueError, TypeError, ImportError, AttributeError, RuntimeError) as exc:
+            print(json.dumps({'error': _clean_text(exc, 180)}, separators=(',', ':')))
+            return 1
     if len(argv) != 5:
         print(json.dumps({"error": "Expected ROOT BACKEND_CHECKOUT COOKIE_PATH BACKEND_PORT REQUEST_JSON"}))
         return 1

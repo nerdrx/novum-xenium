@@ -11,6 +11,7 @@ NOTES_TOOLS = {
     "manage_notes",
     "manage_calendar",
     "manage_tasks",
+    "manage_alarms",
     "ask_user",
     "update_plan",
 }
@@ -92,14 +93,18 @@ def test_odysseus_notes_mode_clamps_and_reenables_all_personal_managers(monkeypa
 
     _run_probe(
         [{"role": "user", "content": "Add buy milk to my notes."}],
-        relevant_tools={"bash", "manage_notes", "manage_calendar", "manage_tasks"},
-        disabled_tools={"manage_notes", "manage_calendar", "manage_tasks"},
+        relevant_tools={
+            "bash", "manage_notes", "manage_calendar", "manage_tasks", "manage_alarms"
+        },
+        disabled_tools={
+            "manage_notes", "manage_calendar", "manage_tasks", "manage_alarms"
+        },
     )
 
     route = prompt_calls[0]
     assert route["relevant_tools"] == NOTES_TOOLS
     assert route["disabled_tools"].isdisjoint(
-        {"manage_notes", "manage_calendar", "manage_tasks"}
+        {"manage_notes", "manage_calendar", "manage_tasks", "manage_alarms"}
     )
 
 
@@ -123,7 +128,9 @@ def test_odysseus_calendar_intent_uses_notes_mode(monkeypatch):
 
     _run_probe(
         [{"role": "user", "content": "Add lunch tomorrow to my calendar."}],
-        relevant_tools={"manage_notes", "manage_calendar", "manage_tasks", "bash"},
+        relevant_tools={
+            "manage_notes", "manage_calendar", "manage_tasks", "manage_alarms", "bash"
+        },
     )
 
     assert prompt_calls[0]["relevant_tools"] == NOTES_TOOLS
@@ -151,10 +158,20 @@ def test_odysseus_calendar_followup_keeps_notes_mode(monkeypatch):
 
     _run_probe(
         messages,
-        relevant_tools={"manage_notes", "manage_calendar", "manage_tasks", "bash"},
+        relevant_tools={
+            "manage_notes", "manage_calendar", "manage_tasks", "manage_alarms", "bash"
+        },
     )
 
     assert prompt_calls[0]["relevant_tools"] == NOTES_TOOLS
+
+
+def test_alarm_intent_selects_notes_calendar_tools():
+    intent = agent_loop._classify_single_agent_request(
+        [], "Set an alarm for 15:00."
+    )
+
+    assert "notes_calendar_tasks" in intent["domains"]
 
 
 def test_agent_route_passes_workspace_to_system_prompt(monkeypatch):
@@ -272,15 +289,19 @@ def test_qwen_notes_fallback_reenables_personal_managers(monkeypatch):
             "gpt-4o",
             [{"role": "user", "content": "Add buy milk to my notes."}],
             max_rounds=2,
-            relevant_tools={"manage_notes", "manage_calendar", "manage_tasks", "bash"},
-            disabled_tools={"manage_notes", "manage_calendar", "manage_tasks"},
+            relevant_tools={
+                "manage_notes", "manage_calendar", "manage_tasks", "manage_alarms", "bash"
+            },
+            disabled_tools={
+                "manage_notes", "manage_calendar", "manage_tasks", "manage_alarms"
+            },
             fallbacks=[("https://qwen.example/v1", ODY_QWEN, {})],
             _is_teacher_run=True,
         )
     )
 
     assert seen_exec["disabled_tools"].isdisjoint(
-        {"manage_notes", "manage_calendar", "manage_tasks"}
+        {"manage_notes", "manage_calendar", "manage_tasks", "manage_alarms"}
     )
 
 

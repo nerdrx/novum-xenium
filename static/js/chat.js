@@ -5366,6 +5366,7 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
     const decoder = new TextDecoder();
     let buffer = '';
     let roundText = '';
+    let resumeThinkOpen = false;
     let docFenceOpened = false;
     let gotDelta = false;
     let leftSession = false;
@@ -5429,6 +5430,13 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
       uiModule.scrollHistory();
     };
 
+    const closeResumeThinking = () => {
+      if (!resumeThinkOpen) return;
+      roundText += '</think>';
+      resumeThinkOpen = false;
+      if (isCurrentResume()) renderDelta();
+    };
+
     try {
       readLoop:
       while (true) {
@@ -5455,6 +5463,7 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
           if (!line) continue;
           const payload = line.slice(6);
           if (payload === '[DONE]') {
+            closeResumeThinking();
             updateRunStatus({ type: 'stream_end' }, sessionId);
             try { await reader.cancel(); } catch (_) {}
             break readLoop;
@@ -5468,7 +5477,17 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
           if (eventIsError) {
             replayError = createTerminalStreamError(json);
           } else if (json.delta) {
-            roundText += json.delta;
+            let delta = json.delta;
+            if (json.thinking) {
+              if (!resumeThinkOpen) {
+                delta = '<think>' + delta;
+                resumeThinkOpen = true;
+              }
+            } else if (resumeThinkOpen) {
+              delta = '</think>' + delta;
+              resumeThinkOpen = false;
+            }
+            roundText += delta;
             if (!docFenceOpened && (roundText.includes('```create_document\n') || roundText.includes('```document\n') || roundText.includes('```documen\n'))) {
               docFenceOpened = true;
               rich = true;
@@ -5567,7 +5586,9 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
             // Tool rounds are separate Markdown documents in the main stream.
             // Replaying them as one source lets an unfinished fence or reasoning
             // block swallow the formatting of every subsequent round.
-            if (markdownModule.hasUnclosedThinkTag?.(roundText)) {
+            if (resumeThinkOpen) {
+              closeResumeThinking();
+            } else if (markdownModule.hasUnclosedThinkTag?.(roundText)) {
               roundText += '</think>';
               renderDelta();
             }
@@ -5579,7 +5600,10 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
             }
             roundText = '';
             docFenceOpened = false;
-          } else if (json.type === 'tool_start' || json.type === 'tool_output' ||
+          } else if (json.type === 'tool_start') {
+            rich = true;
+            closeResumeThinking();
+          } else if (json.type === 'tool_output' ||
                      json.type === 'tool_progress' ||
                      json.type === 'web_sources' || json.type === 'rag_sources' ||
                      json.type === 'research_progress' || json.type === 'research_sources' ||
@@ -5592,6 +5616,8 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
       // Network drop or parse failure: fall through to the canonical reload.
       rich = true;
     }
+
+    closeResumeThinking();
 
     cleanup();
     if (docFenceOpened) _finishDocumentWritingStatus(holder, true);

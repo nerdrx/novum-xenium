@@ -149,19 +149,45 @@ const server = http.createServer((req, res) => {
     await page.evaluate(() => {
       const controller = window.resumeFixtures.get('resume-format-fixture').controller;
       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'agent_step' })}\n\n`));
-      const delta = '# Next round\n\n**reply**';
-      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta })}\n\n`));
+      const delta = 'Native reasoning must stay hidden until this round ends.';
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta, thinking: true })}\n\n`));
     });
     await page.waitForFunction(() => {
       const rounds = document.querySelectorAll('#chat-history .stream-content');
       const next = rounds[rounds.length - 1];
-      return rounds.length >= 2 && next?.querySelector('h1')?.textContent === 'Next round' &&
-        next.querySelector('strong')?.textContent === 'reply';
+      return rounds.length >= 2 && next?.querySelector('.thinking-section') &&
+        next.textContent.includes('Thinking');
+    }, null, { timeout: 10000 });
+    const pendingNative = await page.locator('#chat-history .stream-content').last().textContent();
+    assert.doesNotMatch(pendingNative, /Native reasoning must stay hidden/);
+
+    // A round boundary must close one native reasoning stream and reset its
+    // state before the next round starts a fresh native reasoning stream.
+    await page.evaluate(() => {
+      const controller = window.resumeFixtures.get('resume-format-fixture').controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'agent_step' })}\n\n`));
+      const delta = 'Second-round private reasoning.';
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta, thinking: true })}\n\n`));
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: 'Second-round visible answer.' })}\n\n`));
+    });
+    await page.waitForFunction(() => {
+      const rounds = document.querySelectorAll('#chat-history .stream-content');
+      const prior = rounds[rounds.length - 2];
+      const current = rounds[rounds.length - 1];
+      return rounds.length >= 3 && prior?.querySelector('.thinking-content-inner') &&
+        current?.querySelector('.thinking-content-inner') && current.textContent.includes('Second-round visible answer.');
     }, null, { timeout: 10000 });
     const resumedRounds = await page.evaluate(() => [...document.querySelectorAll('#chat-history .stream-content')]
-      .map(node => ({ heading: node.querySelector('h1')?.textContent || '', text: node.textContent })));
+      .map(node => ({
+        heading: node.querySelector('h1')?.textContent || '',
+        text: node.textContent,
+        thoughts: [...node.querySelectorAll('.thinking-content-inner')].map(inner => inner.textContent),
+        reply: node.querySelector('.live-reply-content')?.textContent || '',
+      })));
     assert.match(resumedRounds[0].text, /print\("still live"\)/);
-    assert.equal(resumedRounds[1].heading, 'Next round');
+    assert.match(resumedRounds[1].thoughts.join(' '), /Native reasoning must stay hidden/);
+    assert.match(resumedRounds[2].thoughts.join(' '), /Second-round private reasoning/);
+    assert.equal(resumedRounds[2].reply.trim(), 'Second-round visible answer.');
 
     await page.evaluate(async () => {
       const controller = window.resumeFixtures.get('resume-format-fixture').controller;
@@ -189,6 +215,28 @@ const server = http.createServer((req, res) => {
       fixture.controller.close();
       await window.resumeResults.get('resume-pending-think-fixture');
     });
+
+    await page.evaluate(() => {
+      const sessionId = 'resume-native-terminal-think-fixture';
+      window.startResumeFixture(sessionId);
+      const controller = window.resumeFixtures.get(sessionId).controller;
+      const delta = 'Terminal native reasoning is collapsed, never leaked.';
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta, thinking: true })}\n\n`));
+    });
+    await page.waitForFunction(() => {
+      const content = [...document.querySelectorAll('#chat-history .stream-content')].at(-1);
+      return content?.querySelector('.thinking-section') && content.textContent.includes('Thinking');
+    });
+    const terminalFixture = await page.evaluate(() => [...window.resumeFixtures.entries()].at(-1)?.[0]);
+    const terminalPending = await page.locator('#chat-history .stream-content').last().textContent();
+    assert.doesNotMatch(terminalPending, /Terminal native reasoning/);
+    await page.evaluate(async id => {
+      const fixture = window.resumeFixtures.get(id);
+      fixture.controller.close();
+      await window.resumeResults.get(id);
+    }, terminalFixture);
+    const terminalThought = await page.locator('#chat-history .msg-ai').last().locator('.thinking-content-inner').textContent();
+    assert.match(terminalThought, /Terminal native reasoning is collapsed/);
     assert.deepEqual(pageErrors, []);
     console.log('PASS resumed live Markdown and thinking formatting');
   } finally {

@@ -608,6 +608,60 @@ class BridgeTests(unittest.TestCase):
             ]), 1)
         self.assertIn('between 10 and 300', json.loads(output.getvalue())['error'])
 
+    def test_installation_config_requires_owned_regular_json_and_returns_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / 'zvram-0.4.25'
+            checkout.mkdir()
+            config = root / 'zvram.json'
+            config.write_text(json.dumps({'checkout': str(checkout)}))
+            config.chmod(0o600)
+            self.assertEqual(bridge._read_installation_config(config), checkout.resolve())
+            link = root / 'zvram-link.json'
+            link.symlink_to(config)
+            with self.assertRaisesRegex(ValueError, 'unavailable'):
+                bridge._read_installation_config(link)
+            config.write_text(json.dumps({'checkout': '/missing/zvram'}))
+            config.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, 'unavailable'):
+                bridge._read_installation_config(config)
+
+    def test_watch_waits_for_install_config_and_loads_new_root_not_removed_old_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            old_root = state / 'zvram-0.4.24'
+            new_root = state / 'zvram-0.4.25'
+            new_root.mkdir()
+            config = state / 'zvram.json'
+            reads = 0
+            def read_config(_path):
+                nonlocal reads
+                reads += 1
+                if reads == 1:
+                    raise ValueError('The configured zVram installation is unavailable')
+                return new_root
+            def sleep(_interval):
+                if reads == 1:
+                    config.write_text(json.dumps({'checkout': str(new_root)}))
+                    config.chmod(0o600)
+                else:
+                    raise KeyboardInterrupt
+            output = io.StringIO()
+            with (mock.patch.object(bridge, '_read_installation_config', side_effect=read_config),
+                  mock.patch.object(bridge, '_load_runtime', return_value=('new-model-helper', 'shared-manager')) as load,
+                  mock.patch.object(bridge, 'dispatch', return_value={'router_sync': {'added': 0, 'models': 1}}) as dispatch,
+                  mock.patch.object(bridge.time, 'sleep', side_effect=sleep),
+                  redirect_stdout(output)):
+                self.assertEqual(bridge.main([
+                    'watch', str(old_root), '/backend', '/cookie', '8000',
+                    '/host/hf', '30', str(config),
+                ]), 0)
+            self.assertEqual(load.call_args_list, [mock.call(new_root)])
+            self.assertEqual(dispatch.call_count, 1)
+            self.assertEqual(dispatch.call_args.args[0], new_root)
+            self.assertEqual(dispatch.call_args.kwargs['helpers'], ('new-model-helper', 'shared-manager'))
+            self.assertEqual([json.loads(line)['sync'] for line in output.getvalue().splitlines()], ['pending', 'ok'])
+
     def test_isolated_runtime_can_import_its_sibling_modules(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

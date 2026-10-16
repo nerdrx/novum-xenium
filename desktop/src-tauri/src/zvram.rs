@@ -22,6 +22,7 @@ fn model_sync_unit_contents(
     cookie_path: &Path,
     backend_port: u16,
     cache_root: &Path,
+    installation_config: &Path,
 ) -> Result<String, String> {
     let checkout = checkout
         .to_str()
@@ -47,8 +48,13 @@ fn model_sync_unit_contents(
             .to_str()
             .ok_or("Model-cache path is not valid UTF-8.")?,
     )?;
+    let installation_config = super::alarms::systemd_quote(
+        installation_config
+            .to_str()
+            .ok_or("Installation-config path is not valid UTF-8.")?,
+    )?;
     Ok(format!(
-        "[Unit]\nDescription=Novum Xenium local model cache sync\n# Novum-Checkout: {checkout}\n\n[Service]\nType=simple\nUMask=0077\nNoNewPrivileges=true\nRestart=on-failure\nRestartSec=10s\nExecStart=/usr/bin/python3 -I {script} watch {installation} {backend} {cookie} {backend_port} {cache} 30\n\n[Install]\nWantedBy=default.target\n"
+        "[Unit]\nDescription=Novum Xenium local model cache sync\n# Novum-Checkout: {checkout}\n\n[Service]\nType=simple\nUMask=0077\nNoNewPrivileges=true\nRestart=on-failure\nRestartSec=10s\nExecStart=/usr/bin/python3 -I {script} watch {installation} {backend} {cookie} {backend_port} {cache} 30 {installation_config}\n\n[Install]\nWantedBy=default.target\n"
     ))
 }
 
@@ -74,6 +80,7 @@ fn provision_model_sync_service(
         .resolve("cookies", BaseDirectory::AppData)
         .map_err(|e| format!("Cannot resolve desktop session cookie storage: {e}"))?;
     let script_path = app_data.join("zvram_bridge.py");
+    let installation_config = zvram_config_path(app)?;
     let unit = model_sync_unit_contents(
         &checkout,
         &script_path,
@@ -81,6 +88,7 @@ fn provision_model_sync_service(
         &cookie_path,
         config.port,
         &cache_root,
+        &installation_config,
     )?;
     super::alarms::provision_owned_service(
         &checkout,
@@ -700,11 +708,12 @@ mod tests {
             Path::new("/home/test/.local/share/novum-xenium/cookies"),
             8123,
             Path::new("/srv/novum/data/huggingface"),
+            Path::new("/home/test/.config/novum-xenium/zvram.json"),
         )
         .unwrap();
         assert!(unit.contains("# Novum-Checkout: /srv/novum\n"));
         assert!(unit.contains("ExecStart=/usr/bin/python3 -I \"/home/test/.local/share/novum-xenium/zvram/model-sync/v1/zvram_bridge.py\" watch "));
-        assert!(unit.contains("\"/home/test/.local/share/zvram/0.4.2\" \"/srv/novum\" \"/home/test/.local/share/novum-xenium/cookies\" 8123 \"/srv/novum/data/huggingface\" 30"));
+        assert!(unit.contains("\"/home/test/.local/share/zvram/0.4.2\" \"/srv/novum\" \"/home/test/.local/share/novum-xenium/cookies\" 8123 \"/srv/novum/data/huggingface\" 30 \"/home/test/.config/novum-xenium/zvram.json\""));
         assert!(unit.contains("UMask=0077\nNoNewPrivileges=true\nRestart=on-failure\n"));
         assert!(!unit.contains("After=default.target"));
         assert!(!unit.contains("router_start"));

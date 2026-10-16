@@ -13,6 +13,7 @@ import re
 import socket
 import struct
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -89,6 +90,44 @@ def _load_module(name, path):
         sys.modules.pop(name, None)
         raise
     return module
+
+
+def _read_installation_config(path):
+    """Read the native app's user-owned install pointer without following links."""
+    config = Path(path)
+    if not config.is_absolute():
+        raise ValueError("The zVram installation config path must be absolute")
+    try:
+        fd = os.open(config, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        raise ValueError("The saved zVram installation config is unavailable") from None
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o022 or info.st_size > 4096):
+            raise ValueError("The saved zVram installation config is unsafe")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            raw = stream.read(4097)
+        if len(raw) > 4096:
+            raise ValueError("The saved zVram installation config is too large")
+    finally:
+        os.close(fd)
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ValueError("The saved zVram installation config is invalid") from None
+    if not isinstance(value, dict) or set(value) != {"checkout"}:
+        raise ValueError("The saved zVram installation config is invalid")
+    checkout = value.get("checkout")
+    if not isinstance(checkout, str) or not checkout or not Path(checkout).is_absolute():
+        raise ValueError("The saved zVram installation path is invalid")
+    try:
+        root = Path(checkout).resolve(strict=True)
+    except OSError:
+        raise ValueError("The configured zVram installation is unavailable") from None
+    if not root.is_dir():
+        raise ValueError("The configured zVram installation is unavailable")
+    return root
 
 
 def _load_runtime(root):
@@ -1169,19 +1208,38 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == 'watch':
-        if len(argv) not in (6, 7):
-            print(json.dumps({'error': 'Expected watch ROOT BACKEND_CHECKOUT COOKIE_PATH BACKEND_PORT CACHE_ROOT [INTERVAL]'}))
+        if len(argv) not in (6, 7, 8):
+            print(json.dumps({'error': 'Expected watch ROOT BACKEND_CHECKOUT COOKIE_PATH BACKEND_PORT CACHE_ROOT [INTERVAL [INSTALLATION_CONFIG_PATH]]'}))
             return 1
-        _, root, backend_checkout, cookie_path, backend_port, cache_root, *interval_value = argv
+        _, root, backend_checkout, cookie_path, backend_port, cache_root, *watch_options = argv
         try:
-            interval = int(interval_value[0]) if interval_value else 30
+            interval = int(watch_options[0]) if watch_options else 30
             if not 10 <= interval <= 300:
                 raise ValueError('Watch interval must be between 10 and 300 seconds')
-            helpers = _load_runtime(root)
+            install_config = Path(watch_options[1]) if len(watch_options) > 1 else None
+            if install_config is not None and not install_config.is_absolute():
+                raise ValueError('The zVram installation config path must be absolute')
+            helpers = None if install_config is not None else _load_runtime(root)
+            active_root = None
             while True:
+                if install_config is not None:
+                    try:
+                        configured_root = _read_installation_config(install_config)
+                        if configured_root != active_root:
+                            configured_helpers = _load_runtime(configured_root)
+                            # Commit the root and both modules together only after
+                            # the new install has loaded and passed its root checks.
+                            active_root, helpers = configured_root, configured_helpers
+                        watch_root = active_root
+                    except (OSError, ValueError, KeyError, TypeError, ImportError, AttributeError, RuntimeError) as exc:
+                        print(json.dumps({'sync': 'pending', 'error': _clean_text(exc, 180)}, separators=(',', ':')), flush=True)
+                        time.sleep(interval)
+                        continue
+                else:
+                    watch_root = root
                 try:
                     result = dispatch(
-                        root, backend_checkout, cookie_path, backend_port,
+                        watch_root, backend_checkout, cookie_path, backend_port,
                         {'action': 'router_sync'}, cache_root=cache_root, helpers=helpers,
                     )
                     summary = result.get('router_sync', {})

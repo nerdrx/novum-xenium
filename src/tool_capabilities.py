@@ -953,6 +953,25 @@ class ToolRunSecurityContext:
             ),
         )
 
+    def safe_browser_navigation_fetch_url(self, tool_name: Any, content: Any) -> str | None:
+        """Return exact user-authorized URL for brokered fetch fallback only."""
+        if (not self.external_untrusted_context_seen
+                or tool_name != "mcp__builtin_browser__browser_navigate"
+                or not isinstance(content, str)):
+            return None
+        try:
+            args = json.loads(content)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(args, dict) or set(args) != {"url"} or not isinstance(args["url"], str):
+            return None
+        url = _web_fetch_read_url(json.dumps({"url": args["url"]}))
+        if not url or url not in self.public_read_urls:
+            return None
+        if not self.decision_for("web_fetch", json.dumps({"url": url})).allowed:
+            return None
+        return url
+
     def observe_tool_result(
         self,
         tool_name: Any,

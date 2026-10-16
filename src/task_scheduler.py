@@ -470,20 +470,32 @@ class TaskScheduler:
             logger.debug("Task abort marker failed for %s", task_id, exc_info=True)
             return False
 
-    def add_notification(self, task_name: str, status: str, task_id: str = None, owner: str = None, body: str = None):
+    def add_notification(self, task_name: str, status: str, task_id: str = None, owner: str = None, body: str = None, source_id: str = None):
         """Store a notification about a completed task run. Tagged with the
         task's owner so `pop_notifications` can return only that user's
         notifications and prevent cross-tenant drain. `body` is the result
         text — populated when output_target='notification' so the client can
         show a rich browser Notification, not just a toast."""
+        timestamp = _utcnow().isoformat() + "Z"
         self._pending_notifications.append({
             "task_name": task_name,
             "status": status,
             "task_id": task_id,
             "owner": owner,
             "body": (body[:500] + "…") if body and len(body) > 500 else body,
-            "timestamp": _utcnow().isoformat() + "Z",
+            "timestamp": timestamp,
         })
+        if source_id:
+            try:
+                from src.notification_feed import add_notification as _add_feed_notification
+                _add_feed_notification(
+                    owner, "task", f"Task {status}: {task_name}",
+                    body=body, source="task_run", source_id=source_id,
+                    route=(f"#task-{task_id}" if task_id else "#task-notifications"),
+                    status="success" if status == "success" else "failure",
+                )
+            except Exception:
+                logger.debug("Could not persist task notification", exc_info=True)
         # Cap at 50 to avoid unbounded growth
         if len(self._pending_notifications) > 50:
             self._pending_notifications = self._pending_notifications[-50:]
@@ -962,7 +974,7 @@ class TaskScheduler:
             if gate_foreground:
                 waiting = db.query(TaskRun).filter(TaskRun.id == run_id).first()
                 if waiting and waiting.status == "queued":
-                    waiting.result = "Queued — waiting for Odysseus to be idle…"
+                    waiting.result = "Queued — waiting for Novum Xenium to be idle…"
                     db.commit()
                 from src.interactive_gate import wait_for_interactive_quiet
                 await wait_for_interactive_quiet(f"scheduled task {task.name}")
@@ -1012,7 +1024,7 @@ class TaskScheduler:
                         await asyncio.sleep(0.25)
                         if has_foreground_activity():
                             foreground_cancel["hit"] = True
-                            logger.info("Task '%s' interrupted because Odysseus became active", task.name)
+                            logger.info("Task '%s' interrupted because Novum Xenium became active", task.name)
                             if current_task:
                                 current_task.cancel()
                             return
@@ -1032,8 +1044,13 @@ class TaskScheduler:
                 else:
                     # LLM task — use agent loop for tool access
                     result = await self._execute_llm_task(task, db)
-                    run.status = "success"
+                    needs_attention = str(result or "").startswith(
+                        "Scheduled task paused safely:"
+                    )
+                    run.status = "error" if needs_attention else "success"
                     run.result = result
+                    if needs_attention:
+                        run.error = result
                 # Record which model actually ran (resolved inside the executor).
                 if getattr(self, "_last_run_model", None):
                     run.model = self._last_run_model
@@ -1060,7 +1077,7 @@ class TaskScheduler:
                 return
             except asyncio.CancelledError:
                 msg = (
-                    "Paused because Odysseus became active"
+                    "Paused because Novum Xenium became active"
                     if foreground_cancel.get("hit")
                     else "Stopped by user"
                 )
@@ -1172,6 +1189,7 @@ class TaskScheduler:
                     task_id,
                     owner=task.owner,
                     body=run.result if output == "notification" else None,
+                    source_id=run_id,
                 )
             elif run.status == "error":
                 self.add_notification(
@@ -1180,6 +1198,7 @@ class TaskScheduler:
                     task_id,
                     owner=task.owner,
                     body=run.error or run.result,
+                    source_id=run_id,
                 )
 
             # Log result to the assistant chat so all task activity is visible.
@@ -1224,8 +1243,6 @@ class TaskScheduler:
                 )
             except Exception:
                 _should_notify_error = False
-            if _should_notify_error:
-                self.add_notification(f"Task {task_id}", "error", task_id, owner=_owner)
             try:
                 # Persist the actual exception message so the UI can show it
                 err_text = f"{type(exec_exc).__name__}: {exec_exc}"
@@ -1284,6 +1301,8 @@ class TaskScheduler:
                         _recover_db.close()
             except Exception:
                 logger.exception("Task %s error-path failed unexpectedly", task_id)
+            if _should_notify_error:
+                self.add_notification(f"Task {task_id}", "error", task_id, owner=_owner, source_id=run_id)
         finally:
             db.close()
             handle = self._task_handles.get(task_id)
@@ -2464,11 +2483,11 @@ class TaskScheduler:
                 raise asyncio.TimeoutError(f"Task {task_id} did not stop within {drain_timeout}s")
         return stopped
 
-    async def stop_background_tasks_for_foreground(self, *, reason: str = "Odysseus became active") -> int:
+    async def stop_background_tasks_for_foreground(self, *, reason: str = "Novum Xenium became active") -> int:
         """Cancel all in-process scheduler tasks because the user is active.
 
         This is intentionally blunt for scheduled/background work: when the
-        user opens or uses Odysseus, foreground interaction wins immediately.
+        user opens or uses Novum Xenium, foreground interaction wins immediately.
         Manual force-runs can be restarted by the user; automatic jobs will be
         deferred by their cancellation path instead of stealing the app.
         """

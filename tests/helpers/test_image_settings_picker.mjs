@@ -130,8 +130,8 @@ assert.equal(configured.saves.at(-1).image_model, 'chatgpt-image-codex@Codex bri
 const empty = makeHarness({ endpoints: [], savedModel: '' });
 await empty.init();
 assert.equal(empty.model.options.length, 1);
-assert.match(empty.backendMsg.textContent, /No image-generation backend detected/);
-assert.match(empty.backendMsg.textContent, /Add and enable an image provider/);
+assert.match(empty.backendMsg.textContent, /download a compatible Stable Diffusion checkpoint in Cookbook/);
+assert.match(empty.backendMsg.textContent, /add an image provider under Settings/);
 
 const unknown = makeHarness({ endpoints: [], savedModel: 'custom-art-model@Remote provider' });
 await unknown.init();

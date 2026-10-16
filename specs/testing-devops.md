@@ -16,7 +16,7 @@ This spec covers development and validation surfaces in:
 - GPU helper scripts `scripts/check-docker-gpu.sh` and `scripts/check-docker-amd-gpu.sh`;
 - `.github/` templates, workflows, and description-check scripts;
 - contributor workflow docs in `CONTRIBUTING.md` and `docs/pr-blocker-audit.md`;
-- platform launchers `launch-windows.ps1`, `launcher.py`, `Odysseus.spec`, `build-windows-portable.ps1`, `start-macos.sh`, `build-macos-app.sh`, and `update_windows.bat`;
+- platform launchers `launch-windows.ps1`, `launcher.py`, `Novum Xenium.spec`, `build-windows-portable.ps1`, `start-macos.sh`, `build-macos-app.sh`, and `update_windows.bat`;
 - setup/service files such as `setup.py`, `install-service.sh`, and `odysseus-ui.service`.
 
 ## Test Runtime
@@ -86,7 +86,7 @@ docker compose ps
 docker compose logs --tail=120 odysseus
 ```
 
-`docker-compose.yml` starts Odysseus, ChromaDB, SearXNG, and ntfy. It binds services to loopback by default through `APP_BIND`, `CHROMADB_BIND`, and `NTFY_BIND`, persists configurable `APP_DATA_DIR`/`APP_LOGS_DIR`, SSH identity, HuggingFace cache, and user-local Python installs, and gives the Odysseus container host-loopback reachability through `host.docker.internal`.
+`docker-compose.yml` starts Novum Xenium, ChromaDB, SearXNG, and ntfy. It binds services to loopback by default through `APP_BIND`, `CHROMADB_BIND`, and `NTFY_BIND`, persists configurable `APP_DATA_DIR`/`APP_LOGS_DIR`, SSH identity, HuggingFace cache, and user-local Python installs, and gives the Novum Xenium container host-loopback reachability through `host.docker.internal`.
 
 Compose variants forward `ODYSSEUS_TTS_CACHE_MAX_BYTES`, defaulting in the service to 500 MiB, and run the mounted `scripts/migrate_searxng_settings.py` helper so retained SearXNG YAML gains default inheritance without replacement. The helper preserves file metadata and formatting where possible and writes atomically; migration failure is non-fatal to the wrapper command. MCP OAuth callback setup follows `OAUTH_REDIRECT_BASE_URL`, `APP_PUBLIC_URL`, or the launcher/bind `APP_PORT`, so externally remapped deployments should set a public base explicitly.
 
@@ -116,7 +116,7 @@ AMD helper behavior:
 Native platform launchers:
 
 - `launch-windows.ps1` requires Python 3.11+, creates `venv`, installs `requirements.txt`, runs `setup.py`, discovers per-user Git Bash installs where possible, warns when Git Bash is missing, and starts uvicorn on port 7000 by default.
-- `launcher.py`, `Odysseus.spec`, and `build-windows-portable.ps1` own the PyInstaller-style portable Windows launcher path, including app-root/data-dir differences covered by `src.runtime_paths`.
+- `launcher.py`, `Novum Xenium.spec`, and `build-windows-portable.ps1` own the PyInstaller-style portable Windows launcher path, including app-root/data-dir differences covered by `src.runtime_paths`.
 - `start-macos.sh` reads `.env`, defaults to port 7860 to avoid AirPlay conflicts, prefers Homebrew arm64 Python, installs/tolerates Homebrew Cookbook deps, handles Chroma package conflicts, starts ChromaDB for native runs, runs `setup.py`, and starts uvicorn.
 - `build-macos-app.sh` builds a launcher app around the existing repo venv and logs to `logs/odysseus-app.log`.
 - `update_windows.bat` owns the tested Windows Docker update flow.

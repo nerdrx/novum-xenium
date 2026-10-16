@@ -25,6 +25,17 @@ let _clockInterval = null;
 let _taskFailurePending = false;
 let _taskCompletionPending = false;
 let _taskBulkDeleting = false;
+let _notifInterval = null;
+let _notifStartTimer = null;
+let _notifPollInFlight = false;
+let _notificationPollGeneration = 0;
+let _notificationOwner = '';
+let _notificationDeviceId = '';
+let _volatileNotificationDeviceId = '';
+const _volatileNotificationCursors = new Map();
+let _feedReadyMessageSequence = 0;
+const _notificationRouteHandled = new Set();
+const _NOTIFICATION_DEVICE_KEY = 'odysseus-notification-device-id';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -3032,6 +3043,7 @@ export function openTasks(focusId, opts) {
       <div class="modal-header">
         <h4 style="position:relative;top:-2px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3L2 6"/><path d="M22 6l-3-3"/></svg>Tasks</h4>
         <span style="flex:1"></span>
+        <button class="memory-toolbar-btn" id="tasks-notification-permission" type="button"></button>
         <button class="close-btn" id="tasks-close">✖</button>
       </div>
       <div class="memory-tabs tasks-tabs" role="tablist">
@@ -3057,6 +3069,7 @@ export function openTasks(focusId, opts) {
     </div>
   `;
   document.body.appendChild(modal);
+  _updateNotificationPermissionButton();
 
   // Tab routing
   modal.querySelectorAll('.tasks-tab').forEach(btn => {
@@ -3185,69 +3198,257 @@ export function closeTasks() {
 
 export function isTasksOpen() { return _open; }
 
-// ---- Task run notifications polling ----
+// ---- Durable task/email notification feed ----
 
-let _notifInterval = null;
+function _notificationCursorKey() {
+  if (!_notificationOwner || !_notificationDeviceId) return '';
+  return `odysseus-notification-cursor:${encodeURIComponent(_notificationOwner)}:${_notificationDeviceId}`;
+}
 
-async function _pollTaskNotifications() {
+function _setDurableFeedReady(ready) {
+  const value = Boolean(ready);
+  if (window.__durableNotificationFeedReady === value) return;
+  window.__durableNotificationFeedReady = value;
   try {
-    const res = await fetch(`${API_BASE}/api/tasks/notifications`, { credentials: 'same-origin' });
-    if (!res.ok) return;
-    const data = await res.json();
-    const notes = data.notifications || [];
-    for (const n of notes) {
-      const ok = n.status === 'success';
-      if (ok) {
-        const completedOpen = _open && document.querySelector('.tasks-tab.active[data-tab="completed"]');
-        if (completedOpen) {
-          _setTaskCompletionPending(false);
-          _renderCompletedView();
-        } else {
-          _setTaskCompletionPending(true);
-        }
-      }
-      // Tasks with output_target='notification' carry the result text in `body`
-      // — show it as a real browser Notification (richer than a toast). Falls
-      // back to a toast when permission is denied or unavailable.
-      if (ok && n.body) {
-        const title = n.task_name || 'Task';
-        let fired = false;
-        try {
-          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            new Notification(title, { body: n.body, tag: 'task-' + (n.task_id || title), icon: '/static/favicon.ico' });
-            fired = true;
-          }
-        } catch (_) {}
-        if (!fired && uiModule) uiModule.showToast(title + ': ' + n.body.slice(0, 140), { duration: 7000 });
-        continue;
-      }
-      const msg = `Task ${ok ? 'finished' : 'failed'}: ${n.task_name}`;
-      if (!uiModule) continue;
-      if (ok) uiModule.showToast(msg, { duration: 5000 });
-      else {
-        _setTaskFailurePending(true);
-        uiModule.showError(msg);
-        if (_open && document.querySelector('.tasks-tab.active[data-tab="activity"]')) {
-          _renderActivityView();
-        }
-      }
+    window.NovumPushBridge?.postMessage?.(JSON.stringify({
+      method: 'feed-ready', ready: value,
+      request_id: `feed-${Date.now()}-${++_feedReadyMessageSequence}`,
+    }));
+  } catch (_) {}
+}
+
+function _getNotificationDeviceId() {
+  try {
+    let id = localStorage.getItem(_NOTIFICATION_DEVICE_KEY);
+    if (!id) {
+      id = crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(_NOTIFICATION_DEVICE_KEY, id);
     }
-  } catch (e) {
-    // Silently ignore — server may be unreachable
+    return id;
+  } catch (_) {
+    if (!_volatileNotificationDeviceId) _volatileNotificationDeviceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    return _volatileNotificationDeviceId;
   }
 }
 
+function _readNotificationCursor(key) {
+  try { return localStorage.getItem(key) || _volatileNotificationCursors.get(key) || ''; }
+  catch (_) { return _volatileNotificationCursors.get(key) || ''; }
+}
+
+function _writeNotificationCursor(key, cursor) {
+  _volatileNotificationCursors.set(key, cursor);
+  try { localStorage.setItem(key, cursor); } catch (_) {}
+}
+
+async function _getNotificationOwner() {
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/status`, { credentials: 'same-origin' });
+    if (!response.ok) return '';
+    const status = await response.json();
+    return String(status.username || '').trim();
+  } catch (_) { return ''; }
+}
+
+function _notificationPermission() {
+  try { return typeof Notification === 'undefined' ? 'unsupported' : Notification.permission; }
+  catch (_) { return 'unsupported'; }
+}
+
+function _updateNotificationPermissionButton() {
+  const button = document.getElementById('tasks-notification-permission');
+  if (!button) return;
+  const permission = _notificationPermission();
+  button.textContent = permission === 'granted' ? 'Notifications enabled'
+    : permission === 'denied' ? 'Notifications blocked'
+      : permission === 'unsupported' ? 'Notifications unavailable' : 'Enable notifications';
+  button.disabled = permission !== 'default';
+  button.title = permission === 'denied' ? 'Allow notifications in your browser or app settings.' : '';
+  button.onclick = async () => {
+    if (_notificationPermission() !== 'default') return;
+    try { await Notification.requestPermission(); } catch (_) {}
+    _updateNotificationPermissionButton();
+  };
+}
+
+function _safeNotificationRoute(route) {
+  const value = String(route || '').trim();
+  if (value === '#tasks') return value;
+  const email = value.match(/^#email=([^:#/?\s]+):([1-9]\d*):([^:#/?\s]+)$/);
+  if (email) {
+    try {
+      decodeURIComponent(email[1]);
+      if (email[3]) decodeURIComponent(email[3]);
+      return value;
+    } catch (_) { return ''; }
+  }
+  if (/^#task-[A-Za-z0-9_-]{1,100}$/.test(value)) return value;
+  const session = value.match(/^#([A-Za-z0-9_-]{1,128})$/);
+  if (session && !/^(newchat-|document-|note-|image-|email-|event-|task-|skill-|research-|notification-|open=)/i.test(session[1])) return value;
+  return '';
+}
+
+function _replaceHashAndDispatch(route) {
+  const url = `${window.location.pathname}${window.location.search}${route}`;
+  if (window.location.pathname + window.location.search + window.location.hash === url) return;
+  window.history.replaceState(null, '', url);
+  window.dispatchEvent(new Event('hashchange'));
+}
+
+async function _openNotificationEvent(id) {
+  if (!/^[1-9]\d{0,18}$/.test(String(id || '')) || _notificationRouteHandled.has(String(id))) return;
+  _notificationRouteHandled.add(String(id));
+  try {
+    const owner = await _getNotificationOwner();
+    if (!owner) throw new Error('Authentication unavailable');
+    const response = await fetch(`${API_BASE}/api/tasks/notification-feed/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const event = await response.json();
+    if (await _getNotificationOwner() !== owner) return;
+    const route = _safeNotificationRoute(event.route);
+    if (route) _replaceHashAndDispatch(route);
+    else {
+      _replaceHashAndDispatch('#task-notifications');
+      openTasks();
+    }
+  } catch (error) {
+    uiModule?.showError('This notification could not be opened. It may have expired or belong to another account.');
+  } finally { _notificationRouteHandled.delete(String(id)); }
+}
+
+function _handleNotificationHash() {
+  const match = String(window.location.hash || '').match(/^#notification-([1-9]\d{0,18})$/);
+  if (match) _openNotificationEvent(match[1]);
+    else if (window.location.hash === '#task-notifications' || window.location.hash === '#tasks') openTasks();
+  else {
+    const task = String(window.location.hash || '').match(/^#task-([A-Za-z0-9_-]{1,100})$/);
+    if (task) openTasks(task[1]);
+  }
+}
+
+function _showFeedNotification(event) {
+  if (event.kind === 'chat' && String(event.status || '').toLowerCase() === 'success'
+      && document.visibilityState === 'visible' && document.hasFocus()) {
+    const route = _safeNotificationRoute(event.route);
+    const activeId = window.sessionModule?.getCurrentSessionId?.();
+    if (route && activeId && route === `#${activeId}`) return;
+  }
+  const title = String(event.title || (event.kind === 'email' ? 'Email notification' : 'Task notification')).slice(0, 160);
+  const body = String(event.body || '').slice(0, 500);
+  const id = String(event.id || '');
+  let fired = false;
+  try {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const notification = new Notification(title, {
+        body, tag: `feed-${id}`, icon: '/static/favicon.ico',
+        data: { event_id: id },
+      });
+      notification.onclick = () => {
+        try { window.focus(); } catch (_) {}
+        _replaceHashAndDispatch(`#notification-${id}`);
+        notification.close?.();
+      };
+      fired = true;
+    }
+  } catch (_) {}
+  if (!fired && uiModule) uiModule.showToast(body ? `${title}: ${body.slice(0, 140)}` : title, { duration: 7000 });
+}
+
+function _handleTaskNotificationEvent(event) {
+  if (event.kind !== 'task') return;
+  const title = String(event.title || 'Task');
+  const status = String(event.status || '').toLowerCase();
+  const failed = status === 'error' || status === 'failure' || status === 'failed';
+  const succeeded = status === 'success' || status === 'completed';
+  if (succeeded) {
+    const completedOpen = _open && document.querySelector('.tasks-tab.active[data-tab="completed"]');
+    if (completedOpen) {
+      _setTaskCompletionPending(false);
+      _renderCompletedView();
+    } else _setTaskCompletionPending(true);
+  }
+  if (failed) {
+    _setTaskFailurePending(true);
+    uiModule?.showError(title);
+    if (_open && document.querySelector('.tasks-tab.active[data-tab="activity"]')) _renderActivityView();
+  }
+}
+
+async function _pollTaskNotifications() {
+  if (_notifPollInFlight) return;
+  _notifPollInFlight = true;
+  const generation = _notificationPollGeneration;
+  try {
+    const owner = await _getNotificationOwner();
+    if (!owner) {
+      _notificationOwner = '';
+      _setDurableFeedReady(false);
+      return;
+    }
+    if (_notificationOwner && _notificationOwner !== owner) _setDurableFeedReady(false);
+    _notificationOwner = owner;
+    if (!_notificationDeviceId) _notificationDeviceId = _getNotificationDeviceId();
+    const key = _notificationCursorKey();
+    if (!key) return;
+    const params = new URLSearchParams();
+    const cursor = _readNotificationCursor(key);
+    if (cursor && /^\d+$/.test(cursor)) params.set('after', cursor);
+    if (_notificationPermission() === 'granted') params.set('email', 'true');
+    const query = params.toString();
+    const suffix = query ? `?${query}` : '';
+    const response = await fetch(`${API_BASE}/api/tasks/notification-feed${suffix}`, { credentials: 'same-origin' });
+    if (!response.ok) {
+      if ([404, 405].includes(response.status)) _setDurableFeedReady(false);
+      return;
+    }
+    const data = await response.json();
+    if (!Array.isArray(data.notifications) || data.cursor == null) return;
+    // Recheck auth after the request: a login switch during polling must not
+    // paint or persist another account's feed events.
+    if (await _getNotificationOwner() !== owner) {
+      _setDurableFeedReady(false);
+      return;
+    }
+    if (generation !== _notificationPollGeneration) return;
+    _setDurableFeedReady(true);
+    for (const event of data.notifications) {
+      _handleTaskNotificationEvent(event);
+      _showFeedNotification(event);
+    }
+    // Persist only after rendering this page, so a failed page is replayed.
+    if (/^\d+$/.test(String(data.cursor))) _writeNotificationCursor(key, String(data.cursor));
+  } catch (_) {
+    // The feed retries on the next poll if the server or storage is unavailable.
+  } finally { _notifPollInFlight = false; }
+}
+
 function startNotificationPolling() {
-  if (_notifInterval) return;
-  setTimeout(_pollTaskNotifications, 1500);
-  _notifInterval = setInterval(_pollTaskNotifications, 30000);
+  if (!_notifInterval) {
+    _notifStartTimer = setTimeout(() => {
+      _notifStartTimer = null;
+      _pollTaskNotifications();
+    }, 1500);
+    _notifInterval = setInterval(_pollTaskNotifications, 30000);
+  }
+  if (!window.__taskNotificationHashBound) {
+    window.__taskNotificationHashBound = true;
+    window.addEventListener('hashchange', _handleNotificationHash);
+    _handleNotificationHash();
+  }
 }
 
 function stopNotificationPolling() {
+  _notificationPollGeneration++;
+  if (_notifStartTimer) {
+    clearTimeout(_notifStartTimer);
+    _notifStartTimer = null;
+  }
   if (_notifInterval) {
     clearInterval(_notifInterval);
     _notifInterval = null;
   }
+  _notificationOwner = '';
+  _setDurableFeedReady(false);
 }
 
 const tasksModule = { openTasks, closeTasks, isTasksOpen, startNotificationPolling, stopNotificationPolling };

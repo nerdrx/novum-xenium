@@ -307,11 +307,16 @@ function _bindEvents() {
 
 function _maybeOpenFromHash() {
   const h = window.location.hash || '';
-  const m = h.match(/^#email=([^:]+):(\d+)/);
+  const m = h.match(/^#email=([^:]+):(\d+)(?::([^:]+))?$/);
   if (!m) return;
-  const folder = decodeURIComponent(m[1]);
+  let folder;
+  let accountId = '';
+  try {
+    folder = decodeURIComponent(m[1]);
+    accountId = m[3] ? decodeURIComponent(m[3]) : '';
+  } catch (_) { return; }
   const uid = m[2];
-  try { openEmailLibrary({ folder, uid }); } catch (e) { console.error(e); }
+  try { openEmailLibrary({ folder, uid, ...(accountId ? { account_id: accountId } : {}) }); } catch (e) { console.error(e); }
   // Clear the hash so reloads don't reopen
   try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch (_) {}
 }

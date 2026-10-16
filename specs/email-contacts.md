@@ -44,7 +44,7 @@ Exactly one default account per owner is enforced as a serialized database trans
 - IMAP/SMTP connection helpers and related transport utilities;
 - Google OAuth2 state signing/verification, token refresh, and XOAUTH2 framing;
 - SMTP security modes (`ssl`, `starttls`, `none`);
-- envelope recipients and Odysseus headers;
+- envelope recipients and Novum Xenium headers;
 - attachment extraction helpers;
 - email pre-retrieval context for AI reply drafting;
 - scheduled email, summary, reply, tag, calendar extraction, urgency, and signature-boundary side databases.
@@ -141,7 +141,7 @@ be staged against another owner's account. MCP-created draft documents use the
 resolved hidden/configured owner when available, with `ODYSSEUS_DOCUMENT_OWNER`
 and single-admin fallback only as document-visibility compatibility.
 
-MCP email send behavior is confirmation-first by default: `send_email` and reply send paths stash a `scheduled_emails` row with `status='agent_draft'` when `agent_email_confirm` is true, and browser routes expose pending drafts for approval or cancellation. Separate MCP draft tools create Odysseus compose documents for user review without sending.
+MCP email send behavior is confirmation-first by default: `send_email` and reply send paths stash a `scheduled_emails` row with `status='agent_draft'` when `agent_email_confirm` is true, and browser routes expose pending drafts for approval or cancellation. Separate MCP draft tools create Novum Xenium compose documents for user review without sending.
 
 MCP email remains a separate local/admin trust boundary. Public and non-admin users must not see or execute email MCP tools. It still needs route-helper parity audits for attachment path containment, sanitization, transport behavior, and pending-draft result text, but global all-account behavior is no longer the current owner model.
 

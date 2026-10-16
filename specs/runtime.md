@@ -19,7 +19,7 @@ This spec covers current app runtime wiring in:
   `routes/admin_wipe/`, `routes/cleanup/`, `routes/compare/`, `routes/contacts/`, `routes/document/`, `routes/gallery/`, `routes/history/`, `routes/mcp/`, `routes/memory/`, `routes/note/`, `routes/research/`, `routes/search/`, `routes/task/`, `routes/vault/`, and `routes/webhook/` packages plus top-level compatibility shims;
 - `routes/prefs_routes.py`, `routes/workspace_routes.py`, and `companion/routes.py`;
 - `src/generated_images.py` for generated-media file resolution;
-- `launcher.py`, `Odysseus.spec`, and platform launcher scripts where frozen/native startup changes runtime paths;
+- `launcher.py`, `Novum Xenium.spec`, and platform launcher scripts where frozen/native startup changes runtime paths;
 - static entrypoints in `static/index.html`, `static/login.html`, and `static/app.js`.
 
 ## App Orchestrator

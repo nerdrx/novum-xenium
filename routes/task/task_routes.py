@@ -10,8 +10,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
 from core.database import SessionLocal, ScheduledTask, TaskRun
@@ -32,6 +32,15 @@ from routes.prefs_routes import _load_for_user, _save_for_user
 
 logger = logging.getLogger(__name__)
 _TASK_CREATE_KEY_TTL_HOURS = 24
+
+
+class NotificationDeviceRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=4096)
+    platform: str = "android"
+    opt_in: bool
+    email_enabled: bool = True
+    task_enabled: bool = True
+    chat_enabled: bool = True
 
 
 def _maybe_cascade_calendar_event(task) -> None:
@@ -645,6 +654,87 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             return {"notifications": []}
         notes = task_scheduler.pop_notifications(owner=user)
         return {"notifications": notes}
+
+    @router.get("/notification-feed")
+    async def get_notification_feed(
+        request: Request,
+        after: int | None = Query(None, ge=0),
+        limit: int = Query(50, ge=1, le=100),
+        email: bool = Query(False),
+    ):
+        """Read durable events; each device advances its own cursor."""
+        user = _owner(request)
+        if not user:
+            return {"notifications": [], "cursor": 0}
+        from src.notification_feed import read_notification_page, watch_email_notifications
+        watch_email_notifications(user, email is True)
+        notifications, cursor = read_notification_page(user, after=after, limit=limit)
+        return {"notifications": notifications, "cursor": cursor}
+
+    @router.get("/notification-feed/{event_id}")
+    async def get_notification_feed_item(request: Request, event_id: int):
+        user = _owner(request)
+        if not user:
+            raise HTTPException(401, "Authentication required")
+        from src.notification_feed import get_notification
+        event = get_notification(user, event_id)
+        if not event:
+            raise HTTPException(404, "Notification not found")
+        return event
+
+    @router.get("/notification-status")
+    async def notification_status(request: Request):
+        user = _owner(request)
+        if not user:
+            raise HTTPException(401, "Authentication required")
+        from core.database import SessionLocal, NotificationDevice
+        from src.push_notifications import push_status
+        from src.push_notifications import server_id
+        configured, reason = push_status()
+        from routes.email_pollers import _inprocess_pollers_enabled
+        worker_enabled = _inprocess_pollers_enabled()
+        if configured and not worker_enabled:
+            reason = "inprocess_pollers_disabled"
+        db = SessionLocal()
+        try:
+            devices = db.query(NotificationDevice).filter(NotificationDevice.owner == user).all()
+            return {
+                "push_configured": configured,
+                "server_id": server_id(),
+                "worker_enabled": worker_enabled,
+                "reason": reason,
+                "registered_devices": len(devices),
+                "email_enabled": any(device.email_enabled for device in devices),
+                "task_enabled": any(device.task_enabled for device in devices),
+                "chat_enabled": any(device.chat_enabled for device in devices),
+            }
+        finally:
+            db.close()
+
+    @router.post("/notification-devices")
+    async def register_notification_device(request: Request, payload: NotificationDeviceRequest):
+        user = _owner(request)
+        if not user:
+            raise HTTPException(401, "Authentication required")
+        from src.push_notifications import register_device
+        try:
+            device_id = register_device(
+                user, payload.token, payload.platform, opt_in=payload.opt_in,
+                email_enabled=payload.email_enabled, task_enabled=payload.task_enabled,
+                chat_enabled=payload.chat_enabled,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        from src.push_notifications import server_id
+        return {"device_id": device_id, "server_id": server_id()}
+
+    @router.delete("/notification-devices/{device_id}")
+    async def unregister_notification_device(request: Request, device_id: str):
+        user = _owner(request)
+        if not user:
+            raise HTTPException(401, "Authentication required")
+        from src.push_notifications import unregister_device
+        return {"removed": unregister_device(user, device_id)}
 
     @router.post("/{task_id}/clear-cache")
     async def clear_task_cache(request: Request, task_id: str):

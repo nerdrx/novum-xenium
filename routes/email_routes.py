@@ -363,21 +363,49 @@ def _clear_done_response_tags(owner: str, account_id: str | None, folder: str, u
         logger.debug(f"clear done response tags skipped: {e}")
 
 
-def _record_email_received_events(owner: str, account_id: str | None, folder: str, emails: list[dict]):
+def _record_email_received_events(owner: str, account_id: str | None, folder: str, emails: list[dict], *, uidvalidity: str | None = None):
     """Baseline inbox messages, then fire `email_received` for new arrivals."""
     if not owner or (folder or "INBOX").upper() != "INBOX" or not emails:
-        return
+        return True
     try:
+        # The notification scanner's UID watermark distinguishes its baseline
+        # marker from inbox rows returned later by a normal foreground refresh.
+        # Keep scanner rows above the watermark eligible: its cursor is advanced
+        # only after this function has durably inserted their feed events.
+        notification_uid = None
+        try:
+            from core.database import SessionLocal as _SessionLocal, NotificationEmailCursor
+            with _SessionLocal() as cursor_db:
+                cursor_row = cursor_db.query(NotificationEmailCursor).filter(
+                    NotificationEmailCursor.owner == owner,
+                    NotificationEmailCursor.account_id == (account_id or "default"),
+                    NotificationEmailCursor.baselined.is_(True),
+                ).first()
+                same_generation = (
+                    uidvalidity is None or not cursor_row or not cursor_row.uidvalidity
+                    or str(uidvalidity) == str(cursor_row.uidvalidity)
+                )
+                if cursor_row and same_generation:
+                    notification_uid = int(cursor_row.last_uid or 0)
+        except Exception:
+            logger.debug("Notification inbox cursor lookup skipped", exc_info=True)
+
         from src.event_bus import fire_event
         account_key = (account_id or "default").strip() or "default"
         now = datetime.utcnow().isoformat() + "Z"
         keys = []
         for e in emails:
+            if notification_uid is not None:
+                try:
+                    if int(e.get("uid") or 0) <= notification_uid:
+                        continue
+                except (TypeError, ValueError):
+                    pass
             key = (e.get("message_id") or e.get("uid") or "").strip()
             if key and key not in keys:
                 keys.append(key)
         if not keys:
-            return
+            return True
 
         conn = _sql3.connect(SCHEDULED_DB)
         try:
@@ -388,7 +416,8 @@ def _record_email_received_events(owner: str, account_id: str | None, folder: st
                 "PRIMARY KEY (owner, account_key, folder, message_key))"
             )
             count = conn.execute(
-                "SELECT COUNT(*) FROM email_event_seen WHERE owner=? AND account_key=? AND folder=?",
+                "SELECT COUNT(*) FROM email_event_seen WHERE owner=? AND account_key=? AND folder=? "
+                "AND message_key != '__notification_baseline__'",
                 (owner, account_key, folder),
             ).fetchone()[0]
             existing = set()
@@ -401,16 +430,57 @@ def _record_email_received_events(owner: str, account_id: str | None, folder: st
                 ).fetchall()
                 existing = {r[0] for r in rows}
             new_keys = [k for k in keys if k not in existing]
-            conn.executemany(
-                "INSERT OR IGNORE INTO email_event_seen "
-                "(owner, account_key, folder, message_key, first_seen_at) VALUES (?, ?, ?, ?, ?)",
-                [(owner, account_key, folder, k, now) for k in keys],
-            )
-            conn.commit()
+            if not count and notification_uid is None:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO email_event_seen "
+                    "(owner, account_key, folder, message_key, first_seen_at) VALUES (?, ?, ?, ?, ?)",
+                    [(owner, account_key, folder, k, now) for k in keys],
+                )
+                conn.commit()
         finally:
             conn.close()
 
-        if count and new_keys:
+        if (count or notification_uid is not None) and new_keys:
+            try:
+                from urllib.parse import quote as _quote
+                from src.notification_feed import add_notification
+                by_key = {
+                    (e.get("message_id") or e.get("uid") or "").strip(): e
+                    for e in emails
+                }
+                persisted = True
+                for key in new_keys[:50]:
+                    email_row = by_key.get(key) or {}
+                    subject = (email_row.get("subject") or "New email").strip()
+                    sender = (email_row.get("from_name") or email_row.get("from_address") or "").strip()
+                    uid = str(email_row.get("uid") or "")
+                    route = (
+                        f"#email={_quote(folder, safe='')}:{_quote(uid, safe='')}:{_quote(str(account_id), safe='')}"
+                        if uid and account_id else
+                        f"#email={_quote(folder, safe='')}:{_quote(uid, safe='')}" if uid else None
+                    )
+                    event_id = add_notification(
+                        owner, "email", subject, body=(f"From {sender}" if sender else None),
+                        route=route, source="email", source_id=f"{account_key}:{folder}:{key}",
+                    )
+                    if event_id is None:
+                        persisted = False
+                if not persisted:
+                    return False
+            except Exception:
+                logger.debug("Could not persist incoming-email notification", exc_info=True)
+                return False
+            # Feed writes are durable before the detector marks messages seen.
+            conn = _sql3.connect(SCHEDULED_DB)
+            try:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO email_event_seen "
+                    "(owner, account_key, folder, message_key, first_seen_at) VALUES (?, ?, ?, ?, ?)",
+                    [(owner, account_key, folder, k, now) for k in new_keys],
+                )
+                conn.commit()
+            finally:
+                conn.close()
             for _ in new_keys[:50]:
                 fire_event("email_received", owner)
             logger.info("Fired email_received for %d new message(s)", min(len(new_keys), 50))
@@ -433,8 +503,10 @@ def _record_email_received_events(owner: str, account_id: str | None, folder: st
                 loop.create_task(_run_away_reply_check())
             except RuntimeError:
                 logger.debug("No running event loop for immediate away-reply check")
+        return True
     except Exception:
         logger.debug("email_received event detection skipped", exc_info=True)
+        return False
 
 
 def _folder_name_from_list_line(line) -> str | None:
@@ -1879,12 +1951,11 @@ def setup_email_routes():
                 # All emails NOT marked as answered/done (read or unread).
                 status, data = _imap_uid_search(conn, f"(UNANSWERED{from_clause})")
             elif filter_ == "reminders":
-                # Prefer the Odysseus marker header, but include the subject
-                # fallback too. The fallback uses a distinct Odysseus prefix
-                # so ordinary emails containing "Reminder" don't get mixed in.
+                # Prefer the legacy marker header, but include both branded and
+                # legacy subject fallbacks so older reminders remain discoverable.
                 status, data = _imap_uid_search(
                     conn,
-                    f'(OR HEADER X-Odysseus-Kind "reminder" SUBJECT "Reminder (Odysseus):"{from_clause})',
+                    f'(OR HEADER X-Odysseus-Kind "reminder" (OR SUBJECT "Reminder (Novum Xenium):" SUBJECT "Reminder (Odysseus):"){from_clause})',
                 )
             elif filter_ == "pending_30d":
                 # "What's pending in the last month" — UNANSWERED + delivered
@@ -3869,10 +3940,12 @@ def setup_email_routes():
                         # explicit kind header, and subject fallback catches
                         # clients/providers that stripped custom headers.
                         uids.update(_search_uids(conn, f'(HEADER X-Odysseus-Kind {_search_quote("reminder")})'))
-                        uids.update(_search_uids(conn, f'(SUBJECT {_search_quote("Reminder (Odysseus):")})'))
+                        for subject_prefix in ("Reminder (Novum Xenium):", "Reminder (Odysseus):"):
+                            uids.update(_search_uids(conn, f'(SUBJECT {_search_quote(subject_prefix)})'))
                         for addr in own_addrs:
                             addr_q = _search_quote(addr)
-                            uids.update(_search_uids(conn, f'(FROM {addr_q} SUBJECT {_search_quote("Reminder (Odysseus):")})'))
+                            for subject_prefix in ("Reminder (Novum Xenium):", "Reminder (Odysseus):"):
+                                uids.update(_search_uids(conn, f'(FROM {addr_q} SUBJECT {_search_quote(subject_prefix)})'))
                             # Legacy reminders created before the Odysseus
                             # prefix still came from this mailbox as
                             # "Reminder: ..."; include them in Clear without

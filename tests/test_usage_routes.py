@@ -98,6 +98,25 @@ def test_empty_usage_and_streak(db_factory):
         assert result["insights"]["active_days"] == 3
 
 
+def test_usage_uses_saved_requested_name_for_same_route_internal_alias(db_factory):
+    now = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
+    with db_factory() as db:
+        db.add(Session(id="alias-chat", owner="alice", name="Chat", model="nx-model-5", endpoint_url="local"))
+        db.add(ChatMessage(id="alias-user", session_id="alias-chat", role="user", content="hello",
+                           timestamp=now.replace(tzinfo=None)))
+        db.add(ChatMessage(id="alias-reply", session_id="alias-chat", role="assistant", content="hi",
+                           timestamp=now.replace(tzinfo=None), meta_data=json.dumps({
+                               "model": "nx-model-5", "requested_model": "qwen3.5:9b-local",
+                               "requested_endpoint_id": "local-zvram", "endpoint_id": "local-zvram",
+                               "usage_buckets": [{"model": "nx-model-5", "endpoint_id": "local-zvram",
+                                                  "input_tokens": 2, "output_tokens": 3}],
+                           })))
+        db.commit()
+        result = usage.collect_usage(db, "alice", 7, now=now)
+        assert [model["model"] for model in result["models"]] == ["qwen3.5:9b-local"]
+
+
+
 def test_route_authentication_days_validation_and_local_owner(db_factory, monkeypatch):
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("LOCALHOST_BYPASS", "false")

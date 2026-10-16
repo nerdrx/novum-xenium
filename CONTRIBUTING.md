@@ -1,4 +1,4 @@
-# Contributing to NX Odysseus
+# Contributing to Novum Xenium
 
 Thanks for helping. The project is moving quickly, so the best contributions are focused, easy to review, and easy to test.
 
@@ -20,8 +20,8 @@ Upstream Odysseus has its own contribution rules and branch policy.
 Docker is the recommended path for normal testing:
 
 ```bash
-git clone https://github.com/nerdrx/nx-odysseus.git
-cd nx-odysseus
+git clone https://github.com/nerdrx/novum-xenium.git
+cd novum-xenium
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -89,7 +89,7 @@ focused. Do not present simulated provider replies as live model tests.
 
 ## Style and visual changes
 
-Odysseus has an intentional visual style. PRs that ignore it will be closed without merge, no matter how correct the underlying code is.
+Novum Xenium has an intentional visual style. PRs that ignore it will be closed without merge, no matter how correct the underlying code is.
 
 Before submitting any change that affects what the app looks like — buttons, icons, fonts, colors, spacing, layout, CSS, HTML, SVG, or any `static/js/` module that draws to the DOM — please:
 

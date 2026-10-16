@@ -1,4 +1,4 @@
-# Where NX Odysseus goes next
+# Where Novum Xenium goes next
 
 The point is to finish useful work without making you babysit the harness.
 More features help only when their controls, tools and recovery paths work.

@@ -21,6 +21,8 @@ from src.runtime_paths import get_app_root
 
 logger = logging.getLogger(__name__)
 
+MCP_TOOL_TIMEOUT_SECONDS = 120.0
+
 def _format_mcp_connection_error(name: str, command: str = "", args: Optional[List[str]] = None, error: Exception = None) -> str:
     """Return a user-actionable MCP connection error message."""
     args = args or []
@@ -33,7 +35,7 @@ def _format_mcp_connection_error(name: str, command: str = "", args: Optional[Li
             f"{raw_error}\n\n"
             "Browser MCP could not start. On fresh installs, cache the Playwright MCP package once before connecting:\n\n"
             "npx -y @playwright/mcp@latest --version\n\n"
-            "Then restart Odysseus and reconnect the Browser MCP server."
+            "Then restart Novum Xenium and reconnect the Browser MCP server."
         )
 
     return raw_error
@@ -629,6 +631,20 @@ class McpManager:
 
         Returns a result dict compatible with agent_tools format.
         """
+        try:
+            return await asyncio.wait_for(
+                self._call_tool_impl(qualified_name, arguments),
+                timeout=MCP_TOOL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            # A timed-out mutation may have completed remotely. Never replay it.
+            return {
+                "error": "Tool did not finish within the time limit. Its remote outcome is unknown; inspect the result before retrying.",
+                "exit_code": 1,
+                "timed_out": True,
+            }
+
+    async def _call_tool_impl(self, qualified_name: str, arguments: Dict) -> Dict:
         parts = qualified_name.split("__", 2)
         if len(parts) != 3 or parts[0] != "mcp":
             return {"error": f"Invalid MCP tool name: {qualified_name}", "exit_code": 1}
@@ -665,6 +681,8 @@ class McpManager:
 
         try:
             result = await self._do_call(session, tool_name, arguments)
+        except asyncio.TimeoutError:
+            raise  # Do not reconnect and replay a call with an unknown outcome.
         except Exception as e:
             # Auto-reconnect for builtin servers whose subprocess may have died
             if self.is_builtin(server_id):

@@ -1869,7 +1869,7 @@ export async function loadSessions() {
     const _realSessions = activeSessions.filter(s => !_isTransient(s));
     let hashId = window.location.hash.replace('#', '');
     const pendingRouteId = pendingChatRouteId();
-    if (/^(document|note|image|email|event|task|skill|research)-/.test(hashId) || /^open=notes&note=/.test(hashId)) {
+    if (hashId === 'tasks' || /^(document|note|image|email|event|task|skill|research|notification)-/.test(hashId) || /^open=notes&note=/.test(hashId)) {
       hashId = '';
     }
     const invalidPendingRoute = !!pendingRouteId && !restorePendingChatDraft(pendingRouteId);

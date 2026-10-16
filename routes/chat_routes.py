@@ -2220,6 +2220,12 @@ def setup_chat_routes(
                             yield f": heartbeat {_heartbeat_counter}\n\n"
                         await asyncio.sleep(1.0)
 
+                    terminal_status = (status or {}).get("status", "error")
+                    if terminal_status == "error":
+                        yield f"data: {json.dumps({'type': 'error', 'error': 'Research could not finish. Open the research result for details.'})}\n\n"
+                    elif terminal_status == "cancelled":
+                        yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
+
                     research_sources = research_handler.get_sources(session)
                     if research_sources:
                         yield f"data: {json.dumps({'type': 'research_sources', 'data': research_sources})}\n\n"
@@ -2232,7 +2238,7 @@ def setup_chat_routes(
                     yield f"data: {json.dumps({'type': 'research_done', 'data': {'session_id': session}})}\n\n"
                     yield "data: [DONE]\n\n"
                     research_handler.clear_result(session)
-                    _stream_set(session, status="done")
+                    _stream_set(session, status=("stopped" if terminal_status == "cancelled" else terminal_status))
                     _active_streams.pop(session, None)
                     return
 
@@ -3130,28 +3136,33 @@ def setup_chat_routes(
             raises before reaching a mode-specific finally block."""
             child_status = "done"
             child_waiting_approval = False
+            completed = False
             try:
                 async for chunk in stream_with_save():
-                    if _subagent_chat and chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
-                        try:
-                            event_data = json.loads(chunk[6:].split("\n", 1)[0])
-                        except (ValueError, TypeError):
-                            event_data = {}
-                        if isinstance(event_data, dict):
-                            approval = event_data.get("data") if event_data.get("type") == "ask_user" else event_data.get("ask_user")
-                            if isinstance(approval, dict) and approval.get("approval_id"):
-                                child_waiting_approval = True
-                            if event_data.get("type") == "error" or event_data.get("error"):
-                                child_status = "error"
+                    from src.chat_notifications import stream_notification_state
+                    child_status, child_waiting_approval = stream_notification_state(
+                        chunk, child_status, child_waiting_approval,
+                    )
                     yield chunk
+                completed = True
             except asyncio.CancelledError:
                 child_status = "stopped"
                 raise
             except Exception:
+                completed = True
                 child_status = "error"
                 raise
             finally:
                 _active_streams.pop(session, None)
+                try:
+                    from src.chat_notifications import record_chat_notification
+                    record_chat_notification(
+                        owner, session, _detached_run_id, child_status, child_waiting_approval,
+                        completed=completed, incognito=incognito, compare_mode=compare_mode,
+                        subagent=bool(_subagent_chat),
+                    )
+                except Exception:
+                    logger.warning("Could not record chat completion notification", exc_info=True)
                 if _subagent_chat:
                     from src.subagents import update_status
                     try:

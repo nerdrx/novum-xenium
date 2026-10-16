@@ -21,7 +21,9 @@
       url.searchParams.set('body', this.body);
       const tag = String(options.tag || '');
       const session = /^(?:stream|research)-([A-Za-z0-9_-]{1,128})$/.exec(tag);
-      if (session) url.searchParams.set('session', session[1]);
+      const event = String(options.data?.event_id || '');
+      if (/^[1-9][0-9]{0,18}$/.test(event)) url.searchParams.set('event', event);
+      else if (session) url.searchParams.set('session', session[1]);
       const link = document.createElement('a');
       link.href = url.href;
       link.hidden = true;
@@ -42,7 +44,7 @@
     card.innerHTML = `<h2>Desktop notifications</h2>
       <div class="settings-row"><label for="nx-notifications-enabled" class="settings-label">Show desktop notifications</label>
       <label class="admin-switch"><input id="nx-notifications-enabled" type="checkbox"><span class="admin-slider"></span></label></div>
-      <p class="admin-toggle-sub">Notify for finished background replies, tasks and reminders while this app is running. Saved on this device. Your system's notification settings still apply.</p>
+      <p class="admin-toggle-sub">Notify for incoming mail, finished background replies, tasks and reminders while this app is running. Saved on this device. Your system's notification settings still apply.</p>
       <div class="settings-row"><button type="button" class="admin-btn-sm" id="nx-notifications-test">Send test notification</button><span id="nx-notifications-status" role="status" class="admin-toggle-sub"></span></div>`;
     panel.prepend(card);
     const toggle = card.querySelector('input');

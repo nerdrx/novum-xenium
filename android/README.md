@@ -34,6 +34,24 @@ docker run --rm --cpus=4 --memory=8g -e GOMAXPROCS=4 -v "$PWD:/workspace" novum-
 
 The Go bridge pins Tailscale and its module checksums. The toolchain checks downloaded archives, and the Gradle wrapper checks its distribution checksum. Build output is unsigned until `tools/sign-apk.sh` runs with a dedicated release keystore. Keep that keystore backed up: future updates must use the same signing key.
 
+## Optional push alerts (maintainer setup)
+
+The normal Android build works without Firebase configuration:
+
+```sh
+./gradlew --no-daemon :app:assembleRelease
+```
+
+To build the push-enabled variant, register the Android package `com.novumxenium.app` in the maintainer-owned Firebase project, place its `google-services.json` at `android/app/google-services.json`, then build with `-Pandroid.fcm=true`:
+
+```sh
+./gradlew --no-daemon -Pandroid.fcm=true :app:assembleRelease
+```
+
+The Firebase config file is ignored by Git. FCM sending credentials belong on the Novum server and are not included in the APK or repository. Real delivery requires both that server configuration and the Firebase Android app configuration. The Android app asks for notification permission only after the user enables **New email and task alerts** in Connection settings. Alerts use generic text; tapping one opens the authenticated event in the workspace.
+
+To compile-check the optional FCM sources and Firebase dependencies without a project config, run `./gradlew --no-daemon -Pandroid.fcmCompileOnly=true :app:compileFcmDebugKotlin`. This is a source validation mode only; it does not produce an installable push-enabled APK.
+
 The Android workflow tests and builds pull requests without release credentials. Tag builds use `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` repository secrets, verify the signed APK, and publish it with a SHA-256 sidecar. No signing key belongs in this repository.
 
 ## Current limits

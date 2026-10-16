@@ -462,7 +462,7 @@ def inspect_archive(archive_path: str | Path) -> dict:
                 elif not info.is_dir():
                     files.append(member.as_posix())
             if not isinstance(manifest, dict) or manifest.get("format") != "odysseus-full-backup" or manifest.get("version") != FORMAT_VERSION:
-                raise ValueError("Unsupported or missing Odysseus backup manifest")
+                raise ValueError("Unsupported or missing Novum Xenium backup manifest")
             if not files:
                 raise ValueError("Backup contains no data files")
             if not any(name.startswith("data/") for name in files):

@@ -1,4 +1,5 @@
 /* Local, per-account usage. No provider quota or billing estimates. */
+import { resolveModelDisplayName } from './modelDisplay.js';
 let days = 7;
 let callbacks = {};
 let initialized = false;
@@ -32,20 +33,7 @@ function card(label, value, detail) {
 export function resolveUsageModelName(modelId, items = [], routeLabel = (value) => value) {
   const raw = String(modelId || '').trim();
   if (!raw) return 'Unknown model';
-  const normalized = String(routeLabel(raw, raw) || raw).trim().toLowerCase();
-  let match = null;
-  let ambiguous = false;
-  for (const item of Array.isArray(items) ? items : []) {
-    const ids = [...(Array.isArray(item.models) ? item.models : []), ...(Array.isArray(item.models_extra) ? item.models_extra : [])];
-    const labels = [...(Array.isArray(item.models_display) ? item.models_display : []), ...(Array.isArray(item.models_extra_display) ? item.models_extra_display : [])];
-    ids.forEach((id, index) => {
-      if (id !== raw && String(routeLabel(id, id) || id).trim().toLowerCase() !== normalized) return;
-      const label = String(labels[index] || id || '').trim();
-      if (match && match !== label) ambiguous = true;
-      else match = label;
-    });
-  }
-  const name = match && !ambiguous ? match : raw;
+  const name = resolveModelDisplayName(raw, items, routeLabel);
   return routeLabel(name, name) || name;
 }
 

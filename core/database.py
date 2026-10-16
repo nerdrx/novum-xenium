@@ -848,6 +848,78 @@ class TaskRun(Base):
     )
 
 
+class NotificationFeedItem(Base):
+    """Durable owner-scoped events; clients keep independent read cursors."""
+    __tablename__ = "notification_feed"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner = Column(String, nullable=False, index=True)
+    kind = Column(String, nullable=False)
+    status = Column(String, nullable=True)
+    title = Column(String, nullable=False)
+    body = Column(Text, nullable=True)
+    route = Column(String, nullable=True)
+    source = Column(String, nullable=False)
+    source_id = Column(String, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+    __table_args__ = (
+        Index("ix_notification_feed_owner_id", "owner", "id"),
+        Index("uq_notification_feed_source", "owner", "source", "source_id", unique=True),
+    )
+
+
+class NotificationDevice(Base):
+    """A user's currently registered FCM destination; token never leaves server."""
+    __tablename__ = "notification_devices"
+
+    id = Column(String, primary_key=True)
+    owner = Column(String, nullable=False, index=True)
+    token = Column(Text, nullable=False, unique=True)
+    platform = Column(String, nullable=False, default="android")
+    email_enabled = Column(Boolean, nullable=False, default=True)
+    task_enabled = Column(Boolean, nullable=False, default=True)
+    chat_enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive, onupdate=utcnow_naive)
+
+
+class NotificationPushDelivery(Base):
+    """Per-device FCM outbox row; source event IDs let clients suppress retries."""
+    __tablename__ = "notification_push_deliveries"
+
+    event_id = Column(Integer, primary_key=True)
+    device_id = Column(String, primary_key=True)
+    owner = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    retry_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive, onupdate=utcnow_naive)
+    error_code = Column(String, nullable=True)
+
+    __table_args__ = (Index("ix_notification_push_due", "status", "retry_at"),)
+
+
+class NotificationEmailCursor(Base):
+    """UID watermark for opted-in background email discovery."""
+    __tablename__ = "notification_email_cursors"
+
+    owner = Column(String, primary_key=True)
+    account_id = Column(String, primary_key=True)
+    last_uid = Column(Integer, nullable=False, default=0)
+    uidvalidity = Column(String, nullable=True)
+    baselined = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive, onupdate=utcnow_naive)
+
+
+class NotificationServerIdentity(Base):
+    """Stable opaque identifier for this server installation."""
+    __tablename__ = "notification_server_identity"
+
+    id = Column(Integer, primary_key=True, default=1)
+    server_id = Column(String, nullable=False, unique=True)
+
+
 class Memory(Base):
     """
     SQLAlchemy model for Memory table.
@@ -2106,6 +2178,26 @@ def _migrate_seed_email_account():
 # Any future migrations or schema changes that temporarily violate foreign-key
 # constraints will fail. To perform such operations, foreign_keys must be
 # temporarily disabled around the migration workflow.
+def _migrate_notification_email_uidvalidity():
+    """Add IMAP mailbox-generation tracking to pre-existing notification cursors."""
+    if engine.dialect.name != "sqlite":
+        return
+    conn = None
+    try:
+        conn = engine.raw_connection()
+        columns = [row[1] for row in conn.execute(
+            "PRAGMA table_info(notification_email_cursors)"
+        ).fetchall()]
+        if columns and "uidvalidity" not in columns:
+            conn.execute("ALTER TABLE notification_email_cursors ADD COLUMN uidvalidity TEXT")
+            conn.commit()
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Notification cursor migration failed: %s", exc)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def init_db():
     """
     Initialize the database by creating all tables.
@@ -2175,6 +2267,7 @@ def init_db():
     _migrate_add_oauth_config()
     _migrate_add_email_oauth_columns()
     _migrate_add_task_automation_columns()
+    _migrate_notification_email_uidvalidity()
     _migrate_add_disabled_tools()
     _migrate_add_mcp_oauth_tokens_column()
     _migrate_add_task_v2_columns()

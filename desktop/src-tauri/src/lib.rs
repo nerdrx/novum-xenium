@@ -870,6 +870,17 @@ fn workbench_notification(url: &tauri::Url) -> Option<WorkbenchNotification> {
             "title" if title.is_none() => &mut title,
             "body" if body.is_none() => &mut body,
             "session" if session_id.is_none() => &mut session_id,
+            "event" if session_id.is_none() => {
+                // Only a feed ID crosses the native boundary. The authenticated
+                // frontend resolves the event and checks its owner on click.
+                if value.is_empty() || value.len() > 19 || value.starts_with('0')
+                    || !value.bytes().all(|b| b.is_ascii_digit())
+                {
+                    return None;
+                }
+                session_id = Some(format!("notification-{value}"));
+                continue;
+            }
             _ => return None,
         };
         *target = Some(value.into_owned());
@@ -953,8 +964,8 @@ fn open_notification_session(app: &AppHandle, session_id: String, origin_port: u
     if window.show().is_err() || window.unminimize().is_err() || window.set_focus().is_err() {
         return;
     }
-    // The workspace resolves this route only after loading the signed-in user's
-    // own session list, preserving its normal ownership and archive checks.
+    // The workspace resolves session routes against the signed-in user's list,
+    // and notification routes through an authenticated, owner-scoped lookup.
     let hash = serde_json::to_string(&format!("#{session_id}")).unwrap();
     let _ = window.eval(&format!("window.location.hash={hash};"));
 }
@@ -2593,10 +2604,21 @@ mod tests {
     }
 
     #[test]
+    fn workbench_notification_event_uses_authenticated_lookup_route() {
+        let url = tauri::Url::parse("nx-workbench://notify?title=Task&body=Done&event=123").unwrap();
+        assert_eq!(workbench_notification(&url).unwrap().session_id.as_deref(), Some("notification-123"));
+    }
+
+    #[test]
     fn workbench_notification_rejects_malformed_routes_and_parameters() {
         for raw in [
             "nx-workbench://notify?title=x", // missing body
             "nx-workbench://notify?title=x&body=y&extra=z",
+            "nx-workbench://notify?title=x&body=y&event=0",
+            "nx-workbench://notify?title=x&body=y&event=01",
+            "nx-workbench://notify?title=x&body=y&event=1%2Fother",
+            "nx-workbench://notify?title=x&body=y&event=1&session=chat",
+            "nx-workbench://notify?title=x&body=y&event=1&event=2",
             "nx-workbench://notify?title=x&body=y&session=chat%2Fother",
             "nx-workbench://notify?title=x&body=y&session=%23javascript",
             "nx-workbench://notify?title=x&title=y&body=z",

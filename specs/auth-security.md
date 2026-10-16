@@ -36,7 +36,7 @@ This spec covers current security and trust-boundary behavior in:
 
 ## Trust Boundary
 
-Odysseus is a trusted-user private-network app. Admins intentionally have powerful local capabilities: shell, files, email, calendar, MCP, model serving, vault, settings, and API token management. The security model prevents unauthenticated access, non-admin escalation, prompt-injection through untrusted content, and accidental exposure of internal services.
+Novum Xenium is a trusted-user private-network app. Admins intentionally have powerful local capabilities: shell, files, email, calendar, MCP, model serving, vault, settings, and API token management. The security model prevents unauthenticated access, non-admin escalation, prompt-injection through untrusted content, and accidental exposure of internal services.
 
 `THREAT_MODEL.md` owns high-level security framing, but implementation claims here should be verified against current code when the threat model is stale. This spec records the implementation map that contributors should check before changing auth or untrusted-context flows. Security-header runtime details live in `runtime.md`.
 

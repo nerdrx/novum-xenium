@@ -22,6 +22,7 @@ _COORDINATOR_HELPER = (
     _REPO / "tests" / "helpers" / "test_settings_shell_coordinator.mjs"
 )
 _IMAGE_PICKER_HELPER = _REPO / "tests" / "helpers" / "test_image_settings_picker.mjs"
+_NATIVE_PUSH_HELPER = _REPO / "tests" / "helpers" / "test_native_push_bridge.mjs"
 _HAS_NODE = shutil.which("node") is not None
 _STYLE = _REPO / "static" / "style.css"
 
@@ -134,4 +135,18 @@ def test_image_settings_picker_behavior():
         "disabledEndpointExcluded": True,
         "savedModelSurvivesRefreshAndSave": True,
         "emptyAndUnknownBackendMessages": True,
+    }
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_native_push_unregister_uses_injected_bridge_message_channel():
+    proc = _run_node(str(_NATIVE_PUSH_HELPER))
+
+    assert proc.returncode == 0, (
+        f"Native push bridge test failed:\nSTDERR:\n{proc.stderr}\nSTDOUT:\n{proc.stdout}"
+    )
+    assert json.loads(proc.stdout.strip()) == {
+        "bridgeObjectReply": True,
+        "unrelatedReplyIgnored": True,
+        "listenerRemoved": True,
     }

@@ -104,12 +104,19 @@ def collect_usage(db, owner, days, *, now=None):
         buckets = md.get("usage_buckets")
         buckets = [b for b in buckets if isinstance(b, dict)] if isinstance(buckets, list) else []
         if not buckets:
-            buckets = [{"model": md.get("model") or selected_model,
+            buckets = [{"model": md.get("model") or selected_model, "endpoint_id": md.get("endpoint_id"),
                         "input_tokens": input_tokens, "output_tokens": output_tokens}]
         touched_models = set()
         for bucket in buckets:
             model = bucket.get("model") or md.get("model") or selected_model or "Unknown"
             model = str(model)[:200]
+            requested = str(md.get("requested_model") or md.get("selected_model") or "").strip()
+            requested_endpoint = str(md.get("requested_endpoint_id") or "").strip()
+            actual_endpoint = str(bucket.get("endpoint_id") or md.get("endpoint_id") or "").strip()
+            if (re.fullmatch(r"nx-model-\d+(?::LOCAL)?", model, re.IGNORECASE)
+                    and requested and not re.fullmatch(r"nx-model-\d+(?::LOCAL)?", requested, re.IGNORECASE)
+                    and requested_endpoint and requested_endpoint == actual_endpoint):
+                model = requested[:200]
             aggregate = models.setdefault(model, {"model": model, **_counts()})
             aggregate["input_tokens"] += _number(bucket.get("input_tokens")) or 0
             aggregate["output_tokens"] += _number(bucket.get("output_tokens")) or 0

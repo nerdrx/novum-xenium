@@ -37,6 +37,7 @@ import notesModule from './js/notes.js';
 import adminModule from './js/admin.js?v=20261007toolqueue1';
 import settingsModule from './js/settings.js';
 import { initUsage, refreshUsage, resolveUsageModelName } from './js/usage.js';
+import { setModelDisplayItemsProvider } from './js/modelDisplay.js';
 import { initModules } from './js/modules.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
@@ -4336,6 +4337,7 @@ function startOdysseusApp() {
   initModules({ openIntegrations: () => settingsModule.open('integrations'), openChat: id => sessionModule.selectSession(id) });
 
   // Home and Settings share the same per-user analytics snapshot.
+  setModelDisplayItemsProvider(() => modelsModule.getCachedItems());
   initUsage({
     openChat: id => sessionModule.selectSession(id),
     openAnalytics: () => settingsModule.open('usage'),

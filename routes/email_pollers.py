@@ -1169,7 +1169,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                     cfg = _get_email_config(account_id, owner=account_owner)
                                     to_addr = cfg["from_address"]  # self-email
 
-                                    # Deep-link to open the original email in Odysseus (if public URL is configured).
+                                    # Deep-link to open the original email in Novum Xenium (if public URL is configured).
                                     # Hash format `#email=FOLDER:UID` is handled by static/js/emailInbox.js:_maybeOpenFromHash.
                                     from src.settings import load_settings as _ls
                                     _pub = (_ls().get("app_public_url") or "").rstrip("/")
@@ -1181,7 +1181,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                     alert_body = (
                                         f"Your AI assistant flagged this email as {urgency.upper()} urgency.\n\n"
                                         f"Reason: {reason}\n\n"
-                                        + (f"Open in Odysseus: {open_url}\n\n" if open_url else "")
+                                        + (f"Open in Novum Xenium: {open_url}\n\n" if open_url else "")
                                         + f"---\n"
                                         f"From: {sender}\n"
                                         f"Subject: {subject}\n"
@@ -1189,14 +1189,14 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                         f"{body[:800]}"
                                         + ("..." if len(body or "") > 800 else "")
                                     )
-                                    # HTML alternative with a clickable "Open in Odysseus" button
+                                    # HTML alternative with a clickable "Open in Novum Xenium" button
                                     import html as _h
                                     body_excerpt = _h.escape((body or "")[:800])
                                     open_html = (
                                         f'<p><a href="{_h.escape(open_url)}" '
                                         'style="display:inline-block;padding:8px 14px;background:#50fa7b;'
                                         'color:#000;text-decoration:none;border-radius:4px;font-weight:bold">'
-                                        'Open in Odysseus</a></p>'
+                                        'Open in Novum Xenium</a></p>'
                                     ) if open_url else ""
                                     alert_html = (
                                         f'<div style="font-family:system-ui,sans-serif;max-width:640px">'
@@ -1510,8 +1510,236 @@ async def _scheduled_email_poller():
             logger.error(f"Scheduled poller error: {e}")
 
 
+_notification_email_scan_lock = None
+_notification_email_account_cursor = 0
+
+
+def _notification_email_scan_once(max_accounts=5):
+    """Poll a bounded number of opted-in inboxes using header-only IMAP reads."""
+    import sqlite3
+    from core.database import (
+        SessionLocal, EmailAccount, NotificationDevice, NotificationEmailCursor,
+    )
+    global _notification_email_account_cursor
+    db = SessionLocal()
+    try:
+        owners = [row[0] for row in db.query(NotificationDevice.owner).filter(
+            NotificationDevice.email_enabled.is_(True),
+        ).distinct().limit(1000).all() if row[0]]
+        from src.notification_feed import active_email_watchers
+        owners = list(set(owners) | set(active_email_watchers()))
+        if not owners:
+            return 0
+        accounts = db.query(EmailAccount).filter(
+            EmailAccount.owner.in_(owners), EmailAccount.enabled.is_(True),
+        ).order_by(EmailAccount.owner, EmailAccount.is_default.desc(), EmailAccount.created_at.asc()).limit(1000).all()
+        account_rows = [(row.id, row.owner) for row in accounts if row.id and row.owner]
+        if not account_rows:
+            return 0
+        n = len(account_rows)
+        start = _notification_email_account_cursor % n
+        selected = [account_rows[(start + i) % n] for i in range(min(max(1, int(max_accounts)), n))]
+        _notification_email_account_cursor = (start + len(selected)) % n
+        cursors = {
+            (row.owner, row.account_id): (row.last_uid, row.baselined, row.uidvalidity)
+            for row in db.query(NotificationEmailCursor).filter(
+                NotificationEmailCursor.owner.in_(owners),
+                NotificationEmailCursor.account_id.in_([aid for aid, _owner in selected]),
+            ).all()
+        }
+    finally:
+        db.close()
+
+    pending_events = []
+    for account_id, owner in selected:
+        conn = None
+        try:
+            conn = _imap_connect(account_id, owner=owner)
+            status, _ = conn.select(_q("INBOX"), readonly=True)
+            if status != "OK":
+                continue
+            def _imap_number(name):
+                try:
+                    response = conn.response(name)
+                    values = response[1] if response else None
+                    if isinstance(values, (list, tuple)):
+                        values = values[0] if values else None
+                    if isinstance(values, bytes):
+                        values = values.decode("ascii", "ignore")
+                    match = re.search(r"\d+", str(values or ""))
+                    return int(match.group(0)) if match else None
+                except Exception:
+                    return None
+
+            uidvalidity = _imap_number("UIDVALIDITY")
+            uidnext = _imap_number("UIDNEXT")
+            cursor_state = cursors.get((owner, account_id))
+            last_uid, baselined, previous_validity = cursor_state if cursor_state else (0, False, None)
+            last_uid = int(last_uid or 0)
+            if uidvalidity is not None and previous_validity and str(uidvalidity) != str(previous_validity):
+                baselined, last_uid = False, 0
+            if not baselined:
+                baseline_uid = max(0, (uidnext or 1) - 1)
+                if uidnext is None:
+                    # Nonconforming servers may omit UIDNEXT; one bounded baseline
+                    # search avoids treating the mailbox's full history as new mail.
+                    baseline_status, baseline_data = conn.uid("SEARCH", None, "ALL")
+                    if baseline_status != "OK":
+                        continue
+                    baseline_values = [
+                        int(value) for value in (baseline_data[0] if baseline_data else b"").split()
+                        if value.isdigit()
+                    ]
+                    baseline_uid = max(baseline_values, default=0)
+                # Mark the existing detector as initialized so the first arrival
+                # after this UID watermark is notified instead of mistaken for baseline.
+                now_iso = datetime.utcnow().isoformat() + "Z"
+                conn_db = sqlite3.connect(SCHEDULED_DB)
+                try:
+                    conn_db.execute(
+                        "CREATE TABLE IF NOT EXISTS email_event_seen ("
+                        "owner TEXT NOT NULL, account_key TEXT NOT NULL, folder TEXT NOT NULL, "
+                        "message_key TEXT NOT NULL, first_seen_at TEXT NOT NULL, "
+                        "PRIMARY KEY (owner, account_key, folder, message_key))"
+                    )
+                    conn_db.execute(
+                        "INSERT OR IGNORE INTO email_event_seen "
+                        "(owner, account_key, folder, message_key, first_seen_at) "
+                        "VALUES (?, ?, 'INBOX', '__notification_baseline__', ?)",
+                        (owner, account_id or "default", now_iso),
+                    )
+                    conn_db.commit()
+                finally:
+                    conn_db.close()
+                db = SessionLocal()
+                try:
+                    cursor = db.query(NotificationEmailCursor).filter(
+                        NotificationEmailCursor.owner == owner,
+                        NotificationEmailCursor.account_id == account_id,
+                    ).first()
+                    if not cursor:
+                        cursor = NotificationEmailCursor(owner=owner, account_id=account_id)
+                        db.add(cursor)
+                    cursor.last_uid = baseline_uid
+                    cursor.uidvalidity = str(uidvalidity) if uidvalidity is not None else None
+                    cursor.baselined = True
+                    db.commit()
+                finally:
+                    db.close()
+                continue
+            if last_uid <= 0:
+                search_status, data = conn.uid("SEARCH", None, "ALL")
+            else:
+                search_status, data = conn.uid("SEARCH", None, "UID", f"{last_uid + 1}:*")
+            if search_status != "OK":
+                continue
+            uids = [int(value) for value in (data[0] if data else b"").split() if value.isdigit()]
+            # UID SEARCH's `*` can resolve below the range start; filter explicitly.
+            new_uids = [uid for uid in uids if uid > last_uid][:50]
+            if not new_uids:
+                # Advance over expunged UID gaps only after a successful search.
+                if uidnext and uidnext - 1 > last_uid:
+                    db = SessionLocal()
+                    try:
+                        cursor = db.query(NotificationEmailCursor).filter(
+                            NotificationEmailCursor.owner == owner,
+                            NotificationEmailCursor.account_id == account_id,
+                        ).first()
+                        if cursor:
+                            cursor.last_uid = uidnext - 1
+                            cursor.uidvalidity = str(uidvalidity) if uidvalidity is not None else cursor.uidvalidity
+                            db.commit()
+                    finally:
+                        db.close()
+                continue
+            fetched = []
+            if new_uids:
+                uid_set = ",".join(str(uid) for uid in new_uids)
+                fetch_status, fetched = conn.uid(
+                    "FETCH", uid_set,
+                    "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM)])",
+                )
+                if fetch_status != "OK":
+                    continue
+            import re as _re
+            from email.utils import parseaddr as _parseaddr
+            rows = []
+            for item in fetched or []:
+                if not isinstance(item, tuple) or len(item) < 2 or not isinstance(item[1], bytes):
+                    continue
+                metadata, raw_headers = item[0], item[1]
+                uid_match = _re.search(rb"\bUID\s+(\d+)", metadata if isinstance(metadata, bytes) else str(metadata).encode())
+                uid = uid_match.group(1).decode() if uid_match else ""
+                if not uid:
+                    continue
+                msg = email_mod.message_from_bytes(raw_headers)
+                from_name, from_address = _parseaddr(_decode_header(msg.get("From", "")))
+                rows.append({
+                    "uid": uid,
+                    "message_id": (msg.get("Message-ID") or "").strip(),
+                    "subject": _decode_header(msg.get("Subject", "New email")) or "New email",
+                    "from_name": from_name or from_address,
+                    "from_address": from_address,
+                })
+            if rows:
+                pending_events.append((owner, account_id, rows, max(int(row["uid"]) for row in rows), str(uidvalidity) if uidvalidity is not None else None))
+        except Exception:
+            logger.warning("Background notification inbox scan failed for owner=%s account=%s", owner, account_id, exc_info=True)
+        finally:
+            if conn is not None:
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+    return pending_events
+
+
+async def _notification_email_poller():
+    import asyncio
+    while True:
+        try:
+            batches = await asyncio.to_thread(_notification_email_scan_once)
+            if batches:
+                from routes.email_routes import _record_email_received_events
+                from core.database import SessionLocal, NotificationEmailCursor
+                for owner, account_id, rows, target_uid, uidvalidity in batches:
+                    if not _record_email_received_events(owner, account_id, "INBOX", rows, uidvalidity=uidvalidity):
+                        continue
+                    db = SessionLocal()
+                    try:
+                        cursor = db.query(NotificationEmailCursor).filter(
+                            NotificationEmailCursor.owner == owner,
+                            NotificationEmailCursor.account_id == account_id,
+                        ).first()
+                        if cursor:
+                            cursor.last_uid = target_uid
+                            cursor.uidvalidity = uidvalidity
+                            cursor.baselined = True
+                            db.commit()
+                    finally:
+                        db.close()
+            await asyncio.sleep(120)
+        except Exception:
+            logger.warning("Background notification email poller failed", exc_info=True)
+            await asyncio.sleep(120)
+
+
+async def _notification_push_poller():
+    import asyncio
+    while True:
+        try:
+            from src.push_notifications import process_pending_push
+            await asyncio.to_thread(process_pending_push, 5)
+            await asyncio.sleep(15)
+        except Exception:
+            logger.warning("Background FCM delivery worker failed", exc_info=True)
+            await asyncio.sleep(15)
+
+
 _poller_task = None
 _summarize_task = None
+_notification_email_task = None
+_notification_push_task = None
 
 def _inprocess_pollers_enabled() -> bool:
     """Honour `ODYSSEUS_INPROCESS_POLLERS` — set to `0`/`false`/`no`/`off`
@@ -1540,12 +1768,16 @@ def _start_poller():
     import asyncio
 
     def _launch():
-        global _poller_task, _summarize_task
+        global _poller_task, _summarize_task, _notification_email_task, _notification_push_task
         loop = asyncio.get_running_loop()
         if _poller_task is None:
             _poller_task = loop.create_task(_scheduled_email_poller())
             logger.info("Started scheduled email poller")
         _summarize_task = None
+        if _notification_email_task is None:
+            _notification_email_task = loop.create_task(_notification_email_poller())
+        if _notification_push_task is None:
+            _notification_push_task = loop.create_task(_notification_push_poller())
 
     try:
         _launch()

@@ -4,9 +4,9 @@ layout: default
 
 # Backup & Restore
 
-Odysseus keeps all of your state in the `data/` directory — the SQLite database
+Novum Xenium keeps all of your state in the `data/` directory — the SQLite database
 (`app.db`), the Fernet encryption key (`data/.app_key`), the vault, memory, RAG
-indexes, personal documents, and uploads. The `scripts/odysseus-backup` tool
+indexes, personal documents, and uploads. The legacy-named `scripts/odysseus-backup` tool
 snapshots that directory into a single gzip tarball and restores it later.
 
 Snapshots are safe to take while the app is running: SQLite databases are copied

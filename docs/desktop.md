@@ -1,12 +1,12 @@
 # Novum Xenium desktop
 
-The desktop app manages a local Docker Compose installation and opens the same workspace served to browser users. It uses Tauri 2 and the operating system's webview. The Python backend and existing Odysseus data formats remain compatible.
+The desktop app manages a local Docker Compose installation and opens the same workspace served to browser users. It uses Tauri 2 and the operating system's webview. The Python backend and existing Novum Xenium data formats remain compatible.
 
 ## First release
 
 This release adopts an existing trusted checkout. It does not install Docker, WSL, Git or a backend automatically. Start with the Docker instructions in the main README, then select that checkout in the desktop manager. No account credentials are copied into the desktop frontend.
 
-For an existing installation on this PC, the checkout is `/run/media/nerdrx/Lex/Odysseus`, Compose project `odysseus-local`, port `7000`. These are installation-specific values, not portable defaults. Select `novum-xenium` for a fresh backend when using its matching Compose project name.
+For an existing installation, select its saved checkout and Compose project (`odysseus-local` is a legacy project name). These are installation-specific values, not portable defaults. Select `novum-xenium` for a fresh backend when using its matching Compose project name.
 
 The manager includes only the checkout's `docker-compose.yml` and recognized optional `docker.local.yml` / `docker.host-local.yml` overlays. It operates on the project you save. It does not stop every container on the machine.
 

@@ -65,7 +65,7 @@ Email default-account state is serialized per owner. Startup normalizes legacy d
 
 ## Migration Policy
 
-Odysseus does not use Alembic. `core.database.init_db()` runs at module import, before FastAPI lifespan startup. `Base.metadata.create_all()` creates missing tables; hand-written `_migrate_*` functions add or reshape legacy columns.
+Novum Xenium does not use Alembic. `core.database.init_db()` runs at module import, before FastAPI lifespan startup. `Base.metadata.create_all()` creates missing tables; hand-written `_migrate_*` functions add or reshape legacy columns.
 
 Runtime behavior:
 

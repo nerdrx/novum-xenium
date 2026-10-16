@@ -2,7 +2,7 @@
 
 This extra runs on the Docker host with an already installed, logged-in Codex CLI. The normal Docker installation does not need it. Python 3 and the standard library are sufficient for the bridge.
 
-The CLI must support `codex exec --json`, `codex exec --image`, and the native `image_generation` feature. Availability depends on your CLI version and account. The bridge uses the existing login, clears API-key environment variables for its worker, and does not copy credentials into Odysseus. Provider usage limits and image rules still apply.
+The CLI must support `codex exec --json`, `codex exec --image`, and the native `image_generation` feature. Availability depends on your CLI version and account. The bridge uses the existing login, clears API-key environment variables for its worker, and does not copy credentials into Novum Xenium. Provider usage limits and image rules still apply.
 
 ## Start on the host
 
@@ -28,9 +28,9 @@ A bridge bound to host loopback is intentionally unreachable from a normal Docke
 docker compose -f docker-compose.yml -f docker/codex-images.yml up -d --build
 ```
 
-This overlay gives only the Odysseus service host networking so it can reach the loopback bridge. It explicitly binds the app to localhost and uses the bundled services' existing loopback ports. It does not mount the Codex home or Docker socket. It is Linux-only; the default Docker flow is unchanged.
+This overlay gives only the Novum Xenium service host networking so it can reach the loopback bridge. It explicitly binds the app to localhost and uses the bundled services' existing loopback ports. It does not mount the Codex home or Docker socket. It is Linux-only; the default Docker flow is unchanged.
 
-In Odysseus Settings, add an image provider with:
+In Novum Xenium Settings, add an image provider with:
 
 - Base URL: `http://127.0.0.1:8111/v1`
 - API key: the local bridge token
@@ -38,9 +38,9 @@ In Odysseus Settings, add an image provider with:
 
 Open **Settings → AI → Image Generation**. The **Model** picker lists `chatgpt-image-codex` together with its configured provider name; select it and enable image generation. The backend description identifies the Codex subscription bridge. Enabled image-only providers and recognized image models on mixed providers appear here; ordinary ChatGPT text models do not become image backends automatically. Provider names disambiguate duplicate model IDs. Saved models that are unavailable remain visible instead of being silently cleared by a quality/toggle change. Reopening the AI panel refreshes provider choices.
 
-**Auto-detect** uses the configured endpoint credentials to discover image models, including the authenticated bridge. This does not install a bridge or transfer Codex credentials into Odysseus. Model discovery can fail while the service is offline; a saved model is configuration, not a live connection check.
+**Auto-detect** uses the configured endpoint credentials to discover image models, including the authenticated bridge. This does not install a bridge or transfer Codex credentials into Novum Xenium. Model discovery can fail while the service is offline; a saved model is configuration, not a live connection check.
 
-Quality and size are visual guidance for the Codex bridge, not guaranteed rendering controls or per-image prices. The saved image dimensions are read from the artifact for Gallery and chat metadata; they can differ from the requested size. Generated and edited images are stored by Odysseus in its persistent Gallery. Attached-image edits pass the uploaded image through a private, per-request temporary job directory to the native image tool; the bridge does not accept caller-supplied filesystem paths.
+Quality and size are visual guidance for the Codex bridge, not guaranteed rendering controls or per-image prices. The saved image dimensions are read from the artifact for Gallery and chat metadata; they can differ from the requested size. Generated and edited images are stored by Novum Xenium in its persistent Gallery. Attached-image edits pass the uploaded image through a private, per-request temporary job directory to the native image tool; the bridge does not accept caller-supplied filesystem paths.
 
 ## Stop or inspect
 

@@ -170,18 +170,33 @@ function assertNoOverflow(metrics, name) {
       const loaded = await page.evaluate(async () => {
         window.__usageCalls = [];
         const usage = await import('/static/js/usage.js');
+        const renderer = await import('/static/js/chatRenderer.js');
+        const display = await import('/static/js/modelDisplay.js');
         window.__usage = usage;
-        window.__modelLabel = (model) => usage.resolveUsageModelName(model, [
+        const catalog = [
           { models: ['nx-model-5'], models_display: ['Llama 3.1 8B'] },
-        ], (requested, actual) => String(actual || requested || '').split('/').pop());
+        ];
+        display.setModelDisplayItemsProvider(() => catalog);
+        window.__modelLabel = (model) => usage.resolveUsageModelName(model, catalog,
+          (requested, actual) => String(actual || requested || '').split('/').pop());
         await usage.initUsage({
           openChat: id => window.__usageCalls.push(['chat', id]),
           openAnalytics: () => window.__usageCalls.push(['analytics']),
           modelLabel: window.__modelLabel,
         });
-        return true;
+        return {
+          chatAlias: renderer.modelRouteLabel('nx-model-5', 'nx-model-5'),
+          chatNamespaced: renderer.modelRouteLabel('vendor/nx-model-5', 'vendor/nx-model-5'),
+          chatSavedRequest: renderer.modelRouteLabel('qwen3.5:9b-local', 'nx-model-5', 'Local models', 'Local models', 'local-zvram', 'local-zvram'),
+          chatFallback: (() => {
+            display.setModelDisplayItemsProvider(() => []);
+            const label = renderer.modelRouteLabel('nx-model-5', 'nx-model-5');
+            display.setModelDisplayItemsProvider(() => catalog);
+            return label;
+          })(),
+        };
       });
-      assert.equal(loaded, true);
+      assert.deepEqual(loaded, { chatAlias: 'nx-model-5', chatNamespaced: 'nx-model-5', chatSavedRequest: 'qwen3.5:9b-local', chatFallback: 'nx-model-5' }, 'historical internal slots use saved request metadata only when its endpoint matches');
       await page.waitForFunction(() => document.querySelector('#home-dashboard .usage-recent-chat'));
       await page.waitForFunction(() => document.querySelector('#usage-panel [data-usage-days="7"]'));
       await page.evaluate(async () => document.fonts.ready);

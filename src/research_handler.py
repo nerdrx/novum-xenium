@@ -10,7 +10,9 @@ Includes a task registry so research survives page refreshes and can be cancelle
 import asyncio
 import json
 import logging
+import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Dict
@@ -373,9 +375,12 @@ class ResearchHandler:
                         logger.warning(f"on_complete callback failed in timeout branch: {e}")
                 else:
                     entry["result"] = f"Research timed out after {hard_timeout}s. The model may be too slow for deep research."
+                    self._save_result(session_id, entry)
                 on_progress({"phase": "error", "message": f"Research timed out after {hard_timeout}s"})
             except asyncio.CancelledError:
                 entry["status"] = "cancelled"
+                entry["result"] = entry.get("result") or "Research was cancelled."
+                self._save_result(session_id, entry)
                 raise
             except Exception as e:
                 logger.error(f"Background research failed: {e}", exc_info=True)
@@ -399,6 +404,7 @@ class ResearchHandler:
                 else:
                     entry["result"] = str(e)
                     entry["status"] = "error"
+                    self._save_result(session_id, entry)
 
         task = asyncio.create_task(_run())
         entry["task"] = task
@@ -599,7 +605,7 @@ class ResearchHandler:
                 pass
 
     def _save_result(self, session_id: str, entry: dict):
-        """Persist completed research result to disk."""
+        """Persist terminal research state atomically for reload recovery."""
         try:
             path = _research_json_path(session_id)
             if path is None:
@@ -628,13 +634,27 @@ class ResearchHandler:
                 # SECURITY: stamp owner so route handlers can filter by user.
                 "owner": entry.get("owner", ""),
             }
-            path.write_text(json.dumps(data), encoding="utf-8")
-            logger.info(f"Research result saved to {path}")
+            temp_path = None
             try:
-                from src.event_bus import fire_event
-                fire_event("research_completed", entry.get("owner") or None)
-            except Exception:
-                logger.debug("research_completed event dispatch failed", exc_info=True)
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=path.parent,
+                    prefix=f"{path.name}.", suffix=".tmp", delete=False,
+                ) as temp_file:
+                    temp_path = Path(temp_file.name)
+                    json.dump(data, temp_file)
+                    temp_file.flush()
+                    os.fsync(temp_file.fileno())
+                os.replace(temp_path, path)
+            finally:
+                if temp_path is not None:
+                    temp_path.unlink(missing_ok=True)
+            logger.info(f"Research result saved to {path}")
+            if entry.get("status") == "done":
+                try:
+                    from src.event_bus import fire_event
+                    fire_event("research_completed", entry.get("owner") or None)
+                except Exception:
+                    logger.debug("research_completed event dispatch failed", exc_info=True)
         except Exception as e:
             logger.error(f"Failed to save research result: {e}")
 

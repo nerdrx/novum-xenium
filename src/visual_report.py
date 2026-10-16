@@ -247,30 +247,31 @@ _TEMPLATE = """\
 <meta property="og:description" content="{description}">
 <meta property="og:type" content="article">
 {og_image_meta}
-<meta name="theme-color" content="#b8543a" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#131214" media="(prefers-color-scheme: dark)">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>O</text></svg>">
+<meta name="theme-color" content="#7653ac" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#100f14" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%23100f14'/><text x='8' y='68' font-family='sans-serif' font-weight='900' font-size='62' fill='%23a88bd6'>nx</text></svg>">
 <style>
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
 :root {{
-  --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
+  --font-display: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --bg: #fbf9f4;
+  --bg: #f6f4f9;
   --bg-surface: #ffffff;
-  --bg-surface-alt: #f1ede4;
+  --bg-surface-alt: #eeebf3;
   --border: rgba(0,0,0,0.08);
   --border-strong: rgba(0,0,0,0.16);
-  --text: #1a1817;
-  --text-dim: #5a5651;
-  --text-muted: #8a8580;
-  --accent: #b8543a;
-  --accent-light: #d97a5e;
-  --accent-bg: rgba(184,84,58,0.06);
+  --text: #25202d;
+  --text-dim: #5e566a;
+  --text-muted: #71677e;
+  --accent-ink: #ffffff;
+  --accent: #7653ac;
+  --accent-light: #684591;
+  --accent-bg: rgba(118,83,172,0.06);
   --gold: #c9952e;
   --gold-bg: rgba(201,149,46,0.09);
-  --aurora-a: rgba(184,84,58,0.10);
+  --aurora-a: rgba(118,83,172,0.10);
   --aurora-b: rgba(201,149,46,0.08);
   --aurora-c: rgba(64,98,128,0.07);
   --radius: 12px;
@@ -281,12 +282,12 @@ _TEMPLATE = """\
 
 @media (prefers-color-scheme: dark) {{
   :root {{
-    --bg: #131214; --bg-surface: #1c1a1e; --bg-surface-alt: #25232a;
+    --bg: #100f14; --bg-surface: #19171e; --bg-surface-alt: #24212b;
     --border: rgba(255,255,255,0.07); --border-strong: rgba(255,255,255,0.16);
-    --text: #ece8e2; --text-dim: #a8a39c; --text-muted: #6f6b66;
-    --accent: #e88f73; --accent-light: #f4ad95; --accent-bg: rgba(232,143,115,0.09);
+    --text: #e9e6ef; --text-dim: #b4acbf; --text-muted: #a298af;
+    --accent-ink: #100f14; --accent: #a88bd6; --accent-light: #c7adee; --accent-bg: rgba(168,139,214,0.09);
     --gold: #e8c05a; --gold-bg: rgba(232,192,90,0.09);
-    --aurora-a: rgba(232,143,115,0.13);
+    --aurora-a: rgba(168,139,214,0.13);
     --aurora-b: rgba(232,192,90,0.09);
     --aurora-c: rgba(125,180,224,0.10);
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.4); --shadow-md: 0 4px 28px rgba(0,0,0,0.55);
@@ -365,6 +366,7 @@ body::after {{
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 44px;
   padding: 6px 14px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -451,6 +453,7 @@ body::after {{
   transform: translateX(-50%);
   background: linear-gradient(90deg, transparent, var(--border-strong), transparent);
 }}
+.hero-brand {{ position: relative; color: var(--accent); margin-bottom: 1rem; }}
 .hero-label {{
   position: relative;
   text-transform: uppercase;
@@ -688,20 +691,6 @@ body::after {{
 }}
 .content p {{ margin-bottom: 1.1rem; hanging-punctuation: first last; }}
 
-/* Drop cap on the very first paragraph of the body — old-school editorial
-   touch that anchors the reader. */
-.content > p:first-of-type::first-letter,
-.content > h2:first-child + p::first-letter {{
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-variation-settings: 'opsz' 144;
-  font-size: 3.6em;
-  line-height: 0.85;
-  float: left;
-  margin: 0.15em 0.12em 0 -0.04em;
-  color: var(--accent);
-}}
-
 .content a {{
   color: var(--accent);
   text-decoration: underline;
@@ -794,7 +783,7 @@ body::after {{
 .chat-cta-btn {{
   display: inline-flex; align-items: center; gap: 8px;
   padding: 10px 18px; font-size: 0.95rem; font-weight: 600;
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--accent-ink);
   border: none; border-radius: 8px; cursor: pointer;
   font-family: inherit;
   transition: filter 0.15s, transform 0.05s;
@@ -851,7 +840,8 @@ body::after {{
 </div>
 
 <div class="hero">
-  <div class="hero-label">Odysseus &mdash; Deep Research Report</div>
+  <div class="hero-brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1098 552" width="64" height="32" aria-label="NX" role="img"><g fill="currentColor" transform="translate(-56 552) scale(1 -1)"><path d="M56 0V540H230L238 368L214 370Q220 439 244.5 478.5Q269 518 306.5 535.0Q344 552 390 552Q446 552 487.5 528.0Q529 504 552.0 458.5Q575 413 575 347V0H381V280Q381 319 376.5 346.5Q372 374 358.5 388.5Q345 403 319 403Q282 403 266.0 371.0Q250 339 250 280V0Z" /><path d="M551.0 0 739.0 272 553.0 540H753.0L851.0 386L947.0 540H1151.0L965.0 272L1154.0 0H954.0L855.0 160L755.0 0Z" /></g></svg></div>
+  <div class="hero-label">Novum Xenium &mdash; Deep Research</div>
   <h1>{question_html}</h1>
 </div>
 
@@ -877,7 +867,7 @@ body::after {{
 </div>
 
 <div class="report-footer">
-  Generated by Odysseus Deep Research &middot; {timestamp}
+  Generated by Novum Xenium Deep Research &middot; {timestamp}
 </div>
 
 <script>
@@ -1098,7 +1088,7 @@ body::after {{
         var url = '/#' + data.session_id;
         var opened = false;
         // The report typically opens in a new tab — if we have access to the
-        // original Odysseus tab, navigate it and close this report tab so the
+        // original Novum Xenium tab, navigate it and close this report tab so the
         // user lands directly in the new chat.
         try {{
           if (window.opener && !window.opener.closed) {{
@@ -1157,122 +1147,8 @@ if (document.body.classList.contains('category-comparison')) {{
 def _category_css(category: Optional[str]) -> str:
     if not category:
         return ""
-    # Per-category palette overrides — applied BEFORE the structural rules so
-    # everything that reads --accent / --aurora-* automatically retints. The
-    # default (no category) keeps the warm terracotta defined in :root.
+    # Categories vary layout while retaining Novum typography and palette.
     palettes = """
-/* ── Category palettes ───────────────────────────────────
-   Override the accent + aurora vars per category so each report
-   type has a distinct visual identity. */
-body.category-product {
-  --accent: #2a8a8c;
-  --accent-light: #4ab0b2;
-  --accent-bg: rgba(42,138,140,0.07);
-  --aurora-a: rgba(42,138,140,0.11);
-  --aurora-b: rgba(201,149,46,0.06);
-  --aurora-c: rgba(64,98,128,0.06);
-}
-body.category-comparison {
-  --accent: #7a4cb8;
-  --accent-light: #9d76d0;
-  --accent-bg: rgba(122,76,184,0.07);
-  --aurora-a: rgba(122,76,184,0.11);
-  --aurora-b: rgba(184,84,58,0.05);
-  --aurora-c: rgba(64,98,128,0.07);
-}
-body.category-howto {
-  --accent: #3d8a3d;
-  --accent-light: #62b162;
-  --accent-bg: rgba(61,138,61,0.07);
-  --aurora-a: rgba(61,138,61,0.11);
-  --aurora-b: rgba(201,149,46,0.07);
-  --aurora-c: rgba(42,138,140,0.05);
-}
-body.category-landscape {
-  --accent: #b88a2e;
-  --accent-light: #d4a955;
-  --accent-bg: rgba(184,138,46,0.08);
-  --aurora-a: rgba(184,138,46,0.13);
-  --aurora-b: rgba(184,84,58,0.06);
-  --aurora-c: rgba(122,76,184,0.05);
-}
-@media (prefers-color-scheme: dark) {
-  body.category-product {
-    --accent: #5cc8cb; --accent-light: #8fdde0;
-    --accent-bg: rgba(92,200,203,0.10);
-    --aurora-a: rgba(92,200,203,0.13);
-    --aurora-b: rgba(232,192,90,0.07);
-    --aurora-c: rgba(125,180,224,0.08);
-  }
-  body.category-comparison {
-    --accent: #b896e8; --accent-light: #d0b8f0;
-    --accent-bg: rgba(184,150,232,0.10);
-    --aurora-a: rgba(184,150,232,0.13);
-    --aurora-b: rgba(232,143,115,0.06);
-    --aurora-c: rgba(125,180,224,0.08);
-  }
-  body.category-howto {
-    --accent: #82c882; --accent-light: #a8dba8;
-    --accent-bg: rgba(130,200,130,0.09);
-    --aurora-a: rgba(130,200,130,0.12);
-    --aurora-b: rgba(232,192,90,0.07);
-    --aurora-c: rgba(92,200,203,0.07);
-  }
-  body.category-landscape {
-    --accent: #e6c069; --accent-light: #f0d390;
-    --accent-bg: rgba(230,192,105,0.10);
-    --aurora-a: rgba(230,192,105,0.15);
-    --aurora-b: rgba(232,143,115,0.07);
-    --aurora-c: rgba(184,150,232,0.06);
-  }
-}
-
-/* ── Per-category font pairings ───────────────────────
-   Body font shifts between serif (long-form categories) and sans
-   (practical/data categories) so each report reads as a different
-   publication, not just a re-tinted version of the same template. */
-
-/* Long-form: literary serif for both display and body */
-body:not([class*="category-"]),
-body.category-landscape {
-  --font-body: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
-}
-
-/* Comparison: analytical serif display + clean sans body */
-body.category-comparison {
-  --font-display: 'Playfair Display', Georgia, serif;
-  --font-body: 'Inter', system-ui, sans-serif;
-}
-
-/* How-to: friendly geometric sans, top to bottom */
-body.category-howto {
-  --font-display: 'Manrope', system-ui, sans-serif;
-  --font-body: 'Inter', system-ui, sans-serif;
-}
-
-/* Product: techy/engineery — IBM Plex Sans display + Inter body */
-body.category-product {
-  --font-display: 'IBM Plex Sans', system-ui, sans-serif;
-  --font-body: 'Inter', system-ui, sans-serif;
-}
-
-/* Source Serif sits visually larger than Inter at the same px — pull it
-   back one notch for the categories that use it as body so line length
-   and rhythm stay comparable across categories. */
-body:not([class*="category-"]) body, /* no-op selector, kept for clarity */
-body.category-landscape { font-size: 16.5px; }
-
-/* Drop cap looks bad on geometric sans — kill it for those categories */
-body.category-product   .content > p:first-of-type::first-letter,
-body.category-howto     .content > p:first-of-type::first-letter,
-body.category-comparison .content > p:first-of-type::first-letter,
-body.category-product   .content > h2:first-child + p::first-letter,
-body.category-howto     .content > h2:first-child + p::first-letter,
-body.category-comparison .content > h2:first-child + p::first-letter {
-  font-size: 1em; float: none; margin: 0; color: inherit;
-  font-family: inherit; font-weight: inherit;
-}
-
 /* ── Per-category background effects ───────────────
    Each category overrides body::before so the page reads as a
    distinctly-textured surface. Aurora stays the default. */
@@ -1645,7 +1521,7 @@ body.category-product .content h3 + table {
         "factcheck": """
 /* Fact-check category */
 .category-factcheck .hero {
-  background:linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  background:linear-gradient(135deg, var(--bg) 0%, var(--bg-surface) 100%);
 }
 .category-factcheck .content h2:first-of-type {
   font-size:1.4em; text-align:center; padding:16px 0; border:none;
@@ -1685,29 +1561,20 @@ def _extract_report_title(markdown_text: str, fallback: str):
     """Pull a real title from the report's first heading rather than reusing
     the raw user query. Returns (title, markdown_with_title_stripped).
 
-    Falls back to the query when no heading is present. Skips generic
-    placeholders ("Executive Summary", "Introduction", etc.) and tries the
-    next heading. If the chosen title was the report's own top heading, that
-    heading is removed from the markdown so it doesn't duplicate the hero h1.
+    Falls back to the query when the opening heading is absent or generic.
+    A real opening title is removed so it does not duplicate the hero h1;
+    section headings remain intact.
     """
     if not markdown_text:
         return fallback, markdown_text
 
-    # Walk through headings (h1 first, then h2 anywhere) and use the first
-    # non-generic one. Track the chosen match so we can strip it from the body.
-    candidates = []
-    for level, pattern in ((1, r'^# +(.+?)\s*$'), (2, r'^## +(.+?)\s*$')):
-        for m in re.finditer(pattern, markdown_text, re.MULTILINE):
-            cand = m.group(1).strip().rstrip('#').strip()
-            if cand and cand.lower() not in _GENERIC_HEADINGS:
-                candidates.append((level, m, cand))
-
-    # Prefer h1 over h2; among same-level, prefer the earliest.
-    candidates.sort(key=lambda t: (t[0], t[1].start()))
-    if candidates:
-        _level, match, title = candidates[0]
-        stripped = markdown_text[:match.start()] + markdown_text[match.end():]
-        return title, stripped.lstrip()
+    # Only an opening heading can name the report. A later section heading
+    # must stay in the body and table of contents, never become the page title.
+    match = re.match(r'\A\s*#{1,2} +([^\n]+)', markdown_text)
+    if match:
+        title = match.group(1).strip().rstrip('#').strip()
+        if title and title.lower() not in _GENERIC_HEADINGS:
+            return title, markdown_text[match.end():].lstrip()
     return fallback, markdown_text
 
 

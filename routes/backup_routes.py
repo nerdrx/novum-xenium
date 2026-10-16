@@ -93,7 +93,7 @@ def setup_backup_routes(memory_manager, preset_manager, skills_manager) -> APIRo
                 detail = "Could not read or save the application backup. Check folder permissions and free disk space, then retry."
                 status = 500
             raise HTTPException(status, detail) from exc
-        filename = f"odysseus_full_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        filename = f"novum_xenium_full_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         return FileResponse(
             path, media_type="application/zip", filename=filename,
             background=BackgroundTask(path.unlink, missing_ok=True),
@@ -182,7 +182,7 @@ def setup_backup_routes(memory_manager, preset_manager, skills_manager) -> APIRo
             "preferences": preferences,
         }
 
-        filename = f"odysseus_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filename = f"novum_xenium_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         return Response(
             content=json.dumps(export_data, indent=2, ensure_ascii=False),
             media_type="application/json",

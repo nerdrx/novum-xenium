@@ -36,3 +36,22 @@ Configuration body.
         target = soup.find(id=target_id)
         assert target is not None
         assert target.name in {"h2", "h3"}
+
+
+def test_visual_report_uses_novum_branding_and_self_contained_icon():
+    page = generate_visual_report("A sample report", "## Findings\nEvidence here.", sources=[], stats={}, session_id="brand-test")
+    soup = BeautifulSoup(page, "html.parser")
+    assert "Novum Xenium" in soup.select_one(".hero-label").get_text()
+    assert "Novum Xenium" in soup.select_one(".report-footer").get_text()
+    assert "Odysseus" not in soup.get_text()
+    assert soup.select_one('link[rel="icon"]')["href"].startswith("data:image/svg+xml,")
+    assert "#100f14" in page and "#a88bd6" in page
+
+
+def test_section_heading_is_not_stolen_as_report_title():
+    from src.visual_report import _extract_report_title
+    body = "## Findings\nEvidence here.\n\n## What to check\nKeep this section."
+    assert _extract_report_title(body, "Original question") == ("Original question", body)
+    code = "```markdown\n# Example heading\n```"
+    assert _extract_report_title(code, "Original question") == ("Original question", code)
+    assert _extract_report_title("# Actual report title\n\n## Findings\nEvidence", "Question") == ("Actual report title", "## Findings\nEvidence")

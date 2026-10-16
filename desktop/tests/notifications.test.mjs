@@ -35,6 +35,10 @@ test('desktop notifications require opt-in, persist, and reuse existing calls', 
     await page.evaluate(() => new Notification('Response Complete', {tag:'stream-chat/123'}));
     const invalidTag = new URL(await page.evaluate(() => sent.at(-1)));
     assert.equal(invalidTag.searchParams.has('session'), false);
+    await page.evaluate(() => new Notification('Task finished', {data:{event_id:123}}));
+    assert.equal(new URL(await page.evaluate(() => sent.at(-1))).searchParams.get('event'), '123');
+    await page.evaluate(() => new Notification('Invalid', {data:{event_id:'1/other'}}));
+    assert.equal(new URL(await page.evaluate(() => sent.at(-1))).searchParams.has('event'), false);
     await page.reload();
     assert.equal(await page.locator('#nx-notifications-enabled').isChecked(), true);
     await page.evaluate(() => new Notification('T'.repeat(140), {body:'B'.repeat(600)}));

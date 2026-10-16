@@ -228,7 +228,7 @@ def setup_codex_routes(
                     continue
                 zf.write(path, Path("odysseus") / path.relative_to(root))
         buf.seek(0)
-        headers = {"Content-Disposition": 'attachment; filename="odysseus-codex-plugin.zip"'}
+        headers = {"Content-Disposition": 'attachment; filename="novum-xenium-codex-plugin.zip"'}
         return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
     @router.get("/todos")
@@ -904,7 +904,7 @@ def setup_claude_routes() -> APIRouter:
                     continue
                 zf.write(path, path.relative_to(bundle_root))
         buf.seek(0)
-        headers = {"Content-Disposition": 'attachment; filename="odysseus-claude-skill.zip"'}
+        headers = {"Content-Disposition": 'attachment; filename="novum-xenium-claude-skill.zip"'}
         return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
     return router

@@ -114,6 +114,38 @@ async def test_scheduler_retires_unattended_exact_approval(monkeypatch):
     assert tool_approval_store.peek(pending.approval_id) is None
 
 
+async def test_unattended_approval_pause_is_recorded_as_needs_attention(monkeypatch, tmp_path):
+    from core import database
+    from src.task_scheduler import TaskScheduler
+    from tests.helpers.sqlite_db import make_temp_sqlite
+
+    sessions, engine, _ = make_temp_sqlite(database.Base.metadata)
+    monkeypatch.setattr(database, "SessionLocal", sessions)
+    with sessions() as db:
+        db.add(database.ScheduledTask(
+            id="approval-task", owner="admin", name="Review task", task_type="llm",
+            prompt="Read this page", trigger_type="event", status="active",
+            notifications_enabled=True,
+        ))
+        db.add(database.TaskRun(id="approval-run", task_id="approval-task", status="queued"))
+        db.commit()
+
+    scheduler = TaskScheduler(session_manager=None)
+    async def paused_result(*_args, **_kwargs):
+        return "Scheduled task paused safely: web_fetch requested approval."
+    monkeypatch.setattr(scheduler, "_execute_llm_task", paused_result)
+    notifications = []
+    monkeypatch.setattr(scheduler, "add_notification", lambda *args, **kwargs: notifications.append(args[1]))
+
+    await scheduler._execute_task_locked("approval-task", "approval-run", gate_foreground=False)
+    with sessions() as db:
+        run = db.query(database.TaskRun).filter_by(id="approval-run").one()
+        assert run.status == "error"
+        assert "paused safely" in run.error
+    assert notifications == ["error"]
+    engine.dispose()
+
+
 # ---------------------------------------------------------------------------
 # Test 2 — fallback path receives the same datetime context
 # ---------------------------------------------------------------------------

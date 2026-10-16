@@ -221,6 +221,9 @@ export function handleUIControl(uiData) {
  * Notify user when a background stream completes.
  */
 export function notifyStreamComplete(sessionId, query) {
+  // The authenticated durable feed owns these alerts once its capability has
+  // been confirmed; keep this local fallback for older/offline servers.
+  if (window.__durableNotificationFeedReady) return;
   var isHidden = document.hidden;
   var isOtherSession = sessionModule && sessionModule.getCurrentSessionId() !== sessionId;
   if (!isHidden && !isOtherSession) return;

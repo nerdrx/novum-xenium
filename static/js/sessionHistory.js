@@ -22,7 +22,7 @@ export function installSessionHistory({ getCurrentSessionId, getCurrentPendingDr
   const navigate = () => {
     if (!isReady()) return;
     const id = window.location.hash.slice(1);
-    if (/^(document|note|image|email|event|task|skill|research)-/.test(id) || /^open=notes&note=/.test(id)) return;
+    if (/^(document|note|image|email|event|task|skill|research|notification)-/.test(id) || /^open=notes&note=/.test(id)) return;
     const pendingId = pendingChatRouteId();
     if (pendingId) {
       if (pendingId !== (getCurrentPendingDraftId?.() || '')) restorePendingChat?.(pendingId);

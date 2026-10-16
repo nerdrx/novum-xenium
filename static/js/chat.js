@@ -5352,7 +5352,7 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
     holder._requestedModel = meta && meta.model;
     holder._actualModel = holder._requestedModel;
     _applyModelColor(holder.querySelector('.role'), meta && meta.model);
-    const contentDiv = holder.querySelector('.stream-content');
+    let contentDiv = holder.querySelector('.stream-content');
     box.appendChild(holder);
 
     const spinner = spinnerModule.create('Generating response...', 'right');
@@ -5386,8 +5386,45 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
       const dt = markdownModule.normalizeThinkingMarkup(_streamDisplayText(roundText, { final: docFenceOpened }));
       if (docFenceOpened && !dt.trim()) {
         _showDocumentWritingStatus(contentDiv);
+      } else if (markdownModule.hasUnclosedThinkTag?.(dt)) {
+        // A second viewer must not expose in-flight reasoning as reply prose.
+        contentDiv.innerHTML = '<div class="thinking-section"><div class="thinking-header"><div class="thinking-header-left">Thinking</div></div></div>';
       } else {
-        contentDiv.innerHTML = markdownModule.mdToHtml(markdownModule.squashOutsideCode(dt));
+        // Share the originating viewer's renderer, including open code fences
+        // and collapsed reasoning, before the terminal history reload arrives.
+        let target = contentDiv;
+        let text = dt;
+        const { thinkingBlocks, content: reply } = markdownModule.extractThinkingBlocks(dt);
+        if (thinkingBlocks.length) {
+          // Keep reasoning outside the incremental reply: its generated IDs
+          // change on each render and prevent safe Markdown block freezing.
+          let thinking = contentDiv.querySelector('.resume-thinking');
+          if (!thinking) {
+            contentDiv.textContent = '';
+            thinking = document.createElement('div');
+            thinking.className = 'resume-thinking';
+            target = document.createElement('div');
+            target.className = 'live-reply-content';
+            contentDiv.appendChild(thinking);
+            contentDiv.appendChild(target);
+          } else {
+            target = contentDiv.querySelector('.live-reply-content');
+          }
+          const source = thinkingBlocks.join('\n\n');
+          if (thinking._source !== source) {
+            thinking.innerHTML = markdownModule.processWithThinking('<think>' + source + '</think>');
+            thinking._source = source;
+          }
+          text = reply;
+        }
+        const renderer = target._streamRenderer ||
+          (target._streamRenderer = createStreamRenderer(target, {
+            render: (text) => thinkingBlocks.length
+              ? markdownModule.mdToHtml(markdownModule.squashOutsideCode(text))
+              : markdownModule.processWithThinking(markdownModule.squashOutsideCode(text)),
+            hljs: window.hljs,
+          }));
+        renderer.update(text);
       }
       uiModule.scrollHistory();
     };
@@ -5525,8 +5562,25 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
               metricsData._costRecordId = _metricsCostRecordId(resumeRunId, json);
             }
             if (metricsData) displayMetrics(holder, metricsData);
+          } else if (json.type === 'agent_step') {
+            rich = true;
+            // Tool rounds are separate Markdown documents in the main stream.
+            // Replaying them as one source lets an unfinished fence or reasoning
+            // block swallow the formatting of every subsequent round.
+            if (markdownModule.hasUnclosedThinkTag?.(roundText)) {
+              roundText += '</think>';
+              renderDelta();
+            }
+            if (docFenceOpened) _finishDocumentWritingStatus(holder, true);
+            if (roundText.trim()) {
+              contentDiv = document.createElement('div');
+              contentDiv.className = 'stream-content';
+              holder.querySelector('.body').appendChild(contentDiv);
+            }
+            roundText = '';
+            docFenceOpened = false;
           } else if (json.type === 'tool_start' || json.type === 'tool_output' ||
-                     json.type === 'tool_progress' || json.type === 'agent_step' ||
+                     json.type === 'tool_progress' ||
                      json.type === 'web_sources' || json.type === 'rag_sources' ||
                      json.type === 'research_progress' || json.type === 'research_sources' ||
                      json.type === 'research_findings' || json.type === 'research_done') {

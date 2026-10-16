@@ -40,7 +40,7 @@ let _streamSessionId = null;
       const make = (deps) => new Function(
         'deps', 'hasActiveStream', 'fetch', 'API_BASE', '_streamRunIds', 'document',
         'sessionModule', '_shortModel', 'uiModule', '_applyModelColor',
-        '_resumingStreams', '_resumeStreams', 'spinnerModule', 'markdownModule',
+        '_resumingStreams', '_resumeStreams', 'spinnerModule', 'createStreamRenderer', 'window', 'markdownModule',
         '_streamDisplayText', 'chatRenderer', '_activeStreams', '_getForegroundStreamState',
         'abortCurrentRequest', '_terminalSavedStreams', '_backgroundStreams',
         '_syncForegroundStreamGlobals', 'updateSubmitButton', 'chatStream',
@@ -50,7 +50,8 @@ let _streamSessionId = null;
         deps.sessionModule, x => x || '', {{ esc: x => x, scrollHistory() {{}} }},
         () => {{}}, new Set(), deps.resumeStreams,
         {{ create: () => ({{ createElement: () => ({{}}), start() {{}}, destroy() {{ deps.destroyed++; }} }}) }},
-        {{ normalizeThinkingMarkup: x => x, squashOutsideCode: x => x, mdToHtml: x => x }},
+        (element, options) => ({{ update: text => {{ element.innerHTML = options.render(text); }} }}), {{}},
+        {{ normalizeThinkingMarkup: x => x, squashOutsideCode: x => x, extractThinkingBlocks: value => ({{ thinkingBlocks: [], content: value }}), processWithThinking: x => x }},
         x => x, {{ addMessage() {{}}, recordSessionMetricsCost() {{}} }}, new Map(),
         () => null, () => {{ deps.abortCalls++; }}, new Set(), new Map(), () => {{}},
         () => '', () => {{}}, {{ notifyStreamComplete() {{}}, insertStreamDoneToast() {{}} }}

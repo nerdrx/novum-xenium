@@ -58,7 +58,7 @@ def test_resume_replays_persona_name_into_live_and_final_bubble():
       const resumeStream = new Function(
         'hasActiveStream', 'fetch', 'API_BASE', '_streamRunIds', 'document',
         'sessionModule', '_shortModel', 'uiModule', '_applyModelColor',
-        '_resumingStreams', '_resumeStreams', 'spinnerModule', 'markdownModule', '_streamDisplayText',
+        '_resumingStreams', '_resumeStreams', 'spinnerModule', 'createStreamRenderer', 'window', 'markdownModule', '_streamDisplayText',
         'updateBrowserPreview', 'updateRunStatus', 'updateWorkspaceDock',
         'recordCodingWorkToolActivity', 'renderCodingWorkPacketStatus', 'chatRenderer',
         {json.dumps('return (' + _FUNCTION + ');')}
@@ -78,7 +78,8 @@ def test_resume_replays_persona_name_into_live_and_final_bubble():
         {{ esc: (value) => value, scrollHistory() {{}} }},
         () => {{}}, new Set(), new Map(),
         {{ create: () => spinner }},
-        {{ normalizeThinkingMarkup: (value) => value, squashOutsideCode: (value) => value, mdToHtml: (value) => value }},
+        (element, options) => ({{ update: text => {{ element.innerHTML = options.render(text); }} }}), {{}},
+        {{ normalizeThinkingMarkup: (value) => value, squashOutsideCode: (value) => value, extractThinkingBlocks: value => ({{ thinkingBlocks: [], content: value }}), processWithThinking: (value) => value }},
         (value) => value,
         () => {{}},
         () => {{}}, () => {{}}, () => {{}}, () => {{}},

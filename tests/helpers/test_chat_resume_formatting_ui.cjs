@@ -1,0 +1,202 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const http = require('node:http');
+const path = require('node:path');
+const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
+
+const repo = path.resolve(__dirname, '../..');
+const staticRoot = path.join(repo, 'static');
+const html = `<!doctype html><meta charset="utf-8">
+<textarea id="message"></textarea><div id="attach-strip"></div><input id="file-input" type="file" multiple>
+<input id="incognito-toggle" type="checkbox"><input id="web-toggle" type="checkbox"><input id="research-toggle" type="checkbox"><input id="bash-toggle" type="checkbox"><button id="research-toggle-btn"></button>
+<div id="chat-history"></div><div id="toast"></div><button class="send-btn"></button>
+<script type="module">
+  import chat from '/js/chat.js';
+  import sessions from '/js/sessions.js';
+  import markdown from '/js/markdown.js';
+  import files from '/js/fileHandler.js';
+  window.modulesReady = Promise.all([chat, sessions, files]).then(() => {
+    window.testModules = { chat, sessions, markdown, files };
+  });
+</script>`;
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/fixture') {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.end(html);
+  }
+  if (url.pathname.startsWith('/api/')) {
+    res.writeHead(404, { 'content-type': 'application/json' }).end('{}');
+    return;
+  }
+  const file = path.resolve(staticRoot, `.${decodeURIComponent(url.pathname)}`);
+  if (!file.startsWith(`${staticRoot}${path.sep}`) || !fs.existsSync(file)) {
+    res.statusCode = 404;
+    return res.end('Not found');
+  }
+  res.setHeader('Content-Type', /\.(?:m?js)$/.test(file) ? 'text/javascript; charset=utf-8' : 'application/octet-stream');
+  res.end(fs.readFileSync(file));
+});
+
+(async () => {
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.BROWSER_EXECUTABLE || '/opt/google/chrome/chrome',
+    args: ['--no-sandbox', '--disable-gpu'],
+  });
+  try {
+    const page = await browser.newPage();
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}/fixture`);
+    try {
+      await page.waitForFunction(() => window.testModules, null, { timeout: 20000 });
+    } catch (error) {
+      throw new Error(`${error.message}; page errors: ${pageErrors.join(' | ')}`);
+    }
+
+    await page.evaluate(() => {
+      const { chat, sessions } = window.testModules;
+      const nativeFetch = window.fetch.bind(window);
+      window.resumeFixtures = new Map();
+      window.resumeResults = new Map();
+      window.fetch = (input, init) => {
+        if (!String(input).includes('/api/chat/resume/')) return nativeFetch(input, init);
+        let controller;
+        const body = new ReadableStream({ start(streamController) { controller = streamController; } });
+        const sessionId = String(input).split('/').pop();
+        window.resumeFixtures.set(sessionId, { controller, settled: false });
+        return Promise.resolve(new Response(body, {
+          status: 200,
+          headers: { 'X-Odysseus-Run-Id': 'resume-format-run' },
+        }));
+      };
+      window.startResumeFixture = sessionId => {
+        sessions.setCurrentSessionId(sessionId);
+        const result = chat.resumeStream(sessionId).then(value => {
+          const fixture = window.resumeFixtures.get(sessionId);
+          if (fixture) fixture.settled = true;
+          return value;
+        });
+        window.resumeResults.set(sessionId, result);
+      };
+    });
+    const markdownDelta = [
+      '# Resumed heading',
+      '',
+      'A **bold** phrase.',
+      '',
+      '- first item',
+      '- second item',
+      '',
+      '| Name | Value |',
+      '| --- | --- |',
+      '| cat | nine |',
+      '',
+      '```js',
+      'const resumed = true;',
+      '```',
+      '',
+      '<think>Reasoning is shown as a collapsible section while this stream is open.</think>',
+      '',
+      'Visible answer',
+    ].join('\n');
+    await page.evaluate(delta => {
+      window.startResumeFixture('resume-format-fixture');
+      const controller = window.resumeFixtures.get('resume-format-fixture').controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta })}\n\n`));
+    }, markdownDelta);
+
+    await page.waitForFunction(() => {
+      const content = document.querySelector('#chat-history .stream-content');
+      return content?.querySelector('h1') && content?.querySelector('table') &&
+        content?.querySelector('pre code') && content?.textContent.includes('Visible answer');
+    }, null, { timeout: 10000 });
+
+    const liveState = await page.evaluate(() => {
+      const content = document.querySelector('#chat-history .stream-content');
+      return {
+        settled: window.resumeFixtures.get('resume-format-fixture').settled,
+        heading: content.querySelector('h1')?.textContent,
+        strong: content.querySelector('strong')?.textContent,
+        listItems: [...content.querySelectorAll('ul li')].map(item => item.textContent),
+        tableCell: content.querySelector('table tbody td')?.textContent,
+        code: content.querySelector('pre code')?.textContent,
+        thinking: content.querySelector('.thinking-content-inner')?.textContent.trim(),
+        rawThinkTextVisible: content.textContent.includes('<think>'),
+      };
+    });
+    assert.equal(liveState.settled, false, 'SSE reader should still be open after chunks');
+    assert.equal(liveState.heading, 'Resumed heading');
+    assert.equal(liveState.strong, 'bold');
+    assert.deepEqual(liveState.listItems, ['first item', 'second item']);
+    assert.equal(liveState.tableCell, 'cat');
+    assert.match(liveState.code, /const resumed = true;/);
+    assert.match(liveState.thinking, /Reasoning is shown/);
+    assert.equal(liveState.rawThinkTextVisible, false);
+
+    await page.evaluate(() => {
+      const controller = window.resumeFixtures.get('resume-format-fixture').controller;
+      const delta = '\n\n```text\nprint("still live")';
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta })}\n\n`));
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content pre code')]
+      .some(content => content.textContent.includes('print("still live")')), null, { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.resumeFixtures.get('resume-format-fixture').settled), false);
+
+    await page.evaluate(() => {
+      const controller = window.resumeFixtures.get('resume-format-fixture').controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'agent_step' })}\n\n`));
+      const delta = '# Next round\n\n**reply**';
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta })}\n\n`));
+    });
+    await page.waitForFunction(() => {
+      const rounds = document.querySelectorAll('#chat-history .stream-content');
+      const next = rounds[rounds.length - 1];
+      return rounds.length >= 2 && next?.querySelector('h1')?.textContent === 'Next round' &&
+        next.querySelector('strong')?.textContent === 'reply';
+    }, null, { timeout: 10000 });
+    const resumedRounds = await page.evaluate(() => [...document.querySelectorAll('#chat-history .stream-content')]
+      .map(node => ({ heading: node.querySelector('h1')?.textContent || '', text: node.textContent })));
+    assert.match(resumedRounds[0].text, /print\("still live"\)/);
+    assert.equal(resumedRounds[1].heading, 'Next round');
+
+    await page.evaluate(async () => {
+      const controller = window.resumeFixtures.get('resume-format-fixture').controller;
+      controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+      controller.close();
+      await window.resumeResults.get('resume-format-fixture');
+    });
+
+    await page.evaluate(() => {
+      const sessionId = 'resume-pending-think-fixture';
+      window.startResumeFixture(sessionId);
+      const controller = window.resumeFixtures.get(sessionId).controller;
+      const delta = '<think>Working through private reasoning that is not finished yet';
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta })}\n\n`));
+    });
+    await page.waitForFunction(() => {
+      const content = [...document.querySelectorAll('#chat-history .stream-content')].at(-1);
+      return content?.querySelector('.thinking-section') && content.textContent.includes('Thinking');
+    });
+    const pendingThought = await page.locator('#chat-history .stream-content').last().textContent();
+    assert.doesNotMatch(pendingThought, /Working through private reasoning/);
+    assert.equal(await page.evaluate(() => window.resumeFixtures.get('resume-pending-think-fixture').settled), false);
+    await page.evaluate(async () => {
+      const fixture = window.resumeFixtures.get('resume-pending-think-fixture');
+      fixture.controller.close();
+      await window.resumeResults.get('resume-pending-think-fixture');
+    });
+    assert.deepEqual(pageErrors, []);
+    console.log('PASS resumed live Markdown and thinking formatting');
+  } finally {
+    await browser.close();
+    server.close();
+  }
+})().catch(error => {
+  console.error(error);
+  server.close();
+  process.exitCode = 1;
+});

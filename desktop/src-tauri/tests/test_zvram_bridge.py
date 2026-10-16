@@ -514,8 +514,8 @@ class BridgeTests(unittest.TestCase):
         status = self.dispatch({"action": "status"})
         self.assertEqual(status["profiles"][0]["alias"], "tiny")
 
-    def test_ignore_swap_guard_is_opt_in_and_persisted_to_manager(self):
-        result = self.dispatch(self.save_request(ignore_swap_guard=True))
+    def test_ignore_swap_guard_defaults_on_for_supported_zvram_and_persists(self):
+        result = self.dispatch(self.save_request())
         self.assertTrue(result["ignore_swap_guard_supported"])
         self.assertTrue(result["profiles"][0]["ignore_swap_guard"])
         manager_profile = json.loads(self.manager.profiles_path.read_text())["tiny"]
@@ -523,13 +523,25 @@ class BridgeTests(unittest.TestCase):
         self.assertIs(manager_profile["ignore_swap_guard"], True)
         self.assertIs(saved_state["ignore_swap_guard"], True)
 
-        self.dispatch(self.save_request())
+        # An explicit opt-out remains stable when saving again.
+        result = self.dispatch(self.save_request(ignore_swap_guard=False))
+        self.assertFalse(result["profiles"][0]["ignore_swap_guard"])
         manager_profile = json.loads(self.manager.profiles_path.read_text())["tiny"]
         self.assertIs(manager_profile["ignore_swap_guard"], False)
+
+    def test_regular_mode_never_ignores_swap_growth(self):
+        result = self.start_router(mode="regular")
+        self.assertFalse(result["router"]["ignore_swap_guard"])
+        profile = json.loads(self.manager.profiles_path.read_text())[bridge._ROUTER_NAME]
+        self.assertIs(profile["ignore_swap_guard"], False)
 
     def test_ignore_swap_guard_requires_zvram_042(self):
         (self.root / "VERSION").write_text("0.4.1\n")
         self.assertFalse(bridge._supports_ignore_swap_guard(self.root))
+        result = self.dispatch(self.save_request())
+        self.assertFalse(result["profiles"][0]["ignore_swap_guard"])
+        manager_profile = json.loads(self.manager.profiles_path.read_text())["tiny"]
+        self.assertIs(manager_profile["ignore_swap_guard"], False)
         with self.assertRaisesRegex(ValueError, "requires zVram 0.4.2 or newer"):
             self.dispatch(self.save_request(ignore_swap_guard=True))
 

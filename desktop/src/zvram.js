@@ -109,6 +109,10 @@ function renderStatus(result) {
   configurationDirty = false;
   elements.modeRegular.checked = router.mode !== 'zvram';
   elements.modeZvram.checked = router.mode === 'zvram';
+  elements.ignoreSwapGuard.checked = ignoreSwapGuardSupported && (
+    router.mode === 'zvram' && typeof router.ignore_swap_guard === 'boolean'
+      ? router.ignore_swap_guard : true
+  );
   elements.autoStart.checked = typeof router.auto_start === 'boolean' ? router.auto_start : true;
   if (typeof router.live_control === 'boolean') elements.liveControl.checked = router.live_control;
   else if (!liveControlSupported) elements.liveControl.checked = false;
@@ -219,7 +223,7 @@ function buildRouterRequest() {
     auto_start: elements.autoStart.checked, port, context,
     compressed: elements.modeZvram.checked && elements.compressed.checked,
     live_control: elements.modeZvram.checked && (elements.compressed.checked || elements.liveControl.checked),
-    ignore_swap_guard: elements.modeZvram.checked && elements.ignoreSwapGuard.checked,
+    ignore_swap_guard: elements.modeZvram.checked && ignoreSwapGuardSupported && elements.ignoreSwapGuard.checked,
   };
   if (request.compressed) {
     const values = budgetInputs.map(input => Number(input.value));

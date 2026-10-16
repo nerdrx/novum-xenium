@@ -5,6 +5,8 @@ mod chromium_workbench;
 mod linux_file_paste;
 #[cfg(target_os = "linux")]
 mod linux_rendering;
+#[cfg(target_os = "linux")]
+mod alarms;
 use std::{
     collections::HashMap,
     fs,
@@ -131,6 +133,19 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .resolve("config.json", BaseDirectory::AppConfig)
         .map_err(|e| format!("Cannot resolve app configuration directory: {e}"))
+}
+
+#[cfg(target_os = "linux")]
+fn provision_local_alarm_bridge(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .resolve("novum-xenium/alarms", BaseDirectory::Data)
+        .map_err(|e| format!("Cannot resolve local alarm application data: {e}"))?;
+    let systemd_user = app
+        .path()
+        .resolve("systemd/user", BaseDirectory::Config)
+        .map_err(|e| format!("Cannot resolve user systemd configuration: {e}"))?;
+    alarms::provision(config, &app_data, &systemd_user)
 }
 
 fn load_config_at(path: &Path) -> Result<Option<DesktopConfig>, String> {
@@ -649,6 +664,8 @@ async fn save_config(
     let path = config_path(&app)?;
     let lock = state.operation.clone();
     let quit_pending = state.quit_pending.clone();
+    #[cfg(target_os = "linux")]
+    let alarm_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
@@ -663,7 +680,18 @@ async fn save_config(
                 );
             }
         }
-        save_config_at(&path, config)
+        let saved = save_config_at(&path, config)?;
+        #[cfg(target_os = "linux")]
+        {
+            let alarm_app = alarm_app.clone();
+            let saved = saved.clone();
+            thread::spawn(move || {
+                if let Err(error) = provision_local_alarm_bridge(&alarm_app, &saved) {
+                    eprintln!("Local alarm bridge unavailable: {error}");
+                }
+            });
+        }
+        Ok(saved)
     })
     .await
     .map_err(|e| format!("Configuration worker failed: {e}"))?
@@ -680,6 +708,8 @@ async fn start_backend(
     let path = config_path(&app)?;
     let lock = state.operation.clone();
     let quit_pending = state.quit_pending.clone();
+    #[cfg(target_os = "linux")]
+    let alarm_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock.lock().map_err(|_| "Native operation lock is unavailable.")?;
         ensure_not_quitting(&quit_pending)?;
@@ -688,6 +718,10 @@ async fn start_backend(
         command_ok(&output, "Backend start")?;
         if !probe_health(&config) {
             return Err("Compose started, but the local health endpoint did not become ready within three minutes.".into());
+        }
+        #[cfg(target_os = "linux")]
+        if let Err(error) = provision_local_alarm_bridge(&alarm_app, &config) {
+            eprintln!("Local alarm bridge unavailable: {error}");
         }
         Ok(status_for(Some(config)))
     }).await.map_err(|e| format!("Backend start worker failed: {e}"))?
@@ -2466,6 +2500,23 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
         .manage(NativeState::default())
         .setup(|app| {
             zvram::monitor_autostart(app.handle().clone());
+            #[cfg(target_os = "linux")]
+            {
+                let alarm_app = app.handle().clone();
+                thread::spawn(move || {
+                    let configured = config_path(&alarm_app)
+                        .and_then(|path| load_config_at(&path));
+                    match configured {
+                        Ok(Some(config)) => {
+                            if let Err(error) = provision_local_alarm_bridge(&alarm_app, &config) {
+                                eprintln!("Local alarm bridge unavailable: {error}");
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => eprintln!("Local alarm bridge is waiting for a valid backend configuration."),
+                    }
+                });
+            }
             match install_tray(&app.handle()) {
                 Ok(tray) => {
                     let state = app.state::<NativeState>();

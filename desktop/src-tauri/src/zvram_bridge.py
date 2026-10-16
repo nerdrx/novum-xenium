@@ -266,7 +266,7 @@ def _profile_name(request, alias, model_name):
     return name
 
 
-def _parameters(request, model_helper, backend_checkout):
+def _parameters(request, model_helper, backend_checkout, ignore_swap_guard_default=False):
     models = _model_rows(model_helper, backend_checkout)
     model_value = request.get("model")
     if not isinstance(model_value, str):
@@ -296,7 +296,7 @@ def _parameters(request, model_helper, backend_checkout):
         raise ValueError("mode must be regular or zvram")
     if mode == "regular":
         compressed = False
-    ignore_swap_guard = request.get("ignore_swap_guard", False)
+    ignore_swap_guard = request.get("ignore_swap_guard", ignore_swap_guard_default)
     if ignore_swap_guard is None:
         ignore_swap_guard = False
     if type(ignore_swap_guard) is not bool:
@@ -767,7 +767,8 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
                 if 'mode' not in request:
                     merged['mode'] = previous.get('mode', 'zvram' if previous.get('router') else 'regular')
                 merged.update(action='router_start', model=models[0]['path'], alias='local-router')
-                params = _parameters(merged, model_helper, backend_checkout)
+                params = _parameters(merged, model_helper, backend_checkout,
+                                     ignore_swap_guard_default=_supports_ignore_swap_guard(root))
                 params.update(router=True, model_ids=[model['name'] for model in models],
                               auto_start=(request.get('auto_start', True) if action == 'router_start'
                                           else request.get('auto_start', previous.get('auto_start', True))))
@@ -813,7 +814,8 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
 
         name = request.get("profile")
         if action == "save":
-            params = _parameters(request, model_helper, backend_checkout)
+            params = _parameters(request, model_helper, backend_checkout,
+                                 ignore_swap_guard_default=_supports_ignore_swap_guard(root))
             if params["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
                 raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if params["port"] == backend_port:
@@ -841,7 +843,8 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
         if action == "start":
             saved_request = {**params, "profile": name}
             saved_request.setdefault("live_control", params.get("compressed", False) is True)
-            current = _parameters(saved_request, model_helper, backend_checkout)
+            current = _parameters(saved_request, model_helper, backend_checkout,
+                                  ignore_swap_guard_default=_supports_ignore_swap_guard(root))
             if current["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
                 raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if _owned_profile_running(manager_helper, manager, name, current):

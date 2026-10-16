@@ -74,7 +74,7 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.equal(await page.locator('#zvram-live-control').isChecked(), true, 'live management is opt-out by default');
   assert.equal(await page.locator('#zvram-live-control').isDisabled(), true, 'zVram memory controls stay inactive in Regular mode');
   assert.match(await page.locator('#zvram-model-list').textContent(), /Test Model\.gguf, Second\.gguf/);
-  assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), false);
+  assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), true, 'supported swap-growth override defaults on');
   assert.equal(await page.locator('#zvram-ignore-swap-guard').isDisabled(), true);
   assert.equal(await page.locator('#zvram-router-state-value').textContent(), 'Provider stopped');
   assert.equal(await page.locator('#zvram-mode-regular').isChecked(), true, 'new provider defaults to Regular mode');
@@ -93,6 +93,8 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
   assert.equal(await page.locator('#zvram-ignore-swap-guard').isDisabled(), true);
+  await page.locator('#zvram-ignore-swap-guard').click({ force: true });
+  assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), false, 'unsupported override remains off when clicked');
   assert.match(await page.locator('#zvram-swap-guard-note').textContent(), /requires zVram 0\.4\.2 or newer/i);
   await page.evaluate(() => { window.__zvram.ignore_swap_guard_supported = true; });
   await page.locator('#zvram-refresh').click();
@@ -116,6 +118,7 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.equal(await page.locator('#zvram-router-state-value').textContent(), 'Provider stopped', 'applying while stopped does not start the provider');
   const savedRegular = await page.evaluate(() => window.__calls.map(call => call.args?.request).find(request => request?.action === 'router_configure'));
   assert.equal(savedRegular.mode, 'regular');
+  assert.equal(savedRegular.ignore_swap_guard, false, 'Regular mode never sends the swap-growth override');
   assert.equal(savedRegular.auto_start, false);
   assert.equal(await page.evaluate(() => window.__zvram.router.running), false);
   await page.locator('#zvram-mode-zvram').check();
@@ -144,7 +147,7 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.locator('#zvram-clean-cache').fill('1024');
   await page.locator('#zvram-headroom').fill('1024');
   await page.locator('#zvram-virtual').fill('40');
-  await page.locator('#zvram-ignore-swap-guard').check();
+  await page.locator('#zvram-ignore-swap-guard').uncheck();
 
   await page.evaluate(() => { window.__failAction = 'router_start'; });
   await page.locator('#zvram-start').click();
@@ -161,12 +164,12 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.deepEqual(requests.map(request => request.action), ['stop', 'router_configure', 'router_configure', 'router_configure', 'router_start', 'router_configure', 'router_start', 'router_register', 'router_register']);
   assert.deepEqual(requests.find(request => request.action === 'router_configure' && request.port === 8098), {
     action: 'router_configure', mode: 'zvram', auto_start: true, port: 8098, context: 8192, compressed: true,
-    live_control: true, ignore_swap_guard: true, resident_mib: 12000, cold_mib: 8000,
+    live_control: true, ignore_swap_guard: false, resident_mib: 12000, cold_mib: 8000,
     clean_cache_mib: 1024, headroom_mib: 1024, virtual_gib: 40,
   });
   assert.deepEqual(requests.find(request => request.action === 'router_start'), {
     action: 'router_start', mode: 'zvram', auto_start: true, port: 8098, context: 8192, compressed: true,
-    live_control: true, ignore_swap_guard: true, resident_mib: 12000, cold_mib: 8000,
+    live_control: true, ignore_swap_guard: false, resident_mib: 12000, cold_mib: 8000,
     clean_cache_mib: 1024, headroom_mib: 1024, virtual_gib: 40,
   });
   assert.equal(await page.locator('#zvram-router-state-value').textContent(), 'Provider ready');
@@ -181,6 +184,8 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
   assert.equal(await page.locator('#zvram-router-models').textContent(), 'Active: qwen3.8:27b, tiny:135m', 'only loaded/loading models appear active');
+  assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), false,
+    'explicit opt-out survives router status refresh');
 
   await page.locator('#zvram-stop').click();
   await page.waitForFunction(() => document.getElementById('zvram-router-state-value').textContent === 'Provider stopped');

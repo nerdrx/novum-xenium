@@ -1226,9 +1226,9 @@ async def do_generate_image(content: str | Dict, session_id: Optional[str] = Non
     from pathlib import Path
     from src.url_safety import check_outbound_url
 
-    if content.lstrip().startswith('{'):
+    if isinstance(content, dict) or (isinstance(content, str) and content.lstrip().startswith('{')):
         try:
-            args = json.loads(content)
+            args = content if isinstance(content, dict) else json.loads(content)
         except (TypeError, ValueError):
             return {"error": "Image arguments must be a JSON object"}
         if not isinstance(args, dict):

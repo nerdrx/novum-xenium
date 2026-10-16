@@ -1902,6 +1902,18 @@ import { invalidateSettings } from './appConfig.js';
     return item;
   }
 
+  function _consumeQueuedRequestStack() {
+    const sid = String(sessionModule?.getCurrentSessionId?.() || '');
+    if (!sid) return null;
+    const matching = [];
+    for (let i = 0; i < _queuedAgentRequests.length; i++) {
+      if (_queuedAgentRequests[i].sessionId === sid) matching.push(_queuedAgentRequests[i]);
+    }
+    if (!matching.length) return null;
+    for (const item of matching) _removeQueuedRequest(item.id);
+    return { sessionId: sid, message: matching.map(item => item.message).join('\n\n') };
+  }
+
   function _setComposerAndSend(message, expectedSessionId = null, pendingPlan = null, queuedItem = null) {
     const input = uiModule.el('message');
     if (!input) return false;
@@ -1912,8 +1924,11 @@ import { invalidateSettings } from './appConfig.js';
         return;
       }
       if (queuedItem && (!_queuedAgentRequests.includes(queuedItem) || isStreaming || _sendInFlight)) return;
-      if (queuedItem) _removeQueuedRequest(queuedItem.id);
-      input.value = message;
+      // Consume only after the asynchronous session/stream checks above.
+      // Navigation or a new request must leave the pending stack intact.
+      const stack = queuedItem ? _consumeQueuedRequestStack() : null;
+      if (queuedItem && !stack) return;
+      input.value = stack ? stack.message : message;
       input.dispatchEvent(new Event('input', { bubbles: true }));
       if (uiModule.autoResize) uiModule.autoResize(input);
       handleChatSubmit({ preventDefault() {}, expectedSessionId, pendingPlan }).catch(err => {
@@ -1935,13 +1950,6 @@ import { invalidateSettings } from './appConfig.js';
     if (!isStreaming && !_sendInFlight) {
       _setComposerAndSend(item.message, item.sessionId, null, item);
       return;
-    }
-    const firstForSession = _queuedAgentRequests.findIndex(queued => queued.sessionId === item.sessionId);
-    const itemIndex = _queuedAgentRequests.indexOf(item);
-    if (itemIndex > firstForSession) {
-      _queuedAgentRequests.splice(itemIndex, 1);
-      _queuedAgentRequests.splice(firstForSession, 0, item);
-      _renderQueuedRequestsForCurrentSession();
     }
     try { uiModule.showToast && uiModule.showToast('Stopping this chat before sending the queued request'); } catch (_) {}
     if (!isStreaming) return; // The current request is still starting; it will drain when its send flag clears.

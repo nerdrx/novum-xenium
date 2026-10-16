@@ -1,0 +1,22 @@
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const source = fs.readFileSync('static/js/settings/agent.js','utf8').replace(/^import .*;\n/gm,'').replace('export async function','async function');
+const nodes = new Map(['agentMaxTools','agentMaxRounds','agentSupervisorLadder','agentCodingGrounding','agentVerifierSubagent','agentMilestoneWorkflow','agentMsg'].map(name=>['set-'+name,{value:'20',checked:false,style:{},listeners:{},addEventListener(type,fn){this.listeners[type]=fn}}]));
+const payloads=[];
+const context={el:id=>nodes.get(id),fetch:async()=>({json:async()=>({agent_max_rounds:0,agent_coding_grounding:false,agent_verifier_subagent:true,agent_milestone_workflow:false})}),_postSettings:async value=>payloads.push(value)};
+vm.createContext(context);vm.runInContext(source,context);
+(async()=>{
+ await context.initAgentSettings();
+ assert.equal(nodes.get('set-agentMaxRounds').value,0);
+ assert.equal(nodes.get('set-agentCodingGrounding').checked,false);
+ assert.equal(nodes.get('set-agentVerifierSubagent').checked,true);
+ assert.match(nodes.get('set-agentMsg').textContent,/Unlimited steps/);
+ nodes.get('set-agentMilestoneWorkflow').checked=true;
+ await nodes.get('set-agentMilestoneWorkflow').listeners.change();
+ assert.equal(payloads[0].agent_max_rounds,0);
+ assert.equal(payloads[0].agent_milestone_workflow,true);
+ assert.equal(payloads[0].agent_coding_grounding,false);
+ assert.equal(payloads[0].agent_verifier_subagent,true);
+ console.log('Agent settings load saved opt-outs, preserve unlimited rounds, and persist switch changes.');
+})().catch(e=>{console.error(e);process.exitCode=1});

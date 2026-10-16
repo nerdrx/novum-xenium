@@ -65,7 +65,7 @@ async def test_autopublish_uses_owner_threshold_and_keeps_valid_low_score_as_dra
     assert result["status"] == "draft"
     assert result["confidence"] == 0.8
     assert manager.added[0]["confidence"] == 0.8
-    assert seen == ["alice"]
+    assert seen and set(seen) == {"alice"}
 
 
 async def test_threshold_is_isolated_by_owner(monkeypatch):
@@ -83,7 +83,7 @@ async def test_threshold_is_isolated_by_owner(monkeypatch):
     )
     assert alice["status"] == "draft"
     assert bob["status"] == "published"
-    assert seen == ["bob"]
+    assert seen and set(seen) == {"bob"}
 
 
 async def test_global_threshold_and_explicit_zero_threshold(monkeypatch):

@@ -9,7 +9,7 @@ def test_agent_research_and_completion_review_settings_are_persisted():
     from src.settings import DEFAULT_SETTINGS
 
     html = (ROOT / "static/index.html").read_text(encoding="utf-8")
-    script = (ROOT / "static/js/settings.js").read_text(encoding="utf-8")
+    script = (ROOT / "static/js/settings/agent.js").read_text(encoding="utf-8")
     css = app_css()
 
     assert 'id="set-agentCodingGrounding" type="checkbox" checked' in html
@@ -38,7 +38,7 @@ def test_agent_research_and_completion_review_settings_are_persisted():
 
 def test_agent_round_setting_displays_and_saves_zero_as_unlimited():
     html = (ROOT / "static/index.html").read_text(encoding="utf-8")
-    script = (ROOT / "static/js/settings.js").read_text(encoding="utf-8")
+    script = (ROOT / "static/js/settings/agent.js").read_text(encoding="utf-8")
     assert 'id="set-agentMaxRounds"' in html
     assert "0 = unlimited" in html
     assert "settings.agent_max_rounds != null" in script
@@ -56,3 +56,11 @@ def test_checked_coding_default_respects_saved_opt_out(monkeypatch, tmp_path):
     assert settings.load_settings()["agent_milestone_workflow"] is True
     settings.save_settings({"agent_milestone_workflow": False})
     assert settings.load_settings()["agent_milestone_workflow"] is False
+
+
+def test_agent_settings_save_controls_and_unlimited_rounds():
+    import subprocess
+    subprocess.run(
+        ["node", "tests/helpers/test_agent_settings_persistence.cjs"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    )

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from types import SimpleNamespace
+from tests.test_image_mcp_owner_scope import _image_authority
 
 import httpx
 import pytest
@@ -32,8 +33,10 @@ async def test_stopping_native_image_tool_cancels_provider_and_prevents_gallery_
         "http://fixture/v1/chat/completions", "chatgpt-image-codex", {},
     ))
     monkeypatch.setattr(settings, "get_setting", lambda _key, default=None: True)
+    monkeypatch.setattr(settings, "load_settings", lambda: {"image_gen_enabled": True})
     monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
     monkeypatch.setattr(execution, "is_public_blocked_tool", lambda _tool: False)
+    monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
 
     class GalleryImage:
         def __init__(self, **kwargs):
@@ -66,15 +69,17 @@ async def test_stopping_native_image_tool_cancels_provider_and_prevents_gallery_
     async def stream():
         tool_task = asyncio.create_task(execute_tool_block(
             SimpleNamespace(
-                tool_type="mcp__image_gen__generate_image",
+                tool_type="generate_image",
                 content=json.dumps({"prompt": "fixture", "model": "chatgpt-image-codex"}),
             ),
             session_id="fixture-image-stop",
             owner="alice",
             security_context=NO_TOOL_SECURITY_CONTEXT,
+            request_authority=_image_authority("alice", "fixture-image-stop", "generate_image"),
         ))
         try:
-            await tool_task
+            _desc, result = await tool_task
+            assert not result.get("error"), result
             yield "data: [DONE]\n\n"
         finally:
             if not tool_task.done():
@@ -101,6 +106,7 @@ def test_image_persistence_serializes_with_session_delete(tmp_path):
 from pathlib import Path
 import httpx
 from types import SimpleNamespace
+from tests.test_image_mcp_owner_scope import _image_authority
 from core.database import Base, engine, SessionLocal, Session as DbSession, GalleryImage
 from core.session_manager import SessionManager
 import src.ai_interaction as images
@@ -116,8 +122,10 @@ image_dir = Path(os.environ["ODYSSEUS_DATA_DIR"]) / "generated_images"
 images.GENERATED_IMAGES_DIR = image_dir
 images._resolve_model = lambda *_a, **_kw: ("http://fixture/v1/chat/completions", "chatgpt-image-codex", {})
 settings.get_setting = lambda _key, default=None: True
+settings.load_settings = lambda: {"image_gen_enabled": True}
 image_gen_server._mcp_owner_required = lambda _owner: False
 execution.is_public_blocked_tool = lambda _tool: False
+execution._owner_is_admin = lambda _owner: True
 entered, release = threading.Event(), threading.Event()
 block_dimensions = [True]
 def dimensions(_bytes):
@@ -147,10 +155,12 @@ thread = threading.Thread(target=delete_while_loop_is_blocked)
 thread.start()
 async def deleted_scope_run():
     async def stream():
-        await execute_tool_block(SimpleNamespace(
-            tool_type="mcp__image_gen__generate_image",
+        _desc, result = await execute_tool_block(SimpleNamespace(
+            tool_type="generate_image",
             content=json.dumps({"prompt": "fixture", "model": "chatgpt-image-codex"}),
-        ), session_id="delete-first", owner="alice", security_context=NO_TOOL_SECURITY_CONTEXT)
+        ), session_id="delete-first", owner="alice", security_context=NO_TOOL_SECURITY_CONTEXT,
+            request_authority=_image_authority("alice", "delete-first", "generate_image"))
+        assert "no longer available" in result.get("error", ""), result
         yield "data: [DONE]\n\n"
     run = agent_runs.start("delete-first", stream(), owner="alice", persist=False)
     try:
@@ -166,7 +176,8 @@ assert db.query(GalleryImage).filter_by(session_id="delete-first").count() == 0
 db.close()
 assert not list(image_dir.glob("*"))
 
-# Writer-first ordering remains valid, and deletion then removes both records.
+# Writer-first ordering remains valid; explicit image deletion removes the file
+# and soft-deletes its library row. Ordinary chat deletion preserves the library.
 block_dimensions[0] = False
 manager.create_session("writer-first", "Race", "unused", "unused", owner="alice")
 async def writer_first():
@@ -181,9 +192,9 @@ image = db.query(GalleryImage).filter_by(session_id="writer-first").one()
 image_path = image_dir / image.filename
 assert image_path.exists()
 db.close()
-assert manager.delete_session("writer-first")
+assert manager.delete_session("writer-first", delete_images=True)
 db = SessionLocal()
-assert db.query(GalleryImage).filter_by(session_id="writer-first").count() == 0
+assert db.query(GalleryImage).filter_by(session_id="writer-first", is_active=True).count() == 0
 db.close()
 assert not image_path.exists()
 
@@ -218,7 +229,7 @@ local_image = db.query(GalleryImage).filter_by(session_id="local-owner-none").on
 assert local_image.owner is None
 local_path = image_dir / local_image.filename
 db.close()
-assert manager.delete_session("local-owner-none")
+assert manager.delete_session("local-owner-none", delete_images=True)
 assert not local_path.exists()
 '''
     env = os.environ.copy()

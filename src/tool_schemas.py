@@ -101,10 +101,19 @@ def _repair_function_arg_aliases(tool_type: str, args: dict[str, Any]) -> dict[s
         query = _first_nonempty_string(args, ("q", "search_query", "command", "text"))
         if query:
             args["query"] = query
-    elif tool_type == "web_fetch" and not str(args.get("url") or "").strip():
-        url = _first_nonempty_string(args, ("href", "link", "uri", "command"))
-        if url:
-            args["url"] = url
+    elif tool_type == "web_fetch":
+        if not str(args.get("url") or "").strip():
+            url = _first_nonempty_string(args, ("href", "link", "uri", "command"))
+            if url:
+                args["url"] = url
+        if isinstance(args.get("urls"), list):
+            # Models sometimes attach a label as [URL, label]. Only this exact
+            # shape is unambiguous; semantic validation rejects other nesting.
+            args["urls"] = [
+                item[0] if isinstance(item, list) and len(item) == 2
+                and all(isinstance(value, str) for value in item)
+                else item for item in args["urls"]
+            ]
     elif tool_type == "pdf_extract" and not str(args.get("url") or "").strip():
         # The public PDF contract historically called every source ``url``,
         # even though local benchmark/user files are paths.  Native models
@@ -256,6 +265,26 @@ def normalized_native_function_argument_error(
     that transport strict, but tell the model how to recover instead of
     returning an opaque converter failure.
     """
+    if tool_type == "web_fetch" and "urls" in args:
+        from urllib.parse import urlsplit
+        urls = args["urls"]
+        if not isinstance(urls, list) or not 1 <= len(urls) <= 12:
+            return "web_fetch urls must be a non-empty array of at most 12 URL strings or objects."
+        for item in urls:
+            target = item.get("url") if isinstance(item, dict) else item
+            if not isinstance(target, str):
+                return "web_fetch batch entries must be URLs, objects, or exact [URL, label] pairs."
+            target = target.strip()
+            if target.startswith(("/workspace/", "file:///workspace/")):
+                continue
+            try:
+                parsed = urlsplit(target)
+                valid = parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
+            except ValueError:
+                valid = False
+            if not valid:
+                return "web_fetch batch entries require valid http(s) URLs or workspace text paths."
+        return None
     if tool_type == "pdf_extract":
         source = str(args.get("url") or "").strip()
         if (
@@ -400,7 +429,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Private quick web lookup through Odysseus' configured search backend, normally SearXNG. Use for open-ended web/search/lookup/latest/current questions. Do NOT navigate to Google/DuckDuckGo/Bing with the browser for search results. NOT for 'research X' / 'do research on X' — those are deep-research jobs; use trigger_research instead.",
+            "description": "Private quick web lookup through Novum Xenium's configured search backend, normally SearXNG. Use for open-ended web/search/lookup/latest/current questions. Do NOT navigate to Google/DuckDuckGo/Bing with the browser for search results. NOT for 'research X' / 'do research on X' — those are deep-research jobs; use trigger_research instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -446,7 +475,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "pdf_extract",
-            "description": "Extract focused evidence from an online PDF URL or task-local /workspace/*.pdf using Odysseus' native document reader. Use this instead of Python requests, curl, pdftotext, or manual downloads. Supply the exact model, metric, and table terms in query. Treat only values visible in the returned passages as verified; never fill missing values from memory or estimates.",
+            "description": "Extract focused evidence from an online PDF URL or task-local /workspace/*.pdf using Novum Xenium's native document reader. Use this instead of Python requests, curl, pdftotext, or manual downloads. Supply the exact model, metric, and table terms in query. Treat only values visible in the returned passages as verified; never fill missing values from memory or estimates.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -514,7 +543,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "extract_text",
-            "description": "Extract exact visible text and pixel coordinates from an owned uploaded image or local workspace image with Odysseus local OCR. Use for screenshots, scans, labels, numbers, receipts, forms, and text-location tasks; use inspect_media for general visual understanding.",
+            "description": "Extract exact visible text and pixel coordinates from an owned uploaded image or local workspace image with Novum Xenium local OCR. Use for screenshots, scans, labels, numbers, receipts, forms, and text-location tasks; use inspect_media for general visual understanding.",
             "parameters": {
                 "type": "object",
                 "additionalProperties": False,
@@ -533,7 +562,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "transcribe_media",
-            "description": "Transcribe speech from a local workspace audio or video file with Odysseus local Whisper. Returns timestamped speech segments in [START --> END] TEXT form; the spoken text begins after the first '] '. For a request limited to a named chapter, question, scene, or topic, first locate that section and its next boundary, then use start/end or filter only that interval rather than matching the whole recording. This transcribes audio speech; use inspect_media for visually burned-in text or subtitles.",
+            "description": "Transcribe speech from a local workspace audio or video file with Novum Xenium local Whisper. Returns timestamped speech segments in [START --> END] TEXT form; the spoken text begins after the first '] '. For a request limited to a named chapter, question, scene, or topic, first locate that section and its next boundary, then use start/end or filter only that interval rather than matching the whole recording. This transcribes audio speech; use inspect_media for visually burned-in text or subtitles.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1730,7 +1759,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "send_email",
-            "description": "Send a new email immediately. Use only when the user explicitly says to send now, deliver now, or approve/send without further review. For normal 'send/write/email someone saying X' requests, use draft_email so Odysseus opens a reviewable email document. Use resolve_contact first if you only have a name and need to find the email address. If multiple accounts exist, pass account from list_email_accounts.",
+            "description": "Send a new email immediately. Use only when the user explicitly says to send now, deliver now, or approve/send without further review. For normal 'send/write/email someone saying X' requests, use draft_email so Novum Xenium opens a reviewable email document. Use resolve_contact first if you only have a name and need to find the email address. If multiple accounts exist, pass account from list_email_accounts.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1747,7 +1776,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "draft_email",
-            "description": "Create a new Odysseus email draft document for review. This does not send. Use this as the default for normal 'send/write/email someone saying X' requests so the user sees the composed message in the document editor and can edit/send it from there.",
+            "description": "Create a new Novum Xenium email draft document for review. This does not send. Use this as the default for normal 'send/write/email someone saying X' requests so the user sees the composed message in the document editor and can edit/send it from there.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1756,7 +1785,7 @@ FUNCTION_TOOL_SCHEMAS = [
                     "body": {"type": "string", "description": "Draft body text"},
                     "cc": {"type": "string", "description": "Optional CC recipients"},
                     "bcc": {"type": "string", "description": "Optional BCC recipients"},
-                    "title": {"type": "string", "description": "Optional Odysseus document title"},
+                    "title": {"type": "string", "description": "Optional Novum Xenium document title"},
                     "account": {"type": "string", "description": "Optional account name/email/id from list_email_accounts, e.g. Gmail or user@example.com"},
                 },
                 "required": ["to", "subject", "body"]
@@ -1767,7 +1796,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "draft_email_reply",
-            "description": "Create a threaded Odysseus reply draft document by email UID. This does not send. Use this for normal 'reply/write back/send them X' requests so the user sees the reply in the document editor before sending.",
+            "description": "Create a threaded Novum Xenium reply draft document by email UID. This does not send. Use this for normal 'reply/write back/send them X' requests so the user sees the reply in the document editor before sending.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1775,7 +1804,7 @@ FUNCTION_TOOL_SCHEMAS = [
                     "body": {"type": "string", "description": "Reply draft body text"},
                     "folder": {"type": "string", "description": "IMAP folder (default: INBOX)"},
                     "reply_all": {"type": "boolean", "description": "Whether to reply all instead of replying only to sender"},
-                    "title": {"type": "string", "description": "Optional Odysseus document title"},
+                    "title": {"type": "string", "description": "Optional Novum Xenium document title"},
                     "account": {"type": "string", "description": "Optional account name/email/id from list_email_accounts, especially when the UID came from a non-default mailbox"},
                 },
                 "required": ["uid", "body"]
@@ -1907,7 +1936,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "reply_to_email",
-            "description": "SEND a reply email immediately by UID. Do not use this when the user asks to write/draft/open/start a reply; use draft_email_reply so the user can review in the Odysseus document editor. Only use when the user explicitly says to send now. Use the exact UID from the latest read_email/list_emails result; never invent UID 1. Automatically threads with In-Reply-To/References headers.",
+            "description": "SEND a reply email immediately by UID. Do not use this when the user asks to write/draft/open/start a reply; use draft_email_reply so the user can review in the Novum Xenium document editor. Only use when the user explicitly says to send now. Use the exact UID from the latest read_email/list_emails result; never invent UID 1. Automatically threads with In-Reply-To/References headers.",
             "parameters": {
                 "type": "object",
                 "properties": {

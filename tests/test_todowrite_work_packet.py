@@ -24,6 +24,7 @@ def _packet():
 def test_dispatcher_passes_selected_workspace_to_packet_validation(monkeypatch, tmp_path):
     from src.agent_tools import ToolBlock
     from src.tool_execution import execute_tool_block, NO_TOOL_SECURITY_CONTEXT
+    from src.agent_runtime.authority import OperationGrant, RequestAuthority
 
     monkeypatch.setattr(coding_tools, "_TODO_DIR", str(tmp_path / "todos"))
     packet = _packet()
@@ -33,6 +34,8 @@ def test_dispatcher_passes_selected_workspace_to_packet_validation(monkeypatch, 
     _, result = asyncio.run(execute_tool_block(
         ToolBlock("todowrite", content), workspace=str(tmp_path), owner="alice",
         session_id="dispatch", security_context=NO_TOOL_SECURITY_CONTEXT,
+        request_authority=RequestAuthority("packet-validation", "alice", "dispatch", str(tmp_path),
+                                           (OperationGrant("todowrite"),)),
     ))
     assert result["exit_code"] == 0, result
     assert result["work_packet"]["files"] == ["src/auth.py"]

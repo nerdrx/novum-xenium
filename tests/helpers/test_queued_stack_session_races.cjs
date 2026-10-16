@@ -1,0 +1,16 @@
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const source = fs.readFileSync('static/js/chat.js','utf8');
+const start = source.indexOf('  function _consumeQueuedRequestStack()');
+const end = source.indexOf('  function _promoteQueuedRequest(id)', start);
+const code = source.slice(start,end);
+let sid='a', streaming=false, inFlight=false;
+const queued=[{id:'1',sessionId:'a',message:'First'},{id:'2',sessionId:'b',message:'Other chat'},{id:'3',sessionId:'a',message:'Second'}];
+const timers=[], sends=[], input={value:'',dispatchEvent(){}};
+const context={sessionModule:{getCurrentSessionId:()=>sid},uiModule:{el:()=>input,autoResize(){}},_queuedAgentRequests:queued,_removeQueuedRequest(id){queued.splice(queued.findIndex(x=>x.id===id),1)},setTimeout:f=>timers.push(f),Event:class{},handleChatSubmit:async e=>sends.push([sid,input.value]),console,isStreaming:streaming,_sendInFlight:inFlight,_pendingApprovedPlan:null};
+vm.createContext(context);vm.runInContext(code,context);
+context._setComposerAndSend('ignored','a',null,queued[0]);sid='b';timers.shift()();assert.equal(queued.length,3);assert.equal(sends.length,0);
+sid='a';context._setComposerAndSend('ignored','a',null,queued[0]);context.isStreaming=true;timers.shift()();assert.equal(queued.length,3);
+context.isStreaming=false;context._setComposerAndSend('ignored','a',null,queued[0]);timers.shift()();assert.deepEqual(sends,[['a','First\n\nSecond']]);assert.deepEqual(queued.map(x=>x.id),['2']);
+console.log('Queue preserves chat/stream races and combines ordered follow-ups exactly once.');

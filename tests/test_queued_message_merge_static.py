@@ -11,13 +11,24 @@ def test_queued_stack_is_consumed_as_one_ordered_message():
     assert ".join('\\n\\n')" in CHAT
 
 
-def test_automatic_drain_sends_the_combined_stack_once():
+def test_queue_consumption_waits_for_session_and_stream_recheck():
+    send = CHAT[CHAT.index("function _setComposerAndSend(") : CHAT.index("function _promoteQueuedRequest(id)")]
+    assert send.index("expectedSessionId") < send.index("_consumeQueuedRequestStack()")
+    assert send.index("_sendInFlight") < send.index("_consumeQueuedRequestStack()")
+    assert "input.value = stack ? stack.message : message" in send
+
+
+def test_automatic_drain_and_click_use_the_guarded_sender():
     drain = CHAT[CHAT.index("function _drainQueuedAgentRequests()") : CHAT.index("/**\n   * Handle chat form submission")]
-    assert "const next = _consumeQueuedRequestStack();" in drain
-    assert "_removeQueuedRequest(next.id)" not in drain
-    assert "_setComposerAndSend(next.message);" in drain
-
-
-def test_clicking_a_queued_bubble_promotes_the_whole_stack():
     promote = CHAT[CHAT.index("function _promoteQueuedRequest(id)") : CHAT.index("function _queueAgentRequest(message)")]
-    assert "const item = _consumeQueuedRequestStack();" in promote
+    assert "_setComposerAndSend(next.message, next.sessionId, null, next)" in drain
+    assert "_setComposerAndSend(item.message, item.sessionId, null, item)" in promote
+    assert "_queuedAgentRequests.splice" not in promote
+
+
+def test_queue_preserves_other_chats_and_async_send_races():
+    import subprocess
+    subprocess.run(
+        ["node", "tests/helpers/test_queued_stack_session_races.cjs"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    )

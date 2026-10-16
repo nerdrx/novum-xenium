@@ -887,7 +887,7 @@ class WebFetchTool:
         if query:
             text = self._focused_passages(text, query, MAX_OUTPUT_CHARS - len(header) - 500)
         output = size_note + header + media_note + text
-        if len(output) > MAX_OUTPUT_CHARS:
+        if query and len(output) > MAX_OUTPUT_CHARS:
             output = output[:MAX_OUTPUT_CHARS] + (
                 "\n\n[...truncated; re-call web_fetch with query terms to retrieve matching passages]"
                 if not query else "\n\n[...truncated]"

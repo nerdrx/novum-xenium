@@ -114,6 +114,7 @@ def test_detached_resume_reloads_canonical_terminal_failures():
 def test_detached_resume_surfaces_fallback_then_provider_alias_before_reload():
     source = "\n".join([
         "import { applyModelRouteEventState } from './static/js/chatModelProvenance.js';",
+        "import { parkMediaFrames, preserveMediaFrames } from './static/js/chatMedia.js';",
         "class Element {",
         "  constructor(tag = 'div') { this.tag = tag; this.children = []; this.parentNode = null; this.style = {}; this.textContent = ''; this._html = ''; }",
         "  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }",
@@ -174,6 +175,7 @@ def test_detached_resume_surfaces_fallback_then_provider_alias_before_reload():
 def test_detached_resume_renders_preoutput_error_without_empty_reload():
     source = "\n".join([
         "import { createTerminalStreamError } from './static/js/chatStreamErrors.js';",
+        "import { parkMediaFrames, preserveMediaFrames } from './static/js/chatMedia.js';",
         "class Element {",
         "  constructor(tag = 'div') { this.tag = tag; this.children = []; this.parentNode = null; this.style = {}; this.textContent = ''; this._html = ''; }",
         "  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }",

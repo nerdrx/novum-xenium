@@ -57,6 +57,11 @@ def _extract_thinking_blocks(text: str) -> dict:
         globalThis.MutationObserver = class { observe() {} };
 
         let source = fs.readFileSync('./static/js/markdown.js', 'utf8');
+        const chatMediaUrl = new URL('./static/js/chatMedia.js', `file://${process.cwd()}/`).href;
+        source = source.replace(
+          /from ['"]\.\/chatMedia\.js['"];?/,
+          `from '${chatMediaUrl}';`
+        );
         source = source.replace(
           /import uiModule from ['"]\.\/ui\.js['"];/,
           ''

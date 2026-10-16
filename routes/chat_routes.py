@@ -76,7 +76,11 @@ from routes.chat_helpers import (
     _allowed_models_for_request,
     _enforce_chat_privileges,
 )
-from src.action_intents import ToolIntent, classify_tool_intent as _classify_tool_intent
+from src.action_intents import (
+    ToolIntent,
+    classify_tool_intent as _classify_tool_intent,
+    has_explicit_browser_intent,
+)
 from src.image_model_ids import looks_like_image_generation_model
 from src.tool_policy import (
     WEB_TOOL_NAMES,
@@ -1275,12 +1279,7 @@ def setup_chat_routes(
                 r"\b(search|look\s*up|lookup|google|browse|web|online|latest|current|today|news|weather|forecast|rate|exchange\s+rate)\b",
                 _msg_l,
             ))
-            _explicit_browser_intent = bool(re.search(
-                r"\b(browser|browse|open\s+(?:the\s+)?(?:site|page|url|link)|"
-                r"click|fill(?:\s+out)?|submit|send\s+(?:the\s+)?form|"
-                r"contact\s+form|web\s*form|form\s+submission)\b",
-                _msg_l,
-            ))
+            _explicit_browser_intent = has_explicit_browser_intent(message)
         _allow_browser_for_web_turn = bool(
             _explicit_browser_intent
             or _explicit_web_intent
@@ -1314,10 +1313,10 @@ def setup_chat_routes(
             chat_mode = "agent"
             auto_escalated = True
             logger.info("chat→agent auto-escalation: search enabled")
-        elif chat_mode == "chat" and _explicit_web_intent:
+        elif chat_mode == "chat" and (_explicit_web_intent or _explicit_browser_intent):
             chat_mode = "agent"
             auto_escalated = True
-            logger.info("chat→agent auto-escalation: explicit web intent")
+            logger.info("chat→agent auto-escalation: explicit web/browser intent")
         active_doc_id = form_data.get("active_doc_id", "").strip()
         logger.info(f"[doc-inject] chat_mode={chat_mode}, active_doc_id={active_doc_id!r}")
 

@@ -44,6 +44,7 @@ try:
         _insert_before_latest_user,
         _MCP_KEYWORDS,
         _image_tool_available,
+        _assemble_prompt,
     )
     _IMPORTED_AGENT_LOOP = sys.modules.get("src.agent_loop")
 finally:
@@ -65,6 +66,13 @@ def test_import_stubs_do_not_leak_into_later_tests():
 
 def test_mcp_keyword_gate_matches_literal_mcp_requests():
     assert "mcp" in _MCP_KEYWORDS
+
+
+def test_web_prompt_requests_verified_inline_media_when_requested():
+    prompt = _assemble_prompt({"web_fetch"}, compact=True)
+    assert "include_media: true" in prompt
+    assert "![caption](direct_url)" in prompt
+    assert "Do not claim browsing is unavailable" in prompt
 
 
 def test_image_capability_available_on_vague_followups_but_respects_policy(monkeypatch):

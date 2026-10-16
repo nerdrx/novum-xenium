@@ -88,6 +88,12 @@ def test_browser_form_followups_include_approval_and_send_phrases():
     assert "submit(?:\\s+it)?" in source
 
 
+def test_named_browser_targets_use_shared_intent_and_auto_escalate():
+    source = _CHAT_ROUTES.read_text(encoding="utf-8")
+    assert "has_explicit_browser_intent(message)" in source
+    assert "(_explicit_web_intent or _explicit_browser_intent)" in source
+
+
 def test_agent_loop_expands_browser_mcp_tools_from_connected_server():
     """Browser intent must not depend on stale hardcoded Playwright tool names."""
     source = (Path(__file__).resolve().parent.parent / "src" / "agent_loop.py").read_text(encoding="utf-8")

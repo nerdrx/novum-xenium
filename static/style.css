@@ -2372,6 +2372,11 @@ body.bg-pattern-sparkles {
 .msg-ai .body {
   color: var(--fg);
 }
+.msg .body video {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
 .model-endpoint-add-btn {
   display: inline-flex;
   align-items: center;

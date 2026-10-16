@@ -135,6 +135,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "style-src 'self' 'unsafe-inline'; "
                 "font-src 'self'; "
                 "img-src 'self' data: blob: https:; "
+                "media-src 'self' blob: https:; "
                 "connect-src 'self'; "
                 "frame-ancestors 'none'"
             )
@@ -161,7 +162,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
                 "font-src 'self' https://cdn.jsdelivr.net; "
                 "img-src 'self' data: blob: https:; "
-                "media-src 'self' blob:; "
+                "media-src 'self' blob: https:; "
                 "connect-src 'self'; "
                 "frame-src 'self'; "
                 "frame-ancestors 'none'"

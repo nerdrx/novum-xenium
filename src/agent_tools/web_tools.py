@@ -115,11 +115,13 @@ class WebFetchTool:
         raw = content.strip()
         url = ""
         max_bytes = None
+        include_media = False
         if raw.startswith("{"):
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, dict):
                     url = str(parsed.get("url") or "").strip()
+                    include_media = parsed.get("include_media") is True
                     # Download-budget override (#3812): "full": true raises the
                     # budget to the hard cap; an explicit max_bytes is clamped
                     # to the hard cap downstream. Default stays the soft cap.
@@ -192,7 +194,7 @@ class WebFetchTool:
         text = (result.get("content") or "").strip()
         title = result.get("title") or ""
 
-        if not text:
+        if not text and not (include_media and result.get("media")):
             if err:
                 return {
                     "error": f"web_fetch: {url}: {err}",
@@ -237,4 +239,9 @@ class WebFetchTool:
         # stores it. The UI and agent context layer produce their own previews;
         # trimming here would make later API sections impossible to search.
         output = size_note + header + text
-        return {"output": output, "exit_code": 0}
+        media = result.get("media", []) if include_media else []
+        if media:
+            output += "\n\nMedia references found on this page (URLs only; content has not been visually verified):\n"
+            output += json.dumps(media, ensure_ascii=False)
+            output += "\nTo show an appropriate image/GIF or direct .mp4/.webm/.ogv clip inline, use ![caption](the exact media URL). Do not invent media URLs or claim an unseen item depicts something. External player pages remain normal links."
+        return {"output": output, "exit_code": 0, **({"media": media} if include_media else {})}

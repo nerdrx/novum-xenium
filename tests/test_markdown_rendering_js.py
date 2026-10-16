@@ -234,6 +234,44 @@ def test_inline_code_content_is_html_escaped(node_available):
     assert "<b>" not in html
 
 
+@pytest.mark.parametrize("url", [
+    "https://cdn.example.test/clip.mp4?download=1",
+    "https://cdn.example.test/clip.webm?token=fixture",
+    "https://cdn.example.test/clip.ogv?download=1",
+])
+def test_direct_https_video_markdown_renders_controlled_inline_video(node_available, url):
+    html = _run_markdown_case(f"![A <clip>]({url})")
+
+    assert '<video src="' in html
+    assert 'controls playsinline preload="none"' in html
+    assert ">A &lt;clip&gt;</video>" in html
+    assert "autoplay" not in html
+
+
+@pytest.mark.parametrize("url", [
+    "http://cdn.example.test/clip.mp4",
+    "javascript:alert(1).mp4",
+    "https://user:pass@cdn.example.test/clip.mp4",
+])
+def test_unsafe_video_urls_do_not_create_media_elements(node_available, url):
+    html = _run_markdown_case(f"![clip]({url})")
+    assert "<video" not in html
+    assert "<img" not in html
+
+
+def test_gif_remains_image_gifv_remains_link_and_video_uses_url_path(node_available):
+    image = _run_markdown_case("![gif](https://cdn.example.test/loop.gif?format=webm)")
+    gifv = _run_markdown_case("![gifv](https://cdn.example.test/loop.gifv?format=webm)")
+    video = _run_markdown_case("![clip](https://cdn.example.test/clip.webm?format=gif)")
+    assert '<img src="https://cdn.example.test/loop.gif?format=webm"' in image
+    assert "<video" not in image
+    assert '<a href="https://cdn.example.test/loop.gifv?format=webm"' in gifv
+    assert ">gifv</a>" in gifv
+    assert "<video" not in gifv
+    assert "<img" not in gifv
+    assert '<video src="https://cdn.example.test/clip.webm?format=gif"' in video
+
+
 def test_fenced_code_keeps_dollar_ampersand(node_available):
     # Issue #5663: the block-restore pass used a string replacement, so `$&` in a
     # restored block was read as "the matched text" and re-inserted the

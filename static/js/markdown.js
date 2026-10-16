@@ -158,11 +158,35 @@ function linkHtml(text, url) {
 }
 
 function imageHtml(alt, url, title) {
+  const video = _directVideoUrl(url);
+  if (video.isVideo) {
+    if (!video.safeUrl) return escapeHtml(alt || '');
+    const safeAlt = escapeHtml(alt || '');
+    const safeTitle = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<video src="${escapeHtml(video.safeUrl)}" controls playsinline preload="none"${safeTitle}>${safeAlt}</video>`;
+  }
+  // .gifv URLs commonly identify player pages rather than media files. Keep
+  // them navigable as ordinary links instead of producing a broken <img>.
+  try {
+    if (/\.gifv$/i.test(new URL(String(url || '').trim()).pathname)) {
+      return linkHtml(alt || 'GIF', url);
+    }
+  } catch (_) {}
   const safeUrl = safeLinkUrl(url);
   if (!safeUrl || safeUrl.startsWith('#')) return escapeHtml(alt || '');
   const safeAlt = escapeHtml(alt || '');
   const safeTitle = title ? ` title="${escapeHtml(title)}"` : '';
   return `<img src="${escapeHtml(safeUrl)}" alt="${safeAlt}"${safeTitle} loading="lazy" decoding="async">`;
+}
+
+function _directVideoUrl(rawUrl) {
+  let parsed;
+  try { parsed = new URL(String(rawUrl || '').trim()); }
+  catch (_) { return { isVideo: false, safeUrl: '' }; }
+  const isVideo = /\.(?:mp4|webm|ogv)$/i.test(parsed.pathname);
+  const safeUrl = isVideo && parsed.protocol === 'https:' && !parsed.username && !parsed.password
+    ? parsed.href : '';
+  return { isVideo, safeUrl };
 }
 
 function _isModelEndpointUrl(rawUrl) {
@@ -191,7 +215,7 @@ function _isModelEndpointUrl(rawUrl) {
  * dangerous URL schemes before the (now safe) fragment is handed back.
  */
 const _ALLOWED_HTML_BAD_TAGS = new Set([
-  'SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META',
+  'SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'AUDIO', 'SOURCE',
   'STYLE', 'BASE', 'FORM', 'NOSCRIPT', 'TEMPLATE',
   // Foreign-content roots. SVG/MathML have their own parser rules and are a
   // classic mutation-XSS vehicle — e.g. an SVG-namespaced <script>, whose
@@ -203,6 +227,7 @@ const _ALLOWED_HTML_BAD_TAGS = new Set([
 const _ALLOWED_HTML_URL_ATTRS = new Set([
   'href', 'src', 'srcset', 'xlink:href', 'action', 'formaction', 'background', 'poster',
 ]);
+const _ALLOWED_VIDEO_ATTRS = new Set(['src', 'controls', 'playsinline', 'preload', 'title']);
 
 function _compactUrlSchemeValue(value) {
   return String(value || '').replace(/[\u0000-\u0020\u007f-\u009f]+/g, '').toLowerCase();
@@ -226,6 +251,26 @@ function _cleanAllowedHtmlOnce(htmlString) {
     if (_ALLOWED_HTML_BAD_TAGS.has(el.tagName.toUpperCase())) {
       el.remove();
       continue;
+    }
+    if (el.tagName.toUpperCase() === 'VIDEO') {
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (!_ALLOWED_VIDEO_ATTRS.has(name)) {
+          el.removeAttribute(attr.name);
+        } else if (name === 'src') {
+          const safeUrl = _directVideoUrl(attr.value).safeUrl;
+          if (safeUrl) el.setAttribute('src', safeUrl);
+          else el.removeAttribute(attr.name);
+        }
+      }
+      const source = el.getAttribute('src');
+      if (!source) {
+        el.remove();
+        continue;
+      }
+      el.setAttribute('controls', '');
+      el.setAttribute('playsinline', '');
+      el.setAttribute('preload', 'none');
     }
     for (const attr of Array.from(el.attributes)) {
       const name = attr.name.toLowerCase();
@@ -729,7 +774,7 @@ export function mdToHtml(src, opts) {
 
   // ALSO preserve <a>/<img> tags the same way (they're now in the HTML from
   // markdown conversion)
-  s = s.replace(/<(?:a\s+[^>]*>.*?<\/a|img\s+[^>]*?)>/gi, (match) => {
+  s = s.replace(/<(?:a\s+[^>]*>.*?<\/a|img\s+[^>]*?|video\s+[^>]*>[\s\S]*?<\/video)>/gi, (match) => {
     const placeholder = `___ALLOWED_HTML_${allowedHtmlBlocks.length}___`;
     allowedHtmlBlocks.push(sanitizeAllowedHtml(match));
     return placeholder;

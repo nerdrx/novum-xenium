@@ -9,6 +9,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import List
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -103,6 +104,49 @@ def _extract_og_image(soup: BeautifulSoup) -> str:
         if url.startswith(("https://", "http://")) and not url.endswith((".svg", ".ico")):
             return url
     return ""
+
+
+def _extract_media(soup: BeautifulSoup, page_url: str) -> list[dict]:
+    """List bounded media references actually present in this fetched page."""
+    from src.tool_capabilities import _public_read_url
+    media = []
+    seen = set()
+    tags = soup.find_all(["img", "video", "source", "a"])
+    # Do not let navigation icons fill the budget before a page's video.
+    tags.sort(key=lambda tag: tag.name not in {"video", "source"})
+    for tag in tags:
+        name = tag.name
+        if name == "source" and not tag.find_parent("video"):
+            continue
+        if name == "img" and any(str(tag.get(size, "")) in {"0", "1", "2"} for size in ("width", "height")):
+            continue
+        raw = tag.get("href") if name == "a" else tag.get("src") or tag.get("data-src")
+        if not isinstance(raw, str) or not raw.strip() or len(raw) > 4096:
+            continue
+        url = urljoin(page_url, raw.strip())
+        try:
+            parsed = urlsplit(url)
+            if not _public_read_url(url):
+                continue
+        except ValueError:
+            continue
+        path = parsed.path.lower()
+        is_video = path.endswith((".mp4", ".webm", ".ogv"))
+        # A player/stream URL may be an HTML page or an opaque endpoint. Do
+        # not hand it to the Markdown video renderer as though it were a file;
+        # this fetcher intentionally does not make extra HEAD/media requests.
+        if name in {"video", "source"} and not is_video:
+            continue
+        if name == "a" and not path.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".mp4", ".webm", ".ogv")):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        label = str(tag.get("alt") or tag.get("title") or tag.get_text(" ", strip=True) or ("Video" if is_video else "Image"))[:160]
+        media.append({"kind": "video" if is_video else "image", "url": url, "label": label})
+        if len(media) == 12:
+            break
+    return media
 
 
 def _extract_lists(soup: BeautifulSoup) -> List[List[str]]:
@@ -242,7 +286,7 @@ def fetch_webpage_content(url: str, timeout: int = 5, retry_attempt: int = 0,
     # not be served to a later full-budget request for the same URL.
     # Bump the parser namespace so cached text extracted from overlapping HTML
     # wrappers cannot hide the corrected non-overlapping extraction.
-    cache_key = generate_cache_key(f"content-v2:{url}#cap={effective_cap}")
+    cache_key = generate_cache_key(f"content-v3:{url}#cap={effective_cap}")
     cache_file = CONTENT_CACHE_DIR / f"{cache_key}.cache"
 
     # Check cache
@@ -425,6 +469,7 @@ def fetch_webpage_content(url: str, timeout: int = 5, retry_attempt: int = 0,
         "meta_description": meta_info.get("description", ""),
         "meta_keywords": meta_info.get("keywords", ""),
         "og_image": og_image,
+        "media": _extract_media(soup, str(getattr(response, "url", url)) or url),
         "js_rendered": js_rendered,
         "js_message": js_message,
         "success": True,

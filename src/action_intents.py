@@ -41,8 +41,45 @@ _EXPLANATORY_PREFIX = re.compile(
     re.I,
 )
 
+_EXPLICIT_BROWSER_INTENT = re.compile(
+    r"\b(?:browser|browse|open\s+(?:the\s+)?(?:site|page|url|link)|"
+    r"click|fill(?:\s+out)?|submit|send\s+(?:the\s+)?form|"
+    r"contact\s+form|web\s*form|form\s+submission)\b"
+    r"|\b(?:open|visit|go\s+to|navigate\s+to|load)\s+(?:the\s+)?"
+    r"(?:https?://\S+|www\.\S+|[\w.-]+\.[a-z]{2,}(?:/\S*)?|"
+    r"(?:[\w-]+\s+){0,3}(?:board|thread|gallery|feed|media|gifs?|videos?)"
+    r"(?!\s+(?:folder|file|directory)\b))\b",
+    re.I,
+)
+
+
+def has_explicit_browser_intent(text: str) -> bool:
+    """Recognize direct browser actions without treating local panel opens as web.
+
+    Panel requests are already classified by the shared UI intent patterns.
+    A URL or an explicit browser action still takes precedence, while a bare
+    "open gallery" remains a request for the app's gallery panel.
+    """
+    text = str(text or "")
+    if not _EXPLICIT_BROWSER_INTENT.search(text):
+        return False
+
+    intent = classify_tool_intent(text)
+    if intent.category == "ui":
+        # A concrete external target remains an explicit browser request.
+        explicit_external_target = re.search(
+            r"\b(?:https?://\S+|www\.\S+|[\w.-]+\.[a-z]{2,}(?:/\S*)?)",
+            text,
+            re.I,
+        )
+        explicit_browser_action = re.search(
+            r"\b(?:browser|browse|site|page|url|link)\b", text, re.I
+        )
+        return bool(explicit_external_target or explicit_browser_action)
+    return True
+
 _PANEL = (
-    r"(?:calendar|notes?|inbox|email|mail|documents?|docs|library|gallery|"
+    r"(?:calendar|notes?|inbox|email|mail|documents?|docs|media\s+library|library|gallery|"
     r"settings|cookbook|sessions?|chats?|skills|memories|memory|brain)"
 )
 

@@ -697,7 +697,7 @@ def _web_fetch_read_url(content: Any) -> str | None:
             args = json.loads(raw)
         except (ValueError, TypeError):
             return None
-        if not isinstance(args, dict) or set(args) - {"url", "full", "max_bytes"}:
+        if not isinstance(args, dict) or set(args) - {"url", "full", "max_bytes", "include_media"}:
             return None
         raw = args.get("url")
     elif "\n" in raw:
@@ -719,7 +719,7 @@ def web_fetch_preflight_error(content: Any) -> str | None:
             args = json.loads(raw)
         except (ValueError, TypeError):
             return "web_fetch needs valid URL arguments; use read_file for local files."
-        if not isinstance(args, dict) or set(args) - {"url", "full", "max_bytes"}:
+        if not isinstance(args, dict) or set(args) - {"url", "full", "max_bytes", "include_media"}:
             return "web_fetch accepts a URL, not local file arguments; use read_file for workspace files."
         raw = args.get("url")
     elif "\n" in raw or "\r" in raw:

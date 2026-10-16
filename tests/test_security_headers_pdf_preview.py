@@ -25,6 +25,7 @@ def test_default_routes_remain_unframeable():
 
     assert response.headers["X-Frame-Options"] == "DENY"
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    assert "media-src 'self' blob: https:" in response.headers["Content-Security-Policy"]
 
 
 def test_document_pdf_preview_can_be_framed_by_same_origin():

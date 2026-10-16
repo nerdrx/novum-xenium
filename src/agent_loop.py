@@ -508,6 +508,8 @@ _DOMAIN_RULES = {
     "web": """\
 ## Web rules
 - For web lookup/search/latest/current requests, use `web_search` or `web_fetch`.
+- When the user asks to open a page and show its images, GIFs, or videos inline, call `web_fetch` with `include_media: true`. Embed only direct media URLs returned by the tool, using `![caption](direct_url)`; never invent or reconstruct media URLs.
+- If a page fetch is blocked or yields no readable content, use available browser tools to inspect it when useful. Do not claim browsing is unavailable while a web or browser tool is listed; report the specific limitation if the available tools cannot retrieve the page.
 - Do not use shell, Python, curl, requests, or scraping code for web lookup unless web tools are unavailable or already failed.
 - "Research X" means `trigger_research`, not a one-off `web_search`, unless the user explicitly asks for a quick lookup.""",
     "documents": """\

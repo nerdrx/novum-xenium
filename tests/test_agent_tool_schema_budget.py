@@ -578,6 +578,38 @@ def test_browser_workspace_request_does_not_starve_browser_actions(monkeypatch):
     assert disabled.isdisjoint(selected)
 
 
+def test_named_external_media_board_forces_navigation_into_final_tool_list(monkeypatch):
+    from src.action_intents import has_explicit_browser_intent
+
+    schemas = _browser_schemas(8)
+    names = [
+        "mcp__builtin_browser__browser_navigate",
+        "mcp__builtin_browser__browser_snapshot",
+    ]
+    for schema, name in zip(schemas, names):
+        schema["function"]["name"] = name
+    browser_names = {schema["function"]["name"] for schema in schemas}
+    requests = []
+    _configure(monkeypatch, schemas, requests)
+    message = "Open the GIF board"
+    assert has_explicit_browser_intent(message)
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6-luna",
+            [{"role": "user", "content": message}],
+            relevant_tools=browser_names,
+            forced_tools=browser_names,
+            disabled_tools=set(),
+            max_rounds=1,
+            _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    selected = {schema["function"]["name"] for schema in requests[0]["kwargs"]["tools"]}
+    assert "mcp__builtin_browser__browser_navigate" in selected
+
+
 @pytest.mark.parametrize(
     "message",
     [

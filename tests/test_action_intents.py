@@ -1,4 +1,8 @@
-from src.action_intents import classify_tool_intent, message_needs_tools
+from src.action_intents import (
+    classify_tool_intent,
+    has_explicit_browser_intent,
+    message_needs_tools,
+)
 
 
 def test_calendar_entry_request_promotes_to_agent():
@@ -54,6 +58,26 @@ def test_explicit_web_search_promotes_to_agent():
     assert message_needs_tools("do a web search for the best chocolate chip cookies")
     assert message_needs_tools("search the web for current RTX 3090 prices")
     assert classify_tool_intent("use web search and find a recipe").category == "web"
+
+
+def test_named_browser_targets_include_boards_and_media_pages():
+    assert has_explicit_browser_intent("Open the GIF board")
+    assert has_explicit_browser_intent("Go to example.org/gallery")
+    assert has_explicit_browser_intent("Visit the video feed")
+    assert not has_explicit_browser_intent("Explain how GIF boards work")
+    assert not has_explicit_browser_intent("Open my local images folder")
+    assert not has_explicit_browser_intent("Open my local video folder")
+
+
+def test_local_gallery_and_media_library_stay_app_panel_requests():
+    for message in ("open gallery", "open the media library"):
+        intent = classify_tool_intent(message)
+        assert intent.category == "ui"
+        assert not has_explicit_browser_intent(message)
+
+
+def test_external_target_overrides_panel_wording():
+    assert has_explicit_browser_intent("Open the gallery at example.org/gallery")
 
 
 def test_workspace_agent_requests_promote_to_shell_workspace():

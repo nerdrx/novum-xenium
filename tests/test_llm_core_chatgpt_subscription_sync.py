@@ -102,3 +102,23 @@ def test_sync_llm_call_propagates_sse_auth_error(monkeypatch):
         llm_core.llm_call(_URL, "vision-model", [{"role": "user", "content": "error case"}])
     assert exc.value.status_code == 401
     assert "Reconnect the provider" in str(exc.value.detail)
+
+
+def test_done_return_closes_nested_stream_generators_before_loop_shutdown(monkeypatch):
+    closed = []
+
+    async def mocked_inner_stream(*_args, **_kwargs):
+        try:
+            yield 'data: {"delta":"finished"}\n\n'
+            yield "data: [DONE]\n\n"
+        finally:
+            closed.append("inner")
+
+    monkeypatch.setattr(llm_core, "_stream_llm_inner", mocked_inner_stream)
+
+    result = asyncio.run(llm_core.llm_call_async(
+        _URL, "vision-model", [{"role": "user", "content": "close test"}],
+    ))
+
+    assert result == "finished"
+    assert closed == ["inner"]

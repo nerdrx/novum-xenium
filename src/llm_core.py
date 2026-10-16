@@ -2582,7 +2582,7 @@ async def llm_call_async(
         # Reuse stream_llm's validated Codex SSE path and collect deltas.
         parts: List[str] = []
         actual_model = model
-        async for chunk in stream_llm(
+        stream = stream_llm(
             url,
             model,
             messages_copy,
@@ -2591,50 +2591,54 @@ async def llm_call_async(
             headers=headers,
             timeout=timeout,
             workload=workload,
-        ):
-            event_is_error = False
-            for line in str(chunk).splitlines():
-                if line.startswith("event:"):
-                    event_is_error = line[6:].strip() == "error"
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                raw = line[5:].strip()
-                if not raw:
-                    continue
-                if raw == "[DONE]":
-                    response = "".join(parts)
-                    if use_response_cache:
-                        _set_cached_response(
-                            cache_key,
-                            response,
-                            actual_model=actual_model,
+        )
+        try:
+            async for chunk in stream:
+                event_is_error = False
+                for line in str(chunk).splitlines():
+                    if line.startswith("event:"):
+                        event_is_error = line[6:].strip() == "error"
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if not raw:
+                        continue
+                    if raw == "[DONE]":
+                        response = "".join(parts)
+                        if use_response_cache:
+                            _set_cached_response(
+                                cache_key,
+                                response,
+                                actual_model=actual_model,
+                            )
+                        return (
+                            (response, actual_model)
+                            if return_model_metadata
+                            else response
                         )
-                    return (
-                        (response, actual_model)
-                        if return_model_metadata
-                        else response
-                    )
-                try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if event_is_error or data.get("error") or (data.get("status") and data.get("text")):
-                    status = int(data.get("status") or 502)
-                    text = data.get("text") or data.get("error") or "ChatGPT Subscription request failed"
-                    error_type = (
-                        _FallbackIneligibleHTTPException
-                        if data.get("fallback_eligible") is False
-                        else HTTPException
-                    )
-                    raise error_type(status, text)
-                if data.get("type") == "model_actual":
-                    reported_model = data.get("model")
-                    if isinstance(reported_model, str) and reported_model.strip():
-                        actual_model = reported_model.strip()
-                delta = data.get("delta")
-                if isinstance(delta, str):
-                    parts.append(delta)
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if event_is_error or data.get("error") or (data.get("status") and data.get("text")):
+                        status = int(data.get("status") or 502)
+                        text = data.get("text") or data.get("error") or "ChatGPT Subscription request failed"
+                        error_type = (
+                            _FallbackIneligibleHTTPException
+                            if data.get("fallback_eligible") is False
+                            else HTTPException
+                        )
+                        raise error_type(status, text)
+                    if data.get("type") == "model_actual":
+                        reported_model = data.get("model")
+                        if isinstance(reported_model, str) and reported_model.strip():
+                            actual_model = reported_model.strip()
+                    delta = data.get("delta")
+                    if isinstance(delta, str):
+                        parts.append(delta)
+        finally:
+            await stream.aclose()
         response = "".join(parts)
         if use_response_cache:
             _set_cached_response(cache_key, response, actual_model=actual_model)
@@ -2900,7 +2904,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
                      reasoning_mode: str = "auto"):
     target_url = _stream_target_url(url)
     async with _local_model_slot(target_url, model, workload):
-        async for chunk in _stream_llm_inner(
+        inner = _stream_llm_inner(
             url,
             model,
             messages,
@@ -2913,8 +2917,12 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
             session_id=session_id,
             tool_choice_none=tool_choice_none,
             reasoning_mode=reasoning_mode,
-        ):
-            yield explain_sse_failure(chunk)
+        )
+        try:
+            async for chunk in inner:
+                yield explain_sse_failure(chunk)
+        finally:
+            await inner.aclose()
 
 
 async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,

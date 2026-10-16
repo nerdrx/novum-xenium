@@ -1480,7 +1480,7 @@ async def _call_mcp_tool(
         output = (result.get("stdout") or "").strip()
         if output.startswith("Error:"):
             result["exit_code"] = 1
-            result["error"] = output
+            result.setdefault("error", output)
         _promote_image_fields(result)
 
     return result

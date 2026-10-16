@@ -175,3 +175,12 @@ def test_shell_diagnostic_commands_promote_to_agent():
 def test_shell_command_explanations_stay_plain_chat():
     assert not message_needs_tools("How do I use lsblk?")
     assert not message_needs_tools("Can you explain docker ps?")
+
+
+def test_explicit_shell_output_commands_keep_admission_scoped_to_execution():
+    from src.agent_runtime.authority import interpret_request
+    for request in ("Run echo hi.", "Please execute printf hello", "exec echo done"):
+        assert classify_tool_intent(request).category == "shell"
+        assert "shell_files" in interpret_request(request).capabilities
+    for prose in ("What does run echo hi mean?", "Explain how printf works", "Echo my words", "Do not run echo hi; just explain it"):
+        assert "shell_files" not in interpret_request(prose).capabilities

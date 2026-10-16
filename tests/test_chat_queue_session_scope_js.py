@@ -138,8 +138,8 @@ def test_queued_request_stays_with_origin_chat_and_stop_is_scoped():
       assert.equal(_queuedAgentRequests.length, 2);
       assert.equal(input.value, 'draft for B');
 
-      // Returning to A restores both. Promote the second item and ensure it
-      // takes priority rather than silently sending the queue head instead.
+      // Returning to A restores both. Promoting requests a scoped Stop,
+      // then submits the queued context together in its original order.
       currentSessionId = 'chat-A';
       observerCallback();
       isStreaming = true;
@@ -151,19 +151,14 @@ def test_queued_request_stays_with_origin_chat_and_stop_is_scoped():
       _drainQueuedAgentRequests();
       timers.shift()(); // queue drain
       timers.shift()(); // guarded zero-delay submit
-      assert.deepEqual(sent, [{{ message: 'later queued task A', sessionId: 'chat-A', expectedSessionId: 'chat-A' }}]);
-      assert.equal(_queuedAgentRequests.length, 1);
-      _drainQueuedAgentRequests();
-      timers.shift()();
-      timers.shift()();
-      assert.deepEqual(sent[1], {{ message: 'continue task A', sessionId: 'chat-A', expectedSessionId: 'chat-A' }});
+      assert.deepEqual(sent, [{{ message: 'continue task A\\n\\nlater queued task A', sessionId: 'chat-A', expectedSessionId: 'chat-A' }}]);
       assert.equal(_queuedAgentRequests.length, 0);
       assert.equal(_queuedBubbleHost, null);
 
       // A duplicate stale completion cannot dispatch the same item twice.
       _drainQueuedAgentRequests();
       assert.equal(timers.length, 0);
-      assert.equal(sent.length, 2);
+      assert.equal(sent.length, 1);
       console.log('queued request session scope ok');
     """
     result = subprocess.run(

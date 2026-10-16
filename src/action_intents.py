@@ -215,6 +215,7 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         # word match promoted informational questions ("What does the grep
         # command do?") and incidental uses ("My cat ate my homework").
         ("shell", "run shell command request", rf"{_PLEASE}(?:run|execute|exec)\s+{_SHELL_COMMAND}\b(?:\s+\S.*)?$"),
+        ("shell", "explicit shell output command request", rf"{_PLEASE}(?:run|execute|exec)\s+(?:echo|printf)\b(?:\s+\S.*)?$"),
         ("shell", "bare shell command request", rf"{_PLEASE}{_SHELL_COMMAND}\b(?:\s+\S.*)?$"),
         ("shell", "assistant shell command request", rf"{_ACTION_QUESTION}{_SHELL_COMMAND}\b(?:\s+\S.*)?$"),
         ("shell", "system/file check request", r"\b(check|see)\s+(if|whether|what)\s+.{1,40}\b(running|process|service|port|file|exists?)\b"),

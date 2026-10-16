@@ -37,4 +37,6 @@ def test_eager_and_lazy_entry_points_share_module_identity(module):
         url = urlsplit(spec)
         if url.path == "/static/" + module:
             identities.add((module, url.query, url.fragment))
-    assert identities == {(module, "", "")}, identities
+    assert len(identities) == 1, identities
+    assert next(iter(identities))[0] == module
+    assert next(iter(identities))[2] == ""

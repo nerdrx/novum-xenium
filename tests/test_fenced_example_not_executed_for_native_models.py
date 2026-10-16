@@ -23,6 +23,7 @@ assertions) end-to-end with a mocked LLM stream, and assert on whether
 """
 import asyncio
 import json
+import tempfile
 
 import src.agent_loop as al
 from src.tool_capabilities import ToolGateDecision
@@ -91,17 +92,26 @@ def _run_loop(monkeypatch, model, deltas, native_calls=None, max_rounds=2, endpo
 
     monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
 
+    workspace = tempfile.TemporaryDirectory(prefix="nx-native-channel-")
+    from src.agent_runtime.authority import create_request_authority
+    authority = create_request_authority(prompt, owner="admin", workspace=workspace.name)
     gen = al.stream_agent_loop(
         endpoint_url or "https://api.openai.com/v1", model,
         [{"role": "user", "content": prompt}],
         max_rounds=max_rounds,
+        client_runtime_context={"model_context_window": 32768},
         relevant_tools={"bash"},
         # These tests isolate parser/channel selection. Use the privileged
         # fixture owner so the native-call execution assertion does not stop
         # at the unrelated production approval policy.
         owner="admin",
+        workspace=workspace.name,
+        request_authority=authority,
     )
-    return _types(_collect(gen))
+    try:
+        return _types(_collect(gen))
+    finally:
+        workspace.cleanup()
 
 
 # ---------------------------------------------------------------------------

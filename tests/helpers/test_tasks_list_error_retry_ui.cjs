@@ -7,7 +7,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
 const html = `<!doctype html><meta charset="utf-8"><body>
-<div id="tasks-list"></div><div id="tasks-tab-count"></div><div id="tasks-head-count"></div>
+<div id="tasks-filter-chips"></div><div id="tasks-list"></div><div id="tasks-tab-count"></div><div id="tasks-head-count"></div>
 <div id="tasks-modal"><div class="modal-body"></div></div>
 <button id="tool-tasks-btn"></button><button id="rail-tasks"></button>
 <div id="toast"></div>

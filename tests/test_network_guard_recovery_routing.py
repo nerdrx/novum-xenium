@@ -76,7 +76,7 @@ def test_network_recovery_floor_precedes_round_schema_materialization():
     source = (Path(__file__).parents[1] / "src" / "agent_loop.py").read_text()
     floor = source.index("_network_recovery_floor = (")
     active_state = source.index("_active_route_state = {", floor)
-    schemas = source.index("all_tool_schemas = _tool_schemas_for_route", active_state)
+    schemas = source.index("all_tool_schemas = _checked_coding_tool_schemas(_tool_schemas_for_route", active_state)
     assert floor < active_state < schemas
 
 

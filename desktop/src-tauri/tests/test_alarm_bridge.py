@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -315,6 +316,50 @@ class AlarmBridgeTests(unittest.TestCase):
             ("set-sink-mute", "sink0", "1"),
         ])
         self.assertEqual(bridge._load_state(self.state_dir)["alarms"][alarm_id]["status"], "failed")
+
+    def test_process_crash_recovery_restores_silent_audio_fixture(self):
+        alarm_id = "12345678-1234-1234-1234-123456789abc"
+        fixture = self.state_dir / "audio-fixture.json"
+        original = {"volume": [12000, 23000], "muted": True}
+        fixture.write_text(json.dumps({"volume": [65536, 65536], "muted": False}))
+
+        # Kill only the simulated alarm runner after it has persisted recovery
+        # state and changed a file-backed sink fixture. No audio, timer, or
+        # systemd unit is involved. A whole-cgroup kill is not equivalent:
+        # it also kills systemd's ExecStopPost recovery process.
+        crash_script = "\n".join((
+            "import importlib.util, json, os, sys",
+            "from pathlib import Path",
+            "spec = importlib.util.spec_from_file_location('alarm_bridge_crash', sys.argv[1])",
+            "bridge = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(bridge)",
+            "state, alarm, fixture = Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])",
+            "bridge._write_audio_snapshot(state, alarm, {'sink': str(fixture), 'muted': True, 'volumes': [12000, 23000]})",
+            "fixture.write_text(json.dumps({'volume': [65536, 65536], 'muted': False}))",
+            "os._exit(86)",
+        ))
+        child = subprocess.run(
+            [sys.executable, "-c", crash_script, str(BRIDGE_PATH), str(self.state_dir), alarm_id, str(fixture)],
+            timeout=3, check=False,
+        )
+        self.assertEqual(child.returncode, 86)
+        self.assertNotEqual(json.loads(fixture.read_text()), original)
+
+        def restore_fixture(action, sink, *values):
+            state = json.loads(Path(sink).read_text())
+            if action == "set-sink-volume":
+                state["volume"] = [int(value) for value in values]
+            elif action == "set-sink-mute":
+                state["muted"] = values[0] == "1"
+            Path(sink).write_text(json.dumps(state))
+
+        with mock.patch.object(bridge, "_pactl", side_effect=restore_fixture):
+            self.assertEqual(bridge.main([
+                "--token-file", str(self.token_file), "--state-dir", str(self.state_dir),
+                "--restore", alarm_id,
+            ]), 0)
+        self.assertEqual(json.loads(fixture.read_text()), original)
+        self.assertFalse(bridge._audio_snapshot_path(self.state_dir, alarm_id).exists())
 
     def test_overlapping_alarm_is_skipped_while_audio_lock_is_owned(self):
         alarm_id = "12345678-1234-1234-1234-123456789abc"

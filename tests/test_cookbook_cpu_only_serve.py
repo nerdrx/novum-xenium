@@ -44,8 +44,8 @@ def test_diffusers_is_available_only_on_local_windows_serve_panel():
 
     assert "function _remoteWindowsDiffusersUnsupported(target)" in text
     assert "return !!(target?.host && target?.platform === 'windows');" in text
-    assert "if (_remoteWindowsDiffusersUnsupported(target)) return [['llamacpp','llama.cpp']];" in text
-    assert "return [['llamacpp','llama.cpp'],['diffusers','Diffusers']];" in text
+    assert "if (_remoteWindowsDiffusersUnsupported(target)) choices = [['llamacpp','llama.cpp']];" in text
+    assert "else choices = [['llamacpp','llama.cpp'],['diffusers','Diffusers']];" in text
     assert "Diffusers serving is not supported on remote Windows servers yet." in text
 
 

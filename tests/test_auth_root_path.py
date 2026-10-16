@@ -61,6 +61,7 @@ def test_login_page_static_assets_resolve_under_mount_path():
     for relative_asset, mounted_path in (
         ("static/manifest.json", "/odysseus/static/manifest.json"),
         ("static/icons/icon-192.png", "/odysseus/static/icons/icon-192.png"),
+        ("static/mobile-dialogs.css", "/odysseus/static/mobile-dialogs.css"),
         (
             "static/fonts/FiraCode-Regular.woff2",
             "/odysseus/static/fonts/FiraCode-Regular.woff2",
@@ -72,6 +73,9 @@ def test_login_page_static_assets_resolve_under_mount_path():
     ):
         assert relative_asset in html
         assert urlparse(urljoin(mounted_login_url, relative_asset)).path == mounted_path
+
+    for relative_asset in ("static/icons/icon-192.png", "static/mobile-dialogs.css"):
+        assert f'href="{relative_asset}"' in html or f'src="{relative_asset}"' in html
 
 
 @pytest.mark.parametrize(

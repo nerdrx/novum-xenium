@@ -37,6 +37,7 @@ def test_real_api_shapes_and_owner_filtered_runs(tmp_path, monkeypatch):
     store.install(package.getvalue())
     store.set_enabled('test-panel', True)
     monkeypatch.setattr(data_routes, 'DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(data_routes, '_session_names', lambda _owner, _ids: {})
     monkeypatch.setattr(data_routes, 'storage_owner_for_request', lambda request: 'alice')
     monkeypatch.setattr(data_routes, 'owner_is_admin_or_single_user', lambda user: False)
     with sqlite3.connect(tmp_path / 'agent_runs.db') as db:
@@ -67,7 +68,7 @@ def test_real_api_shapes_and_owner_filtered_runs(tmp_path, monkeypatch):
 
     client = TestClient(app)
     for capability, title in [('images', 'My picture'), ('models', 'model-a'),
-                              ('research', 'A topic'), ('downloads', 'Model file'), ('runs', 'Run alice-run')]:
+                              ('research', 'A topic'), ('downloads', 'Model file'), ('runs', 'Agent run')]:
         response = client.get(f'/api/modules/test-panel/data/{capability}')
         assert response.status_code == 200, response.text
         assert response.json()['items'][0]['title'] == title

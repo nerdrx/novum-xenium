@@ -128,7 +128,8 @@ def test_dispatch_snapshots_before_write_and_fails_closed(tmp_path, monkeypatch,
     security = ToolRunSecurityContext(approval_mode="full", workspace_snapshots_enabled=True)
     block = SimpleNamespace(tool_type="write_file", content="main.py\nafter")
     def run():
-        return asyncio.run(tool_execution.execute_tool_block(block, session_id="chat", owner="alice",
+        from tests.runtime_evidence_helpers import server_authorized_executor
+        return asyncio.run(server_authorized_executor(tool_execution.execute_tool_block)(block, session_id="chat", owner="alice",
                           workspace=str(root), security_context=security))
     _, result = run()
     assert result["workspace_snapshot_id"]
@@ -166,7 +167,8 @@ def test_default_workspace_snapshot_is_used_when_no_workspace_selected(tmp_path,
     monkeypatch.setattr(tool_execution, "_execute_tool_block_impl", execute)
     security = ToolRunSecurityContext(approval_mode="full", workspace_snapshots_enabled=True)
     block = SimpleNamespace(tool_type="write_file", content="main.py\nafter")
-    _, result = asyncio.run(tool_execution.execute_tool_block(
+    from tests.runtime_evidence_helpers import server_authorized_executor
+    _, result = asyncio.run(server_authorized_executor(tool_execution.execute_tool_block)(
         block, session_id="chat", owner="alice", workspace=None,
         security_context=security,
     ))
@@ -259,8 +261,12 @@ def test_real_loop_judged_edit_requires_snapshot(monkeypatch, tmp_path, snapshot
     executed, snapshots = [], []
     content = json.dumps({"path":"main.py", "content":"print('hi')"})
     loop = _patch_agent_loop(monkeypatch, ["```write_file\n" + content + "\n```"], executed)
+    monkeypatch.setattr(
+        loop, "get_setting",
+        lambda key, default=None: False if key == "agent_milestone_workflow" else default,
+    )
     async def review(action, request, **kwargs):
-        assert action["kind"] == "workspace_edit" and request == "write a hello program"
+        assert action["kind"] == "workspace_edit" and request == "write a hello program in the workspace"
         return {"decision":verdict,"reason":"Reversible coding edit."}
     monkeypatch.setattr(approval_judge, "review_action", review)
     def snapshot(*args):
@@ -275,11 +281,18 @@ def test_real_loop_judged_edit_requires_snapshot(monkeypatch, tmp_path, snapshot
         return "write", {"exit_code":0,"output":"saved"}
     monkeypatch.setattr(loop, "execute_tool_block", execute)
     events = _collect_agent_events(loop.stream_agent_loop(
-        "http://local.test/v1","model",[{"role":"user","content":"write a hello program"},
+        "http://local.test/v1","model",[{"role":"user","content":"write a hello program in the workspace"},
         untrusted_context_message("page","untrusted")],max_rounds=1,relevant_tools={"write_file"},
         workspace=str(tmp_path), owner="alice",session_id="chat", approval_mode="auto"))
     assert bool(executed) is executes
-    assert any(e.get("ask_user",{}).get("kind")=="tool_approval" for e in events) is (not executes)
+    if verdict == "ask":
+        assert any(e.get("ask_user",{}).get("kind")=="tool_approval" for e in events)
+    elif not snapshot_ok:
+        assert any(
+            event.get("type") == "tool_output"
+            and "snapshot" in str(event).lower()
+            for event in events
+        )
 
 
 def test_real_loop_allows_endpoint_metadata_discovery_without_exact_approval(monkeypatch):

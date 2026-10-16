@@ -1134,7 +1134,7 @@ def test_source_media_schema_boundary_keeps_text_companion_writer():
         "# Final provenance boundary: route construction, fallbacks, and"
     )
     materialization = source.index(
-        "all_tool_schemas = _tool_schemas_for_route(_active_route_state)",
+        "all_tool_schemas = _checked_coding_tool_schemas(_tool_schemas_for_route(_active_route_state))",
         boundary,
     )
     segment = source[boundary:materialization]
@@ -1193,7 +1193,7 @@ def test_direct_source_media_extraction_filter_is_reapplied_per_model_route():
         "# Final provenance boundary: route construction, fallbacks, and"
     )
     schema_materialization = source.index(
-        "all_tool_schemas = _tool_schemas_for_route(_active_route_state)",
+        "all_tool_schemas = _checked_coding_tool_schemas(_tool_schemas_for_route(_active_route_state))",
         schema_boundary,
     )
     assert schema_boundary < schema_materialization
@@ -1647,7 +1647,7 @@ def test_artifact_recovery_redirects_wrong_http_and_partial_mutations():
 def test_answer_only_local_media_has_bounded_inspection_budget():
     source = (Path(__file__).parents[1] / "src" / "agent_loop.py").read_text()
     assert "_completed_media_inspections >= 8" in source
-    assert "round_num >= _round_limit - 1" in source
+    assert "_model_rounds >= _round_limit - 1" in source
     assert "_media_inspection_budget_exhausted" in source
     assert "local-media inspection budget exhausted" in source
     assert "answer the user's question now from the evidence" in source
@@ -1778,17 +1778,19 @@ def test_web_fetch_windows_one_line_arxiv_html_around_exact_table_row():
     assert "GPT-4o | 83.7" in focused
 
 
-def test_read_file_url_is_routed_to_native_web_fetch():
+def test_read_file_parser_does_not_silently_add_web_capability():
     from src.tool_schemas import function_call_to_tool_block
 
     block = function_call_to_tool_block(
         "read_file", '{"path":"https://arxiv.org/pdf/2502.13923"}'
     )
-    assert block.tool_type == "web_fetch"
+    # Cross-capability recovery belongs to the offered/authorized loop, not
+    # this low-level parser which has no enabled-tool or request context.
+    assert block.tool_type == "read_file"
     assert "https://arxiv.org/pdf/2502.13923" in block.content
 
 
-def test_local_html_web_fetch_is_routed_to_native_browser():
+def test_web_fetch_parser_does_not_silently_add_browser_capability():
     import json
 
     from src.tool_schemas import function_call_to_tool_block
@@ -1797,11 +1799,8 @@ def test_local_html_web_fetch_is_routed_to_native_browser():
         "web_fetch", '{"url":"file:///workspace/output.html"}'
     )
 
-    assert block.tool_type == "private_browser"
-    assert json.loads(block.content) == {
-        "action": "open",
-        "url": "file:///workspace/output.html",
-    }
+    assert block.tool_type == "web_fetch"
+    assert json.loads(block.content) == {"url": "file:///workspace/output.html"}
 
 
 def test_workspace_alias_resolves_inside_active_workspace(tmp_path):

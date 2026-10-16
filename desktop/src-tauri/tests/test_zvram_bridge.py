@@ -199,7 +199,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual([item['name'] for item in ready], ['org/demo:Demo-Q4_K_M'])
             self.assertEqual(ready[0]['path'], str(model_blob.resolve()))
             split2_blob = blobs / 'split-2'
-            split2_blob.write_bytes(b'part2')
+            split2_blob.write_bytes(self.text_gguf())
             split2.symlink_to(split2_blob)
             ready = bridge._ready_cached_gguf_rows(
                 helper, Path(directory) / 'cookie', 8000, cache,
@@ -207,6 +207,10 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual([item['name'] for item in ready], [
                 'org/demo:Demo-Q4_K_M', 'org/demo:Split',
             ])
+            self.assertEqual(ready[1]['path'], str(split1))
+            bridge._router_preset_path(self.manager).write_text('[nx-model-0]\nalias = tiny\nmodel = /existing\n')
+            bridge._append_router_preset(self.manager, [ready[1]], self.checkout)
+            self.assertIn('model = ' + str(split1), bridge._router_preset_path(self.manager).read_text())
             self.assertEqual(helper.request, ('http://127.0.0.1:8000/api/model/cached', 'odysseus_session=test'))
             helper._request = lambda *_args: {'models': [], 'error': 'private scan detail'}
             with self.assertRaisesRegex(ValueError, 'scan is pending'):

@@ -589,9 +589,13 @@ def _ready_cached_gguf_rows(model_helper, cookie_path, backend_port, cache_root)
                     try:
                         resolved = part_path.resolve(strict=True)
                         resolved.relative_to(host_root)
-                        if not resolved.is_file() or resolved.stat().st_size <= 0:
+                        if not resolved.is_file():
                             complete = False
                             break
+                        with resolved.open('rb') as stream:
+                            if stream.read(4) != b'GGUF':
+                                complete = False
+                                break
                     except (OSError, ValueError):
                         complete = False
                         break
@@ -604,7 +608,9 @@ def _ready_cached_gguf_rows(model_helper, cookie_path, backend_port, cache_root)
             alias = f'{repo}:{stem}'
             if len(alias) > 128 or not _ALIAS_RE.fullmatch(alias):
                 continue
-            ready.append({'name': alias, 'path': str(file_path), 'size': file_path.stat().st_size})
+            # llama-server locates split siblings by their snapshot filenames.
+            model_file = snapshot_file if split_match else file_path
+            ready.append({'name': alias, 'path': str(model_file), 'size': file_path.stat().st_size})
     return ready
 
 
@@ -664,7 +670,8 @@ def _append_router_preset(manager, models, backend_checkout):
     additions = []
     for model in models:
         name, raw_path = model['name'], model['path']
-        model_path = Path(raw_path).expanduser().resolve(strict=True)
+        model_path = Path(raw_path).expanduser().absolute()
+        model_path.resolve(strict=True)
         if (not _ALIAS_RE.fullmatch(name) or any(c in str(model_path) for c in '\r\n\0;#')
                 or str(model_path) != str(model_path).strip()):
             raise ValueError('A discovered model name or path cannot be represented safely in the router preset')
@@ -705,7 +712,7 @@ def _sync_router_models(model_helper, manager_helper, manager, params, params_st
     _, preset_entries, _ = _router_preset_entries(_router_preset_path(manager))
     expected = list(dict.fromkeys([*params.get('model_ids', []), *[
         row['name'] for row in candidates
-        if row['name'] in preset_entries and preset_entries[row['name']][1] == str(Path(row['path']).resolve())
+        if row['name'] in preset_entries and Path(preset_entries[row['name']][1]).resolve() == Path(row['path']).resolve()
     ]]))
     # Idempotent retry: a preset write can succeed while reload/registration fails.
     _local_json(f'http://127.0.0.1:{params["port"]}/models?reload=1', timeout=10)

@@ -3,9 +3,9 @@
 </p>
 
 <h1 align="center">Novum Xenium</h1>
-<p align="center">A desktop home for your self-hosted agent workspace.</p>
+<p align="center">An Odysseus fork focused on reliability, usability, and desktop integration.</p>
 
-Give it a repo. Research something. Make an image. Come back to a longer job without starting from scratch.
+**Novum Xenium builds on [Odysseus](https://github.com/odysseus-dev/odysseus).** This fork improves the existing workspace with NX usability, reliability, and desktop/mobile integration work. The original project, authorship, history, and AGPL license remain credited.
 
 Novum Xenium brings your models, tools, projects and chats together. The lightweight Tauri app manages the Docker backend and opens your workspace. Prefer a browser? Same workspace, same data.
 

@@ -54,7 +54,7 @@ def test_mcp_timeout_does_not_replay_and_releases_browser_lock():
             calls += 1
             await asyncio.Event().wait()
 
-        with patch('src.mcp_manager.MCP_TOOL_TIMEOUT_SECONDS', 0.01), patch.object(mgr, '_do_call', side_effect=stalled), patch.object(mgr, '_reconnect_builtin', new_callable=AsyncMock) as reconnect:
+        with patch('src.mcp_manager._tool_call_timeout', return_value=0.01), patch.object(mgr, '_do_call', side_effect=stalled), patch.object(mgr, '_reconnect_builtin', new_callable=AsyncMock) as reconnect:
             result = await mgr.call_tool('mcp__builtin_browser__browser_navigate', {'url': 'https://example.com'})
             assert result['timed_out'] is True
             assert calls == 1
@@ -65,3 +65,15 @@ def test_mcp_timeout_does_not_replay_and_releases_browser_lock():
                 assert result['timed_out'] is True
                 assert calls == 1
     asyncio.run(run())
+
+
+def test_mcp_deadline_leaves_room_for_images_and_bounds_custom_setting():
+    from src.mcp_manager import _tool_call_timeout
+    with patch('src.settings.get_setting', side_effect=lambda key, default: default):
+        assert _tool_call_timeout('mcp__builtin_browser__browser_navigate') == 120.0
+        assert _tool_call_timeout('mcp__image_gen__generate_image') == 360.0
+    with patch('src.settings.get_setting', return_value=900):
+        assert _tool_call_timeout('mcp__custom__long_job') == 900
+    for invalid in [None, 'invalid', 0, float('nan'), float('inf')]:
+        with patch('src.settings.get_setting', return_value=invalid):
+            assert _tool_call_timeout('mcp__custom__job') == 120.0

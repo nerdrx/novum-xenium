@@ -4,8 +4,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates cmake git libvulkan-dev glslc spirv-headers \
     && rm -rf /var/lib/apt/lists/*
 COPY scripts/build-stable-diffusion.sh /usr/local/bin/build-stable-diffusion.sh
-RUN sh /usr/local/bin/build-stable-diffusion.sh cpu /out
-RUN sh /usr/local/bin/build-stable-diffusion.sh vulkan /out
+RUN sh /usr/local/bin/build-stable-diffusion.sh cpu /out \
+    && sh /usr/local/bin/build-stable-diffusion.sh vulkan /out
 
 # ---- builder: pinned zVram Vulkan layer (Linux x86_64 only) ----
 FROM ubuntu:24.04 AS zvram-build

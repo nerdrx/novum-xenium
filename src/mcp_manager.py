@@ -23,6 +23,18 @@ logger = logging.getLogger(__name__)
 
 MCP_TOOL_TIMEOUT_SECONDS = 120.0
 
+
+def _tool_call_timeout(qualified_name: str) -> float:
+    # Local image generation already permits a 300s HTTP read. Leave room
+    # for its connection/setup while bounding browser and ordinary tool waits.
+    default = 360.0 if qualified_name.startswith("mcp__image_gen__") else MCP_TOOL_TIMEOUT_SECONDS
+    from src.settings import get_setting
+    try:
+        requested = float(get_setting("mcp_tool_timeout_seconds", default))
+    except (TypeError, ValueError):
+        return default
+    return requested if 10.0 <= requested <= 3600.0 else default
+
 def _format_mcp_connection_error(name: str, command: str = "", args: Optional[List[str]] = None, error: Exception = None) -> str:
     """Return a user-actionable MCP connection error message."""
     args = args or []
@@ -634,7 +646,7 @@ class McpManager:
         try:
             return await asyncio.wait_for(
                 self._call_tool_impl(qualified_name, arguments),
-                timeout=MCP_TOOL_TIMEOUT_SECONDS,
+                timeout=_tool_call_timeout(qualified_name),
             )
         except asyncio.TimeoutError:
             # A timed-out mutation may have completed remotely. Never replay it.

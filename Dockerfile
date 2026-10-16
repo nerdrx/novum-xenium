@@ -166,6 +166,12 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global --no-audit --no-fund \
     "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"
 
+# Archive-based images have no .git directory. Record the exact source that
+# the build supplied so the running Settings footer reports this image's code.
+ARG SOURCE_COMMIT=unknown
+ENV ODYSSEUS_SOURCE_COMMIT=$SOURCE_COMMIT
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
+
 # Copy app code
 COPY . .
 # Require the redistribution notices in the image build context.

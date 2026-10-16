@@ -47,6 +47,25 @@ def _token_path() -> Path:
     return Path(override).expanduser() if override else Path(get_app_root()) / ".local" / "novum-alarms" / "bridge-token"
 
 
+def _resolve_local_wall_time(value: datetime) -> datetime:
+    """Attach the user zone only when the requested wall time is unambiguous."""
+    tz = user_timezone()
+    candidates = []
+    seen_instants = set()
+    for fold in (0, 1):
+        aware = value.replace(tzinfo=tz, fold=fold)
+        instant = aware.astimezone(timezone.utc)
+        roundtrip = instant.astimezone(tz).replace(tzinfo=None)
+        if roundtrip == value and instant not in seen_instants:
+            candidates.append(aware)
+            seen_instants.add(instant)
+    if not candidates:
+        raise ValueError("That local time does not exist because of a daylight-saving clock change. Give an explicit-offset ISO time.")
+    if len(candidates) > 1:
+        raise ValueError("That local time occurs twice because of a daylight-saving clock change. Give an ISO time with an explicit UTC offset.")
+    return candidates[0]
+
+
 def _resolve_alarm_time(value: Any) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("Provide an alarm time as HH:MM or an ISO date and time.")
@@ -58,7 +77,8 @@ def _resolve_alarm_time(value: Any) -> datetime:
         minute = int(match.group(2) or 0)
         if hour > 23 or minute > 59:
             raise ValueError("Use a valid 24-hour time such as 15 or 15:00.")
-        resolved = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        naive = local_now.replace(tzinfo=None, hour=hour, minute=minute, second=0, microsecond=0)
+        resolved = _resolve_local_wall_time(naive)
     else:
         try:
             resolved = datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -67,7 +87,7 @@ def _resolve_alarm_time(value: Any) -> datetime:
         if "T" not in raw and " " not in raw:
             raise ValueError("Include a time; date-only alarms are not accepted.")
         if resolved.tzinfo is None:
-            resolved = resolved.replace(tzinfo=user_timezone())
+            resolved = _resolve_local_wall_time(resolved)
     now = datetime.now(timezone.utc)
     if resolved.astimezone(timezone.utc) <= now:
         raise ValueError("That alarm time has already passed. Give a future time explicitly; I won't assume another day.")

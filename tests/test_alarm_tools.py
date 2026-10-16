@@ -53,6 +53,7 @@ def _bridge_env(monkeypatch, tmp_path):
     token.chmod(0o600)
     monkeypatch.setenv("NOVUM_ALARM_BRIDGE_TOKEN_FILE", str(token))
     monkeypatch.delenv("NOVUM_ALARM_BRIDGE_URL", raising=False)
+    monkeypatch.setattr(_FixedDateTime, "current", datetime(2026, 10, 16, 11, 0, tzinfo=timezone.utc))
     monkeypatch.setattr(alarm_tools, "datetime", _FixedDateTime)
     monkeypatch.setattr(alarm_tools, "now_user_local", lambda: _FixedDateTime.current.astimezone(ZoneInfo("Europe/Berlin")))
     monkeypatch.setattr(alarm_tools, "user_timezone", lambda: ZoneInfo("Europe/Berlin"))
@@ -111,6 +112,35 @@ async def test_hour_only_time_means_that_hour_today():
     )
     assert result["exit_code"] == 0
     assert _Client.calls[0][2]["json"]["at"] == "2026-10-16T15:00:00+02:00"
+
+
+@pytest.mark.asyncio
+async def test_dst_gap_and_ambiguous_wall_times_require_explicit_offset(monkeypatch):
+    # At the spring transition, 02:30 does not exist; do not silently turn it
+    # into 03:30 when serializing the local-zone datetime.
+    monkeypatch.setattr(_FixedDateTime, "current", datetime(2026, 3, 29, 0, 30, tzinfo=timezone.utc))
+    result = await alarm_tools.ManageAlarmsTool().execute(
+        '{"action":"create","at":"02:30"}', {"owner": "alice"}
+    )
+    assert result["exit_code"] == 1
+    assert "does not exist" in result["error"]
+    assert not _Client.calls
+
+    # The fall transition repeats 02:30 with two possible UTC offsets.
+    monkeypatch.setattr(_FixedDateTime, "current", datetime(2026, 10, 24, 10, 0, tzinfo=timezone.utc))
+    result = await alarm_tools.ManageAlarmsTool().execute(
+        '{"action":"create","at":"2026-10-25T02:30"}', {"owner": "alice"}
+    )
+    assert result["exit_code"] == 1
+    assert "occurs twice" in result["error"]
+    assert not _Client.calls
+
+    # An explicit offset resolves which occurrence the user intends.
+    result = await alarm_tools.ManageAlarmsTool().execute(
+        '{"action":"create","at":"2026-10-25T02:30:00+01:00"}', {"owner": "alice"}
+    )
+    assert result["exit_code"] == 0
+    assert _Client.calls[0][2]["json"]["at"] == "2026-10-25T02:30:00+01:00"
 
 
 @pytest.mark.asyncio

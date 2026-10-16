@@ -2,7 +2,7 @@ import { addMediaControls, preserveMediaFrames, safePublicMediaUrl } from './cha
 
 // Live activity plus explicitly requested, owner-scoped run evidence. No polling.
 const sessions = new Map();
-const tabs = ['Preview', 'Files', 'Browser', 'Subagents', 'Runs', 'Media'];
+const tabs = ['Preview', 'Media', 'Files', 'Browser', 'Subagents', 'Runs'];
 let current = '';
 let activeTab = 'Preview';
 let panel;

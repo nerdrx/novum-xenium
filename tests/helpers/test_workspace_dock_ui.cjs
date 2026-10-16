@@ -62,6 +62,8 @@ const server = http.createServer((req,res) => {
   });
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'720px');
   await page.keyboard.press('ArrowRight');
+  assert.equal(await page.locator('[role=tab][aria-selected=true]').textContent(),'Media');
+  await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('[role=tab][aria-selected=true]').textContent(),'Files');
   assert.match(await page.locator('[role=tabpanel]').textContent(),/Observed edits this visit/);
   assert.doesNotMatch(await page.locator('[role=tabpanel]').textContent(),/beta secret/);

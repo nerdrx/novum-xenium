@@ -88,7 +88,7 @@ class SessionManager:
     # ------------------------------------------------------------------
 
     def load_sessions(self):
-        """Load recent session METADATA from the database — messages are
+        """Load non-empty session METADATA from the database — messages are
         hydrated on demand by `get_session`. Previously this walked every
         message of every session into RAM at boot, which on a long-running
         personal-server box could be tens of thousands of rows held forever
@@ -99,17 +99,17 @@ class SessionManager:
             db_sessions = db.query(DbSession).filter(
                 DbSession.archived == False,
                 DbSession.messages.any(),
-            ).order_by(DbSession.last_accessed.desc()).limit(100).all()
+            ).order_by(DbSession.last_accessed.desc()).all()
 
             # message_count is derived metadata and can drift after interrupted
-            # or legacy writes. Count only the bounded discovery set so startup
-            # remains metadata-only while lazy hydration sees an authoritative
-            # positive count for every discovered non-empty session.
+            # or legacy writes. Recount without loading messages into memory so
+            # every non-empty session remains discoverable after startup.
             message_counts = {}
             if db_sessions:
                 message_counts = dict(
                     db.query(DbChatMessage.session_id, func.count(DbChatMessage.id))
-                    .filter(DbChatMessage.session_id.in_([row.id for row in db_sessions]))
+                    .join(DbSession, DbSession.id == DbChatMessage.session_id)
+                    .filter(DbSession.archived == False)
                     .group_by(DbChatMessage.session_id)
                     .all()
                 )

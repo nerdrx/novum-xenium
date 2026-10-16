@@ -60,3 +60,39 @@ def test_discovery_uses_persisted_rows_and_repairs_cached_count(tmp_path, monkey
 
     hydrated = restarted.get_session("stale-low")
     assert [message.content for message in hydrated.history] == ["persisted message"]
+
+
+def test_restart_discovers_every_nonempty_session_without_hydrating_history(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "many-sessions.db"
+    manager, session_manager = _make_manager(db_path, monkeypatch)
+    db = session_manager.SessionLocal()
+    try:
+        for index in range(105):
+            session_id = f"session-{index:03d}"
+            db.add(
+                session_manager.DbSession(
+                    id=session_id,
+                    name=session_id,
+                    endpoint_url="http://example.invalid",
+                    model="test-model",
+                )
+            )
+            db.add(
+                session_manager.DbChatMessage(
+                    id=f"message-{index:03d}",
+                    session_id=session_id,
+                    role="user",
+                    content="kept in the database until requested",
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    restarted = session_manager.SessionManager()
+
+    assert len(restarted.sessions) == 105
+    assert all(session.history == [] for session in restarted.sessions.values())
+    assert all(session.message_count == 1 for session in restarted.sessions.values())

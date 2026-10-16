@@ -12,6 +12,13 @@ def test_calendar_entry_request_promotes_to_agent():
     assert intent.category == "calendar"
 
 
+def test_explicit_alarm_actions_promote_to_tools_but_explanations_do_not():
+    assert message_needs_tools("play an alarm at 13:30")
+    assert message_needs_tools("set an alarm for 15:00")
+    assert message_needs_tools("list my alarms")
+    assert not message_needs_tools("How do alarms work?")
+
+
 def test_calendar_imperative_variants_promote_to_agent():
     assert message_needs_tools("add lunch with Sam to my calendar tomorrow at noon")
     assert message_needs_tools("schedule a call with Mina next Friday")

@@ -28,6 +28,7 @@ from .context_tools import ContextSearchTool
 from .model_interaction_tools import ChatWithModelTool, AskTeacherTool, ListModelsTool
 from .bg_job_tools import ManageBgJobsTool
 from .session_tools import CreateSessionTool, ListSessionsTool, SendToSessionTool, ManageSessionTool
+from .alarm_tools import ManageAlarmsTool
 from .subagent_tools import DelegateSubagentTool
 from .admin_tools import (
     ADMIN_TOOL_HANDLERS,
@@ -65,6 +66,7 @@ TOOL_HANDLERS = {
     "list_sessions": ListSessionsTool().execute,
     "send_to_session": SendToSessionTool().execute,
     "manage_session": ManageSessionTool().execute,
+    "manage_alarms": ManageAlarmsTool().execute,
     "delegate_subagent": DelegateSubagentTool().execute,
 }
 # Config/integration admin tools (manage_endpoints/mcp/webhooks/tokens/settings).

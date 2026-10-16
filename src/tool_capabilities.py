@@ -159,6 +159,7 @@ _register(
     {
         "create_document",
         "manage_calendar",
+        "manage_alarms",
         "manage_contact",
         "manage_documents",
         "manage_memory",
@@ -338,6 +339,7 @@ def capabilities_for_tool(tool_name: Any) -> ToolCapabilities:
 _PRIVATE_ACTION_READS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         "manage_calendar": frozenset({"list_calendars", "list_events"}),
+        "manage_alarms": frozenset({"list"}),
         "manage_contact": frozenset({"list"}),
         "manage_documents": frozenset({"list", "read", "view", "open", "get"}),
         "manage_memory": frozenset({"list", "search"}),
@@ -354,6 +356,7 @@ _PRIVATE_ACTION_WRITES: Mapping[str, frozenset[str]] = MappingProxyType(
         "manage_calendar": frozenset(
             {"create_event", "update_event", "delete_event"}
         ),
+        "manage_alarms": frozenset({"create", "stop"}),
         "manage_contact": frozenset({"add", "update", "edit", "delete"}),
         "manage_documents": frozenset({"delete", "tidy"}),
         "manage_memory": frozenset({"add", "edit", "delete"}),
@@ -435,6 +438,9 @@ _ACTION_ALIASES: Mapping[str, Mapping[str, str]] = MappingProxyType(
                 "delete": "delete_event",
                 "list": "list_events",
             }
+        ),
+        "manage_alarms": MappingProxyType(
+            {"schedule": "create", "add": "create", "new": "create", "get": "list", "cancel": "stop"}
         ),
         "manage_notes": MappingProxyType(
             {

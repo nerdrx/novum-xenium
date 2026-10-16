@@ -551,6 +551,7 @@ _ADMIN_TOOLS = {
     "manage_webhooks",
     "manage_tokens",
     "manage_settings",
+    "manage_alarms",
     "download_model",
     "serve_model",
     "serve_preset",
@@ -1388,6 +1389,10 @@ async def _execute_tool_block_impl(
     elif tool == "manage_notes":
         desc = "manage_notes"
         result = await do_manage_notes(content, owner=owner)
+    elif tool == "manage_alarms":
+        desc = "manage_alarms"
+        result = await _direct_fallback(tool, content, owner=owner) \
+            or {"error": "manage_alarms: execution failed", "exit_code": 1}
     elif tool == "manage_calendar":
         desc = "manage_calendar"
         result = await do_manage_calendar(content, owner=owner)

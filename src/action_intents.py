@@ -113,6 +113,7 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         ("notes", "add item to notes/todo request", rf"{_PLEASE}(?:add|jot|write\s+down)\b.{{0,120}}\b(?:to|in|into)\s+(?:my\s+|the\s+)?(?:todo(?:\s+list)?|task\s+list|notes?|checklist)\b"),
         ("notes", "set reminder request", rf"{_PLEASE}set\s+(?:a\s+)?reminder\b"),
         ("notes", "assistant reminder request", rf"{_ACTION_QUESTION}set\s+(?:a\s+)?reminder\b"),
+        ("notes", "alarm request", r"\b(?:play|set|create|schedule|cancel|stop|list)\b.{0,100}\balarms?\b|\balarms?\b.{0,100}\b(?:at|for|list|stop|cancel|create|set)\b"),
 
         # Email actions.
         ("email", "assistant email action request", rf"{_ACTION_QUESTION}(?:send|write|reply|email|message|archive|delete|mark)\b.{{0,120}}\b(?:emails?|mail|messages?|inbox|unread|read)\b"),

@@ -19,9 +19,19 @@ const server = http.createServer((req,res) => {
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.route('**/static/js/workspace.js', route => route.fulfill({ contentType: 'text/javascript', body: 'export async function openWorkspaceBrowser() { window.projectToolsOpened = true; }' }));
   await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>window.dock);
+  const mediaFixture = await page.evaluate(async()=>{
+    if(!MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) throw new Error('WebM fixture encoding unavailable');
+    const canvas=document.createElement('canvas');canvas.width=160;canvas.height=90;const ctx=canvas.getContext('2d');
+    const stream=canvas.captureStream(8);const recorder=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp8'});const chunks=[];
+    recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data)};const stopped=new Promise(resolve=>recorder.onstop=resolve);recorder.start();
+    for(let i=0;i<8;i++){ctx.fillStyle=i%2?'#2468aa':'#c76a45';ctx.fillRect(0,0,160,90);await new Promise(resolve=>setTimeout(resolve,90))}
+    recorder.stop();await stopped;stream.getTracks().forEach(track=>track.stop());return btoa(String.fromCharCode(...new Uint8Array(await new Blob(chunks).arrayBuffer())));
+  });
+  const mediaBuffer=Buffer.from(mediaFixture,'base64');
   await page.evaluate(()=>{
    dock.updateWorkspaceDock({type:'tool_output',tool:'native_preview',screenshot:'data:image/svg+xml;base64,PHN2Zz4=',exit_code:0},'alpha');
    dock.updateWorkspaceDock({type:'tool_output',browser_preview:{screenshot:'javascript:alert(1)',url:'javascript:alert(1)',title:'<img onerror=alert(1)>',state:'unavailable'},diff:{path:'main.py',text:'+ hello'},subagent:{session_id:'child-1',title:'Worker'}},'alpha');
+   dock.updateWorkspaceDock({inline_media:[{kind:'image',url:'https://media.example.test/pic.png',label:'Safe image'},{kind:'video',url:'https://media.example.test/clip.webm',label:'Safe clip'},{kind:'image',url:'/api/images/generated/owned.png',label:'Local generated image'},{kind:'video',url:'javascript:alert(1)'},{kind:'image',url:'http://outside.example.test/unsafe.png'}]},'alpha');
    dock.updateWorkspaceDock({type:'diff',text:'beta secret'},'beta');
   });
   await page.locator('.workspace-dock-toggle').click();
@@ -47,6 +57,7 @@ const server = http.createServer((req,res) => {
   await page.evaluate(()=>{
    dock.updateWorkspaceDock({type:'tool_output',tool:'native_preview',screenshot:'data:image/svg+xml;base64,PHN2Zz4=',exit_code:0},'alpha');
    dock.updateWorkspaceDock({type:'tool_output',browser_preview:{screenshot:'javascript:alert(1)',url:'javascript:alert(1)',title:'<img onerror=alert(1)>',state:'unavailable'},diff:{path:'main.py',text:'+ hello'},subagent:{session_id:'child-1',title:'Worker'}},'alpha');
+   dock.updateWorkspaceDock({inline_media:[{kind:'image',url:'https://media.example.test/pic.png',label:'Safe image'},{kind:'video',url:'https://media.example.test/clip.webm',label:'Safe clip'},{kind:'image',url:'/api/images/generated/owned.png',label:'Local generated image'},{kind:'video',url:'javascript:alert(1)'},{kind:'image',url:'http://outside.example.test/unsafe.png'}]},'alpha');
    dock.updateWorkspaceDock({type:'diff',text:'beta secret'},'beta');
   });
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'720px');
@@ -71,6 +82,27 @@ const server = http.createServer((req,res) => {
   assert.equal(await page.locator('.workspace-dock').count(), 1, 'Switching chats keeps workspace open');
   assert.match(await page.locator('[role=tabpanel]').textContent(), /main.py/);
   assert.doesNotMatch(await page.locator('[role=tabpanel]').textContent(), /beta secret/);
+  await page.route('https://media.example.test/**', route => route.request().url()==='https://media.example.test/clip.webm'
+    ? route.fulfill({status:200,contentType:'video/webm',body:mediaBuffer}) : route.abort());
+  await page.locator('#workspace-tab-Media').click();
+  assert.equal(await page.evaluate(async () => (await import('/static/js/chatMedia.js')).safePublicMediaUrl('  ')), '', 'blank references are not treated as the app origin');
+  assert.equal(await page.locator('.workspace-media-item').count(),3,`Workspace lists HTTPS and same-origin media only for the selected chat: ${await page.locator('[role=tabpanel]').textContent()} errors=${errors.join('|')}`);
+  assert.equal(await page.locator('.workspace-media-item video').getAttribute('preload'),'none');
+  assert.equal(await page.locator('.workspace-media-item a').first().getAttribute('href'),'https://media.example.test/pic.png');
+  assert.equal(await page.locator('.workspace-media-item button.chat-media-fullscreen').count(),3);
+  assert.equal(await page.locator('.workspace-media-item').nth(2).locator('img').getAttribute('src'),`http://127.0.0.1:${server.address().port}/api/images/generated/owned.png`,'same-origin generated images remain available');
+  const workspaceVideo=page.locator('.workspace-media-item video');
+  await workspaceVideo.evaluate(video=>video.load());
+  await page.waitForFunction(()=>document.querySelector('.workspace-media-item video')?.readyState>=2,null,{timeout:10000});
+  const workspaceVideoNode=await workspaceVideo.elementHandle();
+  await workspaceVideo.evaluate(async video=>{video.muted=true;await video.play()});
+  await page.waitForFunction(()=>document.querySelector('.workspace-media-item video')?.paused===false);
+  await page.evaluate(()=>dock.updateWorkspaceDock({inline_media:[{kind:'image',url:'https://media.example.test/new.png'}]},'alpha'));
+  assert.equal(await workspaceVideo.evaluate((node,old)=>node===old,workspaceVideoNode),true,'Workspace updates reuse its active media node');
+  assert.equal(await workspaceVideo.evaluate(video=>video.paused),false,'Workspace updates do not interrupt playback');
+  await page.evaluate(()=>dock.updateWorkspaceDock({inline_media:Array.from({length:61},(_,index)=>({kind:'image',url:`https://media.example.test/item-${index}.png`}))},'alpha'));
+  assert.equal(await page.locator('.workspace-media-item').count(),60,'Workspace bounds the media gallery at sixty entries');
+  assert.match(await page.locator('[role=tabpanel]').textContent(),/Showing the first 60 media items/,'Workspace discloses when the gallery reached its limit');
   await page.setViewportSize({width:390,height:700});
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'0px');
   assert.ok((await page.locator('.workspace-dock').boundingBox()).width<=390);

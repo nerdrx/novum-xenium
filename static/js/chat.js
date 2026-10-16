@@ -23,6 +23,7 @@ import codeRunnerModule from './codeRunner.js';
 import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js';
 import createResearchSynapse from './researchSynapse.js';
 import { createStreamRenderer } from './streamingRenderer.js';
+import { parkMediaFrames, preserveMediaFrames, setHtmlPreservingMedia } from './chatMedia.js';
 import { wireArrowUpRecall, getUserMessagesFromChatHistory } from './composerArrowUpRecall.js?v=20260714promptrecall';
 import {
   createIncrementalDisplayProjector,
@@ -4442,7 +4443,7 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
           if (_liveReplyEl && _finalReply) {
             // Render reply into the live-reply container (thinking bar already showing)
             var _replyHtml = markdownModule.mdToHtml(markdownModule.squashOutsideCode(_finalReply));
-            _liveReplyEl.innerHTML = _replyHtml;
+            setHtmlPreservingMedia(_liveReplyEl, _replyHtml);
             _liveReplyEl.classList.remove('live-reply-content');
             if (_sourcesData) {
               var _srcEl = document.createElement('div');
@@ -4452,9 +4453,9 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
             if (_findingsData) _body4.insertAdjacentHTML('beforeend', chatRenderer.buildFindingsBox(_findingsData));
           } else {
             // Full re-render (reply empty or no live-reply container)
-            _body4.innerHTML = (_sourcesData ? _buildSourcesBox(_sourcesData, _sourcesType, _wasExpanded) : '')
+            setHtmlPreservingMedia(_body4, (_sourcesData ? _buildSourcesBox(_sourcesData, _sourcesType, _wasExpanded) : '')
               + markdownModule.processWithThinking(markdownModule.squashOutsideCode(finalDisplay))
-              + (_findingsData ? chatRenderer.buildFindingsBox(_findingsData) : '');
+              + (_findingsData ? chatRenderer.buildFindingsBox(_findingsData) : ''));
           }
         } else if (_sourcesHtml) {
           var _body4b = roundHolder.querySelector('.body');
@@ -5649,7 +5650,9 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
         metricsData || {},
         characterName ? { character_name: characterName } : {},
       );
-      chatRenderer.addMessage('assistant', roundText, model, meta_);
+      const renderedMessage = chatRenderer.addMessage('assistant', roundText, model, meta_);
+      const renderedBody = renderedMessage?.querySelector('.body');
+      if (renderedBody) preserveMediaFrames(holder, renderedBody);
       uiModule.scrollHistory();
       return true;
     }
@@ -5657,12 +5660,22 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
     // Rich response (tools, sources, docs, multi-round) or user moved on:
     // reload from the DB for the full canonical render.
     if (holder._docWritingThread && holder._docWritingThread.parentNode) holder._docWritingThread.remove();
+    const preservedMedia = onThisSession ? parkMediaFrames(holder) : null;
     if (holder.parentNode) holder.remove();
     if (metricsData) {
       chatRenderer.recordSessionMetricsCost(metricsData, sessionId);
     }
-    if (onThisSession) sessionModule.selectSession(sessionId);
-    else sessionModule.loadSessions();
+    if (onThisSession) {
+      try {
+        await sessionModule.selectSession(sessionId);
+        if (sessionModule.getCurrentSessionId?.() === sessionId) {
+          const history = document.getElementById('chat-history');
+          if (history && preservedMedia) preserveMediaFrames(preservedMedia, history);
+        }
+      } finally {
+        preservedMedia?.remove();
+      }
+    } else sessionModule.loadSessions();
     return true;
   }
 

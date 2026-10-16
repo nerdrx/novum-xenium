@@ -7,6 +7,9 @@
 import uiModule from './ui.js';
 import { splitTableRow } from './markdown/tableRow.js';
 import { replaceEmojiShortcodes, hasEmojiShortcode } from './emojiShortcodes.js';
+import { installChatMediaControls } from './chatMedia.js';
+
+installChatMediaControls();
 
 var escapeHtml = uiModule.esc;
 
@@ -163,7 +166,7 @@ function imageHtml(alt, url, title) {
     if (!video.safeUrl) return escapeHtml(alt || '');
     const safeAlt = escapeHtml(alt || '');
     const safeTitle = title ? ` title="${escapeHtml(title)}"` : '';
-    return `<video src="${escapeHtml(video.safeUrl)}" controls playsinline preload="none"${safeTitle}>${safeAlt}</video>`;
+    return `<figure class="chat-media-frame"><video class="chat-inline-media" src="${escapeHtml(video.safeUrl)}" controls playsinline preload="none"${safeTitle}>${safeAlt}</video></figure>`;
   }
   // .gifv URLs commonly identify player pages rather than media files. Keep
   // them navigable as ordinary links instead of producing a broken <img>.
@@ -176,7 +179,7 @@ function imageHtml(alt, url, title) {
   if (!safeUrl || safeUrl.startsWith('#')) return escapeHtml(alt || '');
   const safeAlt = escapeHtml(alt || '');
   const safeTitle = title ? ` title="${escapeHtml(title)}"` : '';
-  return `<img src="${escapeHtml(safeUrl)}" alt="${safeAlt}"${safeTitle} loading="lazy" decoding="async">`;
+  return `<figure class="chat-media-frame"><img class="chat-inline-media" src="${escapeHtml(safeUrl)}" alt="${safeAlt}"${safeTitle} loading="lazy" decoding="async"></figure>`;
 }
 
 function _directVideoUrl(rawUrl) {
@@ -227,7 +230,7 @@ const _ALLOWED_HTML_BAD_TAGS = new Set([
 const _ALLOWED_HTML_URL_ATTRS = new Set([
   'href', 'src', 'srcset', 'xlink:href', 'action', 'formaction', 'background', 'poster',
 ]);
-const _ALLOWED_VIDEO_ATTRS = new Set(['src', 'controls', 'playsinline', 'preload', 'title']);
+const _ALLOWED_VIDEO_ATTRS = new Set(['src', 'controls', 'playsinline', 'preload', 'title', 'class']);
 
 function _compactUrlSchemeValue(value) {
   return String(value || '').replace(/[\u0000-\u0020\u007f-\u009f]+/g, '').toLowerCase();
@@ -774,7 +777,7 @@ export function mdToHtml(src, opts) {
 
   // ALSO preserve <a>/<img> tags the same way (they're now in the HTML from
   // markdown conversion)
-  s = s.replace(/<(?:a\s+[^>]*>.*?<\/a|img\s+[^>]*?|video\s+[^>]*>[\s\S]*?<\/video)>/gi, (match) => {
+  s = s.replace(/<figure\s+class=["']chat-media-frame["'][^>]*>[\s\S]*?<\/figure>|<(?:a\s+[^>]*>.*?<\/a|img\s+[^>]*?|video\s+[^>]*>[\s\S]*?<\/video)>/gi, (match) => {
     const placeholder = `___ALLOWED_HTML_${allowedHtmlBlocks.length}___`;
     allowedHtmlBlocks.push(sanitizeAllowedHtml(match));
     return placeholder;

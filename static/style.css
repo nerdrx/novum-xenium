@@ -2377,6 +2377,21 @@ body.bg-pattern-sparkles {
   height: auto;
   display: block;
 }
+.chat-media-frame { display: block; max-width: 100%; margin: 8px 0; }
+.chat-media-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.chat-media-actions button, .chat-media-actions a {
+  min-height: 44px; box-sizing: border-box; display: inline-flex; align-items: center;
+  justify-content: center; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--panel); color: var(--fg); font: inherit;
+}
+.chat-media-actions a { color: var(--accent); text-decoration: none; }
+.chat-media-actions button { cursor: pointer; }
+.chat-media-status { margin: 6px 0 0; font-size: .86em; opacity: .82; }
+.chat-media-status[hidden], .chat-media-actions button[hidden] { display: none; }
+.chat-media-frame :fullscreen { box-sizing: border-box; width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; object-fit: contain; background: #000; }
+.workspace-media-list { display: grid; gap: 12px; }
+.workspace-media-item { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
+.workspace-media-item > p { margin: 0 0 8px; overflow-wrap: anywhere; }
 .model-endpoint-add-btn {
   display: inline-flex;
   align-items: center;

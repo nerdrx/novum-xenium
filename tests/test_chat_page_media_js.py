@@ -24,6 +24,11 @@ def _render(media):
         this.attributes[k] = v;
       }});
       const document = { createElement: makeNode };
+      const safePublicMediaUrl = value => {
+        try { const url = new URL(String(value || '').trim()); return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''; }
+        catch { return ''; }
+      };
+      const addMediaControls = () => {};
       __FUNCTION__
       const card = buildPageMediaCard(JSON.parse(process.argv[1]));
       const walk = node => node && ({

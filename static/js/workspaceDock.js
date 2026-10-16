@@ -1,6 +1,8 @@
+import { addMediaControls, preserveMediaFrames, safePublicMediaUrl } from './chatMedia.js';
+
 // Live activity plus explicitly requested, owner-scoped run evidence. No polling.
 const sessions = new Map();
-const tabs = ['Preview', 'Files', 'Browser', 'Subagents', 'Runs'];
+const tabs = ['Preview', 'Files', 'Browser', 'Subagents', 'Runs', 'Media'];
 let current = '';
 let activeTab = 'Preview';
 let panel;
@@ -186,13 +188,49 @@ async function renderPreviewHistory(content, kindFilter = null) {
   }
   if (!controller.signal.aborted && content.isConnected) content.append(retry);
 }
+function renderMedia(content) {
+  if (!current) { content.append(el('p', 'Open a chat to see its media.')); return; }
+  const state = sessions.get(current);
+  const refs = new Map(state?.media || []);
+  const selector = '#chat-container .msg-ai .body img.chat-inline-media, #chat-container .msg-ai .body video.chat-inline-media, #chat-container .msg-ai .body .agent-page-media-item img, #chat-container .msg-ai .body .agent-page-media-item video';
+  for (const node of document.querySelectorAll(selector)) {
+    const url = safePublicMediaUrl(node.currentSrc || node.src);
+    if (!url || refs.has(url)) continue;
+    refs.set(url, { kind: node.tagName === 'VIDEO' ? 'video' : 'image', url,
+      label: text(node.getAttribute('aria-label') || node.getAttribute('alt') || node.closest('figure')?.querySelector('figcaption')?.textContent) });
+  }
+  if (!refs.size) { content.append(el('p', 'No page media in this chat yet.')); return; }
+  const hasMore = state?.mediaOverflow === true || refs.size > 60;
+  const list = el('div', '', 'workspace-media-list');
+  for (const [url, item] of [...refs].slice(0, 60)) {
+    const card = el('article', '', 'workspace-media-item');
+    const label = text(item.label) || `${item.kind === 'video' ? 'Video' : 'Image'} from this chat`;
+    card.append(el('p', label));
+    const figure = el('figure', '', 'chat-media-frame');
+    const media = el(item.kind === 'video' ? 'video' : 'img'); media.src = url;
+    if (item.kind === 'video') { media.controls = true; media.playsInline = true; media.preload = 'none'; }
+    else { media.alt = label; media.loading = 'lazy'; media.decoding = 'async'; }
+    figure.append(media); addMediaControls(figure, media, item.kind, url);
+    card.append(figure); list.append(card);
+  }
+  content.append(el('p', 'Media already shown in this chat. Select a control to play, retry, or view full screen.'));
+  if (hasMore) content.append(el('p', 'Showing the first 60 media items.'));
+  content.append(list);
+}
 function renderContent() {
   if (!panel) return;
   evidenceRequest?.abort(); evidenceRequest = null;
   const content = panel.querySelector('.workspace-dock-content');
-  content.replaceChildren();
   content.setAttribute('aria-labelledby', `workspace-tab-${activeTab}`);
   const state = sessions.get(current);
+  if (activeTab === 'Media') {
+    const next = document.createElement('div');
+    renderMedia(next);
+    preserveMediaFrames(content, next);
+    content.replaceChildren(...next.childNodes);
+    return;
+  }
+  content.replaceChildren();
   if (activeTab === 'Runs') {
     void renderRuns(content);
   } else if (activeTab === 'Files') {
@@ -318,8 +356,23 @@ export function updateWorkspaceDock(event, sessionId) {
   const id = validId(sessionId);
   if (!id || !event || typeof event !== 'object') return;
   init();
-  const state = sessions.get(id) || { diffs: [], children: new Map() };
+  const state = sessions.get(id) || { diffs: [], children: new Map(), media: new Map() };
   let changed = false;
+  if (Array.isArray(event.inline_media)) {
+    if (event.inline_media.length > 60) state.mediaOverflow = true;
+    for (const item of event.inline_media.slice(0, 60)) {
+      if (!item || !['image', 'video'].includes(item.kind)) continue;
+      const mediaUrl = safePublicMediaUrl(item.url);
+      if (mediaUrl && !state.media.has(mediaUrl)) state.media.set(mediaUrl, {
+        kind: item.kind, url: mediaUrl, label: text(item.label, 160),
+      });
+    }
+    while (state.media.size > 60) {
+      state.media.delete(state.media.keys().next().value);
+      state.mediaOverflow = true;
+    }
+    changed = true;
+  }
   if (event.type === 'tool_output' && event.tool === 'native_preview') {
     state.preview = { screenshot: screenshot(event.screenshot), title: 'Desktop preview', state: event.exit_code === 0 ? 'Preview received' : 'Preview did not complete successfully' };
     changed = true;

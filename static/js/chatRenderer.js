@@ -16,6 +16,7 @@ import { copyImageToClipboard } from './imageClipboard.js';
 import { appendSubagentCard } from './subagentCard.js';
 import { modelOutputFallback } from './modelOutputFallback.js';
 import { resolveModelDisplayName } from './modelDisplay.js';
+import { addMediaControls, safePublicMediaUrl } from './chatMedia.js';
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>';
 const REPORT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
@@ -71,13 +72,10 @@ export function buildPageMediaCard(media = []) {
     if (!entry || !['image', 'video'].includes(entry.kind)) continue;
     const raw = String(entry.url || '').trim();
     if (!raw || raw.length > 4096 || seen.has(raw)) continue;
-    let url;
-    try {
-      url = new URL(raw);
-      if (url.protocol !== 'https:' || url.username || url.password) continue;
-    } catch (_) { continue; }
-    seen.add(raw);
-    items.push({ kind: entry.kind, url: url.href, label: String(entry.label || '').slice(0, 160) });
+    const safeUrl = safePublicMediaUrl(raw);
+    if (!safeUrl) continue;
+    seen.add(safeUrl);
+    items.push({ kind: entry.kind, url: safeUrl, label: String(entry.label || '').slice(0, 160) });
     if (items.length >= 6) break;
   }
   if (!items.length) return null;
@@ -102,10 +100,10 @@ export function buildPageMediaCard(media = []) {
       video.controls = true;
       video.playsInline = true;
       video.preload = 'none';
-      video.referrerPolicy = 'no-referrer';
       video.setAttribute('aria-label', caption.textContent);
       video.setAttribute('style', 'display:block;width:100%;max-height:70vh;');
       figure.append(video, caption);
+      addMediaControls(figure, video, 'video', item.url);
     } else {
       const image = document.createElement('img');
       image.src = item.url;
@@ -115,6 +113,7 @@ export function buildPageMediaCard(media = []) {
       image.referrerPolicy = 'no-referrer';
       image.setAttribute('style', 'display:block;max-width:100%;max-height:70vh;height:auto;');
       figure.append(image, caption);
+      addMediaControls(figure, image, 'image', item.url);
     }
     list.appendChild(figure);
   }
@@ -2184,7 +2183,8 @@ export function displayMetrics(messageElement, metrics) {
   const suppliedTps = metrics.tokens_per_second ?? metrics.gen_tps ?? metrics.tps;
   const suppliedTpsNumber = Number(suppliedTps);
   const suppliedTpsText = String(suppliedTps ?? '').trim().toLowerCase();
-  const hasSuppliedTps = suppliedTps != null && suppliedTpsText !== '' && suppliedTpsText !== 'undefined'
+  const hasSuppliedTps = (typeof suppliedTps === 'number' || typeof suppliedTps === 'string')
+    && suppliedTpsText !== '' && suppliedTpsText !== 'undefined'
     && Number.isFinite(suppliedTpsNumber) && suppliedTpsNumber >= 0;
   const outputCount = Number(outputTokens);
   const elapsedSeconds = Number(responseTime);
@@ -2192,7 +2192,7 @@ export function displayMetrics(messageElement, metrics) {
     && Number.isFinite(outputCount) && Number.isFinite(elapsedSeconds)
     ? Math.round((outputCount / elapsedSeconds) * 100) / 100
     : null;
-  const tps = hasSuppliedTps ? suppliedTps : averageTps;
+  const tps = hasSuppliedTps ? suppliedTpsNumber : averageTps;
   const approximateTps = averageTps != null
     || metrics.tps_source === 'computed'
     || metrics.tps_source === 'estimated';

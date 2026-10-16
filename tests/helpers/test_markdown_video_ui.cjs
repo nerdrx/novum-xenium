@@ -9,7 +9,7 @@ const types = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; char
 const server = http.createServer((req, res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
   if (pathname === '/') {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body></body></html>');
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/style.css"></head><body></body></html>');
     return;
   }
   const file = path.resolve(root, `.${pathname}`);
@@ -29,8 +29,8 @@ const server = http.createServer((req, res) => {
     args: ['--no-sandbox', '--disable-gpu'],
   });
   try {
-    const page = await browser.newPage();
-    await page.setViewportSize({ width: 320, height: 720 });
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+    const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     const encoded = await page.evaluate(async () => {
       if (!window.MediaRecorder || !MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
@@ -82,6 +82,7 @@ const server = http.createServer((req, res) => {
       document.querySelector('.msg').append(play);
     });
     await page.waitForFunction(() => window.fixtureLoaded === true, null, { timeout: 10000 });
+    await page.locator('.chat-media-frame').waitFor();
     const safeAttrs = await page.locator('#fixture-video').evaluate(video => ({
       controls: video.controls,
       playsInline: video.playsInline,
@@ -102,9 +103,38 @@ const server = http.createServer((req, res) => {
     }));
     assert.ok(layout.videoWidth <= layout.bodyWidth, JSON.stringify(layout));
     assert.ok(layout.bodyScrollWidth <= layout.bodyWidth, JSON.stringify(layout));
-    assert.ok(layout.pageScrollWidth <= 320, JSON.stringify(layout));
+    assert.ok(layout.pageScrollWidth <= 390, JSON.stringify(layout));
+    assert.equal(await page.locator('.chat-media-actions .chat-media-fullscreen').count(),1);
+    assert.equal(await page.locator('.chat-media-actions .chat-media-retry').isHidden(),true);
     await page.locator('#play-fixture').click();
     await page.waitForFunction(() => window.fixturePlaying === true, null, { timeout: 5000 });
+    await page.locator('.chat-media-fullscreen').click();
+    await page.waitForFunction(() => !!document.fullscreenElement, null, { timeout: 3000 });
+    await page.evaluate(() => document.exitFullscreen());
+    await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 3000 });
+
+    let brokenRequests = 0;
+    await page.route('https://media.example.test/retry.mp4', async route => {
+      brokenRequests++;
+      if (brokenRequests === 1) return route.fulfill({ status: 404, contentType: 'text/plain', body: 'fixture unavailable' });
+      return route.fulfill({ status: 200, contentType: 'video/webm', body: Buffer.from(encoded, 'base64') });
+    });
+    await page.evaluate(() => {
+      const video = document.createElement('video'); video.className = 'chat-inline-media';
+      video.controls = true; video.playsInline = true; video.preload = 'none';
+      video.src = 'https://media.example.test/retry.mp4'; document.querySelector('main').append(video); video.load();
+    });
+    const failed = page.locator('.chat-media-frame').last();
+    await failed.locator('.chat-media-retry').waitFor({ state: 'visible', timeout: 5000 });
+    assert.match(await failed.locator('.chat-media-status').textContent(), /Couldn't load this video|video format is not supported/);
+    assert.equal(await failed.getByRole('link', { name: 'Open original' }).getAttribute('href'), 'https://media.example.test/retry.mp4');
+    await failed.getByRole('button', { name: 'Retry' }).click();
+    await failed.locator('video').evaluate(video => new Promise((resolve, reject) => {
+      video.addEventListener('loadedmetadata', resolve, { once: true });
+      video.addEventListener('error', () => reject(new Error('retry media failed')), { once: true });
+      setTimeout(() => reject(new Error('retry media timed out')), 5000);
+    }));
+    assert.equal(brokenRequests,2);
 
     const sanitized = await page.evaluate(async () => {
       const md = await import('/js/markdown.js');
@@ -114,7 +144,7 @@ const server = http.createServer((req, res) => {
     });
     assert.match(sanitized, /<video[^>]*controls[^>]*playsinline[^>]*preload="none"/);
     assert.doesNotMatch(sanitized, /autoplay|onerror|poster|<source|<iframe|javascript:/i);
-    console.log('PASS markdown video load, click, and DOM sanitization');
+    console.log('PASS mobile video load, fullscreen, error retry, and DOM sanitization');
   } finally {
     await browser.close();
     server.close();

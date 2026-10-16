@@ -83,6 +83,7 @@ const server = http.createServer((req, res) => {
 
       const invalid = [];
       for (const metrics of [
+        { tokens_per_second: false, output_tokens: 0, response_time: 0, _fromHistory: true },
         { input_tokens: 10, output_tokens: 0, response_time: 10, _fromHistory: true },
         { input_tokens: 10, output_tokens: 100, response_time: 0, _fromHistory: true },
         { input_tokens: 10, output_tokens: 0, response_time: 0, _fromHistory: true },

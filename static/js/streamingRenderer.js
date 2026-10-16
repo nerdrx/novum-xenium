@@ -50,11 +50,40 @@ export function createStreamRenderer(contentEl, { render, hljs } = {}) {
     while (tailMarker.nextSibling) tailMarker.nextSibling.remove();
   }
 
+  function mediaKey(frame) {
+    const media = frame.querySelector?.('video.chat-inline-media, img.chat-inline-media');
+    const src = media?.getAttribute('src');
+    return src ? `${media.tagName}:${src}` : '';
+  }
+
+  // Keep the existing media frame when a growing tail is reparsed. That retains
+  // native playback/buffer state while surrounding Markdown receives new tokens.
+  function preserveTailMedia(holder) {
+    const oldFrames = new Map();
+    for (let node = tailMarker?.nextSibling; node; node = node.nextSibling) {
+      const frames = [];
+      if (node.nodeType === Node.ELEMENT_NODE && node.matches('.chat-media-frame')) frames.push(node);
+      frames.push(...(node.querySelectorAll?.('.chat-media-frame') || []));
+      for (const frame of frames) {
+        const key = mediaKey(frame);
+        if (!key) continue;
+        if (!oldFrames.has(key)) oldFrames.set(key, []);
+        oldFrames.get(key).push(frame);
+      }
+    }
+    for (const frame of holder.querySelectorAll('.chat-media-frame')) {
+      const queue = oldFrames.get(mediaKey(frame));
+      const existing = queue?.shift();
+      if (existing) frame.replaceWith(existing);
+    }
+  }
+
   // Render `src` and freeze the nodes before the tail marker. Highlighting happens
   // here, once, on the detached fragment before the nodes are ever shown.
   function freeze(src) {
     const holder = document.createElement('div');
     holder.innerHTML = render(src);
+    preserveTailMedia(holder);
     highlight(holder);
     while (holder.firstChild) contentEl.insertBefore(holder.firstChild, tailMarker);
   }
@@ -67,13 +96,15 @@ export function createStreamRenderer(contentEl, { render, hljs } = {}) {
       return;
     }
     appendMode = null;
-    clearTail();
     if (!tailText) {
+      clearTail();
       tailShownLen = 0;
       return;
     }
     const holder = document.createElement('div');
     holder.innerHTML = render(tailText);
+    preserveTailMedia(holder);
+    clearTail();
     fadeNewText(holder, tailShownLen);
     tailShownLen = holder.textContent.length;
     while (holder.firstChild) contentEl.appendChild(holder.firstChild);
@@ -188,10 +219,10 @@ export function createStreamRenderer(contentEl, { render, hljs } = {}) {
     if (degraded) return;
     try {
       if (!started) start();
-      clearTail();
       appendMode = null;
       const rest = lastText.slice(committedLen);
       if (rest.trim()) freeze(rest);
+      clearTail();
       tailMarker.remove();
       tailMarker = null;
       committedLen = lastText.length;

@@ -27,4 +27,4 @@ def test_markdown_video_load_click_and_sanitization():
         env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "PASS markdown video load, click, and DOM sanitization" in result.stdout
+    assert "PASS mobile video load, fullscreen, error retry, and DOM sanitization" in result.stdout

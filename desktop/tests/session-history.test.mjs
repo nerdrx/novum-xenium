@@ -11,9 +11,11 @@ const appSource = await fs.readFile(new URL('../../static/app.js', import.meta.u
 const sessionsSource = await fs.readFile(new URL('../../static/js/sessions.js', import.meta.url), 'utf8');
 
 test('session routes traverse browser history without replay duplicates or restoring deleted chats', async t => {
-  assert.match(appSource, /function _startFreshChat\(\)[\s\S]*?setCurrentSessionId\(null,\s*\{\s*pushHistory:\s*true\s*\}\)/,
-    'the explicit Home/New Chat path must push a Home entry');
-  assert.match(sessionsSource, /setCurrentSessionId\(id,\s*\{\s*pushHistory\s*=\s*false\s*\}/,
+  assert.match(appSource, /function _startFreshChat\(\)[\s\S]*?sessionModule\.startFreshChat\(\{\s*pushHistory:\s*true\s*\}\)/,
+    'the explicit Home/New Chat path must delegate to the draft-aware fresh-chat flow');
+  assert.match(sessionsSource, /export function startFreshChat\(\{\s*pushHistory\s*=\s*true\s*\}[\s\S]*?_ensurePendingDraftId\(\{\s*fresh:\s*true,\s*replaceRoute:\s*!pushHistory\s*\}\)/,
+    'a fresh chat must push its pending-draft route for browser back/forward');
+  assert.match(sessionsSource, /export function setCurrentSessionId\(id,\s*\{\s*pushHistory\s*=\s*false\s*\}/,
     'non-navigation deselection such as deletion must keep replace semantics');
   const server = http.createServer(async (req, res) => {
     if (req.url === '/sessionHistory.js') {

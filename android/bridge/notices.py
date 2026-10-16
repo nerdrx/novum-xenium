@@ -41,10 +41,13 @@ def main():
     ]
     for module in modules():
         if not module.get("Dir"):
-            continue
+            raise RuntimeError(
+                f"Module source is missing for {module['Path']}@{module.get('Version', '')}; "
+                "run go mod download all before generating notices."
+            )
         module_dir = Path(module["Dir"])
         if not module_dir.is_dir():
-            continue
+            raise RuntimeError(f"Module source directory is unavailable for {module['Path']}: {module_dir}")
         files = sorted(
             path
             for path in module_dir.iterdir()

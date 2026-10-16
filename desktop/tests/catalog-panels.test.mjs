@@ -11,8 +11,12 @@ test('subagent module filters tasks and opens child chats through the sandbox br
   t.after(() => browser.close());
   for (const entry of catalog.modules) {
     const manifest = JSON.parse(await fs.readFile(new URL(`${entry.path}/module.json`, root)));
-    const markup = await fs.readFile(new URL(`${entry.path}/panel.html`, root), 'utf8');
+    // Keep this fixture deterministic; the real panel refreshes itself every
+    // five seconds while visible, which can race the explicit Refresh check.
+    const markup = (await fs.readFile(new URL(`${entry.path}/panel.html`, root), 'utf8'))
+      .replace('setInterval(()=>{if(!document.hidden)refresh()},5000)', 'setInterval(()=>{if(!document.hidden)refresh()},60000)');
     const page = await browser.newPage({viewport:{width:600,height:700}});
+    page.setDefaultTimeout(5000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.setContent('<iframe sandbox="allow-scripts" style="width:100%;height:650px"></iframe>');
@@ -24,28 +28,30 @@ test('subagent module filters tasks and opens child chats through the sandbox br
         if (event.data?.type === 'novum:open') { window.opened = event.data; return; }
         if (event.data?.type !== 'novum:request') return;
         window.requests.push(event.data);
-        if (event.data.capability !== capability) throw new Error('Unexpected capability');
+        if (!capability.includes(event.data.capability)) throw new Error('Unexpected capability');
         frame.contentWindow.postMessage({type:'novum:response', id:event.data.id, data:{
           summary:{Entries:1}, items:[{title:'<img src=x onerror=alert(1)>', detail:'Actual fixture data', status:'running', session_id:'child-123', model:'local-model'}],
           notice:'Read-only fixture.',
         }}, '*');
       });
       frame.srcdoc = markup;
-    }, {markup, capability:manifest.permissions[0]});
+    }, {markup, capability:manifest.permissions});
     const panel = page.frameLocator('iframe');
     await panel.getByRole('heading', {name:'<img src=x onerror=alert(1)>', exact:true}).waitFor();
     assert.equal(await panel.locator('img').count(), 0, 'data is rendered as text');
+    await page.waitForFunction(() => window.requests.length === 2);
     await panel.getByRole('button', {name:'Open chat', exact:true}).click();
     await page.waitForFunction(() => window.opened?.session_id === 'child-123');
     assert.deepEqual(await page.evaluate(() => window.opened), {type:'novum:open',action:'session',session_id:'child-123'});
     await panel.getByRole('combobox').selectOption('finished');
-    await panel.getByText('No matching agents. Try another name or status.', {exact:true}).waitFor();
+    await panel.getByText('No matching tasks. Try another name or status.', {exact:true}).waitFor();
     await panel.getByRole('combobox').selectOption('all');
     await panel.getByRole('searchbox').fill('no-match');
-    await panel.getByText('No matching agents. Try another name or status.', {exact:true}).waitFor();
+    await panel.getByText('No matching tasks. Try another name or status.', {exact:true}).waitFor();
+    const requestCount = await page.evaluate(() => window.requests.length);
     await panel.getByRole('button', {name:'Refresh', exact:true}).click();
-    await page.waitForFunction(() => window.requests.length === 2);
-    assert.equal(await page.evaluate(() => window.requests.length), 2);
+    await page.waitForFunction(count => window.requests.length === count + 2, requestCount);
+    assert.equal(await page.evaluate(() => window.requests.length), requestCount + 2);
     assert.equal(await panel.locator('body').evaluate(body => body.scrollWidth <= innerWidth), true);
     assert.deepEqual(errors, [], manifest.id);
     await page.close();

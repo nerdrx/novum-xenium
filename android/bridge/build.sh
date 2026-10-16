@@ -15,6 +15,8 @@ cd "$ROOT/android/bridge"
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
 go install "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 go test ./...
+# Ensure every pinned graph module has source and license files before collection.
+go mod download all
 python3 notices.py
 gomobile init
 mkdir -p "$ANDROID_DIR/app/libs"

@@ -1,6 +1,6 @@
 [package]
 name = "novum-xenium-desktop"
-version = "0.1.2"
+version = "0.1.5"
 description = "Novum Xenium desktop backend"
 authors = ["Novum Xenium"]
 edition = "2021"

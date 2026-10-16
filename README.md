@@ -78,7 +78,7 @@ Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/pre
 
 Open the same workspace on your phone. The Android app includes its own Tailscale connection, so other phone apps keep their normal network. Enter your server address, sign in to Tailscale, then sign in to Novum. A router with an approved subnet route can provide access to your LAN server.
 
-Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. [Connection, build, and compatibility details](android/README.md).
+Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. Android 0.1.5 routes the configured server through Tailscale while loading embedded external media over the phone’s normal connection. [Connection, build, and compatibility details](android/README.md).
 
 ## Local image generation
 

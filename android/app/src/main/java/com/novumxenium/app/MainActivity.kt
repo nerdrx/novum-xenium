@@ -766,7 +766,12 @@ class MainActivity : Activity() {
                     starting = false; retry.isEnabled = true
                     bridge = client; server = target; proxyAddress = addressOfProxy
                     prefs.edit().putString("server", target.toString()).apply()
-                    val config = ProxyConfig.Builder().addProxyRule(addressOfProxy).removeImplicitRules().build()
+                    val reverseBypassSupported = WebViewFeature.isFeatureSupported(
+                        WebViewFeature.PROXY_OVERRIDE_REVERSE_BYPASS,
+                    )
+                    val config = WebViewProxyRouting.build(
+                        addressOfProxy, target, reverseBypassSupported,
+                    )
                     ProxyController.getInstance().setProxyOverride(config, java.util.concurrent.Executor { handler.post(it) }) {
                         if (token == generation && !closed) { proxyReady = true; showState(JSONObject(client.statusJSON())) }
                     }

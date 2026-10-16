@@ -2,6 +2,16 @@
 // Section Management — collapse/expand + drag reorder
 // ============================================
 
+export function applyInitialSectionCollapse(section, savedState = {}, legacyState = {}, defaultCollapsed = false) {
+  if (!section?.id) return;
+  const id = section.id;
+  const has = (state) => state && typeof state === 'object' && Object.prototype.hasOwnProperty.call(state, id);
+  const value = has(savedState) ? savedState[id]
+    : has(legacyState) ? legacyState[id]
+    : defaultCollapsed;
+  section.classList.toggle('collapsed', value === true);
+}
+
 /**
  * Initialize section collapse/expand with chevron buttons.
  * @param {Object} Storage - Storage module
@@ -21,9 +31,7 @@ export function initSectionCollapse(Storage) {
     header.insertAdjacentHTML('beforeend', _chevronHtml);
 
     // Restore saved state
-    if (savedState[section.id]) {
-      section.classList.add('collapsed');
-    }
+    if (section.id in savedState) section.classList.toggle('collapsed', savedState[section.id] === true);
 
     function toggleCollapse() {
       const wasCollapsed = section.classList.contains('collapsed');

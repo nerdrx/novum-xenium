@@ -33,7 +33,7 @@ const HISTORY_PAGE_LIMIT_DESKTOP = 24;
 
 const SIDEBAR_MAX_VISIBLE = 10;
 const FOLDER_MAX_VISIBLE = 5;
-let _showAllSessions = false;
+const _showAllSessionsOverride = { mobile: null, desktop: null };
 let _expandedFolders = {};  // folderName -> true if "show more" clicked
 let _sortMode = Storage.get('odysseus-session-sort') || 'active'; // default to last active
 const DATE_SECTION_COLLAPSE_KEY = 'ody-session-date-section-collapsed';
@@ -45,6 +45,20 @@ let _historyPager = null;
 let _composerDraftInput = null;
 const _composerDraftWarnings = new Set();
 const _deletedComposerDraftSessions = new Set();
+
+function _isMobileSidebar() {
+  return window.matchMedia?.('(max-width: 768px)').matches ?? window.innerWidth <= 768;
+}
+
+function _showAllSessionsForViewport() {
+  const mobile = _isMobileSidebar();
+  const override = _showAllSessionsOverride[mobile ? 'mobile' : 'desktop'];
+  return override === null ? mobile : override;
+}
+
+function _setShowAllSessionsForViewport(value) {
+  _showAllSessionsOverride[_isMobileSidebar() ? 'mobile' : 'desktop'] = value;
+}
 
 function _composerDraftOptions(sessionId) {
   let currentAccountId = '';
@@ -1247,10 +1261,11 @@ function _renderSessionListImpl() {
       ...orderedSessions.filter(s => !s.is_important),
     ];
 
-    const limit = _showAllSessions ? allFlat.length : SIDEBAR_MAX_VISIBLE;
+    const showAllSessions = _showAllSessionsForViewport();
+    const limit = showAllSessions ? allFlat.length : SIDEBAR_MAX_VISIBLE;
     const visible = allFlat.slice(0, limit);
     const activeIdx = allFlat.findIndex(s => s.id === currentSessionId);
-    if (!_showAllSessions && activeIdx >= limit) visible.push(allFlat[activeIdx]);
+    if (!showAllSessions && activeIdx >= limit) visible.push(allFlat[activeIdx]);
 
     const visibleFavorites = visible.filter(s => s.is_important);
     const visibleRegular = visible.filter(s => !s.is_important);
@@ -1261,10 +1276,10 @@ function _renderSessionListImpl() {
       const remaining = allFlat.length - SIDEBAR_MAX_VISIBLE;
       const toggleBtn = document.createElement('button');
       toggleBtn.className = 'session-show-more-btn';
-      toggleBtn.textContent = _showAllSessions ? 'Show less' : `Show ${remaining} more`;
+      toggleBtn.textContent = showAllSessions ? 'Show less' : `Show ${remaining} more`;
       toggleBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        _showAllSessions = !_showAllSessions;
+        _setShowAllSessionsForViewport(!showAllSessions);
         renderSessionList();
       });
       _frag.appendChild(toggleBtn);
@@ -1398,7 +1413,7 @@ function _renderSessionListImpl() {
       const content = document.createElement('div');
       content.className = 'session-folder-content';
       const folderSessions = folders[folderName];
-      const folderExpanded = _expandedFolders[folderName];
+      const folderExpanded = _expandedFolders[folderName] ?? _isMobileSidebar();
       const folderLimit = folderExpanded ? folderSessions.length : FOLDER_MAX_VISIBLE;
       const visibleFolder = folderSessions.slice(0, folderLimit);
 
@@ -1432,11 +1447,12 @@ function _renderSessionListImpl() {
   // Render unfiled sessions below folders (capped unless expanded)
   const hasFolders = orderedFolderNames.length > 0;
   const activeInUnfiled = unfiled.findIndex(s => s.id === currentSessionId);
-  const limit = _showAllSessions ? unfiled.length : SIDEBAR_MAX_VISIBLE;
+  const showAllSessions = _showAllSessionsForViewport();
+  const limit = showAllSessions ? unfiled.length : SIDEBAR_MAX_VISIBLE;
   const visibleUnfiled = unfiled.slice(0, limit);
 
   // If active session is beyond the limit, include it
-  if (!_showAllSessions && activeInUnfiled >= limit) {
+  if (!showAllSessions && activeInUnfiled >= limit) {
     visibleUnfiled.push(unfiled[activeInUnfiled]);
   }
 
@@ -1516,10 +1532,10 @@ function _renderSessionListImpl() {
     const remaining = unfiled.length - SIDEBAR_MAX_VISIBLE;
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'session-show-more-btn';
-    toggleBtn.textContent = _showAllSessions ? 'Show less' : `Show ${remaining} more`;
+    toggleBtn.textContent = showAllSessions ? 'Show less' : `Show ${remaining} more`;
     toggleBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      _showAllSessions = !_showAllSessions;
+      _setShowAllSessionsForViewport(!showAllSessions);
       renderSessionList();
     });
     unfiledTarget.appendChild(toggleBtn);

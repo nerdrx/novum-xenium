@@ -2,6 +2,7 @@
 // ES6 module — extracted from index.html inline scripts
 
 import Storage from './storage.js';
+import { applyInitialSectionCollapse } from './section-management.js';
 
 function markComposerUserEdited() {
   const msgInput = document.getElementById('message');
@@ -95,14 +96,15 @@ document.addEventListener('DOMContentLoaded', markComposerUserEdited, { once: tr
    places caused two toggles per click, which read as "clicks aren't doing
    anything" (even-count parity). Keep only the initial-state-apply here. */
 {
-  const KEY = Storage.KEYS.SIDEBAR_COLLAPSED;
-  const saved = Storage.getJSON(KEY, {});
-  const _defaultCollapsed = { 'sessions-section': true };
+  // Section collapse state is shared with section-management.js. The older
+  // sidebar-collapsed value remains a fallback for users migrating devices.
+  const saved = Storage.getJSON('section-collapsed', {}) || {};
+  const legacy = Storage.getJSON(Storage.KEYS.SIDEBAR_COLLAPSED, {}) || {};
+  const _defaultCollapsed = {};
   document.querySelectorAll('.sidebar .section').forEach((section) => {
     const id = section.id;
     if (!id) return;
-    const shouldCollapse = (id in saved) ? saved[id] : !!_defaultCollapsed[id];
-    if (shouldCollapse) section.classList.add('collapsed');
+    applyInitialSectionCollapse(section, saved, legacy, !!_defaultCollapsed[id]);
   });
   // Sessions-section notification dot: clear when the section becomes
   // expanded. Watch the class with MutationObserver so we don't need a

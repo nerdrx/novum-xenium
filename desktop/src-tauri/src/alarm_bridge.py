@@ -406,11 +406,30 @@ def _restore_audio(state_dir, alarm_id):
             _save_state(state_dir, state)
 
 
-def _restore_stale_audio_snapshots(state_dir, current_alarm_id):
+def _restore_stale_audio_snapshots(state_dir, current_alarm_id=None):
     for path in state_dir.glob("audio-*.json"):
-        match = re.fullmatch(r"audio-([0-9a-f-]{36})\.json", path.name)
-        if match and match.group(1) != current_alarm_id:
-            _restore_audio_locked(state_dir, match.group(1))
+        match = re.fullmatch(r"audio-(.+)\.json", path.name)
+        alarm_id = match.group(1) if match else None
+        if alarm_id and _ID_RE.fullmatch(alarm_id) and alarm_id != current_alarm_id:
+            _restore_audio_locked(state_dir, alarm_id)
+            with _locked_state(state_dir):
+                state = _load_state(state_dir)
+                alarm = state["alarms"].get(alarm_id)
+                if alarm and alarm.get("status") == "firing":
+                    alarm["status"] = "failed"
+                    _save_state(state_dir, state)
+
+
+def _recover_audio(state_dir):
+    # A live alarm owns this lock; startup must not restore its in-progress snapshot.
+    try:
+        audio_lock = _audio_lock(state_dir)
+    except BlockingIOError:
+        return
+    try:
+        _restore_stale_audio_snapshots(state_dir)
+    finally:
+        audio_lock.close()
 
 
 def _pactl(*args):
@@ -500,6 +519,11 @@ def _play(state_dir, alarm_id):
 
 
 def _recover(state_dir, token_file):
+    try:
+        _recover_audio(state_dir)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        # Leave failed snapshots in place so a later startup can retry restoration.
+        pass
     with _locked_state(state_dir):
         state = _load_state(state_dir)
         pending = [dict(a) for a in state["alarms"].values() if a.get("status") == "scheduled"]

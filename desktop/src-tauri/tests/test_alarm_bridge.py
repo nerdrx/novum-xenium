@@ -334,6 +334,7 @@ class AlarmBridgeTests(unittest.TestCase):
             "bridge = importlib.util.module_from_spec(spec)",
             "spec.loader.exec_module(bridge)",
             "state, alarm, fixture = Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])",
+            "bridge._save_state(state, {'alarms': {alarm: {'id': alarm, 'owner': 'admin', 'status': 'firing'}}})",
             "bridge._write_audio_snapshot(state, alarm, {'sink': str(fixture), 'muted': True, 'volumes': [12000, 23000]})",
             "fixture.write_text(json.dumps({'volume': [65536, 65536], 'muted': False}))",
             "os._exit(86)",
@@ -354,12 +355,23 @@ class AlarmBridgeTests(unittest.TestCase):
             Path(sink).write_text(json.dumps(state))
 
         with mock.patch.object(bridge, "_pactl", side_effect=restore_fixture):
-            self.assertEqual(bridge.main([
-                "--token-file", str(self.token_file), "--state-dir", str(self.state_dir),
-                "--restore", alarm_id,
-            ]), 0)
+            bridge._recover(self.state_dir, self.token_file)
         self.assertEqual(json.loads(fixture.read_text()), original)
         self.assertFalse(bridge._audio_snapshot_path(self.state_dir, alarm_id).exists())
+        self.assertEqual(bridge._load_state(self.state_dir)["alarms"][alarm_id]["status"], "failed")
+
+    def test_startup_audio_recovery_skips_live_alarm_lock(self):
+        alarm_id = "12345678-1234-1234-1234-123456789abc"
+        bridge._write_audio_snapshot(self.state_dir, alarm_id,
+                                     {"sink": "sink0", "muted": True, "volumes": [12000]})
+        audio_lock = bridge._audio_lock(self.state_dir)
+        try:
+            with mock.patch.object(bridge, "_pactl") as pactl:
+                bridge._recover_audio(self.state_dir)
+            pactl.assert_not_called()
+        finally:
+            audio_lock.close()
+        self.assertTrue(bridge._audio_snapshot_path(self.state_dir, alarm_id).exists())
 
     def test_overlapping_alarm_is_skipped_while_audio_lock_is_owned(self):
         alarm_id = "12345678-1234-1234-1234-123456789abc"

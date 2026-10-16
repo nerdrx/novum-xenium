@@ -139,7 +139,7 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn provision_local_alarm_bridge(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
     let app_data = app
         .path()
-        .resolve("novum-xenium/alarms", BaseDirectory::Data)
+        .resolve("novum-xenium", BaseDirectory::Data)
         .map_err(|e| format!("Cannot resolve local alarm application data: {e}"))?;
     let systemd_user = app
         .path()
@@ -162,7 +162,7 @@ fn load_config_at(path: &Path) -> Result<Option<DesktopConfig>, String> {
 
 fn validate_config(mut config: DesktopConfig) -> Result<DesktopConfig, String> {
     let checkout = fs::canonicalize(&config.checkout)
-        .map_err(|_| "Choose an existing Odysseus checkout directory.".to_string())?;
+        .map_err(|_| "Choose an existing backend checkout directory.".to_string())?;
     if !checkout.is_dir() || !checkout.join("docker-compose.yml").is_file() {
         return Err("The selected directory must contain docker-compose.yml.".into());
     }

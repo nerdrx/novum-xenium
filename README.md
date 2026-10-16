@@ -62,6 +62,8 @@ Install a [desktop release](https://github.com/nerdrx/novum-xenium/releases) dir
 
 On Linux, the [local model provider](docs/desktop.md#local-model-provider-linux) starts with Novum and loads your existing GGUF models on demand. Choose **Regular** for plain llama-server or **zVram** for memory management. Connection to chat is automatic once signed in; port and paging controls live under Advanced settings. Ollama stays available.
 
+Local Linux audio alarms use the desktop's private host bridge and user-session timers. Ask for an explicit future time, such as “play an alarm today at 15:00”; the default is 100% software volume for up to five minutes, followed by restoration of the previous volume and mute state. Ask to stop the alarm to cancel it. The computer and its user audio session must be available; this is not a phone alarm or a wake-from-shutdown feature.
+
 Linux is tested locally. Windows builds run in CI; Windows runtime testing is still needed. [Desktop setup and update details](docs/desktop.md).
 
 For development:
@@ -78,7 +80,7 @@ Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/pre
 
 Open the same workspace on your phone. The Android app includes its own Tailscale connection, so other phone apps keep their normal network. Enter your server address, sign in to Tailscale, then sign in to Novum. A router with an approved subnet route can provide access to your LAN server.
 
-Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. Android 0.1.5 routes the configured server through Tailscale while loading embedded external media over the phone’s normal connection. [Connection, build, and compatibility details](android/README.md).
+Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. The companion routes the configured server through Tailscale while loading embedded external media over the phone’s normal connection. [Connection, build, and compatibility details](android/README.md).
 
 ## Local image generation
 
@@ -91,6 +93,8 @@ The Docker backend includes stable-diffusion.cpp with CPU and optional Vulkan bu
 ### Clearer activity
 
 A compact task card separates the current coding step, observed file edits, checks, and review outcome. Repetitive successful tool reads fold together; failures remain visible. A workspace drawer collects received previews, file diffs, browser activity, and subagent links beside the chat. Its file list reflects observed edits, not a complete Git status.
+
+On desktop, drag the Workspace drawer's left edge to resize it; keyboard users can focus the divider and use the arrow keys. The width is remembered. Browser and desktop screenshots captured by persistent chats are stored privately for up to seven days; storage limits can remove older captures sooner, and deleting a chat removes its saved previews. Screenshots discarded before this history feature was enabled cannot be recovered.
 
 The model picker groups providers, searches full names, and preserves keyboard navigation. Availability labels use provider evidence; an unknown model state does not become a green “ready” claim.
 

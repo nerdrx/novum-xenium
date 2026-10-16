@@ -25,7 +25,7 @@ jobs:
         run: |
           docker run --rm --cpus=4 --memory=8g -e GOMAXPROCS=4 -v "$PWD:/workspace" novum-android-build bash -lc 'export PATH=/usr/local/go/bin:/root/go/bin:$PATH; ./bridge/build.sh; ./gradlew --no-daemon --max-workers=4 :app:testDebugUnitTest :app:lintDebug :app:assembleRelease'
       - name: Sign release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

@@ -83,7 +83,7 @@ def test_resume_replays_persona_name_into_live_and_final_bubble():
         (value) => value,
         () => {{}},
         () => {{}}, () => {{}}, () => {{}}, () => {{}},
-        {{ addMessage: (...args) => added.push(args), recordSessionMetricsCost() {{}} }}
+        {{ addMessage: (...args) => {{ added.push(args); return {{ querySelector: () => null }}; }}, recordSessionMetricsCost() {{}} }}
       );
 
       console.log(JSON.stringify({{

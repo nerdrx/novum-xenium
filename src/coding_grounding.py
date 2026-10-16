@@ -8,7 +8,6 @@ from pathlib import PurePosixPath
 import copy
 import json
 import re
-import shlex
 from urllib.parse import urlsplit
 
 from src.tool_capabilities import ToolEffect, capabilities_for_action, tool_result_is_successful
@@ -53,7 +52,7 @@ _DOC_BASENAMES = re.compile(
     r"cmakelists\.txt|makefile|tsconfig\.json)$",
     re.IGNORECASE,
 )
-_RESEARCH_ATTEMPTS = frozenset({"web_search", "web_fetch", "read_file", "host_shell"})
+_RESEARCH_ATTEMPTS = frozenset({"web_search", "web_fetch", "read_file"})
 _URL = re.compile(r"https?://[^\s<>\]\[(){}\"']+", re.IGNORECASE)
 _LATEST_TASK_MARKER = "Latest user instruction:"
 _NARROW_SCOPE = re.compile(
@@ -62,125 +61,6 @@ _NARROW_SCOPE = re.compile(
     r"|\b(?:fix|repair|debug|address|change|test|verify|inspect|review)\b.{0,80}\bonly\b",
     re.IGNORECASE,
 )
-
-
-def _host_shell_read_argv(content):
-    """Parse a deliberately small, shell-operator-free host inspection call."""
-    try:
-        payload = json.loads(content) if isinstance(content, str) else content
-        if not isinstance(payload, dict) or set(payload) - {"command"}:
-            return None
-        command = payload.get("command")
-        if not isinstance(command, str) or not command.strip() or len(command) > 4_000:
-            return None
-        # The bridge accepts shell text. During the grounding phase we accept
-        # simple read commands only; shell composition and expansion are out.
-        if re.search(r"[\n\r;&|<>`$()]", command):
-            return None
-        argv = shlex.split(command, posix=True)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if not argv:
-        return None
-    executable = argv[0]
-    args = argv[1:]
-    # Do not accept paths to executables: a same-named script is not the
-    # trusted system utility. Restrict options because several read tools
-    # (notably rg/grep --pre) can execute arbitrary helpers.
-    if executable == "pwd":
-        return argv if not args else None
-    if executable in {"cat", "head", "tail", "ls"}:
-        safe_flags = {
-            "cat": {"-n", "-b", "-s", "-A", "-E", "-T", "-v"},
-            "head": {"-n", "-c", "-q", "-v"},
-            "tail": {"-n", "-c", "-q", "-v", "-f", "--follow=none"},
-            "ls": {"-a", "-A", "-l", "-h", "-1", "-d", "-F", "-R", "-t", "-S"},
-        }[executable]
-        options_done = False
-        for part in args:
-            if part == "--":
-                options_done = True
-                continue
-            if not options_done and part.startswith("-"):
-                if executable in {"head", "tail"} and re.fullmatch(r"-[nc]\d+", part):
-                    continue
-                if part not in safe_flags:
-                    return None
-        return argv
-    if executable in {"rg", "grep"}:
-        # Only search flags which affect matching/output are accepted. In
-        # particular --pre/--pre-glob and grep's --label/--devices options
-        # are excluded; no option may invoke another program or write files.
-        allowed = {
-            "-i", "-n", "-v", "-w", "-x", "-F", "-E", "-G", "-P",
-            "-H", "-h", "-l", "-L", "-c", "-o", "-q", "-s", "-m",
-            "--ignore-case", "--line-number", "--invert-match", "--word-regexp",
-            "--fixed-strings", "--regexp", "--count", "--only-matching",
-            "--files-with-matches", "--files-without-match", "--quiet",
-            "--no-messages", "--hidden", "--no-ignore", "--glob", "-g",
-            "--type", "-t", "--max-count", "--context", "-C", "--before-context",
-            "-B", "--after-context", "-A", "--color", "--sort", "--threads",
-        }
-        expecting_value = False
-        for part in args:
-            if expecting_value:
-                expecting_value = False
-                continue
-            if part == "--":
-                continue
-            if part.startswith("-"):
-                option = part.split("=", 1)[0]
-                if option not in allowed:
-                    return None
-                if option in {"-m", "-g", "--glob", "-t", "--type", "--max-count",
-                              "-C", "-B", "-A", "--context", "--before-context",
-                              "--after-context", "--color", "--sort", "--threads"} and "=" not in part:
-                    expecting_value = True
-        return argv
-    if executable == "git" and len(args) >= 1:
-        subcommand, rest = args[0], args[1:]
-        # Never allow git global options (including -cfoo, --config-env,
-        # --exec-path=...) before a subcommand. Per-command options are exact.
-        options = {
-            "status": {"--short", "-s", "--branch", "--porcelain", "--untracked-files=no"},
-            "diff": {"--stat", "--name-only", "--name-status", "--check", "--cached"},
-            "log": {"--oneline", "--decorate", "--graph", "-n", "--max-count"},
-            "show": {"--stat", "--name-only", "--name-status", "--format=oneline"},
-            "rev-parse": {"--show-toplevel", "--show-prefix", "--is-inside-work-tree"},
-            "ls-files": {"--cached", "--others", "--exclude-standard"},
-            "branch": {"--show-current", "-a", "--all"},
-        }
-        if subcommand not in options:
-            return None
-        expecting_value = False
-        for part in rest:
-            if expecting_value:
-                if not part.isdecimal() or int(part) > 100:
-                    return None
-                expecting_value = False
-                continue
-            if part.startswith("-"):
-                if part not in options[subcommand]:
-                    return None
-                if part in {"-n", "--max-count"}:
-                    expecting_value = True
-            elif subcommand in {"status", "rev-parse", "branch"}:
-                return None
-        if expecting_value:
-            return None
-        return argv
-    return None
-
-
-def _read_only_host_shell_request(content):
-    return _host_shell_read_argv(content) is not None
-
-
-def _host_shell_read_paths(content):
-    argv = _host_shell_read_argv(content)
-    if not argv or argv[0].rsplit("/", 1)[-1] != "cat":
-        return ()
-    return tuple(part for part in argv[1:] if not part.startswith("-"))
 
 
 def _github_doc_coordinates(url):
@@ -244,12 +124,13 @@ class CodingGrounding:
     _visual_skill_pair = frozenset({"ui-design", "visual-verification"})
 
     def __init__(self, task, *, disabled_tools=(), web_allowed=True,
-                 plan_mode=False, guide_mode=False, host_shell_read_enabled=False):
+                 plan_mode=False, guide_mode=False,
+                 host_workspace_readers_unavailable=False):
         self.task = str(task or "").strip()
         self.latest_scope = self._latest_narrow_scope(self.task)
         research_scope = self.latest_scope or self.task
         self.disabled_tools = set(disabled_tools or ())
-        self.host_shell_read_enabled = bool(host_shell_read_enabled)
+        self.host_workspace_readers_unavailable = bool(host_workspace_readers_unavailable)
         self.web_allowed = bool(web_allowed) and not _NO_WEB.search(self.task)
         # Parameter names such as dependencies in sort(dependencies) are code,
         # not prose requests to build or integrate those capabilities.
@@ -479,11 +360,10 @@ class CodingGrounding:
     def research_tools(self):
         """Available tools for a brief lookup phase; no deep-research sidebar."""
         tools = {"get_workspace", "ls", "glob", "grep", "read_file", "search_tools", "ask_user", "manage_skills"}
-        if self.host_shell_read_enabled:
-            # A TUI bridge is the user's workspace. Do not expose backend file
-            # readers for the same phase; admit only the guarded host reader.
+        if self.host_workspace_readers_unavailable:
+            # The separate host bridge does not expose a verifiable confined
+            # file-read API, so never substitute backend/container paths.
             tools.difference_update({"get_workspace", "ls", "glob", "grep", "read_file"})
-            tools.add("host_shell")
         if self.web_allowed:
             tools.update({"web_search", "web_fetch"})
         return tools - self.disabled_tools if self.required else set()
@@ -517,14 +397,6 @@ class CodingGrounding:
             for previous in self.fetched_urls
         ))
 
-    def allows_host_shell_inspection(self, content=None):
-        """Permit only simple read-only commands on a validated TUI bridge."""
-        return bool(
-            self.host_shell_read_enabled
-            and not self.skill_preparation_required
-            and _read_only_host_shell_request(content)
-        )
-
     @property
     def phase_tools(self):
         """Expose only tools that can advance an outstanding research gate."""
@@ -552,8 +424,6 @@ class CodingGrounding:
             return False
         if self.may_mutate:
             return True
-        if tool_name == "host_shell":
-            return self.allows_host_shell_inspection(content)
         if self.skill_preparation_required:
             if tool_name != "manage_skills":
                 return False
@@ -604,6 +474,12 @@ class CodingGrounding:
             "Use web_search to locate primary documentation, then web_fetch to read it. "
             if self.web_allowed else "Use local project documentation only; web lookup is disabled. "
         )
+        local_source_rule = (
+            "A confined host-workspace file reader is unavailable during this preparation phase. "
+            "Use ask_user to request the relevant README/source excerpt or a supported upload; "
+            "do not inspect backend/container paths or use host_shell to read files. "
+            if self.host_workspace_readers_unavailable else ""
+        )
         url_rule = (
             "Your next documentation lookup should be web_fetch for a URL supplied by the user: "
             + ", ".join(sorted(self.preferred_urls))[:1500]
@@ -635,6 +511,7 @@ class CodingGrounding:
             "## Coding research gate\n"
             "Before the first workspace mutation, inspect relevant local project guidance and documentation. "
             + source_rule
+            + local_source_rule
             + url_rule
             + skill_rule
             + skill_complete
@@ -756,15 +633,6 @@ class CodingGrounding:
                     _DOC_BASENAMES.match(basename)
                     or "/docs/" in f"/{path.strip('/')}/"
                     or path.strip("/").lower().startswith("docs/")
-                )
-            elif tool_name == "host_shell":
-                paths = _host_shell_read_paths(content)
-                normalized = tuple(path.replace("\\", "/") for path in paths)
-                evidence = (not self.preferred_urls or not self.web_allowed) and any(
-                    _DOC_BASENAMES.match(PurePosixPath(path).name)
-                    or "/docs/" in f"/{path.strip('/')}/"
-                    or path.strip("/").lower().startswith("docs/")
-                    for path in normalized
                 )
         if evidence:
             self.evidence.add(tool_name)

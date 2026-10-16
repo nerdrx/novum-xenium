@@ -462,52 +462,17 @@ def test_documentation_ready_pending_skill_exposes_only_skill_phase_tools():
     assert disabled.may_mutate is False  # documentation gate still applies
 
 
-def test_validated_tui_bridge_exposes_only_read_only_host_inspection_during_grounding():
-    gate = CodingGrounding("Build a Python CLI tool", host_shell_read_enabled=True)
-    assert "host_shell" in gate.phase_tools
-    assert not ({"get_workspace", "ls", "glob", "grep", "read_file"} & gate.phase_tools)
-    assert gate.allows_tool("host_shell", '{"command":"pwd"}')
-    assert gate.allows_tool("host_shell", '{"command":"git status --short"}')
-    assert not gate.allows_tool("host_shell", '{"command":"pytest -q"}')
-    assert not gate.allows_tool("host_shell", '{"command":"cat README.md; touch marker"}')
-    assert not gate.allows_tool("host_shell", '{"command":"rm -rf ."}')
-    assert gate.observe(
-        "host_shell", {"output": "Local project setup guide", "exit_code": 0},
-        '{"command":"cat README.md"}',
+def test_tui_grounding_requests_file_context_without_exposing_unsafe_readers():
+    gate = CodingGrounding(
+        "Build a Python CLI tool",
+        host_workspace_readers_unavailable=True,
     )
-    assert gate.has_evidence and gate.may_mutate
-
-
-def test_host_bridge_inspection_requires_explicit_server_validation():
-    gate = CodingGrounding("Build a Python CLI tool")
-    assert "host_shell" not in gate.phase_tools
-    assert not gate.allows_host_shell_inspection('{"command":"pwd"}')
-
-
-def test_host_shell_read_allowlist_rejects_execution_and_config_overrides():
-    gate = CodingGrounding("Build a Python CLI tool", host_shell_read_enabled=True)
-    unsafe = [
-        r'git -c alias.status=!touch\ marker status',
-        'git --exec-path=/tmp status',
-        'git --config-env=alias.status=ENV status',
-        'git status --output=/tmp/result',
-        r'rg --pre=touch\ marker needle .',
-        r'rg --pre-glob=*.txt --pre=touch\ marker needle .',
-        r'grep --pre=touch\ marker needle .',
-        'rg needle .; touch marker',
-        'rg needle . | sh',
-        r'/tmp/rg --pre=touch\ marker needle .',
-        'git branch -D main',
-    ]
-    for command in unsafe:
-        assert not gate.allows_tool("host_shell", json.dumps({"command": command})), command
-    for command in ("git status --short", "git rev-parse --show-toplevel", "rg -n needle src"):
-        assert gate.allows_tool("host_shell", json.dumps({"command": command})), command
-
-
-def test_unvalidated_host_does_not_bypass_grounding():
-    gate = CodingGrounding("Build a Python CLI tool")
-    assert not gate.allows_host_shell_inspection('{"command":"pwd"}')
+    assert "ask_user" in gate.phase_tools
+    assert not ({"get_workspace", "ls", "glob", "grep", "read_file", "host_shell"}
+                & gate.phase_tools)
+    assert not gate.allows_tool("host_shell", '{"command":"cat README.md"}')
+    assert "request the relevant README/source excerpt" in gate.directive
+    assert "backend/container paths" in gate.directive
 
 
 def test_preparation_schema_only_allows_an_exact_pending_skill_view_then_releases():

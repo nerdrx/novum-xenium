@@ -10396,11 +10396,16 @@ def _workspace_coding_rules(
     workspace: Optional[str],
     *,
     host_bridge: bool = False,
+    host_bridge_read_unavailable: bool = False,
 ) -> str:
     if not workspace:
         return ""
     orientation = (
-        "- The host bridge owns the active workspace; use the advertised `host_shell`/patch tools and do not call backend `get_workspace`, `ls`, or `read_file`.\n"
+        (
+            "- The host bridge owns the active workspace, but no confined host file reader is available during required preparation. Use `ask_user` to request relevant file excerpts or a supported upload; do not read files with `host_shell` and do not use backend/container file tools. After preparation, use the normal host bridge for authorized workspace actions.\n"
+            if host_bridge_read_unavailable else
+            "- The host bridge owns the active workspace; use the advertised `host_shell`/patch tools and do not call backend `get_workspace`, `ls`, or `read_file`.\n"
+        )
         if host_bridge
         else "- Start by orienting with `get_workspace` plus `grep`/`glob`/`ls`/`read_file`; prefer targeted reads over dumping whole files.\n"
     )
@@ -15464,6 +15469,14 @@ def _build_system_prompt(
             agent_prompt += _workspace_coding_rules(
                 workspace,
                 host_bridge=_host_bridge_for_prompt,
+                host_bridge_read_unavailable=bool(
+                    _host_bridge_for_prompt
+                    and _tui_local_workspace_turn(
+                        _extract_last_user_message(messages),
+                        workspace=workspace,
+                        client_runtime_context=client_runtime_context,
+                    )
+                ),
             )
     elif (
         relevant_tools
@@ -22332,7 +22345,12 @@ async def stream_agent_loop(
                     "workspace/project/file commands, use host_shell against "
                     "the advertised session_cwd. Do not use backend bash/grep/ls "
                     "to inspect the user's TUI workspace unless the user explicitly "
-                    "asks about the backend server itself."
+                    "asks about the backend server itself. During a required coding "
+                    "preparation phase, use only a confined file reader explicitly "
+                    "offered for that phase. If none is available, ask the user for "
+                    "the relevant file excerpt or a supported upload; never substitute "
+                    "backend/container paths or use host_shell to read files before "
+                    "preparation is complete."
                 ),
             }
         )
@@ -22629,7 +22647,7 @@ async def stream_agent_loop(
             + _last_user
         )[:8_000]
     from src.coding_grounding import CodingGrounding
-    _coding_grounding_host_bridge = bool(
+    _coding_grounding_no_safe_reader = bool(
         _has_tui_host_bridge
         and _tui_local_workspace_turn(
             _last_user,
@@ -22640,7 +22658,7 @@ async def stream_agent_loop(
     _coding_grounding = CodingGrounding(
         (_retrieval_query + "\n" + _last_user) if _use_coding_tools(_retrieval_query, workspace) else "",
         disabled_tools=disabled_tools, plan_mode=plan_mode, guide_mode=guide_only,
-        host_shell_read_enabled=_coding_grounding_host_bridge,
+        host_workspace_readers_unavailable=_coding_grounding_no_safe_reader,
     )
     def _observe_coding_grounding(tool, result, content):
         accepted = _coding_grounding.observe(tool, result, content)
@@ -27107,9 +27125,7 @@ async def stream_agent_loop(
                         if allowed != choices:
                             schema = copy.deepcopy(schema)
                             schema["function"]["parameters"]["properties"]["action"]["enum"] = allowed
-                    elif (_coding_work.blocks(tool_name, "{}")
-                          and not (tool_name == "host_shell"
-                                   and _coding_grounding_host_bridge)):
+                    elif _coding_work.blocks(tool_name, "{}"):
                         continue
             if (_coding_work.state and _coding_work.state.stage == "edit"
                     and tool_name in {"bash", "python"}):
@@ -27513,8 +27529,6 @@ async def stream_agent_loop(
             approval_matches and not approved_alignment_reason
             and _coding_work.enabled
             and _coding_work.blocks(approved.tool_name, approved.content)
-            and not (approved.tool_name == "host_shell"
-                     and _coding_grounding.allows_host_shell_inspection(approved.content))
         )
         if approval_matches and not approved_alignment_reason:
             yield (
@@ -36404,9 +36418,7 @@ async def stream_agent_loop(
                 desc = f"{block.tool_type}: PLAN FIRST"
                 result = {"error": _milestone_checkpoint.directive, "exit_code": 1,
                           "blocked": True, "policy": "milestone_checkpoint"}
-            elif (_coding_work.blocks(block.tool_type, block.content)
-                  and not (block.tool_type == "host_shell"
-                           and _coding_grounding.allows_host_shell_inspection(block.content))):
+            elif _coding_work.blocks(block.tool_type, block.content):
                 desc = f"{block.tool_type}: CODING WORKFLOW"
                 result = {"error": _coding_work.instruction, "exit_code": 1,
                           "blocked": True, "policy": "coding_work_packet"}

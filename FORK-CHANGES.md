@@ -22,6 +22,12 @@ artifacts, single-instance renderer modules, and chat-bound plan execution.
 The Docker image and Compose configuration include the nested namespace setup
 needed by the new native tools; see [Docker containment](docs/native-containment-docker.md).
 
+An external TUI host bridge does not prove workspace path containment. Until
+that bridge provides a supported safe reader, substantive coding preparation
+asks for the needed file content instead of silently reading backend paths or
+adding a host-file exception. Ordinary authorized host commands retain their
+existing execution policy.
+
 ## Local agent reliability (October 12, 2026)
 
 - Shell and file tools use the same default workspace. Auto review supports reversible edits there with rollback snapshots, retains recent user instructions across short follow-ups, and reviews up to 32 actions before falling back to manual approval.

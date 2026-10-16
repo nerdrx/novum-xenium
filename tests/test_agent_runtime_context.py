@@ -1067,7 +1067,7 @@ def test_tui_local_workspace_turn_hides_backend_file_tools(monkeypatch):
         al.stream_agent_loop(
             "https://api.openai.com/v1",
             "gpt-4o",
-            [{"role": "user", "content": "debug this workspace and run tests"}],
+            [{"role": "user", "content": "Build a Python CLI tool in this workspace and run tests"}],
             max_rounds=1,
             relevant_tools={
                 "bash",
@@ -1109,13 +1109,19 @@ def test_tui_local_workspace_turn_hides_backend_file_tools(monkeypatch):
         if isinstance(tool, dict)
     }
 
-    assert "host_shell" in tool_names
+    assert "host_shell" not in tool_names
     assert "bash" not in tool_names
-    assert "grep" in tool_names
-    assert "ls" in tool_names
-    assert "glob" in tool_names
-    assert "read_file" in tool_names
+    assert "grep" not in tool_names
+    assert "ls" not in tool_names
+    assert "glob" not in tool_names
+    assert "read_file" not in tool_names
     assert "get_workspace" not in tool_names
+    assert "ask_user" in tool_names
+    visible_text = "\n".join(
+        str(message.get("content", "")) for message in snapshot["messages"]
+    )
+    assert "no confined host file reader is available" in visible_text
+    assert "request relevant file excerpts" in visible_text
 
 
 def test_native_host_shell_call_runs_through_bridge_and_threads_result(monkeypatch):

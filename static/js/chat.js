@@ -64,6 +64,14 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
       (isAgent ? ' Try a faster model, reduce tool usage, or retry.' : ' Try a faster model or retry.');
   }
 
+  function _appendStreamRecoveryStatus(target, message) {
+    const status = document.createElement('div');
+    status.className = 'stream-recovery-status';
+    status.setAttribute('role', 'status');
+    status.textContent = message;
+    target.appendChild(status);
+  }
+
   function _backgroundStreamStatusText(entry, startedAt, now = Date.now()) {
     if (entry.status === 'error') {
       return `[Error: ${entry.error || 'Background stream encountered an error'}]`;
@@ -4736,16 +4744,13 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
           }
 
           if (abortReason === 'recovery') {
-            const recoveryMsg = 'Streaming was interrupted after the tab went inactive. Partial output was preserved.';
+            const recoveryMsg = accumulated
+              ? 'Live connection paused while this tab was inactive. Your partial reply is preserved.'
+              : 'Live connection paused while this tab was inactive. No reply text arrived yet.';
             if (holder && !accumulated) {
-              holder.querySelector('.body').innerHTML =
-                `<div style="color: var(--color-error); font-style: italic; padding: 4px 0;">[${recoveryMsg}]</div>`;
+              _appendStreamRecoveryStatus(holder.querySelector('.body'), recoveryMsg);
             } else if (_catchViewHolder && accumulated) {
-              const recoveryNote = document.createElement('div');
-              recoveryNote.className = 'stopped-indicator';
-              recoveryNote.innerHTML =
-                `<span style="color: var(--color-error);">[${recoveryMsg}]</span>`;
-              _catchViewHolder.querySelector('.body').appendChild(recoveryNote);
+              _appendStreamRecoveryStatus(_catchViewHolder.querySelector('.body'), recoveryMsg);
             }
             if (currentAbort === abortCtrl) currentAbort = null;
             return;

@@ -11,6 +11,9 @@ from pathlib import Path
 _CHAT = (Path(__file__).resolve().parent.parent / "static" / "js" / "chat.js").read_text(
     encoding="utf-8"
 )
+_STYLE = (Path(__file__).resolve().parent.parent / "static" / "style.css").read_text(
+    encoding="utf-8"
+)
 
 
 def _between(start: str, end: str) -> str:
@@ -190,6 +193,21 @@ def test_foreground_wait_copy_reports_elapsed_without_guessing_cause():
         "// Don't set to null here",
     )
     assert "if (stopServer) abortCtrl._reason = 'user-stop';" in explicit_stop
+
+
+def test_tab_recovery_is_neutral_status_while_fatal_stream_errors_stay_red():
+    recovery = _between("if (abortReason === 'recovery')", "if (abortReason === 'stale-local')")
+    notice_helper = _between("function _appendStreamRecoveryStatus(", "function _backgroundStreamStatusText(")
+    fatal = _between("if (timedOut || abortReason === 'timeout')", "if (abortReason === 'recovery')")
+    assert "Live connection paused while this tab was inactive." in recovery
+    assert "Your partial reply is preserved." in recovery
+    assert "_appendStreamRecoveryStatus" in recovery
+    assert "color-error" not in recovery
+    assert "role', 'status'" in notice_helper
+    assert "textContent = message" in notice_helper
+    assert ".stream-recovery-status" in _STYLE
+    assert "color:var(--fg);\n      opacity:0.75;" in _STYLE
+    assert "color: var(--color-error)" in fatal
 
 
 def test_background_terminal_error_keeps_provider_message():

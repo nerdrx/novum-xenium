@@ -4183,6 +4183,13 @@ body.bg-pattern-sparkles {
       gap:8px;
       flex-wrap:wrap;
     }
+    .stream-recovery-status {
+      color:var(--fg);
+      opacity:0.75;
+      margin-top:8px;
+      font-size:0.85em;
+      font-style:italic;
+    }
 
     /* Message edit UI */
     .msg-edit-textarea {

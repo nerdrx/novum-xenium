@@ -1599,7 +1599,7 @@ def test_tainted_disabled_tool_is_blocked_without_misleading_approval(monkeypatc
     assert "ask_user" not in blocked[0]
 
 
-def test_tainted_document_approval_seals_current_content(monkeypatch):
+def test_tainted_document_approval_seals_current_content(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from src.prompt_security import untrusted_context_message
@@ -1634,40 +1634,46 @@ def test_tainted_document_approval_seals_current_content(monkeypatch):
         current_content="original",
         version_count=4,
     )
-    events = _collect_agent_events(
-        agent_loop.stream_agent_loop(
-            "http://local.test/v1",
-            "small-local-model",
-            [
-                {"role": "user", "content": "update this document"},
-                untrusted_context_message("stored context", "untrusted"),
-            ],
-            active_document=active_document,
-            session_id="document-approval-session",
-            owner="alice",
-            max_rounds=1,
-            relevant_tools={"update_document"},
-            forced_tools={"web_search", "web_fetch"},
-        )
-    )
+    from tests.helpers.database import isolated_session_database
 
-    approval = next(
-        event["ask_user"]
-        for event in events
-        if event.get("ask_user", {}).get("kind") == "tool_approval"
-    )
-    pending = agent_loop.tool_approval_store.peek(approval["approval_id"])
-    assert pending is not None
-    assert pending.document_id == "document-7"
-    assert pending.document_version == 4
-    assert pending.document_digest == document_content_digest("original")
-    assert pending.web_search_enabled is True
-    agent_loop.tool_approval_store.consume(
-        pending.approval_id,
-        decision="deny",
-        owner="alice",
-        session_id="document-approval-session",
-    )
+    # Approval sealing can consult the canonical document/session tables while
+    # validating active-document scope. Bind a complete disposable schema so
+    # this test is independent of any preceding test's DB monkeypatches.
+    with isolated_session_database(tmp_path):
+        events = _collect_agent_events(
+            agent_loop.stream_agent_loop(
+                "http://local.test/v1",
+                "small-local-model",
+                [
+                    {"role": "user", "content": "update this document"},
+                    untrusted_context_message("stored context", "untrusted"),
+                ],
+                active_document=active_document,
+                session_id="document-approval-session",
+                owner="alice",
+                max_rounds=1,
+                relevant_tools={"update_document"},
+                forced_tools={"web_search", "web_fetch"},
+            )
+        )
+
+        approval = next(
+            event["ask_user"]
+            for event in events
+            if event.get("ask_user", {}).get("kind") == "tool_approval"
+        )
+        pending = agent_loop.tool_approval_store.peek(approval["approval_id"])
+        assert pending is not None
+        assert pending.document_id == "document-7"
+        assert pending.document_version == 4
+        assert pending.document_digest == document_content_digest("original")
+        assert pending.web_search_enabled is True
+        agent_loop.tool_approval_store.consume(
+            pending.approval_id,
+            decision="deny",
+            owner="alice",
+            session_id="document-approval-session",
+        )
 
 
 def test_approval_pause_does_not_trigger_teacher_takeover(monkeypatch):

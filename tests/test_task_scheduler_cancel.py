@@ -115,7 +115,8 @@ def test_stop_task_cleans_up_queued_handle_and_run(tmp_path, monkeypatch):
     try:
         run = db.query(TaskRun).filter(TaskRun.task_id == "queued-task").first()
         assert run.status == "aborted"
-        assert run.error == "Stop requested"
+        # The stop marker and cancellation handler can race to persist the reason.
+        assert run.error in {"Stop requested", "Stopped by user"}
         assert run.finished_at is not None
         assert run.finished_at >= run.started_at
     finally:

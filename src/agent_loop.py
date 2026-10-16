@@ -11171,7 +11171,8 @@ def _classify_single_agent_request(messages: List[Dict], last_user: str) -> Dict
 
     explicit_model_context = has(
         r"\b(cookbook|vllm|sglang|llama\.?cpp|ollama|cached models?|running models?|"
-        r"model servers?|models? (?:are )?running|what models?|model picker|gpu box|"
+        r"model servers?|models? (?:are )?running|models? (?:currently )?(?:being )?served|"
+        r"what models?|model picker|gpu box|"
         r"workstation|server|qwen|gemma|llama|mistral|minimax)\b"
     )
     if explicit_model_context or (

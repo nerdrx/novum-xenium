@@ -95,6 +95,7 @@ async def test_scheduled_subprocess_preserves_executable_and_arguments(workspace
     import shlex
     from contextlib import nullcontext
     from src import builtin_actions
+    from src.agent_tools import subprocess_tools
 
     argv = ["python", "script with spaces.py"]
     command = shlex.join(argv)
@@ -114,7 +115,7 @@ async def test_scheduled_subprocess_preserves_executable_and_arguments(workspace
 
     monkeypatch.setattr(resources, "resolve_process_operation", resolve)
     monkeypatch.setattr(resources, "bind_process_operation", lambda _bound: nullcontext())
-    monkeypatch.setattr("src.agent_tools.subprocess_tools._run_owned_command", run_owned_command)
+    monkeypatch.setattr(subprocess_tools, "_run_owned_command", run_owned_command)
     with bind_request_authority(admitted):
         result = await builtin_actions._run_subprocess(argv)
     assert result == ("ok", True)

@@ -16,10 +16,8 @@ def _run(tool, content):
 
 @pytest.fixture
 def repo():
-    # Built under /tmp, which is on the default tool-path allowlist.
-    # realpath because the code under test resolves the path it reports, and on
-    # macOS /tmp is a symlink to /private/tmp: comparing the unresolved path
-    # against the resolved one fails on a file both sides found correctly.
+    # Build under /tmp; the tool should report the stable sealed-workspace
+    # alias rather than exposing this host path.
     root = os.path.realpath(tempfile.mkdtemp(dir="/tmp", prefix="codenav_"))
     try:
         with open(os.path.join(root, "a.py"), "w") as f:
@@ -337,16 +335,18 @@ def test_workspace_reports_existing_child_projects_without_rebinding(repo):
     token = _active_workspace.set(repo)
     try:
         result = _run('get_workspace', '')
-        assert project in result['output']
+        display_project = '/workspace/FFmpegNexus'
+        assert display_project in result['output']
+        assert repo not in result['output']
         candidates = result['output'].split('Immediate child project candidates', 1)[1]
-        assert project in candidates
+        assert display_project in candidates
         assert 'linked-project' not in candidates
         assert 'node_modules' not in candidates
         assert 'cd affects only that single shell call' in result['output']
         assert get_active_workspace() == repo
         missing = _run('read_file', os.path.join(repo, 'package.json'))
         assert missing['exit_code'] == 1
-        assert project in missing['error']
+        assert 'FFmpegNexus' in missing['error']
         assert 'does NOT mean the project is missing' in missing['error']
         assert not os.path.exists(os.path.join(repo, 'package.json'))
     finally:

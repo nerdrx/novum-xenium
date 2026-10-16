@@ -285,7 +285,7 @@ def _parameters(request, model_helper, backend_checkout):
     if not isinstance(alias, str) or not _ALIAS_RE.fullmatch(alias):
         raise ValueError("alias contains unsupported characters")
     port = _integer(request, "port", 8097, 1, 65535)
-    context = _integer(request, "context", 4096)
+    context = _integer(request, "context", 32768)
     compressed = request.get("compressed", False)
     if compressed is None:
         compressed = False
@@ -478,7 +478,7 @@ def _router_inventory(params):
 def _router_status(model_helper, manager_helper, manager, params_state):
     params = params_state.get(_ROUTER_NAME, {})
     result = {'name': _ROUTER_NAME, 'running': False, 'healthy': False, 'state': 'stopped',
-              'port': params.get('port', 8097), 'context': params.get('context', 4096), 'models': []}
+              'port': params.get('port', 8097), 'context': params.get('context', 32768), 'models': []}
     if params.get('router') is not True:
         result.update(mode='regular', auto_start=True)
         return result

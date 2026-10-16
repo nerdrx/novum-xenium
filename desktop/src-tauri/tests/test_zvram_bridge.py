@@ -299,6 +299,7 @@ class BridgeTests(unittest.TestCase):
 
         old_helper = OldModelHelper(self.model)
         params = bridge._parameters({'model': str(self.model)}, old_helper, self.checkout)
+        self.assertEqual(params['context'], 32768)
         self.assertFalse(params['live_control'])
         with self.assertRaisesRegex(ValueError, 'requires a newer zVram'):
             bridge._parameters({'model': str(self.model), 'live_control': True}, old_helper, self.checkout)

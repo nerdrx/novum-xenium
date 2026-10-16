@@ -68,7 +68,7 @@ const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
     }
 
     // A small host DOM runs the actual export function and markdown renderer.
-    await page.route('**/publication-harness', route => route.fulfill({ contentType: 'text/html', body: '<!DOCTYPE html><body><textarea id="doc-editor-textarea"></textarea><select id="doc-language-select"><option value="markdown">Markdown</option><option value="text">Text</option><option value="html">HTML</option></select><div id="theme-grid"></div><select id="theme-font-select"><option value="mono">Fira Code</option><option value="sans">Sans</option></select><select id="theme-density-select"><option value="comfortable">Comfortable</option></select></body>' }));
+    await page.route('**/publication-harness', route => route.fulfill({ contentType: 'text/html', body: '<!DOCTYPE html><body><textarea id="doc-editor-textarea"></textarea><select id="doc-language-select"><option value="markdown">Markdown</option><option value="text">Text</option><option value="html">HTML</option></select><div id="themeGrid"></div><select id="theme-font-select"><option value="mono">Fira Code</option><option value="sans">Sans</option></select><select id="theme-density-select"><option value="comfortable">Comfortable</option></select></body>' }));
     await page.route('**/api/**', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ fonts: {}, value: null }) }));
     await page.goto(origin + '/publication-harness');
     const source = readFileSync('static/js/document.js', 'utf8');
@@ -121,6 +121,14 @@ const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
     assert.deepEqual(result.errors, ['Browser printing is unavailable.']);
 
     // Actual theme module: default, legacy local/server selections and custom theme preferences.
+    // Use the shipped Theme panel, including all color controls required by
+    // initThemeUI, instead of a partial fixture that returned before setup.
+    await page.evaluate(html => {
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      const panel = parsed.getElementById('theme-popup');
+      for (const node of panel.querySelectorAll('[id]')) document.getElementById(node.id)?.remove();
+      document.body.appendChild(document.adoptNode(panel));
+    }, readFileSync('static/index.html', 'utf8'));
     const fonts = await page.evaluate(async origin => {
       localStorage.setItem('odysseus-theme', JSON.stringify({ name: 'dark', colors: {}, font: 'gohu' }));
       localStorage.setItem('odysseus-custom-themes', JSON.stringify({ old: { font: 'GohuFont' } }));
@@ -137,8 +145,8 @@ const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
       const sans = document.documentElement.style.getPropertyValue('--font-family');
       return { fallback, legacy, selected, saved, custom, sans };
     }, origin);
-    assert.equal(fonts.fallback, "'Fira Code', monospace");
-    assert.equal(fonts.legacy, fonts.fallback);
+    assert(fonts.fallback.includes("system-ui"));
+    assert.equal(fonts.legacy, "'Fira Code', monospace");
     assert.equal(fonts.selected, 'mono');
     assert.equal(fonts.saved, 'mono');
     assert.equal(fonts.custom, 'mono');
@@ -154,7 +162,7 @@ const { extractThemeBootstrap } = require('./helpers/theme_bootstrap.cjs');
       eval(code);
       return document.documentElement.style.getPropertyValue('--font-family');
     }, bootstrap);
-    assert.equal(early, fonts.fallback);
+    assert.equal(early, fonts.legacy);
     console.log(JSON.stringify({ website: true, fonts: true, print: true, pwa: true }));
   } finally {
     await browser.close();

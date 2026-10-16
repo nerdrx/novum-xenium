@@ -77,4 +77,3 @@ export async function initAgentSettings() {
     (verifierInput ? ' · review ' + (verifierInput.checked ? 'on' : 'off') : '');
 
 }
-

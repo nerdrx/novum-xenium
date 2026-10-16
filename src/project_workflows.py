@@ -110,8 +110,8 @@ def _run_git(repo: str, *args: str, timeout: int = 10) -> str:
 
 
 def _run_owner_key(session_id: str | None, run_id: str | None):
-    from src.agent_tools.subprocess_tools import _run_key
-    return _run_key(session_id, run_id)
+    from src.agent_tools.subprocess_tools import _run_scope
+    return _run_scope({"session_id": session_id, "run_id": run_id})
 
 
 def verification_plan(owner: str, workspace: str) -> dict[str, Any] | None:
@@ -176,8 +176,13 @@ def _hash_untracked_file(path: str, relative: bytes, info, digest, total: int) -
 
 
 def _track_run_process(owner_key, pid: int, *, remove: bool = False) -> None:
-    from src.agent_tools.subprocess_tools import _track_group, _untrack_group
-    (_untrack_group if remove else _track_group)(owner_key, pid)
+    from src.agent_tools.subprocess_tools import _register_run_task, _unregister_run_task
+    # Stop ownership follows the awaited verification task. The task's
+    # cancellation handler reaps its own process tree before unregistering.
+    if remove:
+        _unregister_run_task((owner_key, asyncio.current_task()))
+    else:
+        _register_run_task(owner_key)
 
 
 async def _kill_async_process(process: asyncio.subprocess.Process) -> None:

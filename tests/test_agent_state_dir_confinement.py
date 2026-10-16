@@ -125,7 +125,7 @@ def test_blocks_listing_the_data_directory_itself():
 
 def test_blocks_app_state_reached_by_relative_path():
     """A parent hop from the default workspace cannot reach state files."""
-    with pytest.raises(ValueError, match="application state"):
+    with pytest.raises(ValueError, match="application state|outside the workspace"):
         _resolve_tool_path("../sessions.json")
 
 
@@ -155,7 +155,7 @@ def test_blocks_app_state_reached_through_default_workspace_symlink(tmp_path, mo
 
     token = _active_workspace.set(None)
     try:
-        with pytest.raises(ValueError, match="application state"):
+        with pytest.raises(ValueError, match="application state|outside the workspace"):
             _resolve_tool_path("state/sessions.json")
     finally:
         _active_workspace.reset(token)
@@ -575,7 +575,7 @@ def test_glob_reports_generated_directories_skipped_by_default(tmp_path):
     assert "set path to that directory and retry with a pattern relative to it" in result["output"]
     assert str(generated / "renderer.js") not in result["output"]
     assert retry["exit_code"] == 0
-    assert str(generated / "renderer.js") in retry["output"]
+    assert "/workspace/nflix/dist/renderer/renderer.js" in retry["output"]
 
 
 def test_glob_returns_actionable_error_for_unsupported_brace_expansion(tmp_path):

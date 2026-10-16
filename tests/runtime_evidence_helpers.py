@@ -35,10 +35,17 @@ def server_authorized_executor(executor):
         launch_scopes = (None if parameters.get("workspace") else tuple(
             seal_launch_scope(NativeBackendResource(tool), FilesystemRoot.seal(scratch))
             for tool in ("bash", "python")))
+        resource_roots = None
+        if not parameters.get("workspace"):
+            from src.tool_execution import AGENT_WORKSPACE_DIR
+            default_root = Path(AGENT_WORKSPACE_DIR)
+            if default_root.is_dir():
+                resource_roots = (FilesystemRoot.seal(default_root, owner=str(parameters.get("owner") or "").strip().casefold()),)
         kwargs.setdefault("request_authority", RequestAuthority(
             "standalone-test-request", str(parameters.get("owner") or "").strip().casefold(),
             str(parameters.get("session_id") or ""), str(parameters.get("workspace") or ""),
             grants,
+            resource_roots=resource_roots,
             launch_scopes=launch_scopes,
             backend_resources=seal_backends((g.tool for g in grants), context=parameters.get("client_runtime_context"),
                 owner=str(parameters.get("owner") or "").strip().casefold()),

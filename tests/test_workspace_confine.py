@@ -143,7 +143,7 @@ async def test_default_workspace_is_reported_and_relative_edit_ls_work(tmp_path,
     assert "Relative file-tool paths" in info["output"]
 
     _, listed = await execute_tool_block(_block("ls", "nx-ffmpeg"), owner="a")
-    assert listed["exit_code"] == 0 and "index.html" in listed["output"]
+    assert listed["exit_code"] == 0 and "index.html" in listed["output"], listed
     _, edited = await execute_tool_block(
         _block("edit_file", json.dumps({
             "path": "nx-ffmpeg/index.html",
@@ -253,7 +253,7 @@ async def test_apply_patch_rejects_duplicate_canonical_paths_before_changes(ws, 
         _block("apply_patch", patch), owner="admin", workspace=ws
     )
     assert result["exit_code"] == 1
-    assert "duplicate path" in result["error"]
+    assert "same resource" in result["error"] or "duplicate path" in result["error"]
     assert open(target).read() == "original\n"
     assert not os.path.exists(os.path.join(ws, "new.txt"))
 
@@ -808,7 +808,7 @@ async def test_python_virtual_workspace_path_works_for_tmp_workspace(ws, admin):
 @pytest.mark.asyncio
 async def test_get_workspace_tool(ws, admin):
     _, r = await execute_tool_block(_block("get_workspace", ""), owner="a", workspace=ws)
-    assert r["exit_code"] == 0 and r["output"].startswith("/workspace") and "not sandboxed" in r["output"]
+    assert r["exit_code"] == 0 and r["output"].startswith("/workspace") and "containment policy" in r["output"]
     assert ws not in r["output"]
     _, r = await execute_tool_block(_block("get_workspace", ""), owner="a")  # none active
     assert r["exit_code"] == 0 and "No workspace" in r["output"]

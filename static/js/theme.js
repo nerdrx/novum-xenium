@@ -53,7 +53,8 @@ const LEGACY_DEFAULT_FONT = 'mono';
 
 // Compatibility for persisted themes that selected the omitted custom face.
 function normalizeFont(font) {
-  return !font || font === 'gohu' || font === 'GohuFont' ? DEFAULT_FONT : font;
+  if (font === 'gohu' || font === 'GohuFont') return LEGACY_DEFAULT_FONT;
+  return font || DEFAULT_FONT;
 }
 const DEFAULT_DENSITY = 'comfortable';
 const MAX_CUSTOM_THEMES = 8;

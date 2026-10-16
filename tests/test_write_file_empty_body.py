@@ -209,7 +209,7 @@ async def test_refusal_suggestion_is_valid_json_for_paths_with_quotes(target):
     _seed(quoted_path)
     refused = await WriteFileTool().execute(_text_call(quoted_path, ""), {})
     match = re.search(
-        r"explicit empty content: (\{.*\})$", refused["error"], re.S
+        r"resend: (\{.*\})$", refused["error"], re.S
     )
     assert match, refused
     suggested_args = json.loads(match.group(1))
@@ -286,18 +286,16 @@ async def test_empty_body_does_not_truncate_data_written_after_the_size_check(
 ):
     """A write racing the size check must survive the empty-body path."""
     _seed(target, "")
-    real_getsize = os.path.getsize
-
-    def write_after_size_check(path):
-        size = real_getsize(path)
-        if path == target and size == 0:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("concurrent update")
-        return size
-
-    monkeypatch.setattr(os.path, "getsize", write_after_size_check)
+    from src.agent_tools import filesystem_tools as files
+    real_read = files._read_mutation_target
+    def interleaved_read(*args, **kwargs):
+        result = real_read(*args, **kwargs)
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("concurrent update")
+        return result
+    monkeypatch.setattr(files, "_read_mutation_target", interleaved_read)
     res = await WriteFileTool().execute(_text_call(target, ""), {})
-    assert res["exit_code"] == 0, res
+    assert res["exit_code"] == 1, res
     assert _read(target) == "concurrent update"
 
 
@@ -306,17 +304,14 @@ async def test_empty_body_does_not_truncate_a_file_created_after_the_absence_che
     target, monkeypatch
 ):
     """Exclusive creation must not overwrite a file that appeared during the check."""
-    real_isfile = os.path.isfile
-
-    def create_after_absence_check(path):
-        exists = real_isfile(path)
-        if path == target and not exists:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("concurrent update")
-            return False
-        return exists
-
-    monkeypatch.setattr(os.path, "isfile", create_after_absence_check)
+    from src.agent_tools import filesystem_tools as files
+    real_read = files._read_mutation_target
+    def interleaved_read(*args, **kwargs):
+        result = real_read(*args, **kwargs)
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("concurrent update")
+        return result
+    monkeypatch.setattr(files, "_read_mutation_target", interleaved_read)
     res = await WriteFileTool().execute(_text_call(target, ""), {})
     assert res["exit_code"] == 1, res
     assert _read(target) == "concurrent update"
@@ -327,26 +322,14 @@ async def test_whitespace_body_does_not_clobber_a_concurrent_creation(
     target, monkeypatch
 ):
     """Whitespace on a missing path must not overwrite a competing writer."""
-    real_open = builtins.open
-    real_link = os.link
-
-    def write_concurrent_content(path):
-        with real_open(path, "w", encoding="utf-8") as concurrent:
-            concurrent.write("concurrent update")
-
-    def interleaved_open(path, mode="r", *args, **kwargs):
-        handle = real_open(path, mode, *args, **kwargs)
-        if path == target and mode == "x":
-            write_concurrent_content(path)
-        return handle
-
-    def interleaved_link(source, destination, *args, **kwargs):
-        if destination == target:
-            write_concurrent_content(destination)
-        return real_link(source, destination, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "open", interleaved_open)
-    monkeypatch.setattr(os, "link", interleaved_link)
+    from src.agent_tools import filesystem_tools as files
+    real_read = files._read_mutation_target
+    def interleaved_read(*args, **kwargs):
+        result = real_read(*args, **kwargs)
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("concurrent update")
+        return result
+    monkeypatch.setattr(files, "_read_mutation_target", interleaved_read)
     res = await WriteFileTool().execute(_text_call(target, "  \n\t"), {})
     assert res["exit_code"] == 1, res
     assert _read(target) == "concurrent update"
@@ -421,7 +404,7 @@ async def test_execute_tool_block_refuses_a_lost_body_without_touching_the_file(
         security_context=te.NO_TOOL_SECURITY_CONTEXT,
     )
     assert result.get("exit_code") == 1, result
-    assert "holds" in result["error"] and "unchanged" in result["error"]
+    assert "empty body" in result["error"] and "unchanged" in result["error"]
     assert _read(target) == RECIPE
 
 

@@ -822,8 +822,13 @@ class WriteFileTool:
                     if identity is not None:
                         _verify_mutation_write_access(parent_fd, leaf, identity)
                     if not body.strip() and not declared_clear and identity is not None:
-                        if old:
-                            raise _EmptyBodyWouldTruncate(path, len(old.encode("utf-8")))
+                        # Decoding failure must never make an occupied binary
+                        # or non-UTF-8 file appear empty to the clear guard.
+                        info = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+                        if (info.st_dev, info.st_ino) != identity:
+                            raise ValueError("file path changed during mutation")
+                        if info.st_size:
+                            raise _EmptyBodyWouldTruncate(path, info.st_size)
                         return old, 0
                     attempted.append(True)
                     _write_mutation_target(
@@ -1278,7 +1283,7 @@ class GlobTool:
                     + ". To search one, set path to that directory and retry with a pattern relative to it."
                 )
             return {"output": output, "exit_code": 0}
-        out = "\n".join(paths)
+        out = "\n".join(_display_tool_path(path) for path in paths)
         if len(paths) >= _CODENAV_MAX_HITS:
             out += f"\n... [capped at {_CODENAV_MAX_HITS} files]"
         return {"output": _truncate(out), "exit_code": 0}
@@ -1742,16 +1747,15 @@ def workspace_project_context(workspace=None):
 
 
 class GetWorkspaceTool:
-    """Report the active workspace folder (no args). File tools are confined to
-    it; the shell starts there (cwd) but is NOT sandboxed."""
+    """Report the active workspace and its execution boundary."""
     async def execute(self, content: str, ctx: dict) -> dict:
-        from src.tool_execution import agent_cwd, get_active_workspace
+        from src.tool_execution import agent_cwd, get_active_workspace, _display_tool_path
         ws = get_active_workspace()
         if ws:
             return {
-                "output": f"{ws}\n(File tools are confined to this folder; the shell starts "
-                          f"here but is not sandboxed and can reach outside it.)\n"
-                          + await asyncio.to_thread(workspace_project_context, ws),
+                "output": f"{_display_tool_path(ws)}\n(File tools are confined to this folder. "
+                          "Shell access follows the selected execution backend's containment policy.)\n"
+                          + (await asyncio.to_thread(workspace_project_context, ws)).replace(ws, _display_tool_path(ws)),
                 "exit_code": 0,
             }
         try:

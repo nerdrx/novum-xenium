@@ -342,6 +342,13 @@ def collect(repo_root: Path = REPO_ROOT) -> dict[str, Variable]:
 # development tooling. Internal variables are listed on the page too, in their
 # own section, rather than hidden.
 VARIABLE_NOTES: dict[str, tuple[str, str, str]] = {
+    'ODYSSEUS_EXECUTOR_ROOT': ("Agent loop and tool execution", USER, 'Workspace mount root shared with the optional separate execution worker; selected workspaces must stay inside it.'),
+    'ODYSSEUS_EXECUTOR_TIMEOUT': ("Agent loop and tool execution", USER, 'Maximum separate-worker command time in seconds, capped at 3600; the client adds a bounded polling grace.'),
+    'ODYSSEUS_EXECUTOR_TOKEN': ("Agent loop and tool execution", USER, 'Secret bearer token for the optional separate execution worker. Configure the same secret on both sides.'),
+    'ODYSSEUS_EXECUTOR_URL': ("Agent loop and tool execution", USER, 'Optional authenticated separate execution worker URL. Worker failure never retries the command locally.'),
+    'ODYSSEUS_PROJECT_WORKTREE_ROOT': ("Agent loop and tool execution", USER, 'Root for owner-scoped managed project worktrees; defaults to /workspace/.nx-worktrees.'),
+    'ODYSSEUS_RUN_CHECKPOINTS_DB': ("Agent loop and tool execution", USER, 'SQLite path for persisted resumable run checkpoints; defaults to agent_runs.db in the data directory.'),
+    'ODYSSEUS_RUN_EVIDENCE_DB': ("Agent loop and tool execution", USER, 'SQLite path for owner-scoped run metadata and event summaries; defaults to run_evidence.db in the data directory.'),
     # -- Deployment and first run ------------------------------------------
     "ODYSSEUS_ADMIN_USER": (
         "Deployment and first run", USER,

@@ -298,4 +298,4 @@ def test_every_changed_approval_module_is_cache_busted_together():
     renderer_version = versions("chatRenderer.js")[0]
     assert f"chatRenderer.js?v={renderer_version}" in compare_stream
     assert f"chatRenderer.js?v={renderer_version}" in compare_vote
-    assert "from './js/compare/index.js';" in (root / "static/app.js").read_text()
+    assert len(set(versions("compare/index.js"))) == 1

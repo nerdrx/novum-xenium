@@ -21,7 +21,7 @@ described as a switch that turns something off, the read rejects `0`, `false`,
 `no` and `off` and treats everything else as on. The `Default` column is the
 value the code falls back to when the variable is unset, quoted from the source.
 
-The source tree reads **117** `ODYSSEUS_*` variables: 81 an operator may want to set, and 36 that are internal - sentinels, fixture switches, capture hooks and development tooling. The internal ones are listed too, in their own section, so this page can be checked against the source mechanically.
+The source tree reads **124** `ODYSSEUS_*` variables: 88 an operator may want to set, and 36 that are internal - sentinels, fixture switches, capture hooks and development tooling. The internal ones are listed too, in their own section, so this page can be checked against the source mechanically.
 
 > This page is generated. Edit `scripts/generate_env_reference.py` and
 > re-run it; `tests/test_env_reference.py` enforces that the committed page
@@ -51,7 +51,7 @@ The source tree reads **117** `ODYSSEUS_*` variables: 81 an operator may want to
 
 | Variable | Default | Read in | What it does |
 |---|---|---|---|
-| `ODYSSEUS_DATA_DIR` | `get_default_data_dir()` | `src/constants.py` (+1 more) | Root directory for every persisted file. Prefer this over the per-path overrides; the rest of `src/constants.py` derives from it. |
+| `ODYSSEUS_DATA_DIR` | `get_default_data_dir()` | `src/constants.py` (+3 more) | Root directory for every persisted file. Prefer this over the per-path overrides; the rest of `src/constants.py` derives from it. |
 | `ODYSSEUS_MAIL_ATTACHMENTS_DIR` | `os.path.join(DATA_DIR, 'mail-attachments')` | `src/constants.py` | Dedicated override for the mail attachment store, which otherwise lives under the data directory. |
 
 ### Model routing and providers
@@ -72,10 +72,17 @@ The source tree reads **117** `ODYSSEUS_*` variables: 81 an operator may want to
 | Variable | Default | Read in | What it does |
 |---|---|---|---|
 | `ODYSSEUS_DISABLE_MCP` | `''` | `src/builtin_mcp.py` | Truthy disables MCP entirely, as an escape hatch for compatibility problems with a server. |
+| `ODYSSEUS_EXECUTOR_ROOT` | `'/workspace'` | `src/execution_runtime.py` (+1 more) | Workspace mount root shared with the optional separate execution worker; selected workspaces must stay inside it. |
+| `ODYSSEUS_EXECUTOR_TIMEOUT` | `'3600'` | `src/execution_runtime.py` | Maximum separate-worker command time in seconds, capped at 3600; the client adds a bounded polling grace. |
+| `ODYSSEUS_EXECUTOR_TOKEN` | `''` | `src/execution_runtime.py` (+2 more) | Secret bearer token for the optional separate execution worker. Configure the same secret on both sides. |
+| `ODYSSEUS_EXECUTOR_URL` | `''` | `src/agent_loop.py` (+4 more) | Optional authenticated separate execution worker URL. Worker failure never retries the command locally. |
 | `ODYSSEUS_MAX_VISUAL_EVIDENCE_FRAMES` | `'3'` | `src/agent_loop.py` | How many video frames one tool result may contribute. Clamped to 1-8. |
 | `ODYSSEUS_MAX_VISUAL_EVIDENCE_IMAGES` | `'1'` | `src/agent_loop.py` | How many images one tool result may contribute to the model turn. Clamped to 1-8. |
 | `ODYSSEUS_MCP_ALLOWED_COMMANDS` | `''` | `src/agent_tools/admin_tools.py` | Security-relevant. Comma-separated allowlist of MCP launcher basenames the agent may start. Empty by default, and the deny list still wins. |
+| `ODYSSEUS_PROJECT_WORKTREE_ROOT` | `'/workspace/.nx-worktrees'` | `src/project_workflows.py` | Root for owner-scoped managed project worktrees; defaults to /workspace/.nx-worktrees. |
 | `ODYSSEUS_PYTHON_TOOL_SITE_PACKAGES` | `''` | `src/agent_runtime/process_resources.py` (+1 more) | Security-relevant. Absolute package roots, separated by the platform path separator, exposed to the sandboxed Python tool. Empty exposes none. |
+| `ODYSSEUS_RUN_CHECKPOINTS_DB` | `os.path.join(DATA_DIR, 'agent_runs.db')` | `src/run_checkpoints.py` | SQLite path for persisted resumable run checkpoints; defaults to agent_runs.db in the data directory. |
+| `ODYSSEUS_RUN_EVIDENCE_DB` | `str(Path(DATA_DIR) / 'run_evidence.db')` | `src/run_evidence.py` | SQLite path for owner-scoped run metadata and event summaries; defaults to run_evidence.db in the data directory. |
 | `ODYSSEUS_SCRIPT_HOST` | `'localhost'` | `src/builtin_actions.py` | Default host for the run-script action. `localhost`, `127.0.0.1`, `local` and empty run locally; any other value runs over SSH. |
 | `ODYSSEUS_TOOL_APPROVAL_GATE` | `'1'` | `src/tool_capabilities.py` | Security-relevant. On by default: after external content enters a run, tools that execute code, mutate state or cause external side effects need a separate approval. Set to 0 to opt out. |
 
@@ -188,9 +195,9 @@ Listed for completeness. Setting one of these on a real install is either a no-o
 
 | Variable | Default | Read in | What it does |
 |---|---|---|---|
-| `ODYSSEUS_COPILOT_EDITOR_VERSION` | `'Odysseus/1.0'` | `src/copilot.py` | Editor-version header presented to the Copilot API. Kept stable on purpose. |
+| `ODYSSEUS_COPILOT_EDITOR_VERSION` | `'Novum Xenium/1.0'` | `src/copilot.py` | Editor-version header presented to the Copilot API. Kept stable on purpose. |
 | `ODYSSEUS_COPILOT_INTEGRATION_ID` | `'vscode-chat'` | `src/copilot.py` | Integration id presented to the Copilot API. Kept stable on purpose. |
-| `ODYSSEUS_COPILOT_USER_AGENT` | `'Odysseus/1.0'` | `src/copilot.py` | Editor-like User-Agent presented to the Copilot API. Kept stable on purpose. |
+| `ODYSSEUS_COPILOT_USER_AGENT` | `'Novum Xenium/1.0'` | `src/copilot.py` | Editor-like User-Agent presented to the Copilot API. Kept stable on purpose. |
 | `ODYSSEUS_DEBUG_LLM_SHAPE` | `''` | `src/llm_core.py` | Truthy logs the shape of streamed provider chunks. Debugging aid for provider response parsing. |
 
 ### Agent loop and tool execution
@@ -265,7 +272,7 @@ reads three ways, because no single pattern covers the codebase:
   lines, so one read lives inside a string literal.
 
 The three passes are not redundancy. A line-based grep for a direct
-`os.environ.get("ODYSSEUS_...` call finds 87 of the 117 variables on this
+`os.environ.get("ODYSSEUS_...` call finds 92 of the 124 variables on this
 page. What it misses is reads through an env-reader helper, reads whose call
 spans more than one line, reads whose variable name is held in a module
 constant, and reads through a mapping passed in as an argument - which is the

@@ -18,6 +18,10 @@ _FUNCTION = _SOURCE[_START:_END].replace(
 )
 
 
+# The real module owns these maps; retain them around the extracted function.
+_FUNCTION = "(() => { const _serverStreamChecksInFlight = new Set(); const _serverStreamAbsentUntil = new Map(); const SERVER_STREAM_ABSENT_TTL_MS = 15000; return (" + _FUNCTION + "); })()"
+
+
 def test_transient_status_error_keeps_detached_stream_polling():
     if not shutil.which("node"):
         pytest.skip("node is not installed")

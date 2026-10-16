@@ -5417,7 +5417,15 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
           contentDiv.appendChild(reply);
         }
         const inner = resumeThinkingSection.querySelector('.resume-thinking-content');
-        if (inner && inner.textContent !== source) inner.textContent = source;
+        if (inner && inner.textContent !== source) {
+          const thinkBox = inner.closest('.thinking-content');
+          const nearBottom = !thinkBox || thinkBox.scrollHeight - thinkBox.clientHeight - thinkBox.scrollTop < 80;
+          inner.style.whiteSpace = 'pre-wrap';
+          inner.textContent = source;
+          if (thinkBox && nearBottom) thinkBox.scrollTop = thinkBox.scrollHeight;
+          if (nearBottom) uiModule.scrollHistory();
+        }
+        return;
       } else {
         // Share the originating viewer's renderer, including open code fences
         // and collapsed reasoning, before the terminal history reload arrives.

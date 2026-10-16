@@ -288,6 +288,35 @@ const server = http.createServer((req, res) => {
     await liveHeader.click();
     await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content')].at(-1)
       ?.querySelector('.thinking-content')?.classList.contains('expanded'));
+    const manyReasoningLines = Array.from({ length: 30 }, (_, index) => `reasoning line ${index + 1}`).join('\n');
+    await page.evaluate(lines => {
+      const box = document.querySelector('#chat-history .stream-content:last-child .thinking-content');
+      box.style.height = '60px';
+      box.style.maxHeight = '60px';
+      box.style.overflowY = 'auto';
+      const controller = window.resumeFixtures.get('resume-navigation-reopen-fixture').controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: `\n${lines}`, thinking: true })}\n\n`));
+    }, manyReasoningLines);
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content')].at(-1)
+      ?.querySelector('.resume-thinking-content')?.textContent.includes('reasoning line 30'));
+    const autoFollow = await page.locator('#chat-history .stream-content').last().locator('.thinking-content').evaluate(box => ({
+      whiteSpace: box.querySelector('.resume-thinking-content')?.style.whiteSpace,
+      scrollTop: box.scrollTop,
+      maxScroll: box.scrollHeight - box.clientHeight,
+    }));
+    assert.equal(autoFollow.whiteSpace, 'pre-wrap');
+    assert.ok(autoFollow.maxScroll > 80, 'fixture reasoning is long enough to scroll');
+    assert.ok(autoFollow.maxScroll - autoFollow.scrollTop < 2, 'near-bottom reader follows new reasoning');
+    await page.evaluate(() => {
+      const box = document.querySelector('#chat-history .stream-content:last-child .thinking-content');
+      box.scrollTop = 0;
+      const controller = window.resumeFixtures.get('resume-navigation-reopen-fixture').controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: '\nmanual scroll stays put', thinking: true })}\n\n`));
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content')].at(-1)
+      ?.querySelector('.resume-thinking-content')?.textContent.includes('manual scroll stays put'));
+    assert.equal(await page.locator('#chat-history .stream-content').last().locator('.thinking-content').evaluate(box => box.scrollTop), 0,
+      'older-text reading position is preserved when the reader has scrolled up');
     await page.evaluate(() => {
       const controller = window.resumeFixtures.get('resume-navigation-reopen-fixture').controller;
       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: 'A separate user-facing answer.', thinking: false })}\n\n`));

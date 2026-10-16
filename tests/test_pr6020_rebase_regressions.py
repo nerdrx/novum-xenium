@@ -1,6 +1,7 @@
 """Executable regression coverage for behavior lost in PR #6020's rebase."""
 
 import asyncio
+import inspect
 import json
 
 import src.agent_loop as agent_loop
@@ -14,6 +15,11 @@ NOTES_TOOLS = {
     "manage_alarms",
     "ask_user",
     "update_plan",
+}
+GENERAL_COMPACT_TOOLS = {"ask_user", "web_search", "web_fetch"}
+CALENDAR_COMPACT_TOOLS = {
+    "ask_user", "bash", "get_workspace", "manage_calendar", "manage_notes",
+    "python", "read_file", "web_fetch", "web_search",
 }
 
 
@@ -88,7 +94,7 @@ def _run_probe(messages, *, relevant_tools, **kwargs):
     )
 
 
-def test_odysseus_notes_mode_clamps_and_reenables_all_personal_managers(monkeypatch):
+def test_odysseus_notes_mode_clamps_without_overriding_caller_denials(monkeypatch):
     prompt_calls, _ = _install_route_probe(monkeypatch)
 
     _run_probe(
@@ -103,27 +109,39 @@ def test_odysseus_notes_mode_clamps_and_reenables_all_personal_managers(monkeypa
 
     route = prompt_calls[0]
     assert route["relevant_tools"] == NOTES_TOOLS
-    assert route["disabled_tools"].isdisjoint(
-        {"manage_notes", "manage_calendar", "manage_tasks", "manage_alarms"}
-    )
+    assert {"manage_notes", "manage_calendar", "manage_tasks"} <= route["disabled_tools"]
 
 
-def test_odysseus_general_mode_disables_every_tool(monkeypatch):
-    from src.tool_policy import known_tool_names
-
+def test_odysseus_router_uses_compact_core(monkeypatch):
     prompt_calls, _ = _install_route_probe(monkeypatch)
 
     _run_probe(
-        [{"role": "user", "content": "Explain the CAP theorem."}],
+        [{"role": "user", "content": "Explain the CAP theorem with a concrete distributed database example."}],
         relevant_tools={"bash", "manage_notes", "ask_user"},
     )
 
     route = prompt_calls[0]
-    assert route["relevant_tools"] == set()
-    assert known_tool_names() <= route["disabled_tools"]
+    assert route["relevant_tools"] == GENERAL_COMPACT_TOOLS
 
 
-def test_odysseus_calendar_intent_uses_notes_mode(monkeypatch):
+def test_odysseus_general_no_tool_mode_has_no_executable_surface(monkeypatch):
+    from src.tool_policy import known_tool_names
+
+    # The current merged profile takes the compact-router branch. Exercise
+    # the legacy general mode itself so its execution denial stays covered.
+    monkeypatch.setattr(agent_loop, "_is_qwen38_tool_router", lambda model: False)
+    prompt_calls, stream_calls = _install_route_probe(monkeypatch)
+
+    _run_probe(
+        [{"role": "user", "content": "Explain the CAP theorem with a concrete distributed database example."}],
+        relevant_tools={"bash", "manage_notes", "ask_user"},
+    )
+
+    assert stream_calls[0]["tools"] is None
+    assert known_tool_names() <= prompt_calls[0]["disabled_tools"]
+
+
+def test_odysseus_calendar_intent_uses_compact_calendar_route(monkeypatch):
     prompt_calls, _ = _install_route_probe(monkeypatch)
 
     _run_probe(
@@ -133,10 +151,10 @@ def test_odysseus_calendar_intent_uses_notes_mode(monkeypatch):
         },
     )
 
-    assert prompt_calls[0]["relevant_tools"] == NOTES_TOOLS
+    assert prompt_calls[0]["relevant_tools"] == CALENDAR_COMPACT_TOOLS
 
 
-def test_odysseus_calendar_followup_keeps_notes_mode(monkeypatch):
+def test_odysseus_calendar_followup_keeps_compact_calendar_route(monkeypatch):
     prompt_calls, _ = _install_route_probe(monkeypatch)
     messages = [
         {"role": "user", "content": "Add lunch tomorrow to my calendar."},
@@ -163,7 +181,7 @@ def test_odysseus_calendar_followup_keeps_notes_mode(monkeypatch):
         },
     )
 
-    assert prompt_calls[0]["relevant_tools"] == NOTES_TOOLS
+    assert prompt_calls[0]["relevant_tools"] == CALENDAR_COMPACT_TOOLS
 
 
 def test_alarm_intent_selects_notes_calendar_tools():
@@ -187,7 +205,7 @@ def test_agent_route_passes_workspace_to_system_prompt(monkeypatch):
     assert prompt_calls[0]["workspace"] == "/tmp/example-repo"
 
 
-def test_odysseus_qwen_temperature_is_capped_for_agent_requests(monkeypatch):
+def test_odysseus_compact_primary_uses_deterministic_temperature(monkeypatch):
     _, stream_calls = _install_route_probe(monkeypatch)
 
     _run_probe(
@@ -196,7 +214,7 @@ def test_odysseus_qwen_temperature_is_capped_for_agent_requests(monkeypatch):
         temperature=1.2,
     )
 
-    assert stream_calls[0]["temperature"] == 0.2
+    assert stream_calls[0]["temperature"] == 0.0
 
 
 def test_qwen_fallback_candidate_gets_capped_temperature(monkeypatch):
@@ -214,7 +232,9 @@ def test_qwen_fallback_candidate_gets_capped_temperature(monkeypatch):
 
     assert stream_calls[0]["temperature"] == 1.2
     factory = stream_calls[0]["candidate_request_factory"]
-    request = asyncio.run(factory(1, "https://qwen.example/v1", ODY_QWEN, {}))
+    request = factory(1, "https://qwen.example/v1", ODY_QWEN, {})
+    if inspect.isawaitable(request):
+        request = asyncio.run(request)
     assert request["kwargs"]["temperature"] == 0.2
 
 
@@ -230,15 +250,14 @@ def test_non_qwen_fallback_keeps_requested_temperature(monkeypatch):
         fallbacks=[("https://backup.example/v1", "gpt-4o", {})],
     )
 
-    assert stream_calls[0]["temperature"] == 0.2
+    assert stream_calls[0]["temperature"] == 0.0
     factory = stream_calls[0]["candidate_request_factory"]
     request = asyncio.run(factory(1, "https://backup.example/v1", "gpt-4o", {}))
     assert request["kwargs"]["temperature"] == 1.2
 
 
 def test_qwen_notes_fallback_reenables_personal_managers(monkeypatch):
-    """The answering candidate's notes mode must unblock the managers for
-    execution, not just enable them in its own route schemas."""
+    """Model/route fallback cannot bypass caller-disabled tools; denials persist."""
 
     _install_route_probe(monkeypatch)
     stream_round = 0
@@ -300,8 +319,9 @@ def test_qwen_notes_fallback_reenables_personal_managers(monkeypatch):
         )
     )
 
-    assert seen_exec["disabled_tools"].isdisjoint(
-        {"manage_notes", "manage_calendar", "manage_tasks", "manage_alarms"}
+    # Caller hard denials are absolute: route fallback cannot re-enable disabled tools.
+    assert {"manage_notes", "manage_calendar", "manage_tasks"}.issubset(
+        seen_exec["disabled_tools"]
     )
 
 

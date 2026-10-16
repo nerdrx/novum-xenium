@@ -6,7 +6,8 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/model-picker-upgrade.css"><style>#model-picker-wrap{position:absolute;bottom:40px;right:40px}</style><body>
+const { withAppStyles } = require('./app_styles.cjs');
+const html = `<!doctype html><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS --><link rel="stylesheet" href="/static/model-picker-upgrade.css"><style>#model-picker-wrap{position:absolute;bottom:40px;right:40px}</style><body>
   <div class="model-picker-wrap" id="model-picker-wrap">
     <button type="button" id="model-picker-btn"><span id="model-picker-label">Choose model</span></button>
     <div class="model-picker-menu hidden" id="model-picker-menu">
@@ -42,13 +43,20 @@ const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); return res.end(html); }
+  if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); return withAppStyles(html).then(styled => res.end(styled)); }
+  if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
+  if (url.pathname === '/api/prefs/theme' || url.pathname === '/api/prefs/custom-themes') {
+    res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({value: url.pathname.endsWith('custom-themes') ? [] : 'dark'}));
+  }
+  if (url.pathname === '/api/tasks/notification-logs') {
+    res.setHeader('Content-Type', 'application/json'); return res.end('[]');
+  }
   if (url.pathname === '/api/model-endpoints/probe-local') {
     res.setHeader('Content-Type', 'application/json'); return res.end('{}');
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 
@@ -62,11 +70,16 @@ const server = http.createServer((req, res) => {
     page.setDefaultTimeout(5000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.stack || error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('requestfailed', request => errors.push(`${request.url()}: ${request.failure()?.errorText || 'request failed'}`));
+    page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`); });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    await page.waitForFunction(() => window.fixtureReady);
+    await page.waitForFunction(() => window.fixtureReady).catch(error => {
+      throw new Error(`${error.message}\n${errors.join('\n')}`);
+    });
 
     await page.locator('#model-picker-btn').click();
-    await page.waitForSelector('.model-switch-item');
+    await page.waitForSelector('.model-switch-item').catch(async error => { throw new Error(error.message + '\n' + await page.locator('#model-picker-menu').evaluate(el => el.outerHTML) + '\n' + errors.join('\n')); });
     assert.equal(await page.evaluate(() => document.activeElement.id), 'model-picker-search');
     assert.equal(await page.locator('#model-picker-btn').getAttribute('aria-expanded'), 'true');
     await page.keyboard.press('Escape');

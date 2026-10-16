@@ -6,8 +6,9 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
+const { withAppStyles } = require('./app_styles.cjs');
 const state = { createStarted: false, docs: { b: 'B content' } };
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css">
+const html = `<!doctype html><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS -->
 <body><div id="toast"></div><div id="chat-container" style="height:100vh"></div>
 <script type="module">import doc from '/static/js/document.js'; doc.init(''); doc.openPanel();
 window.documentModule = doc; window.fixtureReady = true;</script></body>`;
@@ -17,7 +18,7 @@ const reply = (res, status, data) => {
 };
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') return res.end(html);
+  if (url.pathname === '/') return withAppStyles(html).then(styled => res.end(styled));
   if (url.pathname === '/api/sessions') return reply(res, 200, { sessions: [] });
   if (url.pathname === '/api/session' && req.method === 'POST') return reply(res, 200, { id: 'fixture-session' });
   if (url.pathname === '/api/document' && req.method === 'POST') {
@@ -32,7 +33,7 @@ const server = http.createServer(async (req, res) => {
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) {
     res.writeHead(404); return res.end();
   }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 

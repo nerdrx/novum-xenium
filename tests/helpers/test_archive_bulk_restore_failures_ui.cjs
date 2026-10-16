@@ -63,7 +63,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(404);
     return res.end();
   }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   if (file === path.join(repo, 'static/js/sessions.js')) {
     let source = fs.readFileSync(file, 'utf8');
     const start = source.indexOf('async function _arcBulkRestore() {');

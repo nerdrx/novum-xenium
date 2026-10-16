@@ -19,7 +19,12 @@ def _escape_markdown(value: str) -> str:
     return _MARKDOWN_PUNCTUATION.sub(r"\\\1", value)
 
 
-async def do_search_chats(query: str, limit: int = 20, owner: str | None = None) -> Dict:
+async def do_search_chats(
+    query: str,
+    limit: int = 20,
+    owner: str | None = None,
+    exclude_session_id: str | None = None,
+) -> Dict:
     """Search past session transcripts for the calling user's sessions only.
 
     Without an owner filter this used to leak EVERY user's chat history
@@ -37,9 +42,7 @@ async def do_search_chats(query: str, limit: int = 20, owner: str | None = None)
             args = json.loads(query)
             if not isinstance(args, dict) or set(args) - {"query", "message_id", "offset"}:
                 raise ValueError("Use only query, message_id and offset; account scope is server-controlled.")
-            keyword = args.get("query", "")
-            message_id = args.get("message_id", "")
-            offset = args.get("offset", 0)
+            keyword, message_id, offset = args.get("query", ""), args.get("message_id", ""), args.get("offset", 0)
             if not isinstance(keyword, str) or not isinstance(message_id, str):
                 raise ValueError("query and message_id must be strings.")
             if bool(keyword.strip()) == bool(message_id.strip()):
@@ -50,15 +53,13 @@ async def do_search_chats(query: str, limit: int = 20, owner: str | None = None)
                 if len(message_id) > 128:
                     raise ValueError("message_id is too long.")
                 page = read_session_message(message_id, owner=owner, offset=offset)
-                if page is None:
+                if page is None or (exclude_session_id and page.get("session_id") == exclude_session_id):
                     return {"results": "Saved message not found in accessible, non-archived chats.", "untrusted_content": True}
                 source = f"#session-{quote(page['session_id'], safe='')}"
                 title = _escape_markdown(page["session_name"][:120])
-                header = (
-                    f"[Open chat: {title}]({source})\n"
-                    f"Message id: {page['message_id']} | Role: {page['role']} | Time: {page['timestamp'] or 'unknown'}\n"
-                    f"Characters {page['offset']}:{page['end_offset']} of {page['total_chars']} (zero-based).\n"
-                )
+                header = (f"[Open chat: {title}]({source})\n"
+                          f"Message id: {page['message_id']} | Role: {page['role']} | Time: {page['timestamp'] or 'unknown'}\n"
+                          f"Characters {page['offset']}:{page['end_offset']} of {page['total_chars']} (zero-based).\n")
                 if page["has_more"]:
                     header += "Read next page with search_chats: " + json.dumps({"message_id": page["message_id"], "offset": page["next_offset"]}) + "\n"
                 else:
@@ -70,6 +71,24 @@ async def do_search_chats(query: str, limit: int = 20, owner: str | None = None)
 
         search_limit = max(1, min(int(limit or 20), 100))
         results = search_session_messages(query, limit=search_limit, owner=owner)
+        if exclude_session_id:
+            results = [r for r in results if r.session_id != exclude_session_id]
+        if not results:
+            from src.session_search import search_session_titles
+            results = search_session_titles(query, limit=search_limit, owner=owner)
+            if exclude_session_id:
+                results = [r for r in results if r.session_id != exclude_session_id]
+        # Native callers sometimes append requested answer detail to a topic.
+        if not results:
+            words = [word for word in query.split() if word]
+            for width in (4, 3):
+                if len(words) <= width:
+                    continue
+                results = search_session_messages(" ".join(words[:width]), limit=search_limit, owner=owner)
+                if exclude_session_id:
+                    results = [r for r in results if r.session_id != exclude_session_id]
+                if results:
+                    break
         if not results:
             return {"results": f'No chats found matching "{_escape_markdown(query[:120])}".'}
 

@@ -43,7 +43,7 @@ def test_desktop_new_chat_actions_use_shared_preference_helper():
         "const sidebarNewChatBtn = el('sidebar-new-chat-btn');",
     )
 
-    assert "if (preferModel && await _createDirectChatFromPreferredModel({ fresh: true })) return;" in shared_handler
+    assert "if (preferModel && await _createDirectChatFromPreferredModel(" in shared_handler
     assert "await _handleNewChatAction();" in rail_handler
     assert "await _handleNewChatAction({ preferModel: false, focus: false });" in brand_handler
     assert "const dc = await _refreshDefaultChat();" not in rail_handler

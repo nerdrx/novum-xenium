@@ -29,6 +29,10 @@ SKILL_EXTRACT_PROMPT = (
     "(personal errands, a specific person/place/date, casual conversation).\n"
     "- A pure question/answer or explanation with no transferable method.\n"
     "- The agent failed, gave up, or the approach is not worth repeating.\n\n"
+    "- Routine use of an existing tool, or a generic checklist with no new discovery.\n"
+    "Prefer a specific successful workaround, an unexpected pitfall, or a verified "
+    "sequence that would save rediscovery. Preserve exact useful commands and "
+    "verification steps, but replace private identifiers and credentials with placeholders.\n\n"
     "When (and only when) a genuine reusable procedure exists, return a JSON "
     "object with:\n"
     '- "title": short name (under 10 words)\n'
@@ -187,6 +191,7 @@ async def maybe_extract_skill(
 
     try:
         from src.llm_core import llm_call_async
+        from src.utility_effort import effort_for_call
 
         # Get recent messages
         history = session.get_context_messages()
@@ -242,6 +247,7 @@ async def maybe_extract_skill(
             ],
             headers=headers,
             timeout=30,
+            reasoning_effort=effort_for_call(endpoint_url, model, owner, session),
         )
         logger.debug(
             "[skill-extract] LLM returned in %.1fs (len=%d, head=%r)",

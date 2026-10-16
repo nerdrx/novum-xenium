@@ -45,7 +45,7 @@ const server = http.createServer((req, res) => {
     res.statusCode = 404;
     return res.end('Not found');
   }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'application/octet-stream');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'application/octet-stream');
   res.end(fs.readFileSync(file));
 });
 

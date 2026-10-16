@@ -53,7 +53,7 @@ const server = http.createServer((req, res) => {
     assert.match(source, /metadata\?\.subagent\?\.parent_session_id/);
     assert.match(source, /applySubagentInspector\(chatHistory, subagentParentId\)/);
     assert.match(source, /clearSubagentInspector\(\);/);
-    const css = fs.readFileSync(path.join(repo, 'static/style.css'), 'utf8');
+    const css = await import('./stylesheets.mjs').then(({ appCss }) => appCss());
     assert.match(css, /body\.subagent-inspector-active \.chat-input-bar \{ display: none/);
     assert.deepEqual(errors, []);
     console.log('PASS: read-only child inspector, parent link and composer restoration');

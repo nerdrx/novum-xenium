@@ -7,7 +7,7 @@
 
 import Storage, { KEYS } from './storage.js';
 import { mountProjectWorkflow } from './projectWorkflow.js';
-import uiModule from './ui.js';
+import uiModule from './ui.js?v=20260916largetoolscroll1';
 import { makeWindowDraggable } from './windowDrag.js';
 
 const API_BASE = window.location.origin;
@@ -27,6 +27,7 @@ let _snapshotBusy = '';
 let _snapshotViewVersion = 0;
 let _opener = null;
 let _projectCleanup = null;
+let _defaultWorkspaceLoad = null;
 
 export function getWorkspace() {
   // This local Docker installation mounts the persistent files folder here.
@@ -55,7 +56,7 @@ export function syncWorkspaceIndicator(path) {
   if (pill) {
     pill.style.display = (path && !chat) ? '' : 'none';
     pill.classList.toggle('active', !!path);
-    if (path) pill.title = `Workspace: ${path}\nFile tools are confined here; shell commands start here but are not sandboxed and can reach outside it.\nClick to clear.`;
+    if (path) pill.title = `Workspace: ${path}\nFile tools are confined here; shell commands start here but are not sandboxed and can reach outside it.\nClick to open workspace picker. Click X to clear.`;
   }
   if (name) name.textContent = path ? _basename(path) : '';
   if (overflow) {
@@ -96,6 +97,22 @@ export async function vetAndSetWorkspace(path) {
   } catch (e) {
     return { ok: false, path: null };
   }
+}
+
+export async function loadDefaultWorkspace() {
+  if (_defaultWorkspaceLoad) return _defaultWorkspaceLoad;
+  _defaultWorkspaceLoad = fetch(`${API_BASE}/api/workspace/default`, { credentials: 'same-origin' })
+    .then(async (res) => {
+      if (!res.ok) return { ok: false, path: null };
+      const data = await res.json();
+      if (data.ok && data.path && !getWorkspace()) {
+        setWorkspace(data.path);
+        return { ok: true, path: data.path };
+      }
+      return { ok: false, path: null };
+    })
+    .catch(() => ({ ok: false, path: null }));
+  return _defaultWorkspaceLoad;
 }
 
 export function clearWorkspace() {
@@ -471,8 +488,8 @@ function _getModal() {
       </section>
       <details class="workspace-project-tools"><summary>Project tools, checks and run evidence</summary><div id="workspace-project-tools"></div></details>
       <div class="modal-footer workspace-footer">
-        <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-cancel">Cancel</button>
-        <button type="button" class="confirm-btn confirm-btn-primary" id="workspace-use">Use this folder</button>
+        <button type="button" class="confirm-btn confirm-btn-secondary" id="workspace-cancel"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>Cancel</button>
+        <button type="button" class="confirm-btn confirm-btn-primary" id="workspace-use">${_FOLDER_SVG}Use this folder</button>
       </div>
     </div>`;
   document.body.appendChild(_modal);
@@ -488,12 +505,12 @@ function _getModal() {
   });
   _modal.querySelector('#workspace-close').addEventListener('click', closeWorkspaceBrowser);
   _modal.querySelector('#workspace-cancel').addEventListener('click', closeWorkspaceBrowser);
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && _modal.style.display !== 'none') {
-      event.preventDefault();
-      closeWorkspaceBrowser();
-    }
-  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !_modal || _modal.style.display === 'none') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeWorkspaceBrowser();
+  }, true);
   _modal.querySelector('#workspace-snapshot-create').addEventListener('click', _createSnapshot);
   _modal.querySelector('#workspace-snapshot-review').addEventListener('click', _reviewSnapshot);
   _modal.querySelector('#workspace-snapshot-restore').addEventListener('click', _restoreSnapshot);
@@ -548,11 +565,24 @@ export function closeWorkspaceBrowser() {
 
 export function initWorkspace() {
   // Restore persisted workspace into the pill on load.
-  syncWorkspaceIndicator(getWorkspace());
+  const current = getWorkspace();
+  syncWorkspaceIndicator(current);
+  // A browser has no trustworthy local launch directory. Let a deployment
+  // provide one explicitly, and only use it when the user has no saved choice.
+  if (!current) loadDefaultWorkspace();
   const overflow = document.getElementById('overflow-workspace-btn');
   if (overflow) overflow.addEventListener('click', openWorkspaceBrowser);
   const pill = document.getElementById('workspace-indicator-btn');
-  if (pill) pill.addEventListener('click', clearWorkspace);
+  if (pill) {
+    pill.addEventListener('click', openWorkspaceBrowser);
+    const clearBtn = pill.querySelector('.tool-indicator-x');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearWorkspace();
+      });
+    }
+  }
 }
 
-export default { initWorkspace, openWorkspaceBrowser, getWorkspace, setWorkspace, vetAndSetWorkspace, clearWorkspace, syncWorkspaceIndicator, applyMode };
+export default { initWorkspace, openWorkspaceBrowser, getWorkspace, setWorkspace, vetAndSetWorkspace, loadDefaultWorkspace, clearWorkspace, syncWorkspaceIndicator, applyMode };

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
-const css = fs.readFileSync('static/style.css', 'utf8');
+const cssPromise = import('./stylesheets.mjs').then(({ appCss }) => appCss());
 
 (async () => {
   const browser = await chromium.launch({
@@ -13,7 +13,7 @@ const css = fs.readFileSync('static/style.css', 'utf8');
   try {
     for (const viewport of [1280, 320]) {
       const page = await browser.newPage({ viewport: { width: viewport, height: 720 } });
-      await page.setContent(`<style>${css}</style>
+      await page.setContent(`<style>${await cssPromise}</style>
         <main id="custom-preset-modal" style="box-sizing:border-box;width:460px;max-width:calc(100vw - 30px);padding:14px">
           <div id="group-participants">
             <div class="group-participant-picker">

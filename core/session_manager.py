@@ -155,6 +155,14 @@ class SessionManager:
             owner=getattr(db_session, "owner", None),
             is_important=getattr(db_session, "is_important", False) or False,
             name_is_custom=getattr(db_session, "name_is_custom", None),
+            memory_extraction_enabled=getattr(db_session, "memory_extraction_enabled", True) is not False,
+            memory_injection_enabled=getattr(db_session, "memory_injection_enabled", True) is not False,
+            skill_injection_enabled=getattr(db_session, "skill_injection_enabled", True) is not False,
+            thinking_mode=getattr(db_session, "thinking_mode", "") or "off",
+            temperature_override=getattr(db_session, "temperature_override", None),
+            max_tokens_override=getattr(db_session, "max_tokens_override", None),
+            cwd=getattr(db_session, "cwd", None) or None,
+            endpoint_id=getattr(db_session, "endpoint_id", None) or None,
         )
         session.message_count = getattr(db_session, "message_count", 0) or 0
         return session
@@ -214,6 +222,14 @@ class SessionManager:
             owner=getattr(db_session, 'owner', None),
             is_important=getattr(db_session, 'is_important', False) or False,
             name_is_custom=getattr(db_session, "name_is_custom", None),
+            memory_extraction_enabled=getattr(db_session, 'memory_extraction_enabled', True) is not False,
+            memory_injection_enabled=getattr(db_session, 'memory_injection_enabled', True) is not False,
+            skill_injection_enabled=getattr(db_session, 'skill_injection_enabled', True) is not False,
+            thinking_mode=getattr(db_session, "thinking_mode", "") or "off",
+            temperature_override=getattr(db_session, "temperature_override", None),
+            max_tokens_override=getattr(db_session, "max_tokens_override", None),
+            cwd=getattr(db_session, "cwd", None) or None,
+            endpoint_id=getattr(db_session, "endpoint_id", None) or None,
         )
 
         # The rows just loaded are the whole transcript, so they — not the
@@ -486,12 +502,14 @@ class SessionManager:
             session.name = db_session.name
             session.name_is_custom = getattr(db_session, "name_is_custom", None)
             session.endpoint_url = db_session.endpoint_url or ""
+            session.endpoint_id = getattr(db_session, "endpoint_id", None) or None
             session.model = db_session.model or ""
             session.headers = headers or {}
             session.rag = db_session.rag
             session.archived = db_session.archived
             session.owner = getattr(db_session, "owner", None)
             session.is_important = getattr(db_session, "is_important", False) or False
+            session.cwd = getattr(db_session, "cwd", None) or None
             session.message_count = (
                 db.query(DbChatMessage)
                 .filter(DbChatMessage.session_id == session_id)
@@ -554,10 +572,16 @@ class SessionManager:
         rag: bool = False,
         owner: str = None,
         name_is_custom: Optional[bool] = True,
+        cwd: str = None,
+        headers: Optional[Dict[str, str]] = None,
+        endpoint_id: Optional[str] = None,
     ) -> Session:
         """Create a new session and save to database."""
         from src.agent_runs import ensure_session_reusable
+        from src.chatgpt_subscription import is_chatgpt_subscription_base
         ensure_session_reusable(session_id)
+        session_headers = {} if is_chatgpt_subscription_base(endpoint_url) else dict(headers or {})
+        endpoint_id = (endpoint_id or "").strip() or None
         db = SessionLocal()
         try:
             db_session = DbSession(
@@ -566,9 +590,11 @@ class SessionManager:
                 endpoint_url=endpoint_url,
                 model=model,
                 rag=rag,
-                headers={},
+                headers=session_headers,
                 owner=owner,
                 name_is_custom=name_is_custom,
+                cwd=cwd or None,
+                endpoint_id=endpoint_id,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc)
             )
@@ -581,9 +607,11 @@ class SessionManager:
                 endpoint_url=endpoint_url,
                 model=model,
                 rag=rag,
-                headers={},
+                headers=session_headers,
                 owner=owner,
                 name_is_custom=name_is_custom,
+                cwd=cwd or None,
+                endpoint_id=endpoint_id,
             )
 
             self.sessions[session_id] = session
@@ -596,7 +624,7 @@ class SessionManager:
         finally:
             db.close()
 
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, *, delete_images: bool = False) -> bool:
         """Permanently delete a session and all its messages."""
         incognito_lock = None
         clear_incognito_context = None
@@ -619,8 +647,11 @@ class SessionManager:
             image_lock = IMAGE_PERSISTENCE_LOCK
             image_lock.acquire()
             try:
-                from src.session_image_cleanup import cleanup_session_images
-                cleanup_session_images(session_id, db=db)
+                from src.session_image_cleanup import cleanup_session_images, preserve_session_images
+                if delete_images:
+                    cleanup_session_images(session_id, db=db)
+                else:
+                    preserve_session_images(session_id, db=db)
             except Exception as e:
                 logger.warning(f"Image cleanup failed while deleting session {session_id}: {e}")
 

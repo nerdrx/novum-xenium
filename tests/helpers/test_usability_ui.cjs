@@ -6,10 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 const repo = path.resolve(__dirname, '../..');
+const { withAppStyles } = require('./app_styles.cjs');
 const state = { approvalFail: true, saveFail: true, mode: 'auto', snapshotsFail: true,
   modelFail: true, models: [], saves: 0, restored: null, previewDelay: 100 };
 const snapshots = ['a', 'b'].map(id => ({id, label: `Snapshot ${id}`, created_at: '2026-10-07T10:00:00Z'}));
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css">
+const html = `<!doctype html><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS -->
 <body style="padding:20px;overflow:auto"><div id="toast"></div>
 <button id="workspace-open">Workspace</button><div id="group-participants"></div><button id="group-add-btn">Add participant</button>
 <div class="chat-input-right" style="position:fixed;bottom:12px;right:12px"><div class="mode-toggle">Agent</div></div>
@@ -28,7 +29,7 @@ const reply = (res, status, data) => {res.writeHead(status, {'Content-Type':'app
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') return res.end(html);
+  if (url.pathname === '/') return withAppStyles(html).then(styled => res.end(styled));
   if (url.pathname === '/api/prefs/tool_approval_mode') {
     if (req.method === 'PUT') {
       let body='';for await (const part of req) body+=part;
@@ -59,7 +60,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.endsWith('/restore')) {state.restored=url.pathname.split('/').at(-2);await pause(100);return reply(res,200,{rollback_snapshot_id:'recovery'});}
   const file=path.resolve(repo,'.'+url.pathname);
   if(!file.startsWith(repo+path.sep)||!fs.existsSync(file)){res.writeHead(404);return res.end();}
-  res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/plain');fs.createReadStream(file).pipe(res);
+  res.setHeader('Content-Type',(file.endsWith('.js') || file.endsWith('.mjs'))?'text/javascript':file.endsWith('.css')?'text/css':'text/plain');fs.createReadStream(file).pipe(res);
 });
 (async()=>{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

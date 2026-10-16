@@ -6,12 +6,13 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
+const { withAppStyles } = require('./app_styles.cjs');
 const albums = [
   { id: 'album-a', name: 'Album Alpha', count: 2 },
   { id: 'album-b', name: 'Album Beta', count: 1 },
 ];
 const albumQueries = [];
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"><body>
+const html = `<!doctype html><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS --><body>
 <script type="module">
   import ui from '/static/js/ui.js';
   import gallery from '/static/js/gallery.js';
@@ -35,7 +36,7 @@ const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') { res.end(html); return; }
+  if (url.pathname === '/') { withAppStyles(html).then(styled => res.end(styled)); return; }
   if (url.pathname === '/api/gallery/albums') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ albums }));
@@ -54,7 +55,7 @@ const server = http.createServer((req, res) => {
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 

@@ -192,7 +192,7 @@ Found something odd? Show how to reproduce it, the relevant tool output and what
 
 ## Where it came from
 
-Novum Xenium is an independent fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). The upstream base is `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`, with NX changes recorded through October 8, 2026.
+Novum Xenium is an independent fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). The upstream base is `dev` at `0590edd4f2e9a9eeb294d67864bdc8d9699876ac` (October 16, 2026), with Novum Xenium changes maintained on top.
 
 **AGPL-3.0-or-later.** Original authors and third-party notices remain in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md). See [LICENSE](LICENSE). Keep the license and notices, and provide corresponding source as required when distributing or serving modified versions.
 

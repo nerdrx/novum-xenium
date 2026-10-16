@@ -32,7 +32,7 @@ const server = http.createServer((req, res) => {
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) {
     res.writeHead(404); return res.end();
   }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 

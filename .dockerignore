@@ -65,3 +65,6 @@ timetree*.png
 
 # Native desktop files are not backend runtime dependencies.
 desktop/
+# Include distribution notices despite the general documentation exclusion.
+!ACKNOWLEDGMENTS.md
+!services/hwfit/data/README.md

@@ -8,9 +8,10 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
+const { withAppStyles } = require('./app_styles.cjs');
 const original = '- Name:**_(empty)_** <!-- field=Name type=text -->';
 const state = { fail: true, saved: original, puts: [] };
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css">
+const html = `<!doctype html><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS -->
 <body><div id="toast"></div><div id="chat-container" style="height:100vh"></div>
 <script type="module">import doc from '/static/js/document.js'; doc.init(''); window.doc=doc; window.ready=true;</script></body>`;
 const reply = (res, status, data) => {
@@ -19,7 +20,7 @@ const reply = (res, status, data) => {
 };
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') return res.end(html);
+  if (url.pathname === '/') return withAppStyles(html).then(styled => res.end(styled));
   if (url.pathname === '/api/document/fixture' && req.method === 'GET') {
     return reply(res, 200, { id: 'fixture', title: 'Fixture', language: 'markdown', content: state.saved });
   }
@@ -34,7 +35,7 @@ const server = http.createServer(async (req, res) => {
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
   if (file === path.join(repo, 'static/js/document.js')) {
     const source = fs.readFileSync(file, 'utf8').replace('const documentModule = {',
       'window.__docs=docs;window.__fields=_pdfPaneFieldsByDoc;window.__annotations=_pdfPaneAnnotationsByDoc;window.__savePdfPane=_savePdfPaneToMarkdown;const documentModule = {');

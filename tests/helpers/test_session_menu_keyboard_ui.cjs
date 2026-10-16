@@ -38,7 +38,7 @@ const server = http.createServer(async (req, res) => {
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) {
     res.writeHead(404); return res.end();
   }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   if (file === path.join(repo, 'static/js/sessions.js')) {
     const source = fs.readFileSync(file, 'utf8').replace('let sessions = [];',
       "let sessions = []; window.__setSessionFixture = (items) => { sessions = items; renderSessionList(); };");

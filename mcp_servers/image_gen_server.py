@@ -174,6 +174,31 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
                 image_url = f"{_pub_base}/api/generated-image/{filename}"
 
+                # Save to gallery
+                try:
+                    from src.database import SessionLocal, GalleryImage
+                    db = SessionLocal()
+                    try:
+                        db.add(GalleryImage(
+                            id=str(uuid.uuid4()),
+                            filename=filename,
+                            prompt=prompt,
+                            model=model_id,
+                            size=size,
+                            quality=payload.get("quality", "medium"),
+                            owner=owner,
+                        ))
+                        db.commit()
+                    finally:
+                        db.close()
+                    if owner:
+                        try:
+                            from src.generated_images import register_generated_image
+                            register_generated_image(filename, owner)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             elif img.get("url"):
                 image_url = img["url"]
             else:

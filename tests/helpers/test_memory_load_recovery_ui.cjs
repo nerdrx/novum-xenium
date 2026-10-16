@@ -53,7 +53,7 @@ const server = http.createServer((req, res) => {
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   if (url.pathname === '/static/js/ui.js') {
     return res.end(`export const autoResize=()=>{}, styledPrompt=async()=>null; export default {esc:s=>String(s??''),emptyStateIcon:()=>'',showError:m=>window.fixtureErrors.push(String(m)),showToast:m=>window.fixtureToasts.push(String(m))};`);
   }

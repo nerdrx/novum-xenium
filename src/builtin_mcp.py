@@ -202,6 +202,7 @@ async def register_builtin_servers(mcp_manager):
             )
             if ok:
                 logger.info(f"Built-in MCP server registered: {name}")
+                await mcp_manager.hold_owned_connection(server_id)
             else:
                 logger.warning(f"Built-in MCP server failed to connect: {name}")
         except asyncio.CancelledError:
@@ -264,6 +265,7 @@ async def register_builtin_servers(mcp_manager):
                 )
                 if ok:
                     logger.info(f"Built-in server registered: {cfg['name']}")
+                    await mcp_manager.hold_owned_connection(server_id)
                 else:
                     logger.warning(f"Built-in server failed to connect: {cfg['name']}")
             except asyncio.CancelledError:

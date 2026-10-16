@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   build:
+    # The Novum fork intentionally has no public marketing site.
+    if: github.repository == 'odysseus-dev/odysseus'
     name: Package static site
     runs-on: ubuntu-latest
     permissions:
@@ -35,6 +37,7 @@ jobs:
           path: _site
 
   deploy:
+    if: github.repository == 'odysseus-dev/odysseus'
     name: Deploy static site
     needs: build
     runs-on: ubuntu-latest

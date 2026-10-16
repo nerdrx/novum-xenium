@@ -114,3 +114,64 @@ def test_router_reports_non_calendar_categories():
     assert classify_tool_intent("reply to that email").category == "email"
     assert classify_tool_intent("open my calendar").category == "ui"
     assert classify_tool_intent("research cost effective local models").category == "research"
+
+def test_chinese_web_lookup_requests_route_to_web_tools():
+    intent = classify_tool_intent("帮我查一下这些店铺的地址，我要去打卡")
+
+    assert intent.needs_tools
+    assert intent.category == "web"
+
+def test_nearest_place_lookup_promotes_to_web_agent():
+    intent = classify_tool_intent("from vasaplan stockholm where is closest parking")
+    assert intent.needs_tools
+    assert intent.category == "web"
+
+def test_page_references_are_not_mistaken_for_named_computers():
+    for prompt in (
+        "What heading is visible on that page?",
+        "Read it from the current page.",
+        "Compare this with the same page.",
+    ):
+        intent = classify_tool_intent(prompt)
+        assert intent.category != "workspace"
+
+    intent = classify_tool_intent("check the service on odysseus")
+    assert intent.needs_tools and intent.category == "workspace"
+
+def test_direct_code_requests_promote_to_workspace_agent():
+    prompts = [
+        "write a Python function that parses CSV",
+        "write answer.json",
+        "create app.ts",
+        "edit src/app.py",
+        "Can you create a script in this project?",
+        "edit the React component to show a loading state",
+        "I want you to build a small command-line tool",
+        "Can you code this in the repo?",
+    ]
+    for prompt in prompts:
+        intent = classify_tool_intent(prompt)
+        assert intent.needs_tools
+        assert intent.category == "workspace"
+
+def test_code_explanations_stay_plain_chat():
+    assert not message_needs_tools("How do I write a Python function?")
+    assert not message_needs_tools("Can you explain how a React component works?")
+
+def test_shell_diagnostic_commands_promote_to_agent():
+    prompts = [
+        "lsblk",
+        "run lsblk",
+        "df -h",
+        "docker ps",
+        "nvidia-smi",
+        "can you run journalctl -u odysseus",
+    ]
+    for prompt in prompts:
+        intent = classify_tool_intent(prompt)
+        assert intent.needs_tools
+        assert intent.category in {"shell", "workspace"}
+
+def test_shell_command_explanations_stay_plain_chat():
+    assert not message_needs_tools("How do I use lsblk?")
+    assert not message_needs_tools("Can you explain docker ps?")

@@ -148,7 +148,7 @@ const server = http.createServer((req, res) => {
 
     await page.evaluate(() => {
       const controller = window.resumeFixtures.get('resume-format-fixture').controller;
-      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'agent_step' })}\n\n`));
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'agent_step', round: 2 })}\n\n`));
       const delta = 'Native reasoning stays separate from the reply until this round ends.';
       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta, thinking: true })}\n\n`));
     });
@@ -173,7 +173,7 @@ const server = http.createServer((req, res) => {
     // state before the next round starts a fresh native reasoning stream.
     await page.evaluate(() => {
       const controller = window.resumeFixtures.get('resume-format-fixture').controller;
-      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'agent_step' })}\n\n`));
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'agent_step', round: 3 })}\n\n`));
       const delta = 'Second-round private reasoning.';
       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta, thinking: true })}\n\n`));
       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: 'Second-round visible answer.' })}\n\n`));

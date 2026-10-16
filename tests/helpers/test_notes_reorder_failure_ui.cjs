@@ -53,7 +53,7 @@ const server = http.createServer((req, res) => {
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   if (url.pathname === '/static/js/notes.js') {
     const source = fs.readFileSync(file, 'utf8').replace('const notesModule = {', 'window.__testSetNotes = value => { _notes = value; };\nwindow.__testGetNotes = () => _notes;\nwindow.__testCommitNoteReorder = _commitNoteReorder;\nconst notesModule = {');
     return res.end(source);

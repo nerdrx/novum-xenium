@@ -56,6 +56,9 @@ Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
 
 $dataArgs = @(
     "--add-data", "agent-skills;agent-skills",
+    "--add-data", "licenses;licenses",
+    "--add-data", "THIRD_PARTY_PROVENANCE.json;.",
+    "--add-data", "ACKNOWLEDGMENTS.md;.",
     "--add-data", "static;static",
     "--add-data", "scripts;scripts",
     "--add-data", "mcp_servers;mcp_servers",

@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {chromium} = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 const repo = path.resolve(__dirname, '../..');
-const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"></head>
+const { withAppStyles } = require('./app_styles.cjs');
+const html = `<!doctype html><html><head><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS --></head>
 <body style="padding:24px;overflow:auto"><div id="toast"></div><button id="workspace-open">Workspace</button>
 <div class="group-conversation-panel" style="position:relative;bottom:auto;right:auto;width:280px"><div id="team"></div></div>
 <script type="module">
@@ -36,7 +37,7 @@ const snapshot = {id:'a'.repeat(32),created_at:new Date().toISOString(),label:'B
 const json = (res, data) => {res.setHeader('Content-Type','application/json');res.end(JSON.stringify(data));};
 const server = http.createServer(async(req,res)=>{
   const url = new URL(req.url,'http://localhost');
-  if(url.pathname==='/') return res.end(html);
+  if(url.pathname==='/') return withAppStyles(html).then(styled => res.end(styled));
   if(url.pathname.startsWith('/api/groups/')) {
     if(url.pathname.endsWith('/team/run')&&req.method==='POST') {
       let body='';for await(const part of req)body+=part;
@@ -58,7 +59,7 @@ const server = http.createServer(async(req,res)=>{
   if(url.pathname.endsWith('/restore')){restored=true;return json(res,{rollback_snapshot_id:'b'.repeat(32)});}
   const file=path.resolve(repo,'.'+url.pathname);
   if(!file.startsWith(repo+path.sep)||!fs.existsSync(file)){res.statusCode=404;return res.end();}
-  res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/plain');
+  res.setHeader('Content-Type',(file.endsWith('.js') || file.endsWith('.mjs'))?'text/javascript':file.endsWith('.css')?'text/css':'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 (async()=>{

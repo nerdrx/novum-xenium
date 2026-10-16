@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 const repo = path.resolve(__dirname, '../..');
+const { withAppStyles } = require('./app_styles.cjs');
 const source = fs.readFileSync(path.join(repo, 'static/index.html'), 'utf8');
 const appSource = fs.readFileSync(path.join(repo, 'static/app.js'), 'utf8');
 const start = source.indexOf('<nav class="sidebar" id="sidebar"');
@@ -19,7 +20,7 @@ const menuEnd = source.indexOf('</div></span></div>', menuStart) + '</div>'.leng
 assert(triggerStart >= 0 && triggerEnd > triggerStart && menuStart >= 0 && menuEnd > menuStart, 'export controls are present in index.html');
 const exportTrigger = source.slice(triggerStart, triggerEnd);
 const exportMenu = source.slice(menuStart, menuEnd);
-const placementStart = appSource.indexOf('const rect = exportDlBtn.getBoundingClientRect();', appSource.indexOf('// Export dropdown button'));
+const placementStart = appSource.indexOf('const rect = (anchorEl || exportDlBtn).getBoundingClientRect();');
 const placementEnd = appSource.indexOf('closeExportMenu = bindMenuDismiss', placementStart);
 assert(placementStart >= 0 && placementEnd > placementStart, 'app.js export placement logic is present');
 const exportPlacement = appSource.slice(placementStart, placementEnd);
@@ -32,7 +33,7 @@ const controls = [
   ['library-new-doc-btn', 'New document'], ['tool-notes-btn', 'Notes'],
   ['tool-tasks-btn', 'Tasks'], ['tool-theme-btn', 'Theme'],
 ];
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css">
+const html = `<!doctype html><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS -->
 <body>${sidebar}<div id="fixture-export" style="position:fixed;top:12px;right:12px">${exportTrigger}</div>${exportMenu}<button id="outside">Outside</button><script src="/static/js/a11y.js"></script><script>
 window.clicks = {};
 window.exportClicks = {};
@@ -50,6 +51,8 @@ trigger.addEventListener('click', event => {
   if (menu.classList.contains('open')) return close();
   const exportDlBtn = trigger;
   const exportMenu = menu;
+  const anchorEl = trigger;
+  const align = 'right';
   const setExportMenuOpen = setOpen;
   ${exportPlacement}
   close = bindMenuDismiss(menu, () => {
@@ -70,10 +73,10 @@ window.exportReady = true;
 </script></body>`;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') return res.end(html);
+  if (url.pathname === '/') return withAppStyles(html).then(styled => res.end(styled));
   const file = path.resolve(repo, '.' + url.pathname);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-  res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 (async () => {
@@ -118,13 +121,13 @@ const server = http.createServer((req, res) => {
     assert.equal(await exportTriggerButton.getAttribute('aria-expanded'), 'true');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'export-rename-btn', 'keyboard open moves focus into actions');
     const exportActions = [
-      ['export-rename-btn', 'Rename'], ['export-compact-btn', 'Compact'], ['export-copy-btn', 'Copy Chat'],
+      ['export-rename-btn', 'Rename'], ['export-copy-btn', 'Copy Chat'],
       ['export-pdf-btn', 'PDF'], ['export-doc-btn', 'Save to Documents'], ['export-delete-btn', 'Delete Chat'],
     ];
     for (const [id, name] of exportActions) {
       const action = page.locator('#' + id);
       assert.equal(await action.evaluate(el => el.tagName), 'BUTTON');
-      assert.equal(await page.getByRole('button', { name, exact: true }).count(), 1);
+      assert.equal(await page.getByRole('button', { name, exact: true }).count(), 1, `${id} has accessible name ${name}`);
       assert.equal(await action.getAttribute('data-a11y-activatable'), null, 'native action has no shim listener');
     }
     for (const [id] of exportActions.slice(1)) {
@@ -171,7 +174,7 @@ const server = http.createServer((req, res) => {
       assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width,
         `menu stays horizontally in bounds at ${width}px with a near-left trigger`);
       const actionBounds = await page.locator('#export-dropdown-menu button').evaluateAll(buttons =>
-        buttons.map(button => {
+        buttons.filter(button => button.getClientRects().length).map(button => {
           const rect = button.getBoundingClientRect();
           return { left: rect.left, right: rect.right };
         }));
@@ -188,7 +191,7 @@ const server = http.createServer((req, res) => {
         });
       }
     }
-    await page.setViewportSize({ width: 576, height: 260 });
+    await page.setViewportSize({ width: 576, height: 180 });
     await exportTriggerButton.click();
     const shortBounds = await page.locator('#export-dropdown-menu').boundingBox();
     const scrollMetrics = await page.locator('#export-dropdown-menu').evaluate(menu => ({
@@ -197,7 +200,7 @@ const server = http.createServer((req, res) => {
       overflowY: getComputedStyle(menu).overflowY,
     }));
     assert(shortBounds && shortBounds.x >= 0 && shortBounds.y >= 0
-      && shortBounds.x + shortBounds.width <= 576 && shortBounds.y + shortBounds.height <= 260,
+      && shortBounds.x + shortBounds.width <= 576 && shortBounds.y + shortBounds.height <= 180,
     'menu stays inside the short-landscape viewport');
     assert.equal(scrollMetrics.overflowY, 'auto');
     assert(scrollMetrics.scrollHeight > scrollMetrics.clientHeight, 'short landscape menu remains scrollable');

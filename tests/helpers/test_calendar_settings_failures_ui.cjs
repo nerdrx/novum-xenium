@@ -66,7 +66,7 @@ const server = http.createServer((req, res) => {
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   if (url.pathname === '/static/js/calendar.js') {
     const source = fs.readFileSync(file, 'utf8').replace('const calendarModule = {', 'window.__testSetCalendars = value => { _calendars = value; };\nwindow.__testGetCalendars = () => _calendars;\nwindow.__testOpenCalendarSettings = _showCalSettings;\nconst calendarModule = {');
     return res.end(source);

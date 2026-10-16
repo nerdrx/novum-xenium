@@ -7,13 +7,14 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css">
+const { withAppStyles } = require('./app_styles.cjs');
+const html = `<!doctype html><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS -->
 <body><aside id="sidebar"></aside><button id="tool-notes-btn"></button><div id="chat-container"></div><div id="toast"></div>
 <script type="module">import notes from '/static/js/notes.js'; notes.openPanel(); window.fixtureReady = true;</script></body>`;
 let noteLoads = 0;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') { res.end(html); return; }
+  if (url.pathname === '/') { withAppStyles(html).then(styled => res.end(styled)); return; }
   if (url.pathname === '/api/notes' && req.method === 'GET') {
     noteLoads++;
     if (noteLoads === 1) { res.writeHead(503); res.end('fixture unavailable'); return; }
@@ -23,7 +24,7 @@ const server = http.createServer((req, res) => {
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 

@@ -5,11 +5,10 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const source = fs.readFileSync(path.join(repo, 'static/js/settings.js'), 'utf8');
-const start = source.indexOf('async function initImageSettings()');
-const end = source.indexOf('/* ── Vision ── */', start);
-assert(start >= 0 && end > start, 'could not locate image settings initializer');
-const initSource = source.slice(start, end).trim();
+const source = fs.readFileSync(path.join(repo, 'static/js/settings/imageModels.js'), 'utf8');
+const start = source.indexOf('export async function initImageSettings(');
+assert(start >= 0, 'could not locate extracted image settings initializer');
+const initSource = source.slice(start).replace('export async function initImageSettings', 'async function initImageSettings').trim();
 
 class Select {
   constructor(options = []) {
@@ -70,14 +69,13 @@ function makeHarness({ endpoints, savedModel = '', savedQuality = 'medium' }) {
   let refreshHandler = null;
   const context = {
     el: id => elements[id],
-    _fetchModelEndpoints: async () => endpoints,
     _registerAiEndpointRefresh: fn => { refreshHandler = fn; },
     sortModelIds: models => [...models].sort((a, b) => String(a).localeCompare(String(b))),
-    fetch: async () => ({
-      json: async () => ({
-        image_model: savedModel,
-        image_quality: savedQuality,
-        image_gen_enabled: true,
+    fetch: async url => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes('model-endpoints') ? endpoints : ({
+        image_model: savedModel, image_quality: savedQuality, image_gen_enabled: true,
       }),
     }),
     _postSettings: async body => { saves.push(body); return { ok: true }; },
@@ -93,6 +91,7 @@ function makeHarness({ endpoints, savedModel = '', savedQuality = 'medium' }) {
     backendMsg,
     toggle,
     saves,
+    initWithRefresh: async () => init({ registerEndpointRefresh: fn => { refreshHandler = fn; } }),
     refresh: async next => refreshHandler(next),
   };
 }
@@ -106,7 +105,7 @@ const endpoints = [
 ];
 
 const configured = makeHarness({ endpoints, savedModel: 'chatgpt-image-codex' });
-await configured.init();
+await configured.initWithRefresh();
 assert.equal(configured.model.value, 'chatgpt-image-codex@Codex bridge');
 assert(Array.from(configured.model.options).some(option => option.value === 'chatgpt-image-codex@Mixed LLM'));
 assert(Array.from(configured.model.options).some(option => option.value === 'gpt-5-image@Mixed LLM'));
@@ -128,13 +127,13 @@ await configured.toggle.fire('change');
 assert.equal(configured.saves.at(-1).image_model, 'chatgpt-image-codex@Codex bridge');
 
 const empty = makeHarness({ endpoints: [], savedModel: '' });
-await empty.init();
+await empty.initWithRefresh();
 assert.equal(empty.model.options.length, 1);
 assert.match(empty.backendMsg.textContent, /download a compatible Stable Diffusion checkpoint in Cookbook/);
 assert.match(empty.backendMsg.textContent, /add an image provider under Settings/);
 
 const unknown = makeHarness({ endpoints: [], savedModel: 'custom-art-model@Remote provider' });
-await unknown.init();
+await unknown.initWithRefresh();
 assert.equal(unknown.model.value, 'custom-art-model@Remote provider');
 assert.match(unknown.model.options.find(option => option.value === unknown.model.value).textContent, /saved; not listed/);
 await unknown.quality.fire('change');

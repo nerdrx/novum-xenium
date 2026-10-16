@@ -104,6 +104,37 @@ def test_manage_session_unknown_action_is_a_failed_tool_with_choices(monkeypatch
     assert "Unknown action 'create'" in result["error"]
     assert "list" in result["error"] and "rename" in result["error"]
 
+def test_create_session_inherits_current_working_runtime_for_same_model(monkeypatch):
+    source = type("Source", (), {
+        "owner": "alice",
+        "model": "moonshotai/kimi-k3",
+        "endpoint_url": "https://working.example/v1/chat/completions",
+        "headers": {"Authorization": "Bearer runtime-key"},
+    })()
+    created = {}
+    created_session = type("Created", (), {})()
+
+    class FakeMgr:
+        def get_session(self, sid):
+            return source if sid == "parent" else created_session
+
+        def create_session(self, **kw):
+            created.update(kw)
+
+    monkeypatch.setattr(ai_interaction, "_session_manager", FakeMgr())
+    monkeypatch.setattr(st, "_resolve_model", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("same-model child must not re-resolve a stored endpoint")
+    ))
+
+    result = asyncio.run(st.CreateSessionTool().execute(
+        "Relay\nmoonshotai/kimi-k3",
+        {"owner": "alice", "session_id": "parent"},
+    ))
+
+    assert result["endpoint_url"] == source.endpoint_url
+    assert created["endpoint_url"] == source.endpoint_url
+    assert created_session.headers == source.headers
+
 
 def test_manage_session_fork_reaches_uuid(monkeypatch):
     # Regression for the missing `import uuid`: the fork action also mints a new
@@ -187,6 +218,11 @@ class _FakeMgr:
         return self._s.get(sid)
 
 
+class _RaisingFakeMgr:
+    def get_session(self, sid):
+        raise KeyError(f"Session {sid} not found")
+
+
 def test_send_to_session_blocks_null_owner_for_authenticated_caller(monkeypatch):
     # An authenticated caller must not reach a null-owner (legacy / auth-was-off)
     # session: list_sessions and manage_session already hide those, so this path
@@ -210,6 +246,14 @@ def test_send_to_session_blocks_null_owner_for_authenticated_caller(monkeypatch)
     # auth disabled (no owner): single-user still reaches the null-owner session
     r3 = asyncio.run(st.send_to_session("nsid\nhello", owner=None))
     assert r3.get("offline_transcript") is True
+
+
+def test_send_to_session_missing_session_returns_error_instead_of_raising(monkeypatch):
+    monkeypatch.setattr(st, "get_session_manager", lambda: _RaisingFakeMgr())
+
+    result = asyncio.run(st.send_to_session("search\nfind traffic monitor emails", owner="alice"))
+
+    assert result == {"error": "Session 'search' not found"}
 
 
 def test_dispatched_via_registry_not_dispatch_ai_tool():

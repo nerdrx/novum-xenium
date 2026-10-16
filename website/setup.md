@@ -732,6 +732,12 @@ Key settings:
 
 All upload-limit vars are validated (must be a positive integer) and optional; an invalid value fails fast at startup.
 
+The table above is the short list. The source tree reads a lot more `ODYSSEUS_*`
+variables than this - browser automation, model routing, workspace mounts, media
+limits, a few security switches - and the complete list, generated from the code
+with the default each one falls back to, is in the
+[configuration reference](configuration-reference.md).
+
 ### Built-in MCP servers (optional setup)
 
 Novum Xenium auto-registers its built-in MCP servers at startup. The standard Docker image includes Browser MCP (`@playwright/mcp` 0.0.83) and system Chromium. It starts the installed CLI directly, without an npm package download at runtime.

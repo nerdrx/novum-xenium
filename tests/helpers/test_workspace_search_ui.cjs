@@ -6,7 +6,8 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
-const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/workspace-dock.css"></head>
+const { withAppStyles } = require('./app_styles.cjs');
+const html = `<!doctype html><html><head><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS --><link rel="stylesheet" href="/static/workspace-dock.css"></head>
 <body><button id="workspace-open">Workspace</button><button id="mode-chat-btn"></button>
 <script type="module">localStorage.setItem('odysseus-workspace','/workspace');
 import workspace from '/static/js/workspace.js';
@@ -16,7 +17,7 @@ const calls = [];
 const json = (res, body) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)); };
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') return res.end(html);
+  if (url.pathname === '/') return withAppStyles(html).then(styled => res.end(styled));
   if (url.pathname === '/api/workspace/browse') return json(res, {
     path: '/workspace', parent: null, dirs: [], selectable: true,
   });
@@ -29,7 +30,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/workspace/snapshots') return json(res, { snapshots: [] });
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404).end(); return; }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/css');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/css');
   fs.createReadStream(file).pipe(res);
 });
 

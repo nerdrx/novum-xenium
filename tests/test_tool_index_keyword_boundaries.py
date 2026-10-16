@@ -93,3 +93,11 @@ def test_named_tool_identifier_outranks_unrelated_semantic_results():
     unavailable = ToolIndex.__new__(ToolIndex)
     unavailable._lanes = []
     assert unavailable.retrieve("please use native_preview tool invocation") == ["native_preview"]
+
+def test_hardware_aware_model_recommendation_includes_app_api():
+    ti = _index()
+    for query in (
+        "find the best model to run on my hardware",
+        "recommend a compatible model for this GPU",
+    ):
+        assert "app_api" in ti.get_tools_for_query(query), query

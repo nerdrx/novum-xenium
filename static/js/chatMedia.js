@@ -1,4 +1,29 @@
 const initialized = new WeakSet();
+const previewStarted = new WeakSet();
+const videoPreviewStatus = new WeakMap();
+let videoPreviewObserver = null;
+
+function previewVideoWhenVisible(video, setStatus) {
+  if (video.poster || previewStarted.has(video)) return;
+  if (typeof IntersectionObserver === 'undefined') return;
+  if (!videoPreviewObserver) {
+    videoPreviewObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const target = entry.target;
+        videoPreviewObserver.unobserve(target);
+        previewStarted.add(target);
+        target.preload = 'metadata';
+        videoPreviewStatus.get(target)?.('Loading video preview…');
+        target.load();
+      }
+    }, { rootMargin: '160px 0px' });
+  }
+  video.preload = 'none';
+  videoPreviewStatus.set(video, setStatus);
+  videoPreviewObserver.observe(video);
+  setStatus('Preview loads when visible.');
+}
 
 export function safePublicMediaUrl(value) {
   try {
@@ -20,7 +45,10 @@ export function addMediaControls(figure, media, kind, rawUrl = media?.currentSrc
   media.setAttribute('referrerpolicy', 'no-referrer');
   const status = document.createElement('p');
   status.className = 'chat-media-status'; status.setAttribute('role', 'status');
-  status.textContent = kind === 'video' ? 'Tap play to load video.' : 'Loading image…';
+  status.textContent = kind === 'video'
+    ? (media.poster ? '' : 'Tap play to load video.')
+    : 'Loading image…';
+  if (!status.textContent) status.hidden = true;
   const actions = document.createElement('div'); actions.className = 'chat-media-actions';
   const fullscreen = document.createElement('button'); fullscreen.type = 'button';
   fullscreen.className = 'chat-media-fullscreen'; fullscreen.textContent = 'Full screen';
@@ -36,6 +64,11 @@ export function addMediaControls(figure, media, kind, rawUrl = media?.currentSrc
     status.textContent = message; status.hidden = !message; retry.hidden = !canRetry;
   };
   media.addEventListener('load', () => setStatus(''));
+  if (kind === 'video') {
+    media.preload = 'none';
+    media.addEventListener('loadedmetadata', () => setStatus(''), { once: true });
+    previewVideoWhenVisible(media, setStatus);
+  }
   for (const event of ['loadeddata', 'canplay', 'playing']) media.addEventListener(event, () => setStatus(''));
   for (const event of ['waiting', 'stalled']) media.addEventListener(event, () => setStatus('Video is taking a while to load.', true));
   media.addEventListener('error', () => {

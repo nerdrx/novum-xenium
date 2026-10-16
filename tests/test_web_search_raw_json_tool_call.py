@@ -30,6 +30,7 @@ with preserve_import_state(*_IMPORT_STATE):
     import src.agent_tools  # noqa: E402, F401
     from src.tool_parsing import parse_tool_blocks, strip_tool_blocks  # noqa: E402
 
+from src.tool_parsing import parse_tool_blocks, strip_tool_blocks
 
 def test_raw_json_after_web_search_phrase_runs_as_web_search():
     text = (

@@ -12,14 +12,16 @@ Sub-modules:
 """
 
 import logging
-
 from src.tool_security import BUILTIN_EMAIL_TOOLS
 from src.tool_utils import _truncate, get_mcp_manager, set_mcp_manager
+from src.tool_types import TOOL_TAGS, ToolBlock
 
 logger = logging.getLogger(__name__)
 
-from .subprocess_tools import BashTool, PythonTool
-from .web_tools import WebSearchTool, WebFetchTool
+from .subprocess_tools import BashTool, HostShellTool, PythonTool
+from .web_tools import WebSearchTool, WebFetchTool, PdfExtractTool, PrivateBrowserTool, YouTubeTool
+from .weather_tools import WeatherTool
+from .media_tools import ExtractTextTool, InspectMediaTool, TranscribeMediaTool
 from .filesystem_tools import ReadFileTool, WriteFileTool, EditFileTool, ApplyPatchTool, LsTool, GlobTool, GrepTool, GetWorkspaceTool
 from .coding_tools import TodoWriteTool
 from .document_tools import CreateDocumentTool, UpdateDocumentTool, EditDocumentTool, SuggestDocumentTool, ManageDocumentTool
@@ -38,9 +40,17 @@ from .admin_tools import (
 
 TOOL_HANDLERS = {
     "bash": BashTool().execute,
+    "host_shell": HostShellTool().execute,
     "python": PythonTool().execute,
     "web_search": WebSearchTool().execute,
+    "get_weather": WeatherTool().execute,
     "web_fetch": WebFetchTool().execute,
+    "pdf_extract": PdfExtractTool().execute,
+    "youtube_tool": YouTubeTool().execute,
+    "private_browser": PrivateBrowserTool().execute,
+    "inspect_media": InspectMediaTool().execute,
+    "extract_text": ExtractTextTool().execute,
+    "transcribe_media": TranscribeMediaTool().execute,
     "read_file": ReadFileTool().execute,
     "write_file": WriteFileTool().execute,
     "edit_file": EditFileTool().execute,
@@ -76,11 +86,12 @@ TOOL_HANDLERS.update(ADMIN_TOOL_HANDLERS)
 # Constants (re-exported for backward compatibility — single source of truth
 # is src.constants; always prefer importing from there for new code)
 # ---------------------------------------------------------------------------
-MAX_AGENT_ROUNDS = 50
+# Keep an agent turn bounded by default. Callers can still opt into a higher
+# limit explicitly, but a stale/repeating tool loop must not consume a whole
+# session before the user gets control back.
+MAX_AGENT_ROUNDS = 20
 SHELL_TIMEOUT = 60
 PYTHON_TIMEOUT = 30
-
-from src.tool_types import TOOL_TAGS, ToolBlock
 
 # ---------------------------------------------------------------------------
 # Re-exports from sub-modules

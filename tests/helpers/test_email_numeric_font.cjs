@@ -1,11 +1,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { chromium } = require('../../desktop/node_modules/playwright');
+const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 async function main() {
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: process.env.BROWSER_EXECUTABLE,
+      args: ['--no-sandbox'],
+    });
   } catch (error) {
     console.error(`SKIP_BROWSER: ${error.message}`);
     process.exitCode = 77;
@@ -13,9 +17,7 @@ async function main() {
   }
 
   try {
-    const css = fs.readFileSync(
-      path.resolve(__dirname, '../../static/style.css'), 'utf8'
-    );
+    const css = await import('./stylesheets.mjs').then(({ appCss }) => appCss());
     const page = await browser.newPage();
     await page.setContent(`
       <html class="theme-novum-xenium">

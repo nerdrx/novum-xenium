@@ -67,7 +67,7 @@ def add_notification(owner, kind, title, *, source, source_id, body=None, route=
     """Insert once per source event. Empty owners are intentionally ignored."""
     if not owner:
         return None
-    from core.database import SessionLocal, NotificationFeedItem
+    from core.database import SessionLocal, NotificationFeedItem, NotificationPushDelivery
 
     db = SessionLocal()
     try:

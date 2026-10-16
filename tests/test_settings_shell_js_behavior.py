@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.helpers.stylesheets import app_css
 
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -24,11 +25,9 @@ _COORDINATOR_HELPER = (
 _IMAGE_PICKER_HELPER = _REPO / "tests" / "helpers" / "test_image_settings_picker.mjs"
 _NATIVE_PUSH_HELPER = _REPO / "tests" / "helpers" / "test_native_push_bridge.mjs"
 _HAS_NODE = shutil.which("node") is not None
-_STYLE = _REPO / "static" / "style.css"
-
-
+_STYLE_TEXT = app_css()
 def test_settings_desktop_width_targets_settings_not_cookbook():
-    source = _STYLE.read_text(encoding="utf-8")
+    source = _STYLE_TEXT
 
     settings_rule = re.search(
         r"(?ms)^\.settings-modal-content\s*\{[^}]*"
@@ -116,6 +115,9 @@ def test_settings_shell_real_esm_coordinator():
         "navigationCallback": True,
         "directOpen": True,
         "directClose": True,
+        "peekChrome": True,
+        "adminVisibility": True,
+        "adminTabHandoff": True,
     }
 
 

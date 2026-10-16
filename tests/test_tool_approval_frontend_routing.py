@@ -3,6 +3,8 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+import re
+from tests.helpers.stylesheets import app_css
 
 import pytest
 
@@ -30,6 +32,7 @@ def test_tool_approval_submits_pending_chat_without_clicking_new_chat_button():
     start = source.index("function _submitToolApprovalWhenIdle(approvalId) {")
     end = source.index("\n\n  function _fmtContextNumber", start)
     handler = source[start:end]
+    handler = handler[:handler.index("\n  window.addEventListener('odysseus:notes-context-selected'")]
     script = f"""
       const listeners = {{}};
       const timers = [];
@@ -154,15 +157,58 @@ def test_hidden_chat_form_request_submit_has_no_required_textarea_to_block_it():
     assert 'style="display:none;"' in html[form_start:form_end]
 
 
-def test_ask_user_close_button_uses_one_css_glyph():
+def test_ask_user_card_has_no_close_button_and_chat_scale_text():
     root = Path(__file__).resolve().parents[1]
     renderer = (root / "static/js/chatRenderer.js").read_text(encoding="utf-8")
-    styles = (root / "static/style.css").read_text(encoding="utf-8")
+    styles = app_css()
 
-    assert "closeBtn.className = 'modal-close ask-user-close';" in renderer
-    assert "closeBtn.setAttribute('aria-label', 'Dismiss question');" in renderer
-    assert "closeBtn.textContent = '×';" not in renderer
-    assert ".modal-close::before" in styles
+    assert "closeBtn.className = 'modal-close ask-user-close';" not in renderer
+    assert "closeBtn.setAttribute('aria-label', 'Dismiss question');" not in renderer
+    assert "card.appendChild(head);" not in renderer
+    assert "otherSend.textContent" not in renderer
+    assert "otherSend.innerHTML" in renderer
+    assert 'd="M12 19V5M5 12l7-7 7 7"' in renderer
+    assert "ask-user-card-attached" in renderer
+    assert "has-ask-user-bottom" in renderer
+    assert ".ask-user-head" in styles
+    assert ".ask-user-close" in styles
+    assert "display: none !important;" in styles
+    question_block = styles[styles.index(".ask-user-question {"):styles.index(".ask-user-options {")]
+    card_block = styles[styles.index(".ask-user-card {"):styles.index(".ask-user-card-attached {")]
+    attached_block = styles[styles.index(".ask-user-card-attached {"):styles.index(".ask-user-card-attached::before {")]
+    connector_block = styles[styles.index(".ask-user-card-attached::before {"):styles.index("/* Focused only programmatically", styles.index(".ask-user-card-attached::before {"))]
+    label_start = styles.index(".ask-user-option-label {", styles.index(".ask-user-option-label,"))
+    label_block = styles[label_start:styles.index(".ask-user-option-desc {", label_start)]
+    assert "color: var(--fg);" in question_block
+    assert "max-width: 85%;" in card_block
+    assert "isolation: isolate;" in card_block
+    assert "margin-left: 8px;" in attached_block
+    assert "width: 85%;" in attached_block
+    assert "max-width: 85%;" in attached_block
+    assert "z-index: -1;" in connector_block
+    assert "color: var(--accent, var(--red));" in label_block
+    assert "font-size: 11px;" in styles
+    assert "font-size: 11px !important;" in styles
+    assert "background: var(--ai-bubble-bg, var(--panel));" in styles
+    assert "background: var(--send-btn-bg, var(--red));" in styles
+    assert "background: color-mix(in srgb, var(--fg) 4%, var(--panel));" not in styles
+    assert ".ask-user-other-input" in styles
+    assert ".ask-user-answer" in styles
+    assert ".ask-user-answer-value" in styles
+    assert ".ask-user-card-attached::before" in styles
+    assert ".agent-thread.has-ask-user-bottom::before" in styles
+
+
+def test_scroll_bottom_button_uses_dropdown_caret_glyph():
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "static/index.html").read_text(encoding="utf-8")
+    styles = app_css()
+
+    assert 'class="scroll-nav-caret"' in html
+    assert "&#9662;" in html
+    assert ">▼</button>" not in html
+    assert ".scroll-nav-caret" in styles
+    assert "font-family: Arial, Helvetica, sans-serif;" in styles
 
 
 def test_ask_user_number_shortcuts_reuse_option_click_path():
@@ -209,7 +255,13 @@ def test_ask_user_renderer_accepts_scoped_root_and_submit_callback():
     assert "const onSubmit = typeof renderOptions.onSubmit === 'function'" in renderer
     assert "kind: 'answer'" in renderer
     assert "kind: 'tool_approval'" in renderer
-    assert "if (accepted !== false) card.remove();" in renderer
+    assert "function _markAskUserAnswered(card, text)" in renderer
+    assert "function _answerAskUserCards(root, text)" in renderer
+    assert "if (accepted !== false) _markAskUserAnswered(card, text);" in renderer
+    assert "if (accepted !== false) _markAskUserAnswered(card, label);" in renderer
+    assert "scope.querySelectorAll('.ask-user-card:not(.ask-user-answered)')" in renderer
+    assert "if (role === 'user') _answerAskUserCards(box," in renderer
+    assert "if (role === 'user') removeAskUserCards(box);" not in renderer
     assert "document.dispatchEvent(new CustomEvent('odysseus:tool-approval', { detail }))" in renderer
 
 
@@ -217,30 +269,33 @@ def test_every_changed_approval_module_is_cache_busted_together():
     """Keep shared chat and compare modules on a consistent cached version."""
 
     root = Path(__file__).resolve().parents[1]
-    index = (root / "static/index.html").read_text(encoding="utf-8")
-    app = (root / "static/app.js").read_text(encoding="utf-8")
-    chat = (root / "static/js/chat.js").read_text(encoding="utf-8")
-    compare_index = (root / "static/js/compare/index.js").read_text(encoding="utf-8")
+    sources = [
+        path.read_text(encoding="utf-8")
+        for path in (root / "static").rglob("*")
+        if path.suffix in {".js", ".html"}
+    ]
+
+    def versions(module_name):
+        pattern = re.compile(rf"{re.escape(module_name)}\?v=([A-Za-z0-9_-]+)")
+        return [match for source in sources for match in pattern.findall(source)]
+
+    # Every URL for a stateful module must resolve to one ES-module instance.
+    # Different query strings create distinct modules and duplicate listeners.
+    for module_name in ("chatRenderer.js", "chatStream.js", "chat.js"):
+        found = versions(module_name)
+        assert found, f"missing cache-busted reference for {module_name}"
+        assert len(set(found)) == 1, f"split module graph for {module_name}: {found}"
+
+    # Shared modules must have one URL apiece. ui.js is consistently versioned
+    # throughout the graph; the other shared modules remain unversioned.
+    for module_name in ("sessions.js", "memory.js", "markdown.js", "models.js"):
+        assert any(module_name in source for source in sources)
+        assert not versions(module_name), f"split module graph for {module_name}"
+    assert len(set(versions("ui.js"))) == 1
+
     compare_stream = (root / "static/js/compare/stream.js").read_text(encoding="utf-8")
-
-    def versions(source, module):
-        return re.findall(re.escape(module) + r"\?v=([^'\" >]+)", source)
-
-    stream_versions = versions(index, "chatStream.js") + versions(chat, "chatStream.js")
-    assert len(stream_versions) >= 2
-    assert len(set(stream_versions)) == 1
-    # Compare owns shared state with slash commands, so its eager and lazy
-    # entry points use one unversioned URL (static responses require revalidation).
-    assert "from './js/compare/index.js';" in app
-    assert versions(compare_index, "stream.js")
-    assert versions(compare_stream, "chatRenderer.js")
-    # Every importer resolves to the same renderer, including sessions/group
-    # and the compare pane; otherwise each copy registers its own handlers.
-    renderer_versions = versions(index, "chatRenderer.js")
-    for source in (root / "static").rglob("*.js"):
-        text = source.read_text(encoding="utf-8")
-        for specifier in re.findall(r"(?:from\s+|import\s*\()['\"]([^'\"]*chatRenderer\.js[^'\"]*)", text):
-            assert "?v=" in specifier, source
-            renderer_versions.append(specifier.split("?v=", 1)[1])
-    assert len(renderer_versions) > 2
-    assert len(set(renderer_versions)) == 1
+    compare_vote = (root / "static/js/compare/vote.js").read_text(encoding="utf-8")
+    renderer_version = versions("chatRenderer.js")[0]
+    assert f"chatRenderer.js?v={renderer_version}" in compare_stream
+    assert f"chatRenderer.js?v={renderer_version}" in compare_vote
+    assert "from './js/compare/index.js';" in (root / "static/app.js").read_text()

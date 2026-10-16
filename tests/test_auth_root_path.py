@@ -62,6 +62,7 @@ def test_login_page_static_assets_resolve_under_mount_path():
         ("static/manifest.json", "/odysseus/static/manifest.json"),
         ("static/icons/icon-192.png", "/odysseus/static/icons/icon-192.png"),
         ("static/mobile-dialogs.css", "/odysseus/static/mobile-dialogs.css"),
+
         (
             "static/fonts/FiraCode-Regular.woff2",
             "/odysseus/static/fonts/FiraCode-Regular.woff2",

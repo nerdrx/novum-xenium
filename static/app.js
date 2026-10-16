@@ -3,14 +3,14 @@
 // ES6 module — entry point, no exports (wires all modules together)
 // ============================================
 import Storage from './js/storage.js';
-import uiModule from './js/ui.js';
+import uiModule from './js/ui.js?v=20260916largetoolscroll1';
 import workspaceModule from './js/workspace.js';
-import fileHandlerModule from './js/fileHandler.js';
+import fileHandlerModule from './js/fileHandler.js?v=20260909mobileattachmentedit1';
 // Stateful modules use the same URLs as their lazy callers and HTML scripts.
 // A query mismatch creates separate caches, listeners and popup registries.
 import modelsModule from './js/models.js';
 import ragModule from './js/rag.js';
-import presetsModule from './js/presets.js';
+import presetsModule from './js/presets.js?v=20260908personaname1';
 import searchModule from './js/search.js';
 import chatModule from './js/chat.js?v=20261007approvalfix2';
 import compareModule from './js/compare/index.js';
@@ -41,9 +41,12 @@ import { setModelDisplayItemsProvider } from './js/modelDisplay.js';
 import { initModules } from './js/modules.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
+import { startBackgroundToolJobs } from './js/backgroundToolJobs.js';
+import './js/chipScroll.js?v=20260903calendarchips1';
+import './js/mobileBulkSelect.js?v=20260910selecthold1';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
-import './js/tileManager.js';
-import themeModule from './js/theme.js';
+import './js/tileManager.js?v=20260910responsivebounds1';
+import themeModule from './js/theme.js?v=20260911organsrain1';
 // IMPORTANT: import cookbook.js with NO ?v= query — the same plain specifier
 // every other importer (cookbook-hwfit.js / cookbook-diagnosis.js) uses. A query
 // mismatch makes the browser load cookbook.js twice as separate modules (two
@@ -54,9 +57,9 @@ import groupModule from './js/group.js?v=20261007usability1';
 import * as researchPanelModule from './js/research/panel.js?v=20261007quality1';
 import ttsModule from './js/tts-ai.js';
 import spinnerModule from './js/spinner.js';
-import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js';
+import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js?v=20260829chatstyle12';
 import { getSettings } from './js/appConfig.js';
-import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js?v=20260715startupclean';
+import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js?v=20260910sidebarbounce1';
 import { initSectionCollapse, initSectionDrag } from './js/section-management.js';
 import approvalModeModule from './js/approvalMode.js';
 import { bindMenuDismiss } from './js/escMenuStack.js';
@@ -183,8 +186,9 @@ function initRailHoverLabels() {
     'rail-email': 'Email',
     'rail-gallery': 'Gallery',
     'rail-archive': 'Library',
-    'rail-memory': 'Brain',
+    'rail-memory': 'Memory',
     'rail-notes': 'Notes',
+    'rail-skills': 'Skills',
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
     'rail-settings': 'Settings',
@@ -244,12 +248,12 @@ async function _refreshDefaultChat() {
 // synchronously; later reads should call _refreshDefaultChat() first.
 _refreshDefaultChat();
 
-async function _createDirectChatFromPreferredModel({ fresh = false } = {}) {
+async function _createDirectChatFromPreferredModel({ fresh = false, keepDocument = false } = {}) {
   if (!sessionModule) return false;
 
   const pending = sessionModule.getPendingChat && sessionModule.getPendingChat();
   if (pending && pending.url && pending.modelId && pending.endpointId) {
-    sessionModule.createDirectChat(pending.url, pending.modelId, pending.endpointId, { source: pending.source || 'manual', fresh });
+    sessionModule.createDirectChat(pending.url, pending.modelId, pending.endpointId, { source: pending.source || 'manual', fresh, keepDocument });
     return true;
   }
 
@@ -257,20 +261,20 @@ async function _createDirectChatFromPreferredModel({ fresh = false } = {}) {
   const currentId = sessionModule.getCurrentSessionId();
   const current = sessions.find(s => s.id === currentId);
   if (current && current.endpoint_url && current.model && current.endpoint_id) {
-    sessionModule.createDirectChat(current.endpoint_url, current.model, current.endpoint_id, { fresh });
+    sessionModule.createDirectChat(current.endpoint_url, current.model, current.endpoint_id, { fresh, keepDocument });
     return true;
   }
 
   const dc = await _refreshDefaultChat();
   if (dc) {
-    sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id, { source: 'default', fresh });
+    sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id, { source: 'default', fresh, keepDocument });
     return true;
   }
 
   const withModel = sessions.filter(s => s.endpoint_url && s.model);
   if (withModel.length > 0) {
     const last = withModel[0]; // sessions are sorted by recent
-    sessionModule.createDirectChat(last.endpoint_url, last.model, last.endpoint_id, { fresh });
+    sessionModule.createDirectChat(last.endpoint_url, last.model, last.endpoint_id, { fresh, keepDocument });
     return true;
   }
 
@@ -307,7 +311,7 @@ function initializeEventListeners() {
     } catch (_) { uiModule.showToast('Could not attach copied files'); }
   };
   window.addEventListener('paste', async (e)=>{
-    if (e.defaultPrevented || !e.clipboardData) return;
+    if (e.defaultPrevented || !e.clipboardData || e.target?.closest?.('#doc-editor-pane, [contenteditable="true"]')) return;
     const files = Array.from(e.clipboardData.files || []);
     // WebKit can expose screenshot pixels as an item without a FileList entry.
     if (!files.length) files.push(...Array.from(e.clipboardData.items || [])
@@ -342,6 +346,12 @@ function initializeEventListeners() {
   // Scrolling
   el('chat-history').addEventListener('scroll', uiModule.debounce(() => {
     const box = el('chat-history');
+    // scrollHistory() advances in several animation frames.  Its early frames
+    // are intentionally not at the bottom yet, so treating those events as a
+    // user scroll cancels the animation before a synthesis below a large tool
+    // trace can become visible.  Wheel/touch handlers still disable follow
+    // mode immediately for real user input.
+    if (uiModule.isAutoScrolling?.()) return;
     const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
     uiModule.setAutoScroll(atBottom);
   }, 100));
@@ -368,7 +378,8 @@ function initializeEventListeners() {
     const link = e.target.closest('a.chat-link');
     if (!link) return;
     const href = link.getAttribute('href');
-    if (href && href.startsWith('#') && sessionModule) {
+    const isListExpander = /^#(?:notes|skills|memories|events|sessions)-more-/.test(href || '');
+    if (href && href.startsWith('#') && !isListExpander && sessionModule) {
       e.preventDefault();
       sessionModule.selectSession(href.slice(1));
     }
@@ -417,14 +428,36 @@ function initializeEventListeners() {
       exportMenu.classList.toggle('open', open);
       exportDlBtn.setAttribute('aria-expanded', String(open));
     };
-    exportDlBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
+    // Keep Settings available from the chat menu even before a new chat has
+    // received its first prompt (when the header has no session actions yet).
+    if (!el('export-settings-btn')) {
+      const settingsItem = document.createElement('button');
+      settingsItem.type = 'button';
+      settingsItem.className = 'export-dropdown-item';
+      settingsItem.id = 'export-settings-btn';
+      settingsItem.classList.add('export-settings-text-only');
+      settingsItem.innerHTML = '<span class="dropdown-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 4.3l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15z"></path></svg></span><span>Settings</span>';
+      const deleteItem = exportMenu.querySelector('#export-delete-btn');
+      if (deleteItem) exportMenu.insertBefore(settingsItem, deleteItem);
+      else exportMenu.appendChild(settingsItem);
+      settingsItem.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        exportMenu.classList.remove('open');
+        if (window.chatModule?.openContextSettings
+            && await window.chatModule.openContextSettings()) return;
+        if (typeof settingsModule !== 'undefined' && settingsModule?.open) settingsModule.open();
+        else if (typeof adminModule !== 'undefined' && adminModule?.open) adminModule.open();
+        else if (window.settingsModule?.open) window.settingsModule.open();
+        else if (window.adminModule?.open) window.adminModule.open();
+      });
+    }
+    const openExportMenuFrom = (anchorEl, { align = 'right', keyboard = false } = {}) => {
       if (exportMenu.classList.contains('open')) {
         closeExportMenu();
       } else {
         // Move menu to body so it's not affected by ancestor transforms
         if (exportMenu.parentElement !== document.body) document.body.appendChild(exportMenu);
-        const rect = exportDlBtn.getBoundingClientRect();
+        const rect = (anchorEl || exportDlBtn).getBoundingClientRect();
         const viewport = window.visualViewport;
         const left = (viewport?.offsetLeft || 0) + 8;
         const top = (viewport?.offsetTop || 0) + 8;
@@ -436,14 +469,24 @@ function initializeEventListeners() {
         exportMenu.style.right = 'auto';
         setExportMenuOpen(true);
         // Measure the open menu, then keep every action inside the visible viewport.
-        exportMenu.style.left = Math.max(left, Math.min(rect.right - exportMenu.offsetWidth, left + width - exportMenu.offsetWidth)) + 'px';
+        exportMenu.style.left = Math.max(left, Math.min((align === 'left' ? rect.left : rect.right - exportMenu.offsetWidth), left + width - exportMenu.offsetWidth)) + 'px';
         exportMenu.style.top = Math.max(top, Math.min(rect.bottom + 4, top + height - exportMenu.offsetHeight)) + 'px';
         closeExportMenu = bindMenuDismiss(exportMenu, () => {
           const returnFocus = exportMenu.contains(document.activeElement);
           setExportMenuOpen(false);
           if (returnFocus) exportDlBtn.focus();
         }, event => !exportMenu.contains(event.target) && !exportDlBtn.contains(event.target));
-        if (e.detail === 0) exportMenu.querySelector('button:not(:disabled)')?.focus();
+        if (keyboard) exportMenu.querySelector('button:not(:disabled)')?.focus();
+      }
+    };
+    exportDlBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openExportMenuFrom(exportDlBtn, { keyboard: e.detail === 0 });
+    });
+    document.addEventListener('click', () => exportMenu.classList.remove('open'));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && exportMenu.classList.contains('open')) {
+        exportMenu.classList.remove('open');
       }
     });
     window.addEventListener('resize', () => closeExportMenu());
@@ -465,8 +508,17 @@ function initializeEventListeners() {
     if (currentMeta) {
       currentMeta.style.cursor = 'pointer';
       currentMeta.addEventListener('click', (e) => {
+        const incognitoChk = el('incognito-toggle');
+        const mobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+        if (mobile && incognitoChk && incognitoChk.checked) {
+          e.preventDefault();
+          e.stopPropagation();
+          const incognitoBtnForTitle = el('incognito-btn');
+          if (incognitoBtnForTitle) incognitoBtnForTitle.click();
+          return;
+        }
         e.stopPropagation();
-        exportDlBtn.click();
+        openExportMenuFrom(currentMeta, { align: 'left' });
       });
     }
   }
@@ -553,7 +605,7 @@ function initializeEventListeners() {
       e.stopPropagation();
       closeExportMenu();
       const meta = sessionModule.getSessions().find(s => s.id === sessionModule.getCurrentSessionId());
-      const sessionName = meta ? meta.name : 'Odysseus Chat';
+      const sessionName = meta ? meta.name : 'Novum Xenium Chat';
       const originalTitle = document.title;
       document.title = sessionName;
       const chatHistory = document.getElementById('chat-history');
@@ -1130,6 +1182,14 @@ function initializeEventListeners() {
       }
     });
   }
+  const notesNewNoteBtn = el('notes-new-note-btn');
+  if (notesNewNoteBtn) {
+    notesNewNoteBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      notesModule?.newNote?.();
+    });
+  }
   // Refresh notes due-reminder badge on load and every 5 minutes
   if (notesModule && notesModule.refreshDueBadge) {
     notesModule.refreshDueBadge();
@@ -1256,6 +1316,7 @@ function initializeEventListeners() {
       setTimeout(_goFullscreen, 200);
     },
     '/memory':   () => document.getElementById('tool-memory-btn')?.click(),
+    '/skills':   () => document.getElementById('tool-skills-btn')?.click(),
     '/gallery':  () => document.getElementById('tool-gallery-btn')?.click(),
     '/tasks':    () => document.getElementById('tool-tasks-btn')?.click(),
     '/library':  () => sessionModule && sessionModule.openLibrary && sessionModule.openLibrary(),
@@ -1711,9 +1772,24 @@ function initializeEventListeners() {
   const toolMemoryBtn = el('tool-memory-btn');
   if (toolMemoryBtn && memoryModal) {
     toolMemoryBtn.addEventListener('click', () => {
-      memoryModal.classList.remove('hidden');
-      if (memoryModule && memoryModule.renderMemoryList) memoryModule.renderMemoryList();
-      if (memoryModule && memoryModule.updateMemoryCount) memoryModule.updateMemoryCount();
+      if (memoryModule && memoryModule.openMemoryModal) memoryModule.openMemoryModal('browse');
+      else {
+        memoryModal.classList.remove('hidden');
+        if (memoryModule && memoryModule.renderMemoryList) memoryModule.renderMemoryList();
+        if (memoryModule && memoryModule.updateMemoryCount) memoryModule.updateMemoryCount();
+      }
+    });
+  }
+
+  // Sidebar Skills button
+  const toolSkillsBtn = el('tool-skills-btn');
+  if (toolSkillsBtn && memoryModal) {
+    toolSkillsBtn.addEventListener('click', () => {
+      if (memoryModule && memoryModule.openMemoryModal) memoryModule.openMemoryModal('skills');
+      else {
+        memoryModal.classList.remove('hidden');
+        document.querySelector('.memory-tab[data-memory-tab="skills"]')?.click();
+      }
     });
   }
 
@@ -1873,8 +1949,9 @@ function initializeEventListeners() {
       if (toggle) toggle.classList.toggle('mode-chat', mode === 'chat');
       // Workspace pill + overflow entry are agent-only - hide immediately (no flash).
       try { workspaceModule.applyMode(mode); } catch (_) {}
-      // Request construction can run as soon as this click returns. Apply the
-      // mode's tool preferences now so it cannot capture the previous mode.
+      // Tool state is request authority, so synchronize it immediately. A
+      // delayed callback could overwrite a user's fast toggle click and send
+      // a different allow_bash/allow_web_search value than the UI showed.
       applyModeToToggles(mode);
     }
     window.__odysseusSetChatMode = setMode;
@@ -2213,8 +2290,7 @@ function initializeEventListeners() {
       menu.classList.add('closing');
       plusBtn.classList.remove('expanded');
       if (pickerWrap) pickerWrap.style.visibility = '';
-      // Item delays max at 0.18s + 0.20s anim = 0.38s for items, container
-      // delay 0.16s + 0.22s = 0.38s. 400ms covers both with margin.
+      // Keep the upstream short close delay and return keyboard focus safely.
       _closeTimer = setTimeout(() => {
         _closeTimer = null;
         const shouldRestoreFocus = !!focusBeforeClose && document.activeElement === focusBeforeClose;
@@ -2222,7 +2298,7 @@ function initializeEventListeners() {
         menu.classList.remove('closing');
         if (ownerWrap) ownerWrap.appendChild(menu);  // restore from <body> portal
         if (shouldRestoreFocus) plusBtn.focus();
-      }, 400);
+      }, 100);
     }
     // Close menu when clicking any item inside it. preventDefault on pointerdown
     // so tapping an item (e.g. Attach files) doesn't steal focus from the message
@@ -2614,9 +2690,15 @@ function initializeEventListeners() {
   // ── Group toggle button (chatbox indicator) — click to deactivate ──
   const groupToggleBtn = el('group-toggle-btn');
   if (groupToggleBtn) {
-    groupToggleBtn.addEventListener('click', () => {
-      _syncGroupIndicator(false);
-      groupModule.stopGroup();
+    groupToggleBtn.addEventListener('click', (e) => {
+      if (e.target.closest('.tool-indicator-x')) {
+        _syncGroupIndicator(false);
+        groupModule.stopGroup();
+        return;
+      }
+      if (presetsModule && presetsModule.openCustomPresetModal) {
+        presetsModule.openCustomPresetModal('group');
+      }
     });
   }
 
@@ -2638,14 +2720,16 @@ function initializeEventListeners() {
   if (incognitoBtn) {
     incognitoBtn.addEventListener('mousedown', (e) => e.preventDefault());
     incognitoBtn.addEventListener('click', () => {
-      // Don't toggle mid-chat — incognito only changeable from welcome screen
       const ws = el('welcome-screen');
-      if (ws && ws.classList.contains('hidden')) return;
       const chk = el('incognito-toggle');
+      // Starting Nobody is only available from the welcome screen, but ending
+      // it must work after the first message too. The active header/title
+      // controls depend on this path once the welcome button is hidden.
+      if (ws && ws.classList.contains('hidden') && !chk.checked) return;
       chk.checked = !chk.checked;
       incognitoBtn.classList.toggle('active', chk.checked);
       const tipEl = el('welcome-tip');
-      incognitoBtn.title = chk.checked ? 'Disable Nobody mode' : 'Enable Nobody mode — no memory, no history saved';
+      incognitoBtn.title = chk.checked ? 'Disable Nobody mode' : 'Enable Nobody mode — no memory or skill injection, no history saved';
       const welcomeName = document.querySelector('.welcome-name');
       if (chk.checked) {
         try {
@@ -2669,7 +2753,13 @@ function initializeEventListeners() {
           welcomeSub.textContent = "Who am I? I'm nobody.";
           welcomeSub.style.display = '';
         }
-        if (tipEl) { tipEl.dataset.originalTip = tipEl.textContent; tipEl.textContent = 'Temporary session \u2014 won\u2019t be saved and no memory activation.'; tipEl.style.opacity = '0.5'; tipEl.style.marginTop = '8px'; }
+        if (tipEl) {
+          tipEl.dataset.originalTip = tipEl.textContent;
+          tipEl.classList.add('nobody-session-note');
+          tipEl.innerHTML = '<span>No memory or skill activation.</span><span>Temporary session \u2014 won\u2019t be saved.</span>';
+          tipEl.style.opacity = '0.5';
+          tipEl.style.marginTop = '16px';
+        }
         // Default to plain chat: disable tools visually, switch to chat mode.
         // IMPORTANT: don't overwrite the user's persisted per-mode tool prefs
         // (`web_agent`, `bash_agent`, `web_chat`, `bash_chat`). Nobody mode is
@@ -2720,7 +2810,13 @@ function initializeEventListeners() {
           }
           welcomeSub2.style.display = '';
         }
-        if (tipEl && tipEl.dataset.originalTip) { tipEl.textContent = tipEl.dataset.originalTip; tipEl.style.opacity = ''; tipEl.style.marginTop = ''; }
+        if (tipEl && Object.prototype.hasOwnProperty.call(tipEl.dataset, 'originalTip')) {
+          tipEl.textContent = tipEl.dataset.originalTip;
+          delete tipEl.dataset.originalTip;
+          tipEl.classList.remove('nobody-session-note');
+          tipEl.style.opacity = '';
+          tipEl.style.marginTop = '';
+        }
         // Heal any previously-persisted false values from the old Nobody bug
         // so agent-mode defaults (web/bash ON) come back.
         const _ts = Storage.getJSON(Storage.KEYS.TOGGLES, {});
@@ -3192,6 +3288,7 @@ function initializeEventListeners() {
 
     function injectMinimizeButton(modal) {
       if (!modal || !modal.classList || !modal.classList.contains('modal')) return;
+      if (modal.dataset.noMinimize === 'true') return;
       if (modal.id && SKIP_IDS.has(modal.id)) return;
       // Modals managed by the new modalManager (Modals.register) get their own
       // .modal-minimize-btn and chips via the .minimized-dock-chip system.
@@ -3360,13 +3457,40 @@ function initializeEventListeners() {
   async function _handleNewChatAction({ preferModel = true, focus = true } = {}) {
       if (!sessionModule) return;
       if (_closeCompareIfActive()) return;
+      const hasOpenDocument = !!(
+        documentModule
+        && documentModule.isPanelOpen
+        && documentModule.isPanelOpen()
+        && documentModule.getCurrentDocId
+        && documentModule.getCurrentDocId()
+      );
+      const shouldCarryDocument = hasOpenDocument && !!(
+        uiModule?.styledConfirm
+          ? await uiModule.styledConfirm('Bring open document to new chat?', {
+              title: 'New chat',
+              confirmText: 'Bring →',
+              cancelText: 'Drop',
+            })
+          : window.confirm('Bring open document to new chat?')
+      );
       _deactivateIncognito();
       // Clear character on new chat
       if (presetsModule && presetsModule.deactivateCharacter) presetsModule.deactivateCharacter();
       // Clear research mode if active
       const _resChk = el('research-toggle');
       if (_resChk && _resChk.checked) _syncResearchIndicator(false);
-      if (preferModel && await _createDirectChatFromPreferredModel({ fresh: true })) return;
+      if (preferModel && await _createDirectChatFromPreferredModel({ fresh: true, keepDocument: shouldCarryDocument })) {
+        if (shouldCarryDocument) {
+          try {
+            await sessionModule.materializePendingSession();
+            await documentModule.moveActiveDocumentToCurrentChat?.({ quiet: true });
+          } catch (e) {
+            console.warn('Failed to carry document into new chat:', e);
+            uiModule?.showError?.('Could not bring document into the new chat');
+          }
+        }
+        return;
+      }
       // No models at all — show welcome screen
       _startFreshChat();
       const docBtn3 = el('overflow-doc-btn');
@@ -3393,17 +3517,8 @@ function initializeEventListeners() {
   // the default model attaches when they hit send.
   const mobileNewChat = el('mobile-new-chat-btn');
   if (mobileNewChat) {
-    mobileNewChat.addEventListener('click', () => {
-      if (!sessionModule) return;
-      if (_closeCompareIfActive()) return;
-      _deactivateIncognito();
-      _startFreshChat();
-      document.querySelectorAll('.session-item.active').forEach(s => s.classList.remove('active'));
-      // Focus the composer synchronously so mobile keyboards pop open.
-      // iOS Safari only honours programmatic focus inside the original click
-      // callback — a setTimeout breaks the user-gesture chain.
-      const _input = el('message-input');
-      if (_input) { try { _input.focus(); } catch (_) {} }
+    mobileNewChat.addEventListener('click', async () => {
+      await _handleNewChatAction();
     });
   }
 
@@ -3425,6 +3540,11 @@ function initializeEventListeners() {
   if (sidebarNewChatBtn) {
     sidebarNewChatBtn.addEventListener('click', async (e) => {
       if (e) { e.preventDefault(); e.stopImmediatePropagation(); }
+      if (window.innerWidth < 768) {
+        el('sidebar')?.classList.add('hidden');
+        el('sidebar-backdrop')?.classList.remove('visible');
+        window.syncRailSide?.();
+      }
       await _handleNewChatAction();
     });
   }
@@ -3760,6 +3880,8 @@ function startOdysseusApp() {
   searchModule.init();
   chatModule.init(API_BASE);
   chatModule.initListeners();
+  startBackgroundToolJobs({ getSessionId: () => sessionModule.getCurrentSessionId(),
+    addMessage: (...args) => chatRenderer.addMessage(...args), base: API_BASE });
   groupModule.init(API_BASE);
   // Initialize compare module
   if (compareModule) {
@@ -3790,15 +3912,16 @@ function startOdysseusApp() {
 
   // Rail tool buttons — delegate to sidebar tool buttons
   const _railToolMap = {
-    'rail-compare':   'tool-compare-btn',
-    'rail-research':  'tool-research-btn',
-    'rail-cookbook':   'tool-cookbook-btn',
-    'rail-archive':   'tool-library-btn',
-    'rail-gallery':   'tool-gallery-btn',
-    'rail-tasks':     'tool-tasks-btn',
     'rail-calendar':  'tool-calendar-btn',
-    'rail-notes':     'tool-notes-btn',
+    'rail-compare':   'tool-compare-btn',
+    'rail-cookbook':   'tool-cookbook-btn',
+    'rail-research':  'tool-research-btn',
+    'rail-gallery':   'tool-gallery-btn',
+    'rail-archive':   'tool-library-btn',
     'rail-memory':    'tool-memory-btn',
+    'rail-notes':     'tool-notes-btn',
+    'rail-skills':    'tool-skills-btn',
+    'rail-tasks':     'tool-tasks-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
   };
@@ -4085,12 +4208,18 @@ function startOdysseusApp() {
         return;
       }
 
-      // New chat mode — empty input, no attachments, no STT
-      if (!hasText && !hasFiles && sendBtn.dataset.mode === 'newchat') {
-        if (sessionModule) {
-          const sessions = sessionModule.getSessions();
-          const currentId = sessionModule.getCurrentSessionId();
-          const current = sessions.find(s => s.id === currentId);
+	      // New chat mode — empty input, no attachments, no STT
+	      if (!hasText && !hasFiles && sendBtn.dataset.mode === 'newchat') {
+	        const isAlreadyNewChat = document.getElementById('chat-container')?.classList.contains('welcome-active');
+	        if (isAlreadyNewChat) {
+	          if (messageInput) messageInput.focus();
+	          _updateSendBtnIcon();
+	          return;
+	        }
+	        if (sessionModule) {
+	          const sessions = sessionModule.getSessions();
+	          const currentId = sessionModule.getCurrentSessionId();
+	          const current = sessions.find(s => s.id === currentId);
           if (current && current.endpoint_url && current.model) {
             sessionModule.createDirectChat(current.endpoint_url, current.model, current.endpoint_id, { fresh: true });
           } else {
@@ -4131,13 +4260,18 @@ function startOdysseusApp() {
         e.preventDefault();
         // Flush the debounced icon update so dataset.mode reflects the current
         // text state. Without this, a fast type-and-Enter would still see the
-        // stale 'newchat' mode and open a new chat instead of sending.
-        try { _updateSendBtnIcon(); } catch {}
-        if (sendBtn && sendBtn.dataset.mode === 'newchat') {
-          const railNew = el('rail-new-session');
-          if (railNew) railNew.click();
-          return;
-        }
+	        // stale 'newchat' mode and open a new chat instead of sending.
+	        try { _updateSendBtnIcon(); } catch {}
+	        if (sendBtn && sendBtn.dataset.mode === 'newchat') {
+	          const isAlreadyNewChat = document.getElementById('chat-container')?.classList.contains('welcome-active');
+	          if (isAlreadyNewChat) {
+	            if (messageInput) messageInput.focus();
+	            return;
+	          }
+	          const railNew = el('rail-new-session');
+	          if (railNew) railNew.click();
+	          return;
+	        }
         if (_isForegroundChatBusy() && messageInput.value && messageInput.value.trim()) {
           if (chatModule && chatModule.queueStreamingComposerRequest && chatModule.queueStreamingComposerRequest()) {
             return;
@@ -4222,12 +4356,14 @@ function startOdysseusApp() {
   }
 
   chatContainer.addEventListener('dragover', (e) => {
+    if (e.target?.closest?.('#doc-editor-pane')) return;
     e.preventDefault();
     e.stopPropagation();
     _showDropHighlight();
   });
 
   chatContainer.addEventListener('drop', async (e) => {
+    if (e.target?.closest?.('#doc-editor-pane')) return;
     e.preventDefault();
     e.stopPropagation();
     _hideDropHighlight();

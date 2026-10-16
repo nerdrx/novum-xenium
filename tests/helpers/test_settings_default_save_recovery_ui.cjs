@@ -7,13 +7,17 @@ const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
 const source = fs.readFileSync(path.join(repo, 'static/js/settings.js'), 'utf8');
-const postStart = source.indexOf('async function _postSettings(body)');
-const queueStart = source.indexOf('function _createSettingsSaver(', postStart);
+const api = fs.readFileSync(path.join(repo, 'static/js/settings/api.js'), 'utf8');
+const apiStart = api.indexOf('export async function postSettings(body)');
+const apiEnd = api.indexOf('\n}', apiStart) + 2;
+const queueStart = source.indexOf('function _createSettingsSaver(');
 const helpersEnd = source.indexOf('const el = byId;', queueStart);
 const initStart = source.indexOf('async function initDefaultChat()');
 const initEnd = source.indexOf('/* ── Utility Model ── */', initStart);
-assert(postStart >= 0 && queueStart > postStart && helpersEnd > queueStart && initStart >= 0 && initEnd > initStart);
-const settingsHelpers = source.slice(postStart, helpersEnd);
+assert(apiStart >= 0 && apiEnd > apiStart && queueStart >= 0 && helpersEnd > queueStart && initStart >= 0 && initEnd > initStart);
+const settingsHelpers = api.slice(apiStart, apiEnd)
+  .replace('export async function postSettings(body)', 'async function _postSettings(body)')
+  + '\n' + source.slice(queueStart, helpersEnd);
 const initializer = source.slice(initStart, initEnd);
 let postCalls = [];
 let pendingResponses = new Map();
@@ -57,9 +61,11 @@ const server = http.createServer(async (req, res) => {
       const byId = id => document.getElementById(id);
       const el = byId;
       const invalidateSettings = () => { window.__invalidations = (window.__invalidations || 0) + 1; };
+      const uiModule = { showError() {} };
       ${settingsHelpers}
-      const endpoints = [{ id: 'ep', name: 'Endpoint', models: ['m0', 'm1'] }];
+      const endpoints = [{ id: 'ep', name: 'Endpoint', is_enabled: true, models: ['m0', 'm1'] }];
       const _fetchModelEndpoints = async () => endpoints;
+      const _selectableEndpointModels = endpoint => [...new Set([...(endpoint.models || []), ...(endpoint.pinned_models || [])])];
       const _fillEndpointSelect = (select, list, selected) => {
         select.replaceChildren(...list.map(item => { const option = document.createElement('option'); option.value = item.id; option.textContent = item.name; return option; }));
         if (selected) select.value = selected;
@@ -76,7 +82,7 @@ const server = http.createServer(async (req, res) => {
   }
   const file = path.resolve(repo, `.${url.pathname}`);
   if (!file.startsWith(repo + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 

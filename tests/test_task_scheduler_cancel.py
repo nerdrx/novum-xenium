@@ -1,6 +1,9 @@
 import asyncio
+import sqlite3
 import threading
 from types import SimpleNamespace
+import pytest
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Column, DateTime, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -19,11 +22,18 @@ def _setup_db(tmp_path, monkeypatch):
         name = Column(String)
         task_type = Column(String, default="llm")
         action = Column(String)
-        trigger_type = Column(String, default="schedule")
-        schedule = Column(String)
+        status = Column(String, default="active")
         next_run = Column(DateTime)
         last_run = Column(DateTime)
-        status = Column(String, default="active")
+        prompt = Column(Text, default='')
+        request_authority_json = Column(Text)
+        trigger_type = Column(String, default='schedule')
+        schedule = Column(String, default='daily')
+        scheduled_time = Column(String, default='08:00')
+        scheduled_day = Column(String)
+        scheduled_date = Column(DateTime)
+        cron_expression = Column(String)
+        then_task_id = Column(String)
 
     class TaskRun(base):
         __tablename__ = "task_runs"
@@ -68,9 +78,9 @@ def test_stop_task_cleans_up_queued_handle_and_run(tmp_path, monkeypatch):
         scheduler._executing_lock = asyncio.Lock()
         scheduler._run_semaphore = asyncio.Semaphore(1)
         scheduler._task_handles = {}
+        scheduler._execution_handles = {}
         scheduler._concurrency_cap = 1
         scheduler._task_defer_counts = {}
-        scheduler._execution_handles = {}
         await scheduler._run_semaphore.acquire()
 
         task = asyncio.create_task(scheduler._execute_task("queued-task"))
@@ -111,6 +121,117 @@ def test_stop_task_cleans_up_queued_handle_and_run(tmp_path, monkeypatch):
     finally:
         db.close()
 
+
+@pytest.mark.parametrize('mode', ['foreground', 'single', 'queued', 'queued_repeat'])
+@pytest.mark.parametrize('lock_mode', ['EXCLUSIVE', 'IMMEDIATE'])
+def test_cancel_keeps_event_loop_responsive_during_database_lock(tmp_path, monkeypatch, mode, lock_mode):
+    session_local, ScheduledTask, TaskRun = _setup_db(tmp_path, monkeypatch)
+    with session_local() as db:
+        if mode.startswith('queued'):
+            db.add(ScheduledTask(id='locked-task', owner='alice', name='Fixture',
+                task_type='llm', status='active',
+                next_run=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)))
+        else:
+            db.add(TaskRun(id='locked-run', task_id='locked-task', status='running'))
+        db.commit()
+    from src.task_scheduler import TaskScheduler
+
+    holder = sqlite3.connect(tmp_path / 'tasks.db', check_same_thread=False)
+    assert holder.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
+    heartbeat = threading.Event()
+    progress_before_release = []
+    def release_lock():
+        progress_before_release.append(heartbeat.is_set())
+        holder.commit()
+    release = threading.Timer(0.25, release_lock)
+
+    async def drive():
+        scheduler = TaskScheduler(None)
+        scheduler._executing.add('locked-task')
+        pending = None
+        if mode.startswith('queued'):
+            await scheduler._run_semaphore.acquire()
+            pending = asyncio.create_task(scheduler._execute_task('locked-task'))
+            await asyncio.sleep(0)
+            assert 'locked-task' in scheduler._task_handles
+        holder.execute(f'BEGIN {lock_mode}')
+        asyncio.get_running_loop().call_later(0.02, heartbeat.set)
+        repeated_stops = []
+        if mode == 'queued_repeat':
+            asyncio.get_running_loop().call_later(0.04, lambda: repeated_stops.append(
+                asyncio.create_task(scheduler.stop_task('locked-task'))))
+        release.start()
+        if mode == 'foreground':
+            assert await scheduler.stop_background_tasks_for_foreground() == 1
+        else:
+            assert await scheduler.stop_task('locked-task') is True
+        if pending:
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            scheduler._run_semaphore.release()
+        if repeated_stops:
+            await asyncio.gather(*repeated_stops)
+
+    try:
+        asyncio.run(drive())
+    finally:
+        release.join(timeout=2)
+        holder.close()
+    assert progress_before_release == [True], 'foreground event loop froze behind SQLite'
+    with session_local() as db:
+        assert db.query(TaskRun).filter_by(task_id='locked-task').one().status == 'aborted'
+        if mode.startswith('queued'):
+            task = db.get(ScheduledTask, 'locked-task')
+            assert task.status == 'active'
+            assert task.next_run > datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def test_running_task_cancel_keeps_event_loop_responsive_during_database_lock(tmp_path, monkeypatch):
+    session_local, ScheduledTask, TaskRun = _setup_db(tmp_path, monkeypatch)
+    from src.task_scheduler import TaskScheduler
+    from src.builtin_actions import BUILTIN_ACTIONS
+    monkeypatch.setenv('BACKGROUND_TASK_FOREGROUND_GATE', 'false')
+    from src.agent_runtime.authority import seal_task_authority
+    with session_local() as db:
+        db.add(ScheduledTask(id='running-task', owner='alice', name='Fixture action',
+            task_type='action', action='fixture_wait', status='active',
+            request_authority_json=seal_task_authority('', 'action', 'fixture_wait', owner='alice')))
+        db.commit()
+    started = asyncio.Event()
+    async def external_action(**kwargs):
+        started.set()
+        await asyncio.Event().wait()
+    monkeypatch.setitem(BUILTIN_ACTIONS, 'fixture_wait', external_action)
+    holder = sqlite3.connect(tmp_path / 'tasks.db', check_same_thread=False)
+    heartbeat = threading.Event()
+    progress_before_release = []
+    def release_lock():
+        progress_before_release.append(heartbeat.is_set())
+        holder.commit()
+    release = threading.Timer(0.25, release_lock)
+
+    async def drive():
+        scheduler = TaskScheduler(None)
+        assert await scheduler.run_task_now('running-task')
+        await asyncio.wait_for(started.wait(), timeout=2)
+        pending = scheduler._task_handles['running-task']
+        holder.execute('BEGIN EXCLUSIVE')
+        asyncio.get_running_loop().call_later(0.02, heartbeat.set)
+        release.start()
+        assert await scheduler.stop_task('running-task')
+        await pending
+    try:
+        asyncio.run(drive())
+    finally:
+        if release.ident is not None:
+            release.join(timeout=2)
+        holder.close()
+    assert progress_before_release == [True], 'running-task cleanup blocked foreground'
+    with session_local() as db:
+        assert db.query(TaskRun).filter_by(task_id='running-task').one().status == 'aborted'
+        task = db.get(ScheduledTask, 'running-task')
+        assert task.status == 'active'
+        assert task.next_run > datetime.now(timezone.utc).replace(tzinfo=None)
 
 def test_stop_before_task_starts_cancels_registered_handle(tmp_path, monkeypatch):
     session_local, ScheduledTask, _ = _setup_db(tmp_path, monkeypatch)
@@ -184,7 +305,6 @@ def test_stop_before_task_starts_cancels_registered_handle(tmp_path, monkeypatch
 
     asyncio.run(drive())
 
-
 def test_stopped_run_cleanup_does_not_release_restarted_run(tmp_path, monkeypatch):
     session_local, ScheduledTask, _ = _setup_db(tmp_path, monkeypatch)
 
@@ -241,7 +361,6 @@ def test_stopped_run_cleanup_does_not_release_restarted_run(tmp_path, monkeypatc
         assert "restart-task" not in scheduler._task_handles
 
     asyncio.run(drive())
-
 
 def test_inner_executor_cleanup_does_not_release_restarted_run(tmp_path, monkeypatch):
     session_local, ScheduledTask, _ = _setup_db(tmp_path, monkeypatch)
@@ -318,7 +437,6 @@ def test_inner_executor_cleanup_does_not_release_restarted_run(tmp_path, monkeyp
 
     asyncio.run(drive())
 
-
 def test_chained_run_registers_handle_and_skips_duplicate(tmp_path, monkeypatch):
     _setup_db(tmp_path, monkeypatch)
     from src.task_scheduler import TaskScheduler
@@ -354,7 +472,6 @@ def test_chained_run_registers_handle_and_skips_duplicate(tmp_path, monkeypatch)
         assert "chain-task" not in scheduler._task_handles
 
     asyncio.run(drive())
-
 
 def test_force_runs_remain_parallel_and_track_latest_handle(tmp_path, monkeypatch):
     _setup_db(tmp_path, monkeypatch)
@@ -400,7 +517,6 @@ def test_force_runs_remain_parallel_and_track_latest_handle(tmp_path, monkeypatc
             pass
 
     asyncio.run(drive())
-
 
 def test_stop_does_not_release_replacement_execution_reservation(tmp_path, monkeypatch):
     _setup_db(tmp_path, monkeypatch)
@@ -459,7 +575,6 @@ def test_stop_does_not_release_replacement_execution_reservation(tmp_path, monke
         await replacement
 
     asyncio.run(drive())
-
 
 def test_delete_task_drains_active_run_before_removing_task(tmp_path, monkeypatch):
     session_local, ScheduledTask, TaskRun = _setup_db(tmp_path, monkeypatch)
@@ -531,7 +646,6 @@ def test_delete_task_drains_active_run_before_removing_task(tmp_path, monkeypatc
             db.close()
 
     asyncio.run(drive())
-
 
 def test_calendar_cascade_does_not_block_async_task_delete(tmp_path, monkeypatch):
     session_local, ScheduledTask, _ = _setup_db(tmp_path, monkeypatch)
@@ -605,7 +719,6 @@ def test_calendar_cascade_does_not_block_async_task_delete(tmp_path, monkeypatch
     finally:
         db.close()
 
-
 def test_timed_out_delete_keeps_dispatch_fence_until_cancelled_run_exits(tmp_path, monkeypatch):
     _setup_db(tmp_path, monkeypatch)
     from src.task_scheduler import TaskScheduler
@@ -645,7 +758,6 @@ def test_timed_out_delete_keeps_dispatch_fence_until_cancelled_run_exits(tmp_pat
         assert "slow-delete" not in scheduler._deleting_tasks
 
     asyncio.run(drive())
-
 
 def test_task_delete_owner_check_precedes_run_cancellation(tmp_path, monkeypatch):
     session_local, ScheduledTask, _ = _setup_db(tmp_path, monkeypatch)
@@ -708,7 +820,6 @@ def test_task_delete_owner_check_precedes_run_cancellation(tmp_path, monkeypatch
             db.close()
 
     asyncio.run(drive())
-
 
 def test_overlapping_deletes_keep_fence_until_last_request_and_run_finish(tmp_path, monkeypatch):
     _setup_db(tmp_path, monkeypatch)

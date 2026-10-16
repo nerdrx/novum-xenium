@@ -180,6 +180,17 @@ class TestThinkSuppression:
         assert "reasoning_effort" not in payload
 
 
+    def test_qwen_tool_router_does_not_receive_ollama_think_override(self, monkeypatch):
+        """A local OpenAI-compatible tool-router is not Ollama's /v1 surface."""
+        payload = _capture_payload(
+            monkeypatch,
+            "http://127.0.0.1:18059/v1/chat/completions",
+            "qwen35-9b-tool-router-v4-firstaction-noschema-adapter",
+        )
+        assert "think" not in payload
+        assert payload["max_tokens"] == llm_core.LLMConfig.DEFAULT_MAX_TOKENS
+
+
 @pytest.mark.parametrize("model", ["qwen3.5:9b", "huihui-qwen3.8:27b-local"])
 def test_qwen35_ollama_openai_reasoning_disabled(monkeypatch, model):
     """Qwen 3.5 needs the OpenAI reasoning control to avoid empty replies."""

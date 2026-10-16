@@ -5,15 +5,17 @@ const http = require('node:http');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const root = path.resolve('static');
-const server = http.createServer((req, res) => {
+const stylesheetTags = import('./stylesheets.mjs').then(({ stylesheetLinkTags }) => stylesheetLinkTags());
+const server = http.createServer(async (req, res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
   if (pathname === '/') {
-    res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><main id="body"></main><button id="play">Play fixture</button><script type="module">import {mdToHtml} from "/js/markdown.js"; import {createStreamRenderer} from "/js/streamingRenderer.js"; import {parkMediaFrames,preserveMediaFrames,setHtmlPreservingMedia} from "/js/chatMedia.js"; window.r=createStreamRenderer(document.querySelector("#body"),{render:mdToHtml}); window.finish=()=>setHtmlPreservingMedia(document.querySelector("#body"),mdToHtml("![Fixture clip](https://media.example.test/clip.webm)\\n\\nThe final canonical reply.")); window.finishRich=async()=>{const old=document.querySelector("#body"),stash=parkMediaFrames(old);const history=document.createElement("section");history.innerHTML=mdToHtml("![Older duplicate](https://media.example.test/clip.webm)\\n\\n![Fixture clip](https://media.example.test/clip.webm)\\n\\nA rich canonical reload.");await new Promise(resolve=>setTimeout(resolve,250));preserveMediaFrames(stash,history);stash?.remove();old.replaceWith(history);return history}; document.querySelector("#play").onclick=async()=>{const v=document.querySelector("video");v.loop=true;await v.play()};</script>');
+    res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html><head><meta name="viewport" content="width=device-width,initial-scale=1">${await stylesheetTags}</head><main id="body"></main><button id="play">Play fixture</button><script type="module">import {mdToHtml} from "/js/markdown.js"; import {createStreamRenderer} from "/js/streamingRenderer.js"; import {parkMediaFrames,preserveMediaFrames,setHtmlPreservingMedia} from "/js/chatMedia.js"; window.r=createStreamRenderer(document.querySelector("#body"),{render:mdToHtml}); window.finish=()=>setHtmlPreservingMedia(document.querySelector("#body"),mdToHtml("![Fixture clip](https://media.example.test/clip.webm)\\n\\nThe final canonical reply.")); window.finishRich=async()=>{const old=document.querySelector("#body"),stash=parkMediaFrames(old);const history=document.createElement("section");history.innerHTML=mdToHtml("![Older duplicate](https://media.example.test/clip.webm)\\n\\n![Fixture clip](https://media.example.test/clip.webm)\\n\\nA rich canonical reload.");await new Promise(resolve=>setTimeout(resolve,250));preserveMediaFrames(stash,history);stash?.remove();old.replaceWith(history);return history}; document.querySelector("#play").onclick=async()=>{const v=document.querySelector("video");v.loop=true;await v.play()};</script>`);
     return;
   }
-  const file = path.resolve(root, `.${pathname}`);
+  const relative = pathname.startsWith('/static/') ? pathname.slice('/static/'.length) : pathname.slice(1);
+  const file = path.resolve(root, relative);
   if (!file.startsWith(root + path.sep) || !fs.existsSync(file)) return res.writeHead(404).end();
-  res.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : 'text/css' });
+  res.writeHead(200, { 'content-type': (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/css' });
   fs.createReadStream(file).pipe(res);
 });
 
@@ -42,16 +44,17 @@ const server = http.createServer((req, res) => {
       return btoa(String.fromCharCode(...new Uint8Array(await new Blob(chunks, { type: 'video/webm' }).arrayBuffer())));
     });
     await page.evaluate(data => { window.fixtureData = data; }, encoded);
-    await page.evaluate(() => { window.r.update('![Fixture clip](https://media.example.test/clip.webm)'); document.querySelector('video').load(); });
+    await page.evaluate(() => { window.r.update('![Fixture clip](https://media.example.test/clip.webm)'); });
     const video = page.locator('video.chat-inline-media'); await video.waitFor();
     await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2, null, { timeout: 10000 });
     const element = await video.elementHandle();
     await page.locator('#play').click(); await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+    const requestsBeforeUpdates = mediaRequests;
     await page.evaluate(() => window.r.update('![Fixture clip](https://media.example.test/clip.webm) and more response text arrives.'));
     await page.waitForTimeout(150);
     assert.equal(await video.evaluate((node, old) => node === old, element), true, 'live-tail updates preserve the same media node');
     assert.equal(await video.evaluate(node => node.paused), false, 'stream updates preserve ongoing playback');
-    assert.equal(mediaRequests, 1, 'stream updates do not reload the media source');
+    assert.equal(mediaRequests, requestsBeforeUpdates, 'stream updates do not reload the media source');
     await page.evaluate(() => window.r.update('![Fixture clip](https://media.example.test/clip.webm) and more response text arrives.\n\nA second paragraph freezes the media block.'));
     assert.equal(await video.evaluate((node, old) => node === old, element), true, 'freezing a live-tail media block preserves the node');
     assert.equal(await video.evaluate(node => node.paused), false, 'freezing preserves active playback');
@@ -60,14 +63,12 @@ const server = http.createServer((req, res) => {
     await page.evaluate(() => window.finish());
     assert.equal(await video.evaluate((node, old) => node === old, element), true, 'canonical terminal render preserves the media node');
     assert.equal(await video.evaluate(node => node.paused), false, 'canonical terminal render preserves active playback');
-    assert.equal(mediaRequests, 1, 'terminal render does not re-fetch the same media');
+    assert.equal(mediaRequests, requestsBeforeUpdates, 'terminal render does not re-fetch the same media');
     const chatSource = fs.readFileSync(path.resolve(root, '../static/js/chat.js'), 'utf8');
     assert.match(chatSource, /setHtmlPreservingMedia\(_liveReplyEl, _replyHtml\)/, 'primary SSE completion preserves media while canonicalizing Markdown');
-    assert.match(chatSource, /preserveMediaFrames\(holder, renderedBody\)/, 'resume SSE completion transfers live media into the canonical message');
-    assert.match(chatSource, /await sessionModule\.selectSession\(sessionId\)[\s\S]*?preserveMediaFrames\(preservedMedia, history\)/, 'rich resume reload transfers media only after canonical history renders');
-    assert.match(chatSource, /getCurrentSessionId\?\.\(\) === sessionId/, 'rich resume media transfer is guarded against cross-session attachment');
-    assert.match(chatSource, /onThisSession \? parkMediaFrames\(holder\) : null/, 'off-session completion never creates a hidden media parking node');
-    assert.match(chatSource, /try \{[\s\S]*?await sessionModule\.selectSession\(sessionId\)[\s\S]*?finally \{\s*preservedMedia\?\.remove\(\);/, 'failed or successful history reload always removes parked media');
+    assert.match(chatSource, /createTurnRendering\(\{ root: box, start: replayMarker, renderBody: setHtmlPreservingMedia \}\)/, 'resumed streams use the media-preserving turn renderer');
+    assert.match(chatSource, /replayRendering\.render\(\{ body: roundHolder\.querySelector\('\.body'\), html, raw: roundText/, 'resumed turn updates use the preserving renderer for each body');
+    assert.match(chatSource, /replayRendering\.settle\(\)/, 'resumed turn renderer settles its live media state at completion');
     await page.evaluate(() => window.finishRich());
     const richVideos = page.locator('video.chat-inline-media');
     assert.equal(await richVideos.count(), 2, 'rich history may contain an older copy of the same URL');

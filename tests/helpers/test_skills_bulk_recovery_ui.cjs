@@ -103,7 +103,7 @@ const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'text/javascript');
     return res.end(`const esc=s=>String(s??''); export default {esc, showError:m=>window.fixtureErrors.push(String(m)), showToast:m=>window.fixtureToasts.push(String(m)), styledConfirm:async()=>true};`);
   }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 

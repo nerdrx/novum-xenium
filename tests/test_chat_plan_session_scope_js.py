@@ -111,7 +111,7 @@ def test_inline_plan_approval_uses_its_chat_and_cannot_cross_navigation():
       assert.equal(input.value, 'draft for B');
       assert.equal(context.pendingPlan(), null);
       assert.deepEqual(JSON.parse(JSON.stringify(context.buildRequest('chat-B', 'Execute the approved plan.'))), [
-        ['mode', 'agent'], ['plan_mode', 'false']
+        ['mode', 'chat'], ['plan_mode', 'false']
       ]);
       assert.equal(context.pendingPlan(), null);
 

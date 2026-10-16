@@ -19,7 +19,12 @@ GUIDE_ONLY_DIRECTIVE = (
     "output they will produce locally."
 )
 
-WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
+WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch", "get_weather"})
+WEB_ACCESS_TOOL_NAMES = frozenset({
+    *WEB_TOOL_NAMES,
+    "private_browser",
+    "youtube_tool",
+})
 
 
 _GITHUB_REPOSITORY_RE = re.compile(r"\b(?:github(?:\.com)?|git\s*hub)\b.{0,100}\b(?:repos?|repositories)\b|\b(?:repos?|repositories)\b.{0,100}\b(?:github(?:\.com)?|git\s*hub)\b", re.I | re.S)
@@ -439,6 +444,23 @@ def web_search_enabled_for_turn(allow_web_search: object, use_web: object = None
     return tool_toggle_enabled(allow_web_search) or tool_toggle_enabled(use_web)
 
 
+def web_intent_may_enable_for_turn(
+    allow_web_search: object,
+    *,
+    message_denies_lookup: bool = False,
+) -> bool:
+    """Whether prompt intent may turn on web tools for this request.
+
+    Prompt classification can supply a missing preference, but it must never
+    overwrite an explicit caller denial.  This keeps API, TUI, and WebUI
+    permission semantics identical.
+    """
+    return (
+        not is_web_search_explicitly_denied(allow_web_search)
+        and not message_denies_lookup
+    )
+
+
 _COMMON_TOOL_NAMES = {
     "context_search",
     "api_call",
@@ -461,6 +483,7 @@ _COMMON_TOOL_NAMES = {
     "generate_image",
     "glob",
     "grep",
+    "host_shell",
     "list_cached_models",
     "list_cookbook_servers",
     "list_downloads",
@@ -486,7 +509,9 @@ _COMMON_TOOL_NAMES = {
     "manage_webhooks",
     "mark_email_read",
     "pipeline",
+    "private_browser",
     "python",
+    "download_attachment",
     "read_email",
     "read_file",
     "reply_to_email",
@@ -508,6 +533,7 @@ _COMMON_TOOL_NAMES = {
     "vault_unlock",
     "web_fetch",
     "web_search",
+    "youtube_tool",
     "write_file",
 }
 
@@ -550,7 +576,7 @@ class ToolPolicy:
             return self.reasons[tool_name]
         if self.block_all_tool_calls and self.mode == "guide_only":
             return "Tool use is disabled for this guide-only turn."
-        return "Tool use is disabled for this turn."
+        return "Tool use is disabled by the current request policy."
 
 
 def detect_guide_only_turn(message: object) -> Optional[str]:

@@ -7,11 +7,10 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
-const source = fs.readFileSync(path.join(repo, 'static/js/settings.js'), 'utf8');
-const start = source.indexOf('async function initImageSettings()');
-const end = source.indexOf('/* ── Vision ── */', start);
-assert(start >= 0 && end > start, 'could not locate image settings initializer');
-const initializer = source.slice(start, end);
+const source = fs.readFileSync(path.join(repo, 'static/js/settings/imageModels.js'), 'utf8');
+const start = source.indexOf('export async function initImageSettings(');
+assert(start >= 0, 'could not locate extracted image settings initializer');
+const initializer = source.slice(start).replace('export async function initImageSettings', 'async function initImageSettings');
 const html = `<!doctype html><meta charset="utf-8"><body>
 <div><select id="set-imgModelSelect"><option value="">Auto-detect</option></select>
 <select id="set-imgQualitySelect"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
@@ -21,6 +20,10 @@ const endpoint = models => ({ id: 'image-provider', name: 'Provider', is_enabled
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/') return res.end(html);
+  if (url.pathname === '/api/model-endpoints') {
+    res.setHeader('Content-Type', 'application/json');
+    return res.end(JSON.stringify([endpoint(['gpt-image-0', 'gpt-image-1', 'gpt-image-2'])]));
+  }
   if (url.pathname === '/api/auth/settings') {
     res.setHeader('Content-Type', 'application/json');
     return res.end(JSON.stringify({ image_model: 'gpt-image-0@Provider', image_quality: 'medium', image_gen_enabled: true }));
@@ -31,7 +34,6 @@ const server = http.createServer((req, res) => {
       const el = id => document.getElementById(id);
       const uiModule = { showError() {}, showToast() {} };
       const sortModelIds = values => [...values].sort();
-      const _fetchModelEndpoints = async () => [${JSON.stringify(endpoint(['gpt-image-0', 'gpt-image-1', 'gpt-image-2']))}];
       const _registerAiEndpointRefresh = fn => { window.__refreshImageEndpoints = fn; };
       window.__imageSaveCalls = [];
       window.__resolveImageSave = (index, ok) => window.__imageSaveCalls[index].resolve({
@@ -41,7 +43,7 @@ const server = http.createServer((req, res) => {
         snapshot: { ...snapshot }, resolve,
       }));
       ${initializer}
-      await initImageSettings();
+      await initImageSettings({ registerEndpointRefresh: _registerAiEndpointRefresh });
       window.__imageSettingsReady = true;
     `);
   }

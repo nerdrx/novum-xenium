@@ -6,7 +6,8 @@ const path = require('node:path');
 const {chromium} = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
-const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/static/style.css"></head>
+const { withAppStyles } = require('./app_styles.cjs');
+const html = `<!doctype html><html><head><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS --></head>
 <body><button id="workspace-open">Workspace</button><button id="mode-agent-btn" class="mode-toggle-btn">Agent</button><button id="mode-chat-btn" class="mode-toggle-btn">Chat</button><script type="module">
 localStorage.setItem('odysseus-workspace','/workspace');
 localStorage.setItem('currentSessionId','fixture-session');
@@ -29,7 +30,7 @@ const json = (res, data, status = 200) => {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') return res.end(html);
+  if (url.pathname === '/') return withAppStyles(html).then(styled => res.end(styled));
   if (url.pathname === '/api/workspace/browse') {
     return json(res, {path: '/workspace', parent: '/', dirs: [], selectable: true});
   }
@@ -86,7 +87,7 @@ const server = http.createServer(async (req, res) => {
     res.statusCode = 404;
     return res.end();
   }
-  res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
+  res.setHeader('Content-Type', (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/plain');
   fs.createReadStream(file).pipe(res);
 });
 

@@ -63,7 +63,7 @@ def _extract_thinking_blocks(text: str) -> dict:
           `from '${chatMediaUrl}';`
         );
         source = source.replace(
-          /import uiModule from ['"]\.\/ui\.js['"];/,
+          /import uiModule from ['"]\.\/ui\.js(?:[?#][^'"]*)?['"];?/,
           ''
         );
         source = source.replace(

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
-const css = fs.readFileSync('static/style.css', 'utf8');
+const cssPromise = import('./stylesheets.mjs').then(({ appCss }) => appCss());
 const source = fs.readFileSync('static/index.html', 'utf8');
 const start = source.indexOf('<div id="custom-preset-modal"');
 assert.ok(start >= 0, 'Persona modal exists in the app shell');
@@ -27,7 +27,7 @@ const modal = source.slice(start, end).replace('class="modal hidden"', 'class="m
   try {
     for (const width of [1280, 390]) {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
-      await page.setContent(`<style>${css}</style>${modal}`);
+      await page.setContent(`<style>${await cssPromise}</style>${modal}`);
       await page.addStyleTag({ content: '*,*::before,*::after{animation:none!important;transition:none!important}body{margin:0}' });
       await page.evaluate(() => {
         document.querySelector('[data-chartab="inject"]')?.classList.remove('active');

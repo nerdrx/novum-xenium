@@ -119,3 +119,23 @@ def test_append_threads_result_to_correct_tool_call_id():
     assert tool_msgs[0]["content"] == "RESULT"
     asst = next(m for m in messages if m.get("role") == "assistant")
     assert [tc["id"] for tc in asst["tool_calls"]] == ["B"]
+
+
+def test_reasoning_history_preserved_only_for_declared_continuity_modes():
+    from copy import deepcopy
+    prior = [
+        {"role": "assistant", "content": None, "reasoning_content": "prior provider reasoning",
+         "tool_calls": [{"id": "old-call", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "old-call", "content": "source contents"},
+    ]
+    for preserve_all, server_scheduled in ((True, False), (False, True), (False, False)):
+        messages = deepcopy(prior)
+        al._append_tool_results(messages, "", [], ["check result"], ["check result"], False, 2,
+                                preserve_all_reasoning_content=preserve_all,
+                                server_scheduled=server_scheduled)
+        if preserve_all or server_scheduled:
+            assert messages[0]["reasoning_content"] == "prior provider reasoning"
+        else:
+            assert "reasoning_content" not in messages[0]
+        assert messages[0]["tool_calls"] == prior[0]["tool_calls"]
+        assert messages[1] == prior[1]

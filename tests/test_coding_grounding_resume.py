@@ -123,7 +123,9 @@ def test_first_resumed_request_has_grounding_and_real_skill_references(monkeypat
         assert block.tool_type == 'bash' and block.content == 'node qa.js'
         return 'baseline', {'exit_code': 1, 'output': 'Expected GUI failure'}
     async def stream(candidates, messages, **kwargs):
-        assert executed == ['todowrite']
+        # The resume gate runs the trusted baseline check before asking the
+        # model to continue the already-approved implementation.
+        assert executed == ['todowrite', 'bash']
         request = await kwargs['candidate_request_factory'](0, *candidates[0])
         requests.append(request)
         names = {schema['function']['name'] for schema in request['kwargs']['tools']}

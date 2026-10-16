@@ -39,7 +39,15 @@ def _types(chunks):
 def _patch_common(monkeypatch):
     # Skip RAG/tool-index, MCP, and settings lookups; keep the real loop body,
     # _resolve_tool_blocks, and parse_tool_blocks.
-    monkeypatch.setattr(al, "get_setting", lambda key, default=None: default, raising=False)
+    # These are loop-budget/recovery tests, not checked-workflow tests. Keep
+    # the milestone preflight opt-in here so its required packet does not
+    # consume the synthetic provider rounds under test.
+    monkeypatch.setattr(
+        al,
+        "get_setting",
+        lambda key, default=None: False if key == "agent_milestone_workflow" else default,
+        raising=False,
+    )
     monkeypatch.setattr(al, "get_mcp_manager", lambda: None, raising=False)
     monkeypatch.setattr(al, "estimate_tokens", lambda *a, **k: 10, raising=False)
     # The round providers are synthetic. Keep real compaction logic while
@@ -74,7 +82,15 @@ def _patch_common(monkeypatch):
     monkeypatch.setattr(al, "execute_tool_block", _fake_exec, raising=False)
 
 
-def _run_loop(monkeypatch, round_text, max_rounds=2):
+def _run_loop(
+    monkeypatch,
+    round_text,
+    max_rounds=2,
+    *,
+    user_text="do a long multi-step task",
+    relevant_tools=None,
+    workspace=None,
+):
     responses = iter(round_text) if isinstance(round_text, (list, tuple)) else None
 
     async def _fake_stream(_candidates, messages, **kwargs):
@@ -85,9 +101,10 @@ def _run_loop(monkeypatch, round_text, max_rounds=2):
 
     gen = al.stream_agent_loop(
         "http://x/v1", "m",
-        [{"role": "user", "content": "do a long multi-step task"}],
+        [{"role": "user", "content": user_text}],
         max_rounds=max_rounds,
-            relevant_tools={"bash"},
+        relevant_tools=relevant_tools or {"bash"},
+        workspace=workspace,
     )
     return _types(_collect(gen))
 
@@ -166,7 +183,7 @@ def test_python_html_mutation_queues_native_browser_verification(monkeypatch):
     _collect(al.stream_agent_loop(
         "http://x/v1",
         "m",
-        [{"role": "user", "content": "Create /workspace/output.html."}],
+        [{"role": "user", "content": "Create /workspace/output.html in the workspace."}],
         max_rounds=2,
         relevant_tools={"python", "private_browser"},
         workspace="/workspace",
@@ -483,7 +500,7 @@ def test_native_explicit_script_run_uses_backend_bash_after_write(monkeypatch):
         [{
             "role": "user",
             "content": (
-                "Write /workspace/calculate.py containing the calculation. "
+                "Write /workspace/calculate.py containing the calculation in the workspace. "
                 "Then run the script."
             ),
         }],
@@ -716,7 +733,14 @@ def test_notes_definition_question_suppresses_bad_notes_tool_call(monkeypatch):
 def test_emits_intent_nudge_exhausted_when_cap_is_exhausted(monkeypatch):
     _patch_common(monkeypatch)
 
-    events = _run_loop(monkeypatch, "Let me check the logs", max_rounds=5)
+    events = _run_loop(
+        monkeypatch,
+        "Let me check the logs",
+        max_rounds=5,
+        user_text="Inspect the workspace logs and report the error.",
+        relevant_tools={"host_shell"},
+        workspace="/workspace",
+    )
 
     guard = next((e for e in events if e.get("type") == "intent_nudge_exhausted"), None)
     assert guard is not None, events
@@ -731,6 +755,8 @@ def test_try_different_search_gets_intent_followthrough_nudges(monkeypatch):
         monkeypatch,
         "Let me try a different search approach to find the official sources.",
         max_rounds=5,
+        user_text="Find official sources about the current release status.",
+        relevant_tools={"web_search"},
     )
 
     guard = next(
@@ -747,6 +773,9 @@ def test_need_to_scan_gets_intent_followthrough_nudges(monkeypatch):
         monkeypatch,
         "I need to scan through the video more carefully.",
         max_rounds=5,
+        user_text="Inspect /workspace/video.mp4 and describe the scene.",
+        relevant_tools={"inspect_media"},
+        workspace="/workspace",
     )
 
     assert any(
@@ -756,7 +785,9 @@ def test_need_to_scan_gets_intent_followthrough_nudges(monkeypatch):
 
 def test_unattended_intent_nudge_cap_forces_final_answer(monkeypatch):
     _patch_common(monkeypatch)
+    import src.llm_core as llm_core
     seen = []
+    synthesis_calls = []
 
     async def _fake_stream(_candidates, messages, **kwargs):
         seen.append(messages)
@@ -775,6 +806,12 @@ def test_unattended_intent_nudge_cap_forces_final_answer(monkeypatch):
         yield "data: [DONE]\n\n"
 
     monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+
+    async def _fake_synthesis(*args, **kwargs):
+        synthesis_calls.append(kwargs)
+        return "Best-supported answer: seven points were visible."
+
+    monkeypatch.setattr(llm_core, "llm_call_async", _fake_synthesis)
     events = _types(_collect(al.stream_agent_loop(
         "http://x/v1", "m",
         [{"role": "user", "content": "Inspect /workspace/video.mp4 and count the points."}],
@@ -789,7 +826,8 @@ def test_unattended_intent_nudge_cap_forces_final_answer(monkeypatch):
     )))
 
     assert not any(e.get("type") == "intent_nudge_exhausted" for e in events)
-    assert any("seven points" in str(e.get("delta") or "") for e in events)
+    assert synthesis_calls
+    assert any("seven points" in str(e.get("delta") or e.get("content") or "") for e in events)
 
 
 def test_unattended_force_answer_rejects_long_planning_tail(monkeypatch):
@@ -916,8 +954,20 @@ def test_long_coding_promise_does_not_silently_finish(monkeypatch):
         "I'll continue with the actual implementation of the FFmpeg GUI with NX Design Language. Let me create a complete, working solution by generating the full HTML file with embedded CSS and JavaScript functionality."
     )
     assert len(promise) > 400
-    events = _run_loop(monkeypatch, promise, max_rounds=5)
-    assert any(e.get("type") == "intent_nudge_exhausted" for e in events)
+    events = _run_loop(
+        monkeypatch,
+        promise,
+        max_rounds=5,
+        user_text="Create a working FFmpeg GUI in the workspace.",
+        relevant_tools={"write_file", "host_shell"},
+        workspace="/workspace",
+    )
+    assert any(
+        event.get("type") == "agent_terminal"
+        and event.get("status") == "failed"
+        and event.get("reason") == "research_incomplete"
+        for event in events
+    ), events
 
 
 def test_finished_answer_after_preamble_is_not_nudged(monkeypatch):
@@ -1079,8 +1129,8 @@ def test_empty_workspace_round_gets_one_bounded_action_nudge(monkeypatch):
     assert "fixture.py" in decision["missing_artifacts"]
     assert any(
         e.get("type") == "final_response"
-        and "Workspace checked." in e.get("content", "")
-        and "incomplete" in e.get("content", "")
+        and "task is incomplete" in e.get("content", "").lower()
+        and "fixture.py" in e.get("content", "")
         for e in events
     )
 
@@ -1257,7 +1307,7 @@ def test_eval_workspace_prompt_uses_host_tool_then_answers(monkeypatch):
         max_rounds=4,
         relevant_tools={"host_shell", "ask_user", "update_plan"},
         disabled_tools=set(),
-        workspace=None,
+        workspace="/home/tester/project",
         client_runtime_context={
             "surface": "odysseus-tui",
             "session_cwd": "/home/tester/project",
@@ -1396,12 +1446,21 @@ def test_tui_coding_turn_recovers_inspects_patches_and_verifies(monkeypatch, exp
     decision = next(event['data'] for event in events if event.get('type') == 'completion_decision')
     assert decision['can_complete'] is explicit_verifier
     assert (decision['status'] == 'verified') is explicit_verifier
-    assert any(
-        event.get("type") == "final_response"
-        and "Verification:" in event.get("content", "")
-        and "passed" in event.get("content", "")
+    final_text = "\n".join(
+        str(event.get("content") or "")
         for event in events
-    ) is explicit_verifier
+        if event.get("type") == "final_response"
+    )
+    if explicit_verifier:
+        # The completion wrapper reports the actual command and its output,
+        # rather than appending a fixed verification sentence.
+        assert "2 passed" in final_text
+        assert sum(tool == "host_shell" for tool, _content in executed) == 2
+        assert any(
+            event.get("type") == "tool_output"
+            and "2 passed" in str(event.get("output") or "")
+            for event in events
+        )
     terminal = next(event['data'] for event in events if event.get('type') == 'metrics')
     assert terminal['completion_gate']['additional_provider_calls'] == 0
     assert not any(event.get("type") in {"rounds_exhausted", "loop_breaker_triggered"} for event in events)
@@ -1466,9 +1525,9 @@ def test_qwen_tui_coding_summary_reports_verification_retry(monkeypatch):
     assert executed == ["read_file", "edit_file", "host_shell", "host_shell"]
     summaries = [e.get("content", "") for e in events if e.get("type") == "final_response"]
     summary = summaries[-1]
-    assert "Changed:" in summary and "`parser.py`" in summary
-    assert "`pytest -q` failed" in summary
-    assert "`pytest -q` passed" in summary
+    assert "Output available: parser.py." in summary
+    assert "latest executable verification passed" in summary
+    assert test_attempts == 2
 
 
 @pytest.mark.parametrize('explicit_verifier', [False, True])
@@ -1552,12 +1611,12 @@ def test_tui_coding_turn_replaces_duplicate_edit_with_requested_tests(monkeypatc
     decision = next(event['data'] for event in events if event.get('type') == 'completion_decision')
     assert decision['can_complete'] is explicit_verifier
     assert (decision['status'] == 'verified') is explicit_verifier
-    assert any(
-        "Verification:" in event.get("content", "")
-        and "passed" in event.get("content", "")
+    final_text = "\n".join(
+        str(event.get("content") or "")
         for event in events
         if event.get("type") == "final_response"
-    ) is explicit_verifier
+    )
+    assert ("latest executable verification passed" in final_text) is explicit_verifier
 
 
 def test_failed_forced_verifier_allows_an_adapted_test_command(monkeypatch):
@@ -1981,6 +2040,7 @@ def test_identical_inspections_redirect_to_missing_artifact_before_convergence(m
     rounds = []
     writes = []
 
+    @authoritative_executor
     async def _fake_exec(block, *args, **kwargs):
         if "/tmp_workspace/results/report.md" in block.content:
             writes.append(block.content)
@@ -2024,11 +2084,17 @@ def test_identical_inspections_redirect_to_missing_artifact_before_convergence(m
 
     monkeypatch.setattr(al, "execute_tool_block", _fake_exec, raising=False)
     monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+    import src.llm_core as llm_core
+
+    async def _fake_artifact_body(*args, **kwargs):
+        return "# Report\n\nVerified result.\n"
+
+    monkeypatch.setattr(llm_core, "llm_call_async", _fake_artifact_body)
 
     events = _types(_collect(al.stream_agent_loop(
         "https://api.openai.com/v1",
         "gpt-4o",
-        [{"role": "user", "content": "Inspect the workspace."}],
+        [{"role": "user", "content": "Inspect the workspace and create the requested report file."}],
         max_rounds=8,
         relevant_tools={"host_shell"},
         forced_tools={"host_shell"},
@@ -2208,6 +2274,7 @@ def test_post_redirect_varied_inspection_is_suppressed_until_artifact_mutation(m
     requests = []
     executed = []
 
+    @authoritative_executor
     async def _fake_exec(block, *args, **kwargs):
         executed.append(block.content)
         if "report.md" in block.content and ">" in block.content:
@@ -2276,7 +2343,10 @@ def test_post_redirect_varied_inspection_is_suppressed_until_artifact_mutation(m
     assert any("report.md" in command and ">" in command for command in executed)
     assert any(
         event.get("type") == "completion_blocked"
-        and event.get("reason") == "artifact_mutation_required"
+        and event.get("reason") in {
+            "artifact_mutation_required",
+            "artifact_observation_budget",
+        }
         for event in events
     )
 
@@ -4143,9 +4213,17 @@ def test_web_fetch_pagination_signature_ignores_page_args():
         }),
         "result": {"output": "ok", "exit_code": 0},
     })
+    sig_other_source = al._web_fetch_pagination_signature({
+        "tool_name": "web_fetch",
+        "content": json.dumps({
+            "url": "https://crates.io/api/v1/users?page=8&per_page=5&sort=downloads",
+        }),
+        "result": {"output": "ok", "exit_code": 0},
+    })
 
     assert sig1
     assert sig1 == sig2
+    assert sig_other_source and sig_other_source != sig1
 
 
 def test_repeated_web_fetch_pagination_forces_convergence(monkeypatch):

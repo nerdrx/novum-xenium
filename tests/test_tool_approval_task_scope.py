@@ -36,6 +36,7 @@ def _enable_approval_gate_for_legacy_gate_tests(monkeypatch):
 def _pending(
     store: ToolApprovalStore,
     *,
+    workspace=None,
     selected_tools=None,
     continuation_query="inspect the project using memory and skills",
 ):
@@ -46,7 +47,7 @@ def _pending(
         origin_run_id="run-1",
         tool_name="bash",
         content=content,
-        workspace=None,
+        workspace=workspace,
         external_untrusted_context_seen=True,
         selected_tools=selected_tools,
         continuation_query=continuation_query,
@@ -113,6 +114,7 @@ def test_allow_for_task_bypasses_only_the_resumed_run_gate():
 def _task_continuation_fixture(
     monkeypatch,
     *,
+    workspace=None,
     approval_ttl_seconds=600,
     continuation_ttl_seconds=600,
     created_at=None,
@@ -122,6 +124,7 @@ def _task_continuation_fixture(
     approvals = ToolApprovalStore(ttl_seconds=approval_ttl_seconds)
     pending = _pending(
         approvals,
+        workspace=workspace,
         selected_tools=["bash", "web_fetch"],
         continuation_query=continuation_query,
     )
@@ -152,7 +155,7 @@ def _task_continuation_fixture(
         approval_mode="auto",
         owner="alice",
         session_id="session-1",
-        workspace=None,
+        workspace=workspace,
         document_id=None,
         document_version=None,
         document_digest=None,
@@ -282,6 +285,35 @@ def test_task_continuation_refuses_wrong_choice_context_and_replays(monkeypatch)
     changed_options = {**ask_user, "options": list(reversed(ask_user["options"]))}
     assert _consume_task_continuation(store, marker, changed_options) is None
     assert _consume_task_continuation(store, marker, ask_user) is None
+
+
+def test_default_agent_workspace_matches_task_continuation_scope(tmp_path, monkeypatch):
+    import routes.chat_routes as chat_routes
+    import src.constants as constants
+    import src.tool_execution as tool_execution
+    import src.tool_security as tool_security
+
+    workspace = tmp_path / "default-agent-root"
+    workspace.mkdir()
+    monkeypatch.setattr(constants, "AGENT_WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(tool_execution, "AGENT_WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(chat_routes, "effective_user", lambda _request: "alice")
+    monkeypatch.setattr(tool_security, "owner_is_admin_or_single_user", lambda _owner: True)
+    request = SimpleNamespace(
+        headers={}, state=SimpleNamespace(current_user="alice"),
+    )
+    bound_workspace = chat_routes._bind_default_agent_workspace(
+        request, "", agent_mode=True, client_runtime_context={},
+    )
+
+    store, _, ask_user, marker = _task_continuation_fixture(
+        monkeypatch, workspace=bound_workspace,
+    )
+    continuation = _consume_task_continuation(
+        store, marker, ask_user, workspace=bound_workspace,
+    )
+    assert continuation is not None
+    assert continuation.workspace == str(workspace)
 
 
 def test_task_continuation_refuses_expiry_and_non_task_or_non_auto_grants(monkeypatch):

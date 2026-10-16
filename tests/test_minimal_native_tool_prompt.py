@@ -268,7 +268,7 @@ def test_calendar_missing_date_guidance_uses_ask_user_not_guessing() -> None:
     assert "do not guess a reservation/event date" in agent_loop
     assert "never invent a day for a reservation" in agent_loop
     assert "If create/update lacks a required date, time, or target event, call ask_user once" in tool_index
-    assert "include an 'Exact date' option" in schemas
+    assert "generic option such as 'Exact date'" in schemas
 
 
 def test_qwen35_tool_router_uses_broad_compact_map() -> None:
@@ -481,7 +481,7 @@ def test_qwen35_tui_workspace_uses_coding_only_prompt() -> None:
     )
 
     content = prompt[0]["content"]
-    assert "Odysseus TUI workspace tools" in content
+    assert "Novum Xenium TUI workspace tools" in content
     assert "old_string" in content
     assert "mcp__email__search_emails" not in content
 

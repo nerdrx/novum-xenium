@@ -74,6 +74,15 @@ def control_app(tmp_path, monkeypatch):
     monkeypatch.setattr(core.auth, 'AuthManager', lambda: manager)
     monkeypatch.setattr(tool_execution, '_owner_is_admin', lambda u: u == 'alice')
     monkeypatch.setattr(cookbook_routes, 'TMUX_LOG_DIR', tmp_path / 'tmux')
+    # These route tests mock tmux session creation below. Keep the prerequisite
+    # probe consistent with that mocked runtime instead of depending on the
+    # host running the test suite to have tmux installed.
+    binary_available = cookbook_routes._binary_available
+    async def mocked_binary_available(binary, remote=None, ssh_port=22):
+        if binary == 'tmux':
+            return True
+        return await binary_available(binary, remote, ssh_port)
+    monkeypatch.setattr(cookbook_routes, '_binary_available', mocked_binary_available)
     state = tmp_path / 'cookbook.json'
     state.write_text(json.dumps({'presets': [{'name': 'preset', 'model': 'samplepkg', 'cmd': 'python -m pip install samplepkg'}]}))
     monkeypatch.setattr(cookbook_routes, 'COOKBOOK_STATE_FILE', str(state))

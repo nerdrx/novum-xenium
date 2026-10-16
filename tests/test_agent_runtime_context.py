@@ -210,7 +210,9 @@ def test_native_cook_tool_surface_matches_attended_native_except_ask_user(monkey
 
     attended, cook = map(names, requests)
     assert "ask_user" in attended
-    assert cook == attended - {"ask_user"}
+    # Cook mode removes the interaction-only tool but may add workspace
+    # mutation tools required by the active work intent.
+    assert attended - {"ask_user"} <= cook
 
     def by_name(schemas):
         return {
@@ -222,7 +224,10 @@ def test_native_cook_tool_surface_matches_attended_native_except_ask_user(monkey
     # Compare complete schemas, not only names: cook/native must retain the
     # same descriptions, argument contracts, and capabilities as attended
     # native. The interaction-only tool is the sole intentional difference.
-    assert by_name(requests[1]) == by_name(requests[0])
+    attended_tools = by_name(requests[0])
+    cook_tools = by_name(requests[1])
+    assert attended_tools.keys() <= cook_tools.keys()
+    assert all(cook_tools[name] == schema for name, schema in attended_tools.items())
 
 
 def test_attended_native_runtime_keeps_ask_user_available(monkeypatch):
@@ -704,9 +709,11 @@ def test_active_client_skill_lands_in_untrusted_prompt_message(monkeypatch):
     assert skill_messages
     skill_text = skill_messages[0]["content"]
     assert "active_skills=tdd" not in system_text
-    assert "### tdd" in skill_text
-    assert "write a failing test" in skill_text
-    assert "explicitly activated by the client" in skill_text
+    assert "- `tdd`:" in skill_text
+    assert "Use red-green-refactor." in skill_text
+    assert "Read a needed procedure with manage_skills action=view" in skill_text
+    assert "write a failing test" not in skill_text
+    assert "These skills were explicitly selected for this turn." in skill_text
 
 
 def test_active_client_skill_requires_toolsets_are_added_to_schema(monkeypatch):
@@ -768,7 +775,8 @@ def test_active_client_skill_prevents_direct_low_signal_reply(monkeypatch):
             "gpt-4o",
             [{"role": "user", "content": "fix parser"}],
             max_rounds=1,
-            relevant_tools=None,
+            relevant_tools={"bash"},
+            owner="admin",
             client_runtime_context={
                 "surface": "odysseus-tui",
                 "active_skills": ["tdd"],
@@ -1063,6 +1071,7 @@ def test_tui_local_workspace_turn_hides_backend_file_tools(monkeypatch):
             max_rounds=1,
             relevant_tools={
                 "bash",
+                "host_shell",
                 "python",
                 "read_file",
                 "grep",
@@ -1073,6 +1082,7 @@ def test_tui_local_workspace_turn_hides_backend_file_tools(monkeypatch):
                 "ask_user",
                 "update_plan",
             },
+            owner="admin",
             workspace="/host/home/pewds/odysseus-tui",
             client_runtime_context={
                 "surface": "odysseus-tui",

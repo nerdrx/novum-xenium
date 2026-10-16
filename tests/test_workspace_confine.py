@@ -1148,6 +1148,85 @@ def test_request_workspace_gate_uses_api_token_owner(ws, monkeypatch):
     assert seen == ["admin"]
 
 
+@pytest.mark.asyncio
+async def test_omitted_agent_workspace_seals_default_root_for_dispatch(tmp_path, monkeypatch, admin):
+    from src import constants, tool_execution
+    from src.agent_runtime.authority import bind_request_authority, request_authority_for_http
+    import routes.chat_routes as cr
+
+    workspace = tmp_path / "agent_workspace"
+    workspace.mkdir()
+    target = workspace / "note.txt"
+    target.write_text("default workspace works", encoding="utf-8")
+    monkeypatch.setattr(constants, "AGENT_WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(tool_execution, "AGENT_WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(cr, "effective_user", lambda _request: "admin")
+    monkeypatch.setattr(
+        "src.tool_security.owner_is_admin_or_single_user", lambda _owner: True,
+    )
+    request = SimpleNamespace(headers={}, state=SimpleNamespace(current_user="admin"))
+
+    bound_workspace = cr._bind_default_agent_workspace(
+        request, "", agent_mode=True, client_runtime_context={},
+    )
+    assert bound_workspace == str(workspace)
+
+    authority = request_authority_for_http(
+        request,
+        "Read file note.txt",
+        owner="admin",
+        session_id="default-workspace-test",
+        workspace=bound_workspace,
+    )
+    assert len(authority.resource_roots) == 1
+    assert authority.resource_roots[0].path == str(workspace)
+
+    from src.tool_execution import execute_tool_block as dispatch
+    with bind_request_authority(authority):
+        _, result = await dispatch(
+            _block("read_file", "note.txt"),
+            owner="admin",
+            session_id="default-workspace-test",
+            workspace=bound_workspace,
+            security_context=NO_TOOL_SECURITY_CONTEXT,
+        )
+    assert result.get("exit_code") == 0, result
+    assert "default workspace works" in result.get("output", ""), result
+
+
+def test_default_agent_workspace_keeps_non_admin_and_sealed_routes_empty(tmp_path, monkeypatch):
+    import routes.chat_routes as cr
+    import src.tool_security as tool_security
+    import src.tool_execution as tool_execution
+
+    workspace = tmp_path / "agent_workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(cr, "effective_user", lambda _request: "bob")
+    monkeypatch.setattr(tool_security, "owner_is_admin_or_single_user", lambda _owner: False)
+    vet_calls = []
+    real_vet = tool_execution.vet_workspace
+    monkeypatch.setattr(
+        tool_execution, "vet_workspace",
+        lambda path: vet_calls.append(path) or real_vet(path),
+    )
+    request = SimpleNamespace(headers={}, state=SimpleNamespace(current_user="bob"))
+
+    assert cr._bind_default_agent_workspace(
+        request, "", agent_mode=True, client_runtime_context={},
+    ) == ""
+    assert cr._bind_default_agent_workspace(
+        request, "", agent_mode=True, recovery_run_id="run-1",
+        client_runtime_context={},
+    ) == ""
+    assert cr._bind_default_agent_workspace(
+        request, "", agent_mode=True, client_runtime_context={"surface": "odysseus-tui"},
+    ) == ""
+    assert cr._bind_default_agent_workspace(
+        request, "/saved/project", agent_mode=True, client_runtime_context={},
+    ) == "/saved/project"
+    assert vet_calls == []
+
+
 def test_persisted_session_workspace_falls_back_to_cwd(monkeypatch):
     import routes.chat_routes as cr
 

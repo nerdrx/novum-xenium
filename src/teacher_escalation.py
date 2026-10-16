@@ -28,6 +28,7 @@ from contextlib import aclosing
 from contextvars import ContextVar
 from copy import deepcopy
 from functools import wraps
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -56,6 +57,7 @@ def with_teacher_takeover(func):
         token = _TAKEOVER.set(request)
         done = False
         failed = False
+        completed_terminals = []
         try:
             async with aclosing(func(*args, **kwargs)) as stream:
                 async for chunk in stream:
@@ -63,23 +65,65 @@ def with_teacher_takeover(func):
                         done = True
                         continue
                     failed |= chunk.startswith('event: error')
+                    if chunk.startswith('data: '):
+                        try:
+                            payload = json.loads(chunk[6:])
+                        except (ValueError, TypeError):
+                            payload = None
+                        if (isinstance(payload, dict)
+                                and payload.get('type') == 'agent_terminal'
+                                and payload.get('status') == 'completed'):
+                            # The student can only queue a takeover here; the
+                            # teacher's gate runs after its completion wrapper
+                            # has closed. Hold success until we know whether an
+                            # actual teacher_takeover event was emitted.
+                            completed_terminals.append(chunk)
+                            continue
                     yield chunk
             # The parent generator and gate have both unwound. Child control
             # events now belong only to the child, never to the parent gate.
             if request and not failed:
+                took_over = False
                 try:
                     async with aclosing(run_teacher_inline(**request)) as stream:
                         async for chunk in stream:
                             if chunk.strip() == 'data: [DONE]':
                                 continue
                             failed |= chunk.startswith('event: error')
+                            if chunk.startswith('data: '):
+                                try:
+                                    payload = json.loads(chunk[6:])
+                                except (ValueError, TypeError):
+                                    payload = None
+                                if isinstance(payload, dict) and payload.get('type') == 'teacher_takeover':
+                                    took_over = True
                             yield chunk
+                    if not took_over:
+                        for terminal in completed_terminals:
+                            yield terminal
+                    completed_terminals.clear()
                 except Exception as exc:
                     logger.warning('teacher escalation hook failed: %s', exc, exc_info=True)
                     if not failed:
-                        import json
                         yield 'data: ' + json.dumps({'type': 'escalation_failed', 'reason': str(exc),
                                                     'teacher': True}) + '\n\n'
+                    if took_over:
+                        # Once takeover was announced, the student's held
+                        # success is no longer authoritative. Surface a failed
+                        # terminal if the teacher stream aborts before its own.
+                        yield 'data: ' + json.dumps({
+                            'type': 'agent_terminal',
+                            'status': 'failed',
+                            'reason': 'teacher_takeover_failed',
+                            'message': 'The teacher handoff started but did not complete.',
+                        }) + '\n\n'
+                    else:
+                        for terminal in completed_terminals:
+                            yield terminal
+                    completed_terminals.clear()
+            else:
+                for terminal in completed_terminals:
+                    yield terminal
             if done and not failed:
                 yield 'data: [DONE]\n\n'
         finally:

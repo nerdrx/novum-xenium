@@ -128,7 +128,7 @@ def test_fetching_task_docs_opens_coding_tools(monkeypatch, tmp_path):
     events, requests, histories, executed = _run(
         monkeypatch,
         tmp_path,
-        f"Build a GUI app using this framework; follow {url}.",
+        f"Build a GUI app in the workspace using this framework; follow {url}.",
         [_call("web_fetch", {"url": url}, "fetch"),
          _call("write_file", {"path": "app.py", "content": "print('ok')"}, "write"),
          'data: {"delta":"Implemented and checked."}\n\n'],
@@ -170,7 +170,7 @@ def test_explicit_url_fetch_schema_is_narrow_and_shared_schema_is_unchanged(monk
     original_schemas = copy.deepcopy(al.FUNCTION_TOOL_SCHEMAS)
     schema_details = []
     events, requests, _, executed = _run(
-        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        monkeypatch, tmp_path, f'Build a GUI app in the workspace following {url}.',
         [_call('web_fetch', {'url': wrong_url}, 'wrong-fetch'),
          _call('web_fetch', {'url': raw_alias}, 'right-fetch'),
          _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
@@ -246,7 +246,7 @@ def test_research_can_load_owned_skill_but_cannot_edit_it(monkeypatch, tmp_path)
     }])
     url = 'https://vendor.example/docs/gui'
     events, requests, _, executed = _run(
-        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        monkeypatch, tmp_path, f'Build a GUI app in the workspace following {url}.',
         [_call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
          _call('manage_skills', {'action': 'delete', 'name': 'ui-design'}, 'delete'),
          _call('web_fetch', {'url': url}, 'fetch'),
@@ -318,7 +318,7 @@ def test_read_only_skill_approval_keeps_research_gate(monkeypatch, tmp_path):
     url = 'https://vendor.example/docs/gui'
     approved_view = {'action': 'view', 'name': 'ui-design'}
     events, requests, _, executed = _run(
-        monkeypatch, tmp_path, f'Build a GUI app following {url}.',
+        monkeypatch, tmp_path, f'Build a GUI app in the workspace following {url}.',
         [_call('web_fetch', {'url': url}, 'fetch'),
          _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
          'data: {"delta":"Ready."}\n\n'],
@@ -333,6 +333,7 @@ def test_read_only_skill_approval_keeps_research_gate(monkeypatch, tmp_path):
 
 
 def test_approved_workspace_mutation_keeps_resume_behavior(monkeypatch, tmp_path):
+    _seed_ui_skill(monkeypatch)
     approved_write = {'path': 'app.py', 'content': 'approved'}
     later_write = {'path': 'next.py', 'content': 'later'}
     url = 'https://vendor.example/docs/gui'
@@ -341,18 +342,23 @@ def test_approved_workspace_mutation_keeps_resume_behavior(monkeypatch, tmp_path
         [_call('write_file', later_write, 'unapproved-write'),
          _call('web_fetch', {'url': url}, 'fetch'),
          _call('write_file', later_write, 'later-write'),
-         'data: {"delta":"Continuing the approved change."}\n\n'],
+         _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view-ui-design'),
+         _call('write_file', later_write, 'resumed-write'),
+         'data: {"delta":"Both files were saved; the requested GUI still needs verification."}\n\n'],
         {'write_file': [{'output': 'approved file saved', 'exit_code': 0},
                         {'output': 'later file saved', 'exit_code': 0}],
-         'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}]},
+         'web_fetch': [{'output': 'Official GUI documentation', 'exit_code': 0}],
+         'manage_skills': [{'results': 'Use the compact GUI layout.', 'exit_code': 0}]},
         exact_approval=_approval('write_file', approved_write),
     )
-    # The exact sealed write executes once. It does not unlock a different
-    # model-proposed write on the resumed task before documentation research.
+    # The exact approved operation is applied first. A distinct model-proposed
+    # write stays unavailable until the documentation and required skill are read.
     assert not ({'bash', 'write_file'} & requests[0])
     assert not ({'bash', 'write_file'} & requests[1])
-    assert 'write_file' in requests[2]
-    assert executed == ['write_file', 'web_fetch', 'write_file']
+    assert 'write_file' not in requests[2]
+    assert requests[2] == {'manage_skills'}
+    assert 'write_file' in requests[4]
+    assert executed == ['write_file', 'web_fetch', 'manage_skills', 'write_file']
 
 
 def test_documentation_evidence_still_waits_for_suggested_skill_view(monkeypatch, tmp_path):
@@ -576,12 +582,19 @@ def _seed_ui_skill(monkeypatch):
 def test_exhausted_search_allowance_reminds_about_skill_without_claiming_sources(monkeypatch, tmp_path):
     _seed_ui_skill(monkeypatch)
     searches = [
-        _call('web_search', {'query': f'Electron GUI detail {i}'}, f'search-{i}')
-        for i in range(6)
+        _call('web_search', {'query': query}, f'search-{i}')
+        for i, query in enumerate((
+            'Electron GUI official application menu guidance',
+            'Electron GUI official IPC security guidance',
+            'Electron GUI official window lifecycle guidance',
+            'Electron GUI official navigation controls guidance',
+            'Electron GUI official accessibility controls guidance',
+            'Electron GUI official packaging recommendations',
+        ))
     ]
     events, requests, histories, executed = _run(
         monkeypatch, tmp_path,
-        'Build a GUI app following https://vendor.example/docs/gui. Search the web for additional official GUI implementation guidance.',
+        'Build a GUI app in the workspace following https://vendor.example/docs/gui. Search the web for additional official GUI implementation guidance.',
         [*searches,
          _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
          _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
@@ -608,12 +621,19 @@ def test_exhausted_search_allowance_reminds_about_skill_without_claiming_sources
 def test_exhausted_search_without_skill_candidate_gets_no_skill_reminder(monkeypatch, tmp_path):
     _no_suggested_skills(monkeypatch)
     searches = [
-        _call('web_search', {'query': f'Electron GUI detail {i}'}, f'search-{i}')
-        for i in range(6)
+        _call('web_search', {'query': query}, f'search-{i}')
+        for i, query in enumerate((
+            'Electron GUI official application menu guidance',
+            'Electron GUI official IPC security guidance',
+            'Electron GUI official window lifecycle guidance',
+            'Electron GUI official navigation controls guidance',
+            'Electron GUI official accessibility controls guidance',
+            'Electron GUI official packaging recommendations',
+        ))
     ]
     events, requests, histories, executed = _run(
         monkeypatch, tmp_path,
-        'Build a GUI app following https://vendor.example/docs/gui. Search the web for additional official GUI implementation guidance.',
+        'Build a GUI app in the workspace following https://vendor.example/docs/gui. Search the web for additional official GUI implementation guidance.',
         [*searches,
          _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
          'data: {"delta":"Implemented with uncertainty noted."}\n\n'],

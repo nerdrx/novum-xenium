@@ -91,6 +91,36 @@ async def test_scheduled_local_runner_uses_exact_launch_ceiling(workspace):
         assert not success and "external backend" in output
 
 
+async def test_scheduled_subprocess_preserves_executable_and_arguments(workspace, monkeypatch):
+    import shlex
+    from contextlib import nullcontext
+    from src import builtin_actions
+
+    argv = ["python", "script with spaces.py"]
+    command = shlex.join(argv)
+    admitted = replace(
+        authority(workspace),
+        grants=(OperationGrant("bash", inputs=frozenset({command})),),
+    )
+    seen = []
+
+    def resolve(_authority, operation, _backend):
+        assert operation.input == command
+        return object()
+
+    async def run_owned_command(received, *_args, **_kwargs):
+        seen.append(received)
+        return {"output": "ok", "exit_code": 0}
+
+    monkeypatch.setattr(resources, "resolve_process_operation", resolve)
+    monkeypatch.setattr(resources, "bind_process_operation", lambda _bound: nullcontext())
+    monkeypatch.setattr("src.agent_tools.subprocess_tools._run_owned_command", run_owned_command)
+    with bind_request_authority(admitted):
+        result = await builtin_actions._run_subprocess(argv)
+    assert result == ("ok", True)
+    assert seen == [command]
+
+
 async def test_attachment_failure_after_execution_does_not_claim_no_execution(workspace, monkeypatch):
     def failure(*args):
         raise OSError("attachment publication failed")

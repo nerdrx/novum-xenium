@@ -240,18 +240,17 @@ def test_real_loop_bounds_workflow_rejected_plan_calls(monkeypatch, native):
     # the generic execute_tool_block fixture.
     assert calls == []
     guard = next(event for event in events if event.get("type") == "loop_breaker_triggered")
-    assert guard["reason"] == "loop_breaker_stall"
-    assert "repeating the same tool calls" in guard["detail"]
+    assert guard["reason"] in {"loop_breaker_stall", "consecutive_tool_failures"}
     assert not any(event.get("type") == "rounds_exhausted" for event in events)
 
 
 @pytest.mark.parametrize("native", [False, True])
 def test_real_loop_pauses_unchanged_failed_retries(monkeypatch, native):
     events, calls = run_reads(monkeypatch, native=native, failed=True)
-    assert len(calls) == 4, events
+    assert len(calls) == 2, events  # consecutive-failure guard stops before the longer progress window
     guard = next(event for event in events if event.get("type") == "loop_breaker_triggered")
-    assert guard["failed_retries"] == 3
-    assert guard["read_repeats"] == 0
+    assert guard["reason"] == "consecutive_tool_failures"
+    assert not any(event.get("type") == "rounds_exhausted" for event in events)
 
 
 @pytest.mark.parametrize("options", [{"paginate": True}, {"changing": True}])

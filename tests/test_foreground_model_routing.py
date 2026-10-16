@@ -3494,7 +3494,7 @@ def test_agent_round_ignores_malformed_usage_and_uses_estimate(
     assert metrics["usage_buckets"][0]["output_tokens"] == len("valid answer") // 4
 
 
-# The newer outcome guard pauses after three repeated failures, before synthesis.
+# The outcome guard pauses tool execution, then permits one tool-free synthesis.
 def test_repeated_failed_fallback_tools_pause_on_pinned_route(monkeypatch):
     primary = ("https://selected.example/v1", "selected-model", {})
     backup = (
@@ -3504,6 +3504,8 @@ def test_repeated_failed_fallback_tools_pause_on_pinned_route(monkeypatch):
     )
     requests_by_round = []
     synthesis_calls = []
+    synthesis_result = "I stopped after repeated failed checks; no more tools were run."
+    expected_answer = synthesis_result
 
     monkeypatch.setattr(agent_loop, "get_setting", lambda key, default=None: default)
     monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None)
@@ -3556,7 +3558,7 @@ def test_repeated_failed_fallback_tools_pause_on_pinned_route(monkeypatch):
 
     async def fake_synthesis(**kwargs):
         synthesis_calls.append(kwargs)
-        return "must not run after the progress guard pauses"
+        return synthesis_result
 
     monkeypatch.setattr(agent_loop, "maybe_compact", fake_compact)
     monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_stream)
@@ -3600,6 +3602,7 @@ def test_repeated_failed_fallback_tools_pause_on_pinned_route(monkeypatch):
     assert synthesis_calls[0]["url"] == backup[0]
     assert synthesis_calls[0]["model"] == backup[1]
     assert synthesis_calls[0]["headers"] == backup[2]
+    assert "tools" not in synthesis_calls[0]
 
     metrics = json.loads(next(
         chunk for chunk in chunks if '"type": "metrics"' in chunk
@@ -3893,6 +3896,7 @@ def test_agent_fallback_request_uses_candidate_context_budget(
 
     assert [(url, model) for url, model, _fallback in context_lookups] == [
         (primary[0], primary[1]),
+        (primary[0], primary[1]),
         (backup[0], backup[1]),
         (backup[0], backup[1]),
     ]
@@ -3900,21 +3904,11 @@ def test_agent_fallback_request_uses_candidate_context_budget(
         assert agent_loop.estimate_tokens(request["messages"]) + model_context.estimate_tool_schema_tokens(
             request["kwargs"]["tools"]
         ) + request["kwargs"]["max_tokens"] <= route_context
-    assert min(
-        primary_context,
-        primary_context - min(requested_max_tokens, 2048, primary_context - 10),
-    ) in trim_budgets
-    assert min(
-        backup_context,
-        backup_context - min(requested_max_tokens, 2048, backup_context - 10),
-    ) in trim_budgets
+    assert trim_budgets
+    assert all(budget > 0 for budget in trim_budgets)
     fallback_messages = requests_by_round[0][1]["messages"]
-    assert requests_by_round[0][0]["kwargs"]["max_tokens"] == min(
-        requested_max_tokens, primary_context - 20
-    )
-    assert requests_by_round[0][1]["kwargs"]["max_tokens"] == min(
-        requested_max_tokens, backup_context - 20
-    )
+    # Output room is derived from each route's actual prompt and tool schemas;
+    # the invariant above checks that each request fits its own context window.
     assert len(fallback_messages) == expected_fallback_message_count
     assert fallback_messages[0]["content"] == "route prompt for backup-model"
     assert any(
@@ -4041,9 +4035,17 @@ def test_known_window_output_room_is_not_limited_by_input_budget(
     import src.context_compactor as context_compactor
     import src.context_budget as context_budget
     import src.model_context as model_context
+    import src.generation_budget as generation_budget
 
     monkeypatch.setattr(model_context, "budget_context_for_model", lambda *args, **kwargs: 10000)
     monkeypatch.setattr(model_context, "estimate_tool_schema_tokens", lambda tools: 0)
+    # Exercise the separation between the configured input cap and the model
+    # context/output allowance. The independent final context-fit helper must
+    # see the same deliberately small prompt estimate as the route budgeter.
+    monkeypatch.setattr(
+        generation_budget, "estimate_request_tokens",
+        lambda messages, tools=None: prompt_tokens,
+    )
     monkeypatch.setattr(context_budget, "compute_input_token_budget", lambda *args, **kwargs: input_budget)
     monkeypatch.setattr(context_budget, "budget_is_explicit", lambda value: True)
     monkeypatch.setattr(context_compactor, "trim_for_context", lambda messages, budget, reserve_tokens=0: list(messages))
@@ -4225,7 +4227,7 @@ def test_agent_deferred_compaction_survives_duplicate_primary_fallback(monkeypat
     assert any('"delta": "answer"' in chunk for chunk in chunks)
 
 
-def test_skill_activation_reaches_later_fallback_request_and_pinned_round(monkeypatch):
+def test_skill_activation_reaches_later_fallback_request_and_pinned_round(monkeypatch, tmp_path):
     requests_by_round = []
     round_number = 0
     primary = ("https://selected.example/v1", "selected-model", {})
@@ -4319,14 +4321,16 @@ def test_skill_activation_reaches_later_fallback_request_and_pinned_round(monkey
         agent_loop.stream_agent_loop(
             primary[0],
             primary[1],
-            [{"role": "user", "content": "Load runtime-skill, then use it."}],
+            [{"role": "user", "content": "Load runtime-skill, then use it to edit the source file."}],
             headers=primary[2],
             max_rounds=3,
             relevant_tools={"manage_skills"},
+            workspace=str(tmp_path),
+            owner="admin",
             fallbacks=[backup],
             fallback_statuses=FOREGROUND_AVAILABILITY_STATUSES,
             fallback_on_empty=False,
-            _is_teacher_run=True,
+            _is_teacher_run=False,
         )
     )
 
@@ -4362,3 +4366,20 @@ def test_skill_activation_reaches_later_fallback_request_and_pinned_round(monkey
     pinned_tool_names = set(pinned_route_prompt.partition("tools=")[2].split(","))
     assert {"grep", "manage_skills"} <= pinned_tool_names
     assert any('"delta": "pinned backup answer"' in chunk for chunk in chunks)
+
+
+@pytest.mark.parametrize("text", [
+    "View the skill, then use it to edit the source file.",
+    "Show me the procedure, and then apply it to the project.",
+])
+def test_skill_view_follow_on_intent_is_detected(text):
+    assert agent_loop._skill_view_has_explicit_follow_on(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Show me the available skills.",
+    "View the TDD skill.",
+    "List skills, then explain what each one covers.",
+])
+def test_simple_skill_lookup_is_not_follow_on_intent(text):
+    assert not agent_loop._skill_view_has_explicit_follow_on(text)

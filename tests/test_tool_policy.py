@@ -45,6 +45,20 @@ def _delta_chunk(text):
     return "data: " + json.dumps({"delta": text}) + "\n\n"
 
 
+def _web_enabled_contract():
+    """Mirror the authenticated chat route's explicit web opt-in."""
+    from src.tool_policy import ToolPolicy
+    from src.tool_schemas import FUNCTION_TOOL_SCHEMAS
+    from src.turn_contract import resolve_turn_contract
+
+    return resolve_turn_contract(
+        capabilities={"search_browser"},
+        schemas=FUNCTION_TOOL_SCHEMAS,
+        policy=ToolPolicy(),
+        selected_tools={"web_search", "web_fetch", "private_browser", "youtube_tool"},
+    )
+
+
 def _patch_loop_basics(monkeypatch):
     monkeypatch.setattr(al, "get_setting", lambda key, default=None: default, raising=False)
     monkeypatch.setattr(al, "get_mcp_manager", lambda: None, raising=False)
@@ -917,7 +931,11 @@ def test_youtube_latest_video_followup_keeps_prior_entity_context(monkeypatch):
                 {"role": "user", "content": "whats their latest video"},
             ],
             max_rounds=1,
+            context_length=32768,
+            client_runtime_context={"model_context_window": 32768},
             relevant_tools={"ask_user", "update_plan"},
+            relevant_tools_are_selection_only=True,
+            turn_contract=_web_enabled_contract(),
         )
     )
 
@@ -1216,6 +1234,9 @@ def test_web_fetch_js_failure_exposes_private_browser_next_round(monkeypatch):
 
 def test_go_to_web_prompt_routes_private_browser_and_prunes_noise(monkeypatch):
     _patch_loop_basics(monkeypatch)
+    # This test covers narrow routing behavior rather than the separate
+    # regular-model full-schema surface configured in the shared test DB.
+    monkeypatch.setattr(al, "_configured_model_tool_surface", lambda *a, **k: "compact")
     sent_tools = []
 
     async def _fake_stream(_candidates, messages, **kwargs):
@@ -1231,6 +1252,8 @@ def test_go_to_web_prompt_routes_private_browser_and_prunes_noise(monkeypatch):
             "local-model",
             [{"role": "user", "content": "Go to Airbnb and find stays in Tokyo for next weekend under $150/night."}],
             max_rounds=1,
+            context_length=32768,
+            client_runtime_context={"model_context_window": 32768},
             relevant_tools={
                 "web_search",
                 "web_fetch",
@@ -1241,6 +1264,8 @@ def test_go_to_web_prompt_routes_private_browser_and_prunes_noise(monkeypatch):
                 "ask_user",
                 "update_plan",
             },
+            relevant_tools_are_selection_only=True,
+            turn_contract=_web_enabled_contract(),
         )
     )
 
@@ -1272,6 +1297,8 @@ def test_open_web_player_routes_private_browser_not_ui(monkeypatch):
             "local-model",
             [{"role": "user", "content": q}],
             max_rounds=1,
+            context_length=32768,
+            client_runtime_context={"model_context_window": 32768},
             relevant_tools={
                 "web_search",
                 "web_fetch",
@@ -1281,6 +1308,8 @@ def test_open_web_player_routes_private_browser_not_ui(monkeypatch):
                 "ask_user",
                 "update_plan",
             },
+            relevant_tools_are_selection_only=True,
+            turn_contract=_web_enabled_contract(),
         )
     )
 
@@ -1405,7 +1434,11 @@ def test_rendered_page_followup_keeps_private_browser(monkeypatch):
                 {"role": "user", "content": "and what does the comments say?"},
             ],
             max_rounds=1,
+            context_length=32768,
+            client_runtime_context={"model_context_window": 32768},
             relevant_tools={"web_search", "web_fetch", "ask_user", "update_plan"},
+            relevant_tools_are_selection_only=True,
+            turn_contract=_web_enabled_contract(),
         )
     )
 
@@ -1454,7 +1487,11 @@ def test_maps_followup_keeps_private_browser(monkeypatch):
                 {"role": "user", "content": "use google maps?"},
             ],
             max_rounds=1,
+            context_length=32768,
+            client_runtime_context={"model_context_window": 32768},
             relevant_tools={"web_search", "web_fetch", "ask_user", "update_plan"},
+            relevant_tools_are_selection_only=True,
+            turn_contract=_web_enabled_contract(),
         )
     )
 
@@ -1488,7 +1525,11 @@ def test_closest_parking_routes_private_browser(monkeypatch):
             "local-model",
             [{"role": "user", "content": prompt}],
             max_rounds=1,
+            context_length=32768,
+            client_runtime_context={"model_context_window": 32768},
             relevant_tools={"web_search", "web_fetch", "ask_user", "update_plan"},
+            relevant_tools_are_selection_only=True,
+            turn_contract=_web_enabled_contract(),
         )
     )
 
@@ -1517,6 +1558,8 @@ def test_youtube_prompt_routes_youtube_tool_without_noise(monkeypatch):
             "local-model",
             [{"role": "user", "content": "Open YouTube and find the latest video from the official OpenAI channel."}],
             max_rounds=1,
+            context_length=32768,
+            client_runtime_context={"model_context_window": 32768},
             relevant_tools={
                 "web_search",
                 "web_fetch",
@@ -1527,6 +1570,8 @@ def test_youtube_prompt_routes_youtube_tool_without_noise(monkeypatch):
                 "ask_user",
                 "update_plan",
             },
+            relevant_tools_are_selection_only=True,
+            turn_contract=_web_enabled_contract(),
         )
     )
 
@@ -1553,7 +1598,11 @@ def test_latest_numbered_videos_routes_youtube_tool(monkeypatch):
             "local-model",
             [{"role": "user", "content": "whats rainbolts latest 5 videos?"}],
             max_rounds=1,
+            context_length=32768,
+            client_runtime_context={"model_context_window": 32768},
             relevant_tools={"web_search", "web_fetch", "ask_user", "update_plan"},
+            relevant_tools_are_selection_only=True,
+            turn_contract=_web_enabled_contract(),
         )
     )
 

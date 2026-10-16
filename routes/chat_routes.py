@@ -1068,7 +1068,7 @@ def _client_runtime_context_system_message(
         and not has_contract_facts
     ):
         return None
-    lines = ["## Odysseus TUI runtime contract"]
+    lines = ["## Novum Xenium TUI runtime contract"]
     if session_cwd:
         lines.append(f"- session_cwd: {session_cwd}")
     if turn_controls:
@@ -1248,10 +1248,19 @@ def _effective_agent_rounds(
     finite limit remains available for ordinary turns and explicit callers.
     """
     try:
-        rounds = int(raw_value or default)
-    except (TypeError, ValueError):
-        rounds = default
-    rounds = max(1, min(rounds, 200))
+        if isinstance(raw_value, bool):
+            raise ValueError("boolean is not a round limit")
+        if isinstance(raw_value, str) and not re.fullmatch(r"[+-]?\d+", raw_value.strip()):
+            raise ValueError("non-integer string is not a round limit")
+        rounds = int(default if raw_value is None else raw_value)
+        if not isinstance(raw_value, str) and raw_value is not None and raw_value != rounds:
+            raise ValueError("fractional value is not a round limit")
+        if rounds < 0:
+            raise ValueError("negative round limit")
+    except (TypeError, ValueError, OverflowError):
+        rounds = int(default)
+    # Zero is the explicit unlimited sentinel supported by the agent loop.
+    rounds = min(rounds, 200)
     if (
         isinstance(client_runtime_context, dict)
         and str(client_runtime_context.get("surface") or "") == "odysseus-native"
@@ -1898,6 +1907,55 @@ def _resolve_persisted_session_workspace(request, sess, *, current_workspace: st
     if not persisted:
         return "", ""
     return _resolve_request_workspace(request, persisted)
+
+
+def _bind_default_agent_workspace(
+    request,
+    workspace: str,
+    *,
+    workspace_rejected: str = "",
+    agent_mode: bool = False,
+    internal: bool = False,
+    delegated: bool = False,
+    subagent: bool = False,
+    exact_approval=None,
+    recovery_run_id: str = "",
+    client_runtime_context=None,
+) -> str:
+    """Bind the server's configured scratch workspace for ordinary admin agent turns.
+
+    This fills only the omitted default. Explicit, restored, rejected, and
+    inherited workspaces retain their existing request-scoped ceiling.
+    """
+    if (
+        workspace
+        or workspace_rejected
+        or not agent_mode
+        or internal
+        or delegated
+        or subagent
+        or exact_approval is not None
+        or recovery_run_id
+    ):
+        return workspace or ""
+    runtime = client_runtime_context if isinstance(client_runtime_context, dict) else {}
+    if runtime.get("surface") in {"odysseus-tui", "odysseus-native"} or runtime.get("host_shell_bridge"):
+        return ""
+    if hasattr(request, "headers") and is_internal_tool_request(request):
+        return ""
+    try:
+        request_owner = effective_user(request)
+    except (AttributeError, TypeError):
+        request_owner = get_current_user(request)
+    from src.tool_security import owner_is_admin_or_single_user
+    if not owner_is_admin_or_single_user(request_owner):
+        return ""
+    from src.constants import AGENT_WORKSPACE_DIR
+    from src.tool_execution import vet_workspace
+    try:
+        return vet_workspace(AGENT_WORKSPACE_DIR) or ""
+    except (OSError, RuntimeError, ValueError):
+        return ""
 
 
 _ABS_PATH_RE = re.compile(r"(?<!\S)(~?/[^\"'\s`<>]+)")
@@ -3548,6 +3606,22 @@ def setup_chat_routes(
         finally:
             _doc_db.close()
 
+        # Rebind the same trusted default before validating a task clarification
+        # continuation. Its one-use server record is sealed to the workspace
+        # used by the original task turn.
+        workspace = _bind_default_agent_workspace(
+            request,
+            workspace,
+            workspace_rejected=workspace_rejected,
+            agent_mode=(chat_mode == "agent" or bool(task_question_context)),
+            internal=is_internal_tool_request(request),
+            delegated=is_delegated_credential(request),
+            subagent=bool(_subagent_chat),
+            exact_approval=exact_tool_approval,
+            recovery_run_id=recovery_run_id,
+            client_runtime_context=client_runtime_context,
+        )
+
         if task_question_context and not incognito:
             task_question_continuation = task_approval_continuation_store.consume(
                 task_question_context["marker"],
@@ -3621,6 +3695,23 @@ def setup_chat_routes(
                 "chat→agent auto-escalation: active document edit request doc_id=%s",
                 getattr(active_doc, "id", ""),
             )
+
+        # Omitted workspace is the normal browser flow. Bind only the server's
+        # vetted scratch root, and only for an interactive admin agent turn;
+        # approvals, recovery, subagents, delegated/internal calls, and TUI
+        # bridges keep their existing sealed scope.
+        workspace = _bind_default_agent_workspace(
+            request,
+            workspace,
+            workspace_rejected=workspace_rejected,
+            agent_mode=(chat_mode == "agent"),
+            internal=is_internal_tool_request(request),
+            delegated=is_delegated_credential(request),
+            subagent=bool(_subagent_chat),
+            exact_approval=exact_tool_approval,
+            recovery_run_id=recovery_run_id,
+            client_runtime_context=client_runtime_context,
+        )
 
         # Build disabled-tools set from frontend toggles + user privileges
         # Product Agent turns resolve a contract once.  A native desktop/web

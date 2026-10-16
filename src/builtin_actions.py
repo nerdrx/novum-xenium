@@ -9,6 +9,7 @@ import logging
 import os
 import json
 import re
+import shlex
 import time
 from datetime import datetime
 from typing import Tuple
@@ -888,7 +889,20 @@ async def _run_subprocess(argv, *, shell: bool = False, timeout: int = 120, labe
         return "Scheduled process launch has no server authority.", False
     if isinstance(argv, list) and argv and argv[0] == "ssh":
         return "Remote scheduled workload requires an exact external backend binding.", False
-    command = argv[-1] if isinstance(argv, list) else argv
+    if isinstance(argv, (list, tuple)):
+        args = [str(arg) for arg in argv]
+        if len(args) == 3 and args[1] == "-c" and os.path.basename(args[0]).casefold() in {"bash", "bash.exe", "sh", "sh.exe"}:
+            # The scheduled action's sealed input is the shell program itself.
+            command = args[2]
+        else:
+            # Preserve the executable and every argument. Joining with shell
+            # quoting lets the existing owned Bash producer enforce the exact
+            # sealed command instead of accidentally running only argv[-1].
+            command = shlex.join(args)
+    else:
+        command = str(argv or "")
+    if not command.strip():
+        return "No scheduled command specified.", False
     operation = ExactOperation.normalize("bash", command)
     if not authority.permits(operation):
         return "Scheduled launch differs from the sealed operation.", False

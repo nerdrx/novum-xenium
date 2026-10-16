@@ -294,21 +294,28 @@ def _looks_like_explicit_web_search_request(
     if local_media_turn:
         return False
     value = str(text or "")
-    return bool(
+    current_fact = bool(re.search(
+        r"\bcurrent\b.{0,80}\b(?:release|version|price|weather|forecast|news|"
+        r"president|prime minister|ceo|exchange rate|score|schedule|results?)\b",
+        value,
+        re.IGNORECASE,
+    ))
+    explicit_web = bool(
         re.search(
-            r"\b(?:latest|current|today|online|internet|web|search|look\s+up)\b"
+            r"\b(?:latest|today|online|internet|web|search|look\s+up)\b"
             r"|\bfind\b.{0,80}\b(?:official\s+)?(?:website|site|page|url|link)\b",
             value,
             re.IGNORECASE,
-        )
-        and not re.search(
-            r"\b(?:email|mail|inbox|calendar|meeting|task|note|memory|saved\s+research|"
-            r"skills?|procedures?|documents?|docs?|past\s+chat|prior\s+chat|"
-            r"previous\s+conversation|research|deep\s+dive|investigate)\b",
-            value,
-            re.IGNORECASE,
-        )
+        ) or current_fact
     )
+    personal_domain = bool(re.search(
+        r"\b(?:email|mail|inbox|calendar|meeting|task|note|memory|saved\s+research|"
+        r"skills?|procedures?|documents?|docs?|past\s+chat|prior\s+chat|"
+        r"previous\s+conversation|research|deep\s+dive|investigate)\b",
+        value,
+        re.IGNORECASE,
+    ))
+    return explicit_web and not personal_domain
 
 
 def _repeated_artifact_mutation_can_finish(
@@ -816,7 +823,7 @@ def _drop_legacy_email_alias_schemas_when_mcp_available(
 
 _BROWSER_MCP_PREFIX = "mcp__builtin_browser__"
 _QWEN38_TOOL_ROUTER_PROMPT = (
-    "Odysseus tools. Emit one native tool call, then stop. After a successful tool result, answer from it; "
+    "Novum Xenium tools. Emit one native tool call, then stop. After a successful tool result, answer from it; "
     "never repeat the same tool with the same arguments. "
     "HARD CODING ORDER: when the user asks to add, change, or fix code, "
     "the next calls must be read_file then edit_file or apply_patch, then "
@@ -864,7 +871,7 @@ _QWEN38_TOOL_ROUTER_PROMPT = (
     "If an active email draft is open and the user asks to write, edit, update, respond, or add text to it, use edit_document or update_document, not ui_control or calendar."
 )
 _QWEN38_WORKSPACE_TOOL_ROUTER_PROMPT = (
-    "Odysseus TUI workspace tools. Emit exactly one native tool call, then stop. "
+    "Novum Xenium TUI workspace tools. Emit exactly one native tool call, then stop. "
     "The active workspace is the user's real filesystem. For a coding request, "
     "follow this order: read_file, then edit_file or apply_patch, then host_shell "
     "for the focused test. Never run tests before the requested edit succeeds. "
@@ -1151,7 +1158,7 @@ def _qwen38_router_tool_names(query: str) -> Set[str]:
         if "search_chats" in tools and any(keyword in q for keyword in keywords):
             if re.search(r"\b(?:list|show|view)\b.{0,30}\b(?:chat\s+)?sessions?\b", q):
                 selected.add("list_sessions")
-                continue
+            continue
             if re.search(r"\b(?:prior|past|previous|search|find)\b.{0,40}\b(?:chat|conversation|session)s?\b", q):
                 selected.add("search_chats")
                 continue
@@ -7022,7 +7029,7 @@ _API_AGENT_RULES = """\
 - "Disable/turn off/enable/turn on <tool>" (shell, search, research, browser, documents, incognito, etc.) → call `ui_control` with `toggle <name> <on|off>`. Aliases accepted: shell→bash, search→web, deepresearch→research, documents→document_editor. NEVER record this as a memory — the user wants the toggle flipped, not a note about preferring it.
 - "Research X" / "do research on X" / "look into Y" / "deep dive on Z" → call `trigger_research` with `topic`. This starts a live job that appears in the Deep Research sidebar (streams progress + final report). **Do NOT use `web_search` for these** — saw the agent do a plain web_search for "do research on X" when the user wanted the deep-research job. "research X" is a deep-research request, not a quick lookup. (web_search is only for a single quick fact mid-task.) Do NOT POST /api/research/start via app_api either — blocked. After starting, tell the user it's running in the Deep Research sidebar. Only if the user explicitly wants it inline/quick should you fall back to web_search.
 - "Open <panel>" (documents, library, gallery, calendar/schedule, email, inbox, sessions, brain/memories, skills, settings, theme, notes, cookbook) → call `ui_control` with `open_panel <name>`. Panel aliases: library/doc/docs/document→documents, images→gallery, calendar/schedule→calendar, mail/inbox/emails→email, chats/history→sessions, memory/memories→brain, preferences→settings, appearance/themes→theme, models/serve/serving→cookbook. CRITICAL: "open memory/memories/brain" / "open skills" / "open calendar/schedule" / "open notes" / "open documents" / "open cookbook" / "open theme" means OPEN THE PANEL — call `ui_control`, NOT a manage/list tool. But "show/list/what are my skills|notes|memories" means list them in chat with `manage_skills`, `manage_notes`, or `manage_memory`. The "manage_*" tools list contents in chat; `ui_control open_panel` opens the visual modal the user is asking for.
-- "Write/draft/send a reply saying X" for an open/read email → call `draft_email_reply` with the email `uid`/`folder`/`account` and `body` containing the drafted reply. This opens an Odysseus email draft document and DOES NOT send. Do NOT call `reply_to_email` unless the user explicitly says to send immediately.
+- "Write/draft/send a reply saying X" for an open/read email → call `draft_email_reply` with the email `uid`/`folder`/`account` and `body` containing the drafted reply. This opens a Novum Xenium email draft document and DOES NOT send. Do NOT call `reply_to_email` unless the user explicitly says to send immediately.
 - "Open/start a reply", "open a reply to <sender>", "draft a reply window" with no requested body → find/read the email if needed, then call `draft_email_reply` with the UID/folder/account.
 - Bulk email actions ("delete all those", "archive these", "mark all read") require a real email tool call. Use `bulk_email` once with UIDs from the latest `list_emails` result and the same `account`; never claim success without the tool result.
 - Suspected spam: review first, then ask the user to confirm moving to Junk, blocking sender, unsubscribing, keeping, or deleting. Use `ask_user` for this decision unless the user already gave the exact action. Use `bulk_email` action="junk" for moving messages and `block_sender` for sender block rules.
@@ -7151,7 +7158,7 @@ _DOMAIN_RULES = {
 - For named mailboxes/accounts, call `list_email_accounts` if needed and pass the exact `account` value.
 - Bulk email actions use `bulk_email` once with explicit UIDs; do not loop one message at a time.
 - For suspected spam, list/scan first, summarize reasons, ask the user to confirm, then use `bulk_email` action="junk" or `block_sender`.
-- "Write/draft/send a reply saying X" means create a pre-filled Odysseus email draft document via `draft_email_reply`; only `reply_to_email` when the user clearly wants to send now.""",
+- "Write/draft/send a reply saying X" means create a pre-filled Novum Xenium email draft document via `draft_email_reply`; only `reply_to_email` when the user clearly wants to send now.""",
     "cookbook": """\
 ## Cookbook/model-serving rules
 - Cookbook is the LLM-serving subsystem.
@@ -7390,7 +7397,6 @@ def _compact_native_route_tools(
         )
     )
     compact: Set[str] = set(original & _COMPACT_AGENT_CORE_TOOLS)
-
     if "web" in domains:
         compact.update(WEB_TOOL_NAMES)
         if (
@@ -7610,6 +7616,10 @@ def _compact_native_route_tools(
         compact.add("get_workspace")
 
     compact.update(original & {"ask_user", "update_plan", "host_shell"})
+    # Tool-catalog discovery is a lightweight read-only entry point. Preserve
+    # it when the outer router explicitly selected it; otherwise compact
+    # reduction can silently turn a discovery route into an unrelated answer.
+    compact.update(original & {"search_tools"})
     if named_online_document:
         compact.difference_update({"bash", "host_shell"})
     # Keep the artifact mutation floor even when semantic RAG did not retrieve
@@ -7877,6 +7887,7 @@ def _web_only_route_tools(text: str, disabled_tools: Set[str]) -> Set[str]:
         tools.add("private_browser")
     return tools
 
+
 _WORKSPACE_TERMINUS_TOOLS = (
     _DOMAIN_TOOL_MAP["files"]
     | {"manage_skills", "ask_teacher", "web_search", "web_fetch", "ask_user", "update_plan", "search_tools"}
@@ -8001,7 +8012,7 @@ Search the web for a SINGLE quick fact/lookup mid-task. For recently published n
 Choose the `query` yourself from the user's full request and recent conversation context. If the latest user message is only "can you search", "look it up", or similar, search for the prior topic, not the literal follow-up phrase.
 If this `web_search` tool section is visible, search is available. Do NOT tell the user web/search tools are unavailable.
 For products, hardware, software, launches, and releases, distinguish announcement date from release/ship/availability date. Do not call an announced future product "current" or "available" unless the evidence says it is shipping/available now.
-Use this instead of `bash`, `curl`, `python`, `requests`, scraping code, or browser navigation to Google/DuckDuckGo/Bing for web lookup/search/latest/current requests. This is Odysseus' private search path and uses the configured backend, normally SearXNG.""",
+Use this instead of `bash`, `curl`, `python`, `requests`, scraping code, or browser navigation to Google/DuckDuckGo/Bing for web lookup/search/latest/current requests. This is Novum Xenium's private search path and uses the configured backend, normally SearXNG.""",
 
     "web_fetch": """\
 ```web_fetch
@@ -8137,7 +8148,7 @@ Notes, checklists, AND user reminders. Use this for "create/add/write a note", t
 ```send_email
 {"to": "recipient@example.com", "subject": "Re: Your question", "body": "Hi, ...", "account": "gmail"}
 ```
-Send a new email immediately via SMTP/approval staging. Use only when the user explicitly says to send now, deliver now, approve/send, or otherwise skip review. For normal "send/write/email someone saying X" requests, use `draft_email` so Odysseus opens a reviewable email document. Use `resolve_contact` first if you only have a name. If multiple email accounts exist, call `list_email_accounts` first and pass the chosen `account`.
+Send a new email immediately via SMTP/approval staging. Use only when the user explicitly says to send now, deliver now, approve/send, or otherwise skip review. For normal "send/write/email someone saying X" requests, use `draft_email` so Novum Xenium opens a reviewable email document. Use `resolve_contact` first if you only have a name. If multiple email accounts exist, call `list_email_accounts` first and pass the chosen `account`.
 
 CRITICAL — signatures: DO NOT invent a sign-off name. End the body with just `Thanks,` or similar — never type a person's name unless the user explicitly told you what to sign as. When `agent_email_confirm` is on (default), the tool returns `{pending: true, pending_id: ...}` and stages the email for the user to approve in the chat UI instead of SMTPing immediately.""",
     "list_emails": """\
@@ -11153,13 +11164,21 @@ def _classify_single_agent_request(messages: List[Dict], last_user: str) -> Dict
     def has(*patterns: str) -> bool:
         return any(re.search(p, q) for p in patterns)
 
-    if has(r"\b(cookbook|serve|serving|served|launch|start|preset|vllm|sglang|llama\.?cpp|ollama|download|downloading|pull|cached models?|running models?|model servers?|models? (?:are )?running|what models?|model picker|gpu box|workstation|server|qwen|gemma|llama|mistral|minimax)\b"):
+    explicit_model_context = has(
+        r"\b(cookbook|vllm|sglang|llama\.?cpp|ollama|cached models?|running models?|"
+        r"model servers?|models? (?:are )?running|what models?|model picker|gpu box|"
+        r"workstation|server|qwen|gemma|llama|mistral|minimax)\b"
+    )
+    if explicit_model_context or (
+        has(r"\b(serve|serving|served|launch|start|preset|download|downloading|pull)\b")
+        and has(r"\b(model|server|qwen|gemma|llama|mistral|minimax|vllm|sglang|ollama)\b")
+    ):
         domains.add("cookbook")
     if has(r"\b(emails?|mails?|gmail|inbox|reply|forward|cc|bcc|send email|compose email|draft email|message chris|message him|message her)\b"):
         domains.add("email")
     if has(r"邮件|邮箱|收件箱|发件箱|草稿|附件|发件人|垃圾邮件|钓鱼邮件"):
         domains.add("email")
-    if has(r"\b(notes?|todos?|to-dos?|checklists?|tasks?|task list|packing list|shopping list|grocery list|remind me|reminders?|alarms?|buy|pickup|pick up)\b", r"待办|清单|提醒|任务|便签|笔记") or _looks_like_implicit_notes_turn(retrieval_query):
+    if has(r"\b(notes?|todos?|to-dos?|checklists?|task lists?|packing lists?|shopping lists?|grocery lists?|remind me|reminders?|alarms?|buy|pickup|pick up)\b", r"待办|清单|提醒|任务|便签|笔记") or _looks_like_implicit_notes_turn(retrieval_query):
         domains.add("notes_calendar_tasks")
     if has(
         r"\b(?:my|all|saved|scheduled)\s+tasks?\b",
@@ -11175,7 +11194,7 @@ def _classify_single_agent_request(messages: List[Dict], last_user: str) -> Dict
         domains.add("skills")
     if has(r"\b(every day|every morning|every evening|recurring|automatically|cron|scheduled task|background task)\b"):
         domains.add("notes_calendar_tasks")
-    if has(r"\b(calendar|event|meeting|appointment|schedule)\b", r"日历|会议|约会|日程"):
+    if has(r"\b(calendar|events?|meeting|appointment|schedule)\b", r"日历|会议|约会|日程"):
         domains.add("notes_calendar_tasks")
     _code_write_intent = has(
         r"\b(?:python|javascript|typescript|java|c\+\+|cpp|c#|csharp|rust|go|golang|"
@@ -11187,10 +11206,29 @@ def _classify_single_agent_request(messages: List[Dict], last_user: str) -> Dict
     if "notes_calendar_tasks" not in domains and has(r"\bwrite\b"):
         domains.add("documents")
     personal_domain_turn = _looks_like_explicit_tui_personal_domain_request(retrieval_query)
+    explicit_browser_request = _looks_like_explicit_browser_interaction(q)
     strong_web_target = bool(re.search(r"\b(?:web|internet|online|google|news|weather|website|url|browse|browser)\b|" + _BARE_WEB_DOMAIN_RE, q))
     explicit_web_retrieval = bool(re.search(r"https?://|www\.|\b(?:web|internet|online|google|website|url|browse|browser)\b|\b(?:search|look\s+up|find)\b.{0,30}\b(?:web|internet|online)\b", q))
-    if has(r"\b(search|web|google|look up|latest|news|current|weather|forecast|stock price|price of|website|url|https?://|www\.)\b") and not (personal_domain_turn and not strong_web_target):
-        domains.add("web")
+    current_fact = has(
+        r"\bcurrent\b.{0,80}\b(?:release|version|price|weather|forecast|news|"
+        r"president|prime minister|ceo|exchange rate|score|schedule|results?)\b"
+    )
+    local_video_task = bool(
+        _has_explicit_local_path(retrieval_query)
+        and re.search(r"\.(?:mp4|mov|mkv|webm|avi|ogv)\b", retrieval_query, re.IGNORECASE)
+    )
+    if ((has(r"\b(search|web|google|look up|latest|news|weather|forecast|stock price|price of|website|url|https?://|www\.)\b")
+            or re.search(_BARE_WEB_DOMAIN_RE, q, re.IGNORECASE)
+            or explicit_browser_request
+            or _looks_like_youtube_tool_turn(q)
+            or current_fact)
+            and not (
+                local_video_task
+                and not explicit_web_retrieval
+                and not explicit_browser_request
+            )):
+        if not (personal_domain_turn and not strong_web_target):
+            domains.add("web")
     if has(r"\b(?:reviews?|ratings?|testimonials?)\b", r"\b(?:worth|recommend(?:ed|ation)?|pros?\s+and\s+cons?|buying\s+guide)\b"):
         domains.add("web")
     if has(
@@ -11206,7 +11244,9 @@ def _classify_single_agent_request(messages: List[Dict], last_user: str) -> Dict
         domains.add("web")
     if has(r"\b(research|deep dive|investigate|look into)\b"):
         domains.add("web")
-    if has(r"\b(open|show|toggle|turn on|turn off|disable|enable|switch model|change model|settings|theme|panel)\b"):
+    if has(r"\b(open|show|toggle|turn on|turn off|disable|enable|switch model|change model|settings|theme|panel)\b") and not (
+        explicit_browser_request and strong_web_target
+    ):
         domains.add("ui")
     if has(r"\b(session|chat history|rename chat|delete chat|archive chat|fork chat|list chats|prior chats?|past chats?|previous conversations?)\b"):
         domains.add("sessions")
@@ -14136,7 +14176,7 @@ def _ody_qwen_terminal_tool_summary(tool_event: dict[str, Any], user_text: str =
             return "Email sent."
     if tool_name in {"draft_email", "mcp__email__draft_email", "draft_email_reply", "mcp__email__draft_email_reply", "ai_draft_email_reply", "mcp__email__ai_draft_email_reply"}:
         if re.search(r"\bcreated\b.+\b(?:email|reply|compose)\s+draft\b", output, re.IGNORECASE):
-            return "Created an Odysseus email draft document for review."
+            return "Created a Novum Xenium email draft document for review."
     if tool_name in {"reply_to_email", "mcp__email__reply_to_email"}:
         if "replied" in output.lower():
             return "Replied to the email."
@@ -14262,6 +14302,19 @@ def _tui_verified_coding_summary(tool_events: list[dict[str, Any]]) -> str:
             args = {}
         if tool in {"write_file", "edit_file", "apply_patch"}:
             path = str(args.get("path") or "").strip()
+            if not path and tool == "write_file":
+                # The compact/local parser represents write_file as
+                # ``path\\ncontents`` rather than JSON. Keep summaries useful
+                # for both native transports without treating an unsuccessful
+                # write as a completed change.
+                path = raw.splitlines()[0].strip() if raw else ""
+            if not path and tool == "apply_patch":
+                patch_path = re.search(
+                    r"(?m)^\*\*\* (?:Update|Add|Delete) File: (.+?)\s*$",
+                    raw,
+                )
+                if patch_path:
+                    path = patch_path.group(1).strip()
             if path and path not in changed and tool_result_is_successful(event):
                 changed.append(path)
         if tool == "host_shell":
@@ -16446,10 +16499,6 @@ def _append_tool_results(
     without the per-round accumulation.
     """
     tool_result_records = tool_result_records or []
-    # Strip reasoning_content from earlier assistant turns; only the newest keeps it.
-    for _m in messages:
-        if not server_scheduled and _m.get("role") == "assistant":
-            _m.pop("reasoning_content", None)
     # A browser snapshot is a point-in-time DOM state. Once a newer snapshot
     # exists, retaining older full trees only confuses element refs and grows
     # the prompt by thousands of tokens per round. Keep action/result history
@@ -16568,7 +16617,7 @@ def _append_tool_results(
     # Most models need only the newest reasoning turn and can otherwise grow
     # context without bound. DeepSeek is stricter: every historical assistant
     # tool-call message must retain the reasoning_content returned with it.
-    if not preserve_all_reasoning_content:
+    if not preserve_all_reasoning_content and not server_scheduled:
         for _m in messages:
             if _m.get("role") == "assistant":
                 _m.pop("reasoning_content", None)
@@ -21572,6 +21621,16 @@ def _empty_action_tool_hint(offered_tools: Iterable[str]) -> str:
     )
 
 
+def _skill_view_has_explicit_follow_on(text: str) -> bool:
+    """Keep a skill-view tool from ending a turn that explicitly asks for later work."""
+    return bool(re.search(
+        r"\b(?:then|afterwards|after that|and then)\b.{0,120}"
+        r"\b(?:use|apply|follow|implement|edit|modify|fix|change|build|create)\b",
+        str(text or ""),
+        re.IGNORECASE | re.DOTALL,
+    ))
+
+
 def _source_media_text_companion_recovery_tools(
     missing_artifacts: Sequence[str],
     *,
@@ -22058,18 +22117,19 @@ async def stream_agent_loop(
     # Zero is an explicit opt-in to run until the task finishes or an existing
     # safety/progress guard stops it. Invalid negative direct-call values keep
     # the finite application default.
-    try:
-        if isinstance(max_rounds, bool):
-            raise ValueError("boolean is not a step count")
-        if isinstance(max_rounds, str) and not re.fullmatch(r"[+-]?\d+", max_rounds.strip()):
-            raise ValueError("non-integer string is not a step count")
-        converted_rounds = int(max_rounds)
-        if not isinstance(max_rounds, str) and max_rounds != converted_rounds:
-            raise ValueError("fractional value is not a step count")
-        max_rounds = converted_rounds
-    except (TypeError, ValueError):
-        max_rounds = MAX_AGENT_ROUNDS
-    if max_rounds < 0:
+    if max_rounds is not None:
+        try:
+            if isinstance(max_rounds, bool):
+                raise ValueError("boolean is not a step count")
+            if isinstance(max_rounds, str) and not re.fullmatch(r"[+-]?\d+", max_rounds.strip()):
+                raise ValueError("non-integer string is not a step count")
+            converted_rounds = int(max_rounds)
+            if not isinstance(max_rounds, str) and max_rounds != converted_rounds:
+                raise ValueError("fractional value is not a step count")
+            max_rounds = converted_rounds
+        except (TypeError, ValueError):
+            max_rounds = MAX_AGENT_ROUNDS
+    if max_rounds is not None and max_rounds < 0:
         max_rounds = MAX_AGENT_ROUNDS
 
     from src.owner_identity import effective_storage_owner
@@ -22263,9 +22323,9 @@ async def stream_agent_loop(
             {
                 "role": "system",
                 "content": (
-                    "Odysseus TUI runtime: a host_shell bridge is available for "
+                    "Novum Xenium TUI runtime: a host_shell bridge is available for "
                     "host-local filesystem, LAN, DNS, SSH, and process checks. "
-                    "Treat the Odysseus backend like a remote API server, not "
+                    "Treat the Novum Xenium backend like a remote API server, not "
                     "the user's CLI machine. The backend shell may run in Docker; "
                     "/app and server home directories are infrastructure paths, "
                     "not necessarily the user's active project. For TUI-local "
@@ -22569,9 +22629,18 @@ async def stream_agent_loop(
             + _last_user
         )[:8_000]
     from src.coding_grounding import CodingGrounding
+    _coding_grounding_host_bridge = bool(
+        _has_tui_host_bridge
+        and _tui_local_workspace_turn(
+            _last_user,
+            workspace=workspace,
+            client_runtime_context=client_runtime_context,
+        )
+    )
     _coding_grounding = CodingGrounding(
         (_retrieval_query + "\n" + _last_user) if _use_coding_tools(_retrieval_query, workspace) else "",
         disabled_tools=disabled_tools, plan_mode=plan_mode, guide_mode=guide_only,
+        host_shell_read_enabled=_coding_grounding_host_bridge,
     )
     def _observe_coding_grounding(tool, result, content):
         accepted = _coding_grounding.observe(tool, result, content)
@@ -22649,7 +22718,8 @@ async def stream_agent_loop(
     # to the current task; prior-turn verifier failures are never restored into
     # unrelated follow-ups.
     _coding_verification_required = bool(
-        _coding_grounding.required and get_setting("agent_verifier_subagent", False)
+        (_coding_grounding.required or _coding_work.enabled)
+        and get_setting("agent_verifier_subagent", False)
     )
     restored_source = await _restore_approved_coding_source(
         _coding_grounding, exact_approval, owner, session_id, task_continuation,
@@ -24124,6 +24194,11 @@ async def stream_agent_loop(
         client_runtime_context,
         workspace,
     )
+    if normalized_external_tool_schemas:
+        # A caller-provided execution surface can remain useful even when the
+        # public-web tools are disabled. Do not replace the whole turn with a
+        # web-toggle refusal before those declared tools reach the model.
+        _web_search_unavailable_turn = False
     _context_only_web_followup = bool(
         _intent.get("continuation")
         and _contextual_public_web_followup
@@ -26422,6 +26497,7 @@ async def stream_agent_loop(
     _artifact_finish_post_correction_tool_used = False
     _artifact_finish_post_correction_mutation_seen = False
     _artifact_finish_convergence_sent = False
+    _artifact_finish_promise_recovery_sent = False
     _local_media_source_nudge_sent = False
     _local_media_evidence_block_count = 0
     # Consecutive failed tool batches need a separate repair allowance from
@@ -26535,6 +26611,7 @@ async def stream_agent_loop(
     _call_freq: collections.Counter = collections.Counter()
     _last_tool_result_sig = ""
     _unchanged_tool_result_rounds = 0
+    _last_tool_result_mutation_epoch = -1
     _failed_tool_rounds = 0
     # Exact failed calls are not useful retries until some successful tool has
     # materially changed workspace state. This catches loops that include
@@ -26787,8 +26864,9 @@ async def stream_agent_loop(
             if tool_name == "native_preview" and os.getenv("ODYSSEUS_EXECUTOR_URL", "").strip():
                 continue
             if (not tool_policy_names(tool_name).isdisjoint(disabled_tools)
-                    or not (_coding_grounding.may_mutate
-                            or tool_name in _coding_grounding.phase_tools)):
+                    or (_coding_grounding.required
+                        and not (_coding_grounding.may_mutate
+                                 or tool_name in _coding_grounding.phase_tools))):
                 continue
             if tool_name == "web_fetch" and _coding_grounding.requested_url_phase:
                 # Never mutate FUNCTION_TOOL_SCHEMAS: other concurrent turns
@@ -26854,6 +26932,15 @@ async def stream_agent_loop(
         ):
             return []
         if tool_surface == "none":
+            # A route can advertise no built-in tool surface while the caller
+            # still supplies an explicit environment-owned schema. Preserve
+            # that request-scoped contract on native API candidates; textual
+            # fallbacks set is_api_model=False and continue to omit schemas.
+            if route_state["is_api_model"] and normalized_external_tool_schemas:
+                return _filter_route_tool_schemas([
+                    schema for schema in normalized_external_tool_schemas
+                    if schema["function"]["name"] not in disabled_tools
+                ])
             return []
         if qwen38_router and not tool_surface:
             # These router LoRAs were trained with `--no-tools`: the compact
@@ -27020,7 +27107,9 @@ async def stream_agent_loop(
                         if allowed != choices:
                             schema = copy.deepcopy(schema)
                             schema["function"]["parameters"]["properties"]["action"]["enum"] = allowed
-                    elif _coding_work.blocks(tool_name, "{}"):
+                    elif (_coding_work.blocks(tool_name, "{}")
+                          and not (tool_name == "host_shell"
+                                   and _coding_grounding_host_bridge)):
                         continue
             if (_coding_work.state and _coding_work.state.stage == "edit"
                     and tool_name in {"bash", "python"}):
@@ -27151,24 +27240,6 @@ async def stream_agent_loop(
     _MAX_INTENT_NUDGES = 2
     _research_nudges = 0
 
-    # "I said I would, then didn't" detector. The pattern that breaks debug
-    # loops on weak models (deepseek-v4-flash mid-2026): the model writes
-    # "Let me tail the output to see the error" and then ends the turn with
-    # no tool_calls. The intent is sincere but the function call gets dropped.
-    # Match the common phrasings + an action verb that maps to an available
-    # tool, so we don't nudge on harmless transitional text like "let me
-    # know what you think".
-    _INTENT_RE = re.compile(
-        r"(?:^|\n)\s*(?:let me|i'?ll|i will|i need to|we need to|need to|"
-        r"i should|we should|i must|we must|going to|let's)\s+(?:(?:first|now|next)\s+)?"
-        r"(?:tail|check|investigate|look at|see|tail|read|fetch|inspect|"
-        r"verify|diagnose|examine|debug|capture|grab|pull|view|run|call|"
-        r"trigger|launch|start|kick off|stop|kill|restart|adopt|serve|"
-        r"register|adopt|list|search|find|query|hit|ping|test|use|perform|do|"
-        r"create|write|edit|build|implement|complete|continue|finish)"
-        r"\b[^.\n]{0,140}",
-        re.IGNORECASE,
-    )
     _awaiting_user = False  # set by ask_user → end the turn and wait for a choice
 
     _doc_stream_create_completed = False
@@ -27442,6 +27513,8 @@ async def stream_agent_loop(
             approval_matches and not approved_alignment_reason
             and _coding_work.enabled
             and _coding_work.blocks(approved.tool_name, approved.content)
+            and not (approved.tool_name == "host_shell"
+                     and _coding_grounding.allows_host_shell_inspection(approved.content))
         )
         if approval_matches and not approved_alignment_reason:
             yield (
@@ -28067,9 +28140,9 @@ async def stream_agent_loop(
         _round_limit = max(1, _round_limit)
     _last_round_num = 0
 
-    for round_num in (
-        count(1) if _round_limit is None else range(1, _round_limit + 1)
-    ):
+    # Server-scheduled coding checks run without consuming a model round. The
+    # loop can therefore have more iterations than the configured model cap.
+    for round_num in count(1):
         _last_round_num = round_num
         if _approved_effectful_completed or _approved_read_completed:
             break
@@ -28349,8 +28422,13 @@ async def stream_agent_loop(
                 else _round_compaction_state
             ),
         }
-        if round_num == 1 and not _approved_result_injected:
-            _active_route_state["tools"] = _route_state.get("tools", [])
+        if (round_num == 1 and not _approved_result_injected
+                and "tools" in _route_state):
+            # An absent cached schema list means this route should build its
+            # tools from the current relevance/capability state.  Storing a
+            # synthetic empty list here marks it as cached and silently
+            # suppresses every native schema.
+            _active_route_state["tools"] = _route_state["tools"]
         all_tool_schemas = _checked_coding_tool_schemas(_tool_schemas_for_route(_active_route_state))
         if round_num == 1 and not _approved_result_injected:
             _active_route_state["request_messages"] = _initial_route_request_messages
@@ -28503,6 +28581,7 @@ async def stream_agent_loop(
         async def _candidate_request(index, candidate_url, candidate_model, candidate_headers):
             nonlocal _last_route_request_messages, _last_route_context_length
             nonlocal _last_context_inspection
+            nonlocal _tool_names_sent
             if index == 0 and round_num == 1 and not _coding_packet_boundary:
                 state = _active_route_state
             else:
@@ -28584,6 +28663,14 @@ async def stream_agent_loop(
                 ]
 
             state["tools"] = candidate_tools
+            # Validate returned native calls against the schemas actually sent
+            # for the responding candidate. The initial route snapshot may be
+            # narrower than a rebuilt, already-checked research phase.
+            _tool_names_sent = [
+                schema.get("function", {}).get("name")
+                for schema in candidate_tools or ()
+                if schema.get("function", {}).get("name")
+            ]
             from src.generation_budget import fit_output_token_budget
 
             candidate_max_tokens = fit_output_token_budget(
@@ -29303,7 +29390,7 @@ async def stream_agent_loop(
             agent_stream_timeout,
         )
         _coding_narration_loop = False
-        if _model_request_capture_enabled():
+        if _model_request_capture_enabled() and not _server_coding_check:
             _snapshot_messages = _active_route_state.get("request_messages")
             if _snapshot_messages is None:
                 _snapshot_messages = _trim_route_request_messages(
@@ -29331,26 +29418,33 @@ async def stream_agent_loop(
                     ),
                 ),
             }) + "\n\n"
-        _stream_iterator = stream_llm_with_fallback(
-            _candidates,
-            messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            prompt_type=prompt_type if round_num == 1 else None,
-            tools=all_tool_schemas if all_tool_schemas else None,
-            tool_choice_none=_ody_doc_finetune_mode,
-            timeout=agent_stream_timeout,
-            session_id=session_id,
-            workload=workload,
-            thinking_mode=thinking_mode,
-            reasoning_effort=reasoning_effort,
-            fallback_statuses=fallback_statuses,
-            fallback_on_empty=fallback_on_empty,
-            candidate_request_factory=_candidate_request,
-            candidate_capability_recovery_factory=_candidate_capability_recovery,
-            candidate_route_descriptors=_candidate_route_descriptors,
-            retry_degenerate_stream_once=_terminal_completion_contract,
-        )
+        if _server_coding_check:
+            async def _empty_server_check_stream():
+                if False:
+                    yield ""
+            _stream_iterator = _empty_server_check_stream()
+        else:
+            _stream_iterator = stream_llm_with_fallback(
+                _candidates,
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                prompt_type=prompt_type if round_num == 1 else None,
+                tools=all_tool_schemas if all_tool_schemas else None,
+                tool_choice_none=_ody_doc_finetune_mode,
+                reasoning_mode=reasoning_mode,
+                timeout=agent_stream_timeout,
+                session_id=session_id,
+                workload=workload,
+                thinking_mode=thinking_mode,
+                reasoning_effort=reasoning_effort,
+                fallback_statuses=fallback_statuses,
+                fallback_on_empty=fallback_on_empty,
+                candidate_request_factory=_candidate_request,
+                candidate_capability_recovery_factory=_candidate_capability_recovery,
+                candidate_route_descriptors=_candidate_route_descriptors,
+                retry_degenerate_stream_once=_terminal_completion_contract,
+            )
         async for chunk in _stream_iterator:
             if not _round_first_event_logged:
                 _round_first_event_logged = True
@@ -29410,27 +29504,9 @@ async def stream_agent_loop(
                 # Let the completion gate retain the original failure even
                 # when earlier tool evidence supplies useful fallback prose.
                 yield chunk
-                terminal_status = None
-                try:
-                    error_line = next(
-                        line[6:]
-                        for line in chunk.splitlines()
-                        if line.startswith("data: ")
-                    )
-                    error_data = json.loads(error_line)
-                    terminal_status = _normalize_http_status(
-                        error_data.get("status")
-                    )
-                except Exception:
-                    pass
-                terminal_error = {
-                    "message": (
-                        f"Model request failed (HTTP {terminal_status})"
-                        if terminal_status is not None
-                        else "Model request failed"
-                    ),
-                    "status": terminal_status,
-                }
+                # Keep the allowlisted provider failure parsed above, including
+                # normalized status and category. Re-parsing here discarded the
+                # recovery guidance and failed to normalize fractional statuses.
                 _verified_artifact_on_provider_error = bool(
                     _terminal_completion_contract
                     and _artifact_creation_requested
@@ -29808,6 +29884,16 @@ async def stream_agent_loop(
                             messages = answering_state["messages"]
                             mcp_schemas = answering_state["mcp_schemas"]
                             _relevant_tools = answering_state["relevant_tools"]
+                            _answering_tools = answering_state.get("tools")
+                            if _answering_tools is None:
+                                _answering_tools = _checked_coding_tool_schemas(
+                                    _tool_schemas_for_route(answering_state)
+                                )
+                            _tool_names_sent = [
+                                schema.get("function", {}).get("name")
+                                for schema in _answering_tools or ()
+                                if schema.get("function", {}).get("name")
+                            ]
                             _is_api_model = answering_state["is_api_model"]
                             _is_ollama_native = answering_state["is_ollama_native"]
                             _ollama_openai_compat = answering_state["ollama_openai_compat"]
@@ -33832,6 +33918,87 @@ async def stream_agent_loop(
                 logger.info("[agent] web evidence recovery stage=%d", _web_evidence_recovery_rounds)
                 yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
                 continue
+            if (
+                _artifact_finish_nudge_sent
+                and _artifact_finish_correction_seen
+                and not _artifact_finish_convergence_sent
+                and _artifact_has_current_inspection(
+                    tool_events, _completion_requirements.required_artifacts,
+                )
+                and EvidenceLedger.from_tool_events(
+                    tool_events, _completion_requirements,
+                ).evaluate().can_complete
+            ):
+                _artifact_finish_convergence_sent = True
+                _force_answer = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Your one evidence-based artifact correction succeeded and the "
+                        "corrected artifact has now been inspected. Do not call more "
+                        "tools or continue polishing. Give the concise final response now."
+                    ),
+                })
+                yield "data: " + json.dumps({
+                    "type": "artifact_finish_after_verified_correction",
+                    "round": round_num,
+                }) + "\n\n"
+            if (
+                _artifact_finish_nudge_sent
+                and not _artifact_finish_correction_seen
+                and not _force_answer
+                and _artifact_calls_are_verification_only(tool_blocks)
+                and _artifact_has_current_inspection(
+                    tool_events, _completion_requirements.required_artifacts,
+                )
+                and EvidenceLedger.from_tool_events(
+                    tool_events, _completion_requirements,
+                ).evaluate().can_complete
+            ):
+                _artifact_finish_convergence_sent = True
+                _force_answer = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "The requested artifact exists and has now been inspected again "
+                        "after the finish check, but no correction was made. Do not call "
+                        "more tools or retry alternate preview URLs. Give the concise "
+                        "final response now."
+                    ),
+                })
+                yield "data: " + json.dumps({
+                    "type": "artifact_finish_after_reinspection",
+                    "round": round_num,
+                }) + "\n\n"
+            if (
+                _artifact_finish_nudge_sent
+                and not _artifact_finish_correction_seen
+                and not _artifact_finish_promise_recovery_sent
+                and not any(_workspace_mutation_tool_block(block) for block in tool_blocks)
+                and (
+                    _looks_like_unfinished_action_promise(cleaned_round or round_response)
+                    or re.search(
+                        r"\b(?:i should|i will|i need to|let me)\b.{0,180}"
+                        r"\b(?:complete|correct|fix|edit|write|update)\b",
+                        cleaned_round or round_response,
+                        re.IGNORECASE | re.DOTALL,
+                    )
+                )
+            ):
+                # Keep the mutation surface for one bounded response when the
+                # model promises a correction but emits no correction tool.
+                _artifact_finish_promise_recovery_sent = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Your last reply promised a concrete artifact correction but did "
+                        "not make it. Either perform that one evidence-based correction "
+                        "now and verify it, or finish concisely if no defect remains. "
+                        "Do not promise future work."
+                    ),
+                })
+                yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+                continue
             if not tool_blocks:
                 break  # no tools — done
 
@@ -33866,7 +34033,7 @@ async def stream_agent_loop(
             _completed_media_inspections >= 8
             or (
                 _round_limit is not None
-                and round_num >= _round_limit - 1
+                and _model_rounds >= _round_limit - 1
                 and _completed_media_inspections >= 6
             )
         )
@@ -34743,7 +34910,7 @@ async def stream_agent_loop(
                         "content": (
                             "The previous action named a tool outside this request's "
                             "environment contract. Call exactly one of the functions "
-                            "declared for this request now; do not inspect Odysseus "
+                            "declared for this request now; do not inspect Novum Xenium "
                             "settings, model registries, or personal tools."
                         ),
                     })
@@ -34872,11 +35039,23 @@ async def stream_agent_loop(
                     # Resolve the alias before security, approval, and execution so
                     # the registered command follows the ordinary Bash path.
                     block = ToolBlock("bash", check_command)
+            scheduled_check = _scheduled_coding_check
+            server_scheduled_check = bool(
+                _server_coding_check
+                and coding_check_error is None
+                and block.tool_type == "bash"
+                and _coding_work.state is not None
+                and scheduled_check is not None
+                and scheduled_check[0] is _coding_work.state
+                and scheduled_check[1] == _coding_work.state.stage
+                and scheduled_check[2] == block.content
+                and scheduled_check[3] is _coding_work.state.edit_result
+            )
             native_tool_fields = (
                 _native_tool_provenance(converted_calls, i, block.tool_type)
                 if used_native else {}
             )
-            if _server_coding_check:
+            if server_scheduled_check:
                 native_tool_fields["server_scheduled_check"] = True
             native_call = converted_calls[i] if i < len(converted_calls) else None
             tool_call_id = _resolved_tool_call_id(
@@ -34886,6 +35065,12 @@ async def stream_agent_loop(
                 tool_index=i,
                 tool_name=block.tool_type,
             )
+            # Every emitted start/output pair needs the same stable ID, even
+            # when a provider's native call had no reusable identifier.
+            native_tool_fields.update({
+                "call_id": tool_call_id,
+                "tool_call_id": tool_call_id,
+            })
             _runtime_action = propose_action(block, tool_call_id, native_call)
             _call_signature = _tool_call_signature(block.tool_type, block.content)
             _grounding_feedback_only = _call_signature in _grounding_feedback_calls
@@ -34896,7 +35081,11 @@ async def stream_agent_loop(
                 and _previous_failure.get("mutation_epoch") == _workspace_mutation_epoch
             )
             _previous_successful_read = _successful_read_call_history.get(_call_signature)
-            _blocked_redundant_read = _redundant_read_should_block(
+            # The packet has explicitly invalidated its prior check. This
+            # exact server-owned stage/command must run again; a read-cache
+            # hit is not fresh verifier evidence. Normal authority, approval,
+            # disabled-tool and budget checks still apply below.
+            _blocked_redundant_read = not server_scheduled_check and _redundant_read_should_block(
                 _previous_successful_read,
                 block,
                 _workspace_mutation_epoch,
@@ -36016,7 +36205,7 @@ async def stream_agent_loop(
                     "blocked": True,
                     "policy": "coding_work_packet",
                 }
-            elif _grounding_feedback_only:
+            elif _grounding_feedback_only and not server_scheduled_check:
                 desc = f"{block.tool_type}: RESEARCH FIRST"
                 result = {
                     "error": _coding_grounding.directive,
@@ -36205,7 +36394,8 @@ async def stream_agent_loop(
                     block_policy,
                     block.tool_type,
                 )
-            elif not _coding_grounding.allows_tool(block.tool_type, block.content):
+            elif (not server_scheduled_check
+                  and not _coding_grounding.allows_tool(block.tool_type, block.content)):
                 desc = f"{block.tool_type}: RESEARCH FIRST"
                 result = {"error": _coding_grounding.directive, "exit_code": 1,
                           "blocked": True, "policy": "coding_grounding"}
@@ -36214,7 +36404,9 @@ async def stream_agent_loop(
                 desc = f"{block.tool_type}: PLAN FIRST"
                 result = {"error": _milestone_checkpoint.directive, "exit_code": 1,
                           "blocked": True, "policy": "milestone_checkpoint"}
-            elif _coding_work.blocks(block.tool_type, block.content):
+            elif (_coding_work.blocks(block.tool_type, block.content)
+                  and not (block.tool_type == "host_shell"
+                           and _coding_grounding.allows_host_shell_inspection(block.content))):
                 desc = f"{block.tool_type}: CODING WORKFLOW"
                 result = {"error": _coding_work.instruction, "exit_code": 1,
                           "blocked": True, "policy": "coding_work_packet"}
@@ -39141,6 +39333,443 @@ async def stream_agent_loop(
         if _awaiting_user:
             break
 
+        if (
+            _artifact_recovery_enabled
+            and not _force_answer
+            and tool_result_records
+            and any(
+                str(record.get("tool_name") or "") in {"bash", "python"}
+                and isinstance(record.get("result"), dict)
+                and "ad-hoc HTTP" in str(
+                    record["result"].get("error") or record["result"].get("output") or ""
+                )
+                for record in tool_result_records
+                if isinstance(record, dict)
+            )
+        ):
+            _wrong_http_evidence = EvidenceLedger.from_tool_events(
+                tool_events, _completion_requirements,
+            ).evaluate()
+            _wrong_http_missing = tuple(_wrong_http_evidence.missing_artifacts)
+            if _wrong_http_missing and _artifact_completion_nudges < 3:
+                _artifact_completion_nudges += 1
+                _artifact_recovery_relevant_tools = (
+                    None if _relevant_tools is None else set(_relevant_tools)
+                )
+                _source_locks = _resolved_value_locks_from_tool_events(tool_events)
+                _available_tools = set(_artifact_recovery_relevant_tools or _relevant_tools or ())
+                _native_source_tools = (
+                    {"pdf_extract", "web_fetch", "web_search", "private_browser"}
+                    & _available_tools
+                )
+                _needs_native_acquisition = bool(
+                    not _source_locks
+                    and _native_source_tools
+                    and re.search(
+                        r"https?://|\b(?:pdf|paper|report|source|web|online)\b",
+                        _last_user,
+                        re.IGNORECASE,
+                    )
+                )
+                if _needs_native_acquisition:
+                    _artifact_acquisition_recovery_active = True
+                    _artifact_mutation_only_mode = False
+                    _relevant_tools = set(_native_source_tools)
+                    messages = _artifact_acquisition_recovery_messages(
+                        messages, tool_events, _wrong_http_missing, user_text=_last_user,
+                    )
+                    _reason = "artifact_native_acquisition_required"
+                else:
+                    _artifact_acquisition_recovery_active = False
+                    _artifact_mutation_only_mode = True
+                    _relevant_tools = {
+                        "python", "write_file", "read_file", "ls", "grep",
+                        "glob", "edit_file", "apply_patch", "bash",
+                    } & _available_tools
+                    messages = _artifact_recovery_messages(
+                        messages, tool_events, _wrong_http_missing,
+                    )
+                    _reason = "artifact_wrong_tool_http"
+                yield "data: " + json.dumps({
+                    "type": "completion_blocked",
+                    "reason": _reason,
+                    "round": round_num,
+                    "attempt": _artifact_completion_nudges,
+                    "decision": _wrong_http_evidence.to_dict(),
+                }) + "\n\n"
+                yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+                continue
+
+        # Keep one provider request available for the workspace mutation when
+        # a terminal artifact task reaches its round budget after gathering
+        # evidence but before creating the required deliverable.
+        if (
+            _artifact_recovery_enabled
+            and not _force_answer
+            and _round_limit is not None
+            and _model_rounds >= _round_limit - 1
+            and not _artifact_mutation_only_mode
+            and any(
+                isinstance(event, dict) and event.get("exit_code") == 0
+                for event in tool_events
+            )
+        ):
+            _round_budget_evidence = EvidenceLedger.from_tool_events(
+                tool_events, _completion_requirements,
+            ).evaluate()
+            _round_budget_missing = tuple(_round_budget_evidence.missing_artifacts)
+            if _round_budget_missing:
+                _artifact_completion_nudges += 1
+                _artifact_recovery_relevant_tools = (
+                    None if _relevant_tools is None else set(_relevant_tools)
+                )
+                _artifact_acquisition_recovery_active = False
+                _artifact_mutation_only_mode = True
+                messages = _artifact_recovery_messages(
+                    messages, tool_events, _round_budget_missing,
+                )
+                yield "data: " + json.dumps({
+                    "type": "completion_blocked",
+                    "reason": "artifact_round_budget_reserved",
+                    "round": round_num,
+                    "attempt": _artifact_completion_nudges,
+                    "decision": _round_budget_evidence.to_dict(),
+                }) + "\n\n"
+                yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+                continue
+
+        # Preserve the bounded artifact convergence and repair guards from the
+        # native loop. A successful inspection earns one concise finish
+        # nudge; repeated failed mutations get a small repair budget, then an
+        # honest stop instead of silently declaring the deliverable complete.
+        _post_finish_evidence = EvidenceLedger.from_tool_events(
+            tool_events, _completion_requirements,
+        ).evaluate()
+        if (
+            _artifact_recovery_enabled
+            and not _force_answer
+            and not _artifact_finish_nudge_sent
+            and _artifact_has_current_inspection(
+                tool_events, _completion_requirements.required_artifacts,
+            )
+            and _post_finish_evidence.can_complete
+        ):
+            _artifact_finish_nudge_sent = True
+            messages.append({
+                "role": "system",
+                "content": (
+                    "The requested artifact now exists and has been inspected after "
+                    "its latest edit. If it meets the request, finish with a concise "
+                    "summary. If inspection found a concrete defect, make one "
+                    "evidence-based correction, verify it, and finish. Do not keep "
+                    "polishing or recreate the artifact without new evidence."
+                ),
+            })
+            yield "data: " + json.dumps({
+                "type": "artifact_finish_nudge",
+                "round": round_num,
+                "reason": "artifact_complete_and_currently_inspected",
+            }) + "\n\n"
+            yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+            continue
+
+        # Different arguments can still return the same observation forever.
+        # Count only fully successful batches, and allow either changed text
+        # or changed result data to reset the convergence window.
+        _result_batch_successful = bool(tool_result_records) and all(
+            tool_result_is_successful(record.get("result") or {})
+            for record in tool_result_records
+        )
+        _result_sig = (
+            _tool_result_signature(tool_result_records)
+            if _result_batch_successful
+            else ""
+        )
+        _real_text_after_tools = _strip_think_blocks(cleaned_round).strip()
+        if (
+            _result_sig
+            and _result_sig == _last_tool_result_sig
+            and _workspace_mutation_epoch == _last_tool_result_mutation_epoch
+            and not _real_text_after_tools
+        ):
+            _unchanged_tool_result_rounds += 1
+        else:
+            _unchanged_tool_result_rounds = 0
+        _last_tool_result_sig = _result_sig
+        _last_tool_result_mutation_epoch = _workspace_mutation_epoch
+
+        _round_pagination_sigs = {
+            signature
+            for signature in (
+                _web_fetch_pagination_signature(record)
+                for record in tool_result_records
+            )
+            if signature
+        }
+        for signature in _round_pagination_sigs:
+            _web_fetch_pagination_counts[signature] += 1
+        _runaway_pagination_sig = next(
+            (
+                signature
+                for signature in _round_pagination_sigs
+                if _web_fetch_pagination_counts[signature] >= 3
+            ),
+            "",
+        )
+        if _runaway_pagination_sig and not _force_answer:
+            yield "data: " + json.dumps({
+                "type": "loop_breaker_triggered",
+                "reason": "repeated_web_pagination",
+                "message": (
+                    "The same web source has been paginated repeatedly. The agent is "
+                    "being asked to answer from the evidence already collected."
+                ),
+                "round": round_num,
+            }) + "\n\n"
+            _force_answer = True
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Stop fetching additional pages from this source. Answer from the "
+                    "evidence already collected and state any remaining gap."
+                ),
+            })
+
+        if (
+            _unchanged_tool_result_rounds >= 2
+            and not _force_answer
+            # The detailed progress guard owns reads and polling. This
+            # secondary guard only catches result-identical calls outside
+            # that vocabulary, such as changing shell probes returning the
+            # same observation; read pagination must retain its own progress
+            # semantics.
+            and all(
+                record.get("tool_name") not in _ToolProgressGuard.reads
+                for record in tool_result_records
+            )
+        ):
+            _loop_evidence = EvidenceLedger.from_tool_events(
+                tool_events, _completion_requirements,
+            ).evaluate()
+            _loop_missing_artifacts = tuple(_loop_evidence.missing_artifacts)
+            if (
+                _artifact_recovery_enabled
+                and _loop_missing_artifacts
+                and _artifact_completion_nudges < 2
+            ):
+                _artifact_completion_nudges += 1
+                _unchanged_tool_result_rounds = 0
+                _missing = ", ".join(_loop_missing_artifacts)
+                yield "data: " + json.dumps({
+                    "type": "completion_blocked",
+                    "reason": "artifact_mutation_required",
+                    "round": round_num,
+                    "attempt": _artifact_completion_nudges,
+                    "decision": _loop_evidence.to_dict(),
+                }) + "\n\n"
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"Stop repeating inspections. Required artifacts are still missing: {_missing}. "
+                        "Create the requested artifact with an available workspace mutation tool, "
+                        "then verify it. Do not claim it exists before that succeeds."
+                    ),
+                })
+            else:
+                _progress_paused = True
+                yield "data: " + json.dumps({
+                    "type": "loop_breaker_triggered",
+                    "reason": "unchanged_tool_results",
+                    "message": (
+                        "The same tool results repeated without new information, so the agent "
+                        "is being asked to finish from the evidence it has."
+                    ),
+                    "round": round_num,
+                }) + "\n\n"
+                _force_answer = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "The latest tool calls produced no new information. Stop using tools "
+                        "and give a concise answer from the evidence already available."
+                    ),
+                })
+
+        _all_tool_results_failed = bool(tool_result_records) and all(
+            not tool_result_is_successful(record.get("result") or {})
+            for record in tool_result_records
+        )
+        _failed_mutation_attempts = _failed_workspace_mutation_attempts(
+            tool_blocks, tool_result_records,
+        )
+        if _artifact_recovery_enabled and _failed_mutation_attempts and not _all_tool_results_failed:
+            _artifact_failed_mutation_attempts += _failed_mutation_attempts
+        elif _artifact_recovery_enabled and any(
+            _workspace_mutation_tool_block(block)
+            and tool_result_is_successful(record.get("result") or {})
+            for block, record in zip(tool_blocks, tool_result_records)
+        ):
+            _artifact_failed_mutation_attempts = 0
+        _only_repeated_read_refusals = bool(tool_result_records) and all(
+            isinstance(record.get("result"), dict)
+            and record["result"].get("blocked")
+            and record["result"].get("policy") == "repeated_read_only_call"
+            for record in tool_result_records
+        )
+        # Refusing an unchanged successful read is not a new execution failure.
+        # The progress guard counts these as reads and can recover to a packet;
+        # let that bounded path run instead of preempting it with failure retry.
+        _recorded_reproduction_failure = bool(
+            _coding_work.state and _coding_work.state.stage == "edit"
+            and _coding_work.state.reproduction_result is not None
+            and tool_result_records
+            and all(
+                record.get("tool_name") == "bash"
+                and record.get("content") == _coding_work.state.packet.reproduce_command
+                and isinstance(record.get("result"), dict)
+                and type(record["result"].get("exit_code")) is int
+                and record["result"]["exit_code"] != 0
+                and not record["result"].get("blocked")
+                and not record["result"].get("approval_required")
+                for record in tool_result_records
+            )
+        )
+        # A checked reproduction is meant to demonstrate the failure before
+        # repair. Its recorded stage transition is progress, not a retry loop.
+        if (_all_tool_results_failed and not _only_repeated_read_refusals
+                and not _recorded_reproduction_failure):
+            _bounded_research_retry_released = bool(
+                _coding_grounding.required
+                and _coding_grounding.documentation_ready
+                and _coding_grounding.may_mutate
+                and tool_result_records
+                and all(
+                    record.get("tool_name") in _coding_grounding.research_tools
+                    for record in tool_result_records
+                )
+            )
+            if _bounded_research_retry_released:
+                # Documentation/skill attempts have their own finite retry
+                # counters. Once that prerequisite releases, its failures
+                # must not trigger the unrelated consecutive-command breaker
+                # before the requested workspace action can run.
+                _failed_tool_rounds = 0
+            else:
+                _failed_tool_rounds += 1
+            if _artifact_recovery_enabled and any(
+                _workspace_mutation_tool_block(block) for block in tool_blocks
+            ):
+                _artifact_failed_mutation_batches += 1
+        else:
+            _failed_tool_rounds = 0
+
+        if _artifact_failed_mutation_attempts >= 3 and not _force_answer:
+            _force_answer = True
+            yield "data: " + json.dumps({
+                "type": "loop_breaker_triggered",
+                "reason": "mixed_artifact_mutation_failures",
+                "round": round_num,
+                "failed_attempts": _artifact_failed_mutation_attempts,
+            }) + "\n\n"
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Several attempts to create or convert the required artifact "
+                    "failed. Stop probing and give a concise, truthful result from "
+                    "the evidence already gathered. Do not claim the artifact exists."
+                ),
+            })
+        if _artifact_failed_mutation_batches >= 6 and not _force_answer:
+            _force_answer = True
+            yield "data: " + json.dumps({
+                "type": "loop_breaker_triggered",
+                "reason": "cumulative_artifact_mutation_failures",
+                "round": round_num,
+                "failed_batches": _artifact_failed_mutation_batches,
+            }) + "\n\n"
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Six artifact mutation attempts failed in this request. Stop "
+                    "using tools and give a concise, truthful final answer with the "
+                    "last concrete failure. Do not claim the artifact exists."
+                ),
+            })
+        _failed_round_limit = _failed_tool_round_limit(client_runtime_context)
+        if _failed_tool_rounds >= _failed_round_limit and not _force_answer:
+            _failed_evidence = EvidenceLedger.from_tool_events(
+                tool_events, _completion_requirements,
+            ).evaluate()
+            _failed_missing_artifacts = tuple(_failed_evidence.missing_artifacts)
+            if (
+                _artifact_recovery_enabled
+                and _failed_missing_artifacts
+                and _artifact_failed_batch_repairs < 3
+            ):
+                _artifact_failed_batch_repairs += 1
+                _failed_tool_rounds = 0
+                _last_failed_result = (
+                    (tool_result_records[-1].get("result") or {})
+                    if tool_result_records else {}
+                )
+                _last_failure_detail = str(
+                    _last_failed_result.get("error")
+                    or _last_failed_result.get("stderr")
+                    or _last_failed_result.get("output")
+                    or "the previous tool call failed"
+                ).strip()[:1200]
+                _missing = ", ".join(_failed_missing_artifacts)
+                yield "data: " + json.dumps({
+                    "type": "artifact_repair_required",
+                    "reason": "artifact_recovery_after_tool_failures",
+                    "round": round_num,
+                    "attempt": _artifact_failed_batch_repairs,
+                    "decision": _failed_evidence.to_dict(),
+                    "last_failure": _last_failure_detail,
+                }) + "\n\n"
+                yield "data: " + json.dumps({
+                    "type": "completion_blocked",
+                    "reason": "artifact_recovery_after_tool_failures",
+                    "round": round_num,
+                    "attempt": _artifact_failed_batch_repairs,
+                    "decision": _failed_evidence.to_dict(),
+                }) + "\n\n"
+                _artifact_recovery_relevant_tools = (
+                    None if _relevant_tools is None else set(_relevant_tools)
+                )
+                messages = _artifact_recovery_messages(
+                    messages, tool_events, _failed_missing_artifacts,
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"Do not finish: required artifact evidence is still missing for {_missing}. "
+                        f"The latest failure was: {_last_failure_detail}. Fix that exact error "
+                        "with a materially changed minimal approach, then verify the artifact. "
+                        "Do not repeat a failed call."
+                    ),
+                })
+            else:
+                # Repeated failed tools are a bounded stop too: the ensuing
+                # synthesis may answer, but teacher escalation must not reopen
+                # the failed action loop.
+                _progress_paused = True
+                yield "data: " + json.dumps({
+                    "type": "loop_breaker_triggered",
+                    "reason": "consecutive_tool_failures",
+                    "round": round_num,
+                }) + "\n\n"
+                _force_answer = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "The last tool calls failed repeatedly. Finish truthfully from "
+                        "the evidence available; do not claim a missing artifact exists."
+                    ),
+                })
+            yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+            continue
+
         _failed_tool_completion_decision = None
         if _substantive_answer_after_failed_tools(cleaned_round, tool_result_records):
             if _artifact_recovery_enabled and not _force_answer:
@@ -39215,9 +39844,54 @@ async def stream_agent_loop(
             continue
 
         if (
+            _artifact_recovery_enabled
+            and not _force_answer
+            and not _artifact_mutation_only_mode
+            and _artifact_completion_nudges < 3
+            and any(
+                tool_result_is_successful(record.get("result"))
+                and _workspace_mutation_tool_block(ToolBlock(
+                    str(record.get("tool_name") or ""),
+                    str(record.get("content") or ""),
+                ))
+                for record in tool_result_records
+                if isinstance(record, dict)
+            )
+        ):
+            _partial_evidence = EvidenceLedger.from_tool_events(
+                tool_events, _completion_requirements,
+            ).evaluate()
+            _partial_missing = tuple(_partial_evidence.missing_artifacts)
+            if _partial_missing:
+                _artifact_completion_nudges += 1
+                logger.warning(
+                    "[agent] partial artifact mutation left required artifacts missing: %s",
+                    ", ".join(_partial_missing),
+                )
+                _artifact_recovery_relevant_tools = (
+                    None if _relevant_tools is None else set(_relevant_tools)
+                )
+                _artifact_acquisition_recovery_active = False
+                _artifact_mutation_only_mode = True
+                messages = _artifact_recovery_messages(
+                    messages, tool_events, _partial_missing,
+                )
+                yield "data: " + json.dumps({
+                    "type": "completion_blocked",
+                    "reason": "partial_artifact_mutation",
+                    "round": round_num,
+                    "attempt": _artifact_completion_nudges,
+                    "decision": _partial_evidence.to_dict(),
+                }) + "\n\n"
+                yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+                continue
+
+        if (
             _post_effectful_mutation_done
             and _post_edit_verification_completed
             and _workspace_mutation_completion_authorized
+            and not _coding_work.enabled
+            and not _coding_verification_required
             and (_deterministic_terminal_eligible or _tui_local_execution_turn)
         ):
             if _tui_local_execution_turn or _qwen38_tool_router:
@@ -39241,7 +39915,9 @@ async def stream_agent_loop(
             logger.info("[agent] completed verified workspace mutation")
             break
 
-        if (_inspection_edit_completed or _file_creation_completed) and _deterministic_terminal_eligible:
+        if ((_inspection_edit_completed or _file_creation_completed)
+                and _deterministic_terminal_eligible
+                and not _coding_work.enabled and not _coding_verification_required):
             if not full_response.strip() or full_response.strip().startswith("```"):
                 _verification_output = ""
                 for _event in reversed(tool_events):
@@ -39264,6 +39940,11 @@ async def stream_agent_loop(
             and not _qwen_skills_unlocked_tools
             and _deterministic_terminal_eligible
             and not _coding_grounding.required
+            and not _coding_work.enabled
+            and not bool(
+                set(_intent.get("domains") or ()) & {"coding", "shell_files"}
+            )
+            and not _skill_view_has_explicit_follow_on(_last_user)
         ):
             if not full_response.strip():
                 full_response = _qwen_skills_terminal_summary or "Done."
@@ -40301,6 +40982,39 @@ async def stream_agent_loop(
             full_response,
         )
 
+    # A checked packet can finish through the server-scheduled acceptance
+    # check and deterministic receipt summary without another model round.
+    # In that path the in-round verifier hook is never reached; review the
+    # completed packet here before the outer completion adapter emits success.
+    if (
+        _coding_work.enabled
+        and _coding_work.state
+        and _coding_work.state.stage == "done"
+        and not _coding_work.pending
+        and _coding_work.review_status == "not_reviewed"
+        and _effectful_used
+        and get_setting("agent_verifier_subagent", False)
+        and not _awaiting_user
+        and not _progress_paused
+        and not _exhausted_rounds
+        and not _coding_work.retry_limit_reached
+    ):
+        yield f'data: {json.dumps({"type": "agent_step", "round": round_num})}\n\n'
+        _vfail = await _run_verifier_subagent(
+            _verifier_instruction,
+            _build_actions_snapshot(tool_events),
+            endpoint_url=endpoint_url, model=model, headers=headers,
+            reasoning_mode=reasoning_mode,
+        )
+        _coding_work.record_review(_vfail)
+        _save_coding_work_checkpoint()
+        yield f'data: {json.dumps(_coding_work.event(round_num))}\n\n'
+        _verification_issues = _vfail
+        if _vfail:
+            _verifier_rounds += 1
+        else:
+            _completion_review_passed = True
+
     if tool_events and full_response.strip():
         full_response = _linkify_note_titles_from_tool_events(full_response, tool_events)
         full_response = _linkify_email_titles_from_tool_events(full_response, tool_events)
@@ -40446,11 +41160,9 @@ async def stream_agent_loop(
     )
     yield f"data: {json.dumps({'type': 'metrics', 'data': metrics})}\n\n"
 
-    _teacher_escalation_intervened = False
     # Queue the existing teacher hook. The outer adapter executes it only
     # after this invocation's completion gate and action context have closed.
     if not _is_teacher_run and not guide_only and not _awaiting_user and not _progress_paused:
-        _teacher_escalation_intervened = True
         request_teacher_takeover(
             student_endpoint_url=endpoint_url,
             student_messages=messages,
@@ -40483,17 +41195,26 @@ async def stream_agent_loop(
         _coding_work.review_status == "passed" and _completion_review_passed
     )
     if (
-        _coding_verification_required
+        (_coding_verification_required or bool(_verification_issues))
         and not _completion_review_passed
         and not _verification_failure_terminal_emitted
         and not _awaiting_user
         and not _exhausted_rounds
         and not _coding_work.retry_limit_reached
     ):
-        notice = (
-            "**Incomplete — completion not verified:** The required independent "
-            "review did not pass before the run stopped."
-        )
+        if _verification_issues:
+            issue_summary = "\n".join(
+                f"- {str(issue).strip()[:300]}" for issue in _verification_issues[:3]
+            )
+            notice = (
+                "**Incomplete — completion not verified:** The independent review "
+                "found unresolved issues:\n" + issue_summary
+            )
+        else:
+            notice = (
+                "**Incomplete — completion not verified:** The required independent "
+                "review did not pass before the run stopped."
+            )
         full_response += "\n\n" + notice
         yield "data: " + json.dumps({"delta": "\n\n" + notice}) + "\n\n"
         yield f'data: {json.dumps({"type": "agent_terminal", "status": "failed", "reason": "completion_unverified", "message": notice})}\n\n'
@@ -40508,7 +41229,6 @@ async def stream_agent_loop(
         and not _progress_paused
         and not _exhausted_rounds
         and not _coding_work_budget_exceeded
-        and not _teacher_escalation_intervened
         and (_project_verification is None or _project_verification.get("complete") is True)
     ):
         terminal = {

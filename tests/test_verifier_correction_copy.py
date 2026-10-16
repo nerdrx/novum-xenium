@@ -7,7 +7,7 @@ AGENT_LOOP = Path(__file__).resolve().parents[1] / "src" / "agent_loop.py"
 def test_verifier_correction_uses_plain_continuation_copy():
     source = AGENT_LOOP.read_text(encoding="utf-8")
 
-    assert '_note = "\\n\\nAnd also...\\n\\n"' in source
+    assert '_note = "\\n\\n_Completion review found missing work or evidence; checking again._\\n\\n"' in source
     assert "Double-checked the work and found something to fix" not in source
 
 

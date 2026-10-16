@@ -328,8 +328,15 @@ def test_substantive_repair_releases_completion_only_after_review(monkeypatch, t
                        "https://vendor.example/docs/gui."),
     )
     deltas = "".join(event.get("delta", "") for event in events)
+    final_text = deltas + "".join(
+        event.get("content", "") for event in events
+        if event.get("type") == "final_response"
+    )
     assert len(reviews) == 1
-    assert "Work finished." in deltas
+    assert "Work finished." in final_text, "; ".join(
+        f"{event.get('type')}:{event.get('tool')}:{event.get('round')}:{event.get('reason')}:{event.get('status')}"
+        for event in events[-24:]
+    )
     assert not any(event.get("type") == "agent_terminal" for event in events)
 
 
@@ -362,8 +369,12 @@ def test_exact_approval_resume_still_requires_passing_review(monkeypatch, tmp_pa
         review_calls=reviews, coding_prompt=prompt,
     )
     deltas = "".join(event.get("delta", "") for event in events)
+    final_text = deltas + "".join(
+        event.get("content", "") for event in events
+        if event.get("type") == "final_response"
+    )
     assert len(reviews) == 1
-    assert "Work finished." in deltas
+    assert "Work finished." in final_text, events
     assert not any(event.get("type") == "agent_terminal" for event in events)
 
 
@@ -441,11 +452,15 @@ def test_completion_recovery_text_waits_for_tool_and_passing_review(monkeypatch,
         [{"role": "user", "content": "Write and verify the result file"}], tmp_path,
     )))
     deltas = "".join(event.get("delta", "") for event in events)
+    final_text = deltas + "".join(
+        event.get("content", "") for event in events
+        if event.get("type") == "final_response"
+    )
     assert len(writes) == 2
-    assert "Everything is ready." not in deltas
-    assert "Initial write starting." in deltas
-    assert "Repair action executed." in deltas
-    assert "Verified complete." in deltas
+    assert "Everything is ready." not in final_text
+    assert "Initial write starting." in final_text
+    assert "Repair action executed." in final_text
+    assert "Verified complete." in final_text
     assert not any(event.get("type") == "agent_terminal" for event in events)
 
 

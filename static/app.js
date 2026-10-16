@@ -243,12 +243,12 @@ async function _refreshDefaultChat() {
 // synchronously; later reads should call _refreshDefaultChat() first.
 _refreshDefaultChat();
 
-async function _createDirectChatFromPreferredModel() {
+async function _createDirectChatFromPreferredModel({ fresh = false } = {}) {
   if (!sessionModule) return false;
 
   const pending = sessionModule.getPendingChat && sessionModule.getPendingChat();
   if (pending && pending.url && pending.modelId && pending.endpointId) {
-    sessionModule.createDirectChat(pending.url, pending.modelId, pending.endpointId, { source: pending.source || 'manual' });
+    sessionModule.createDirectChat(pending.url, pending.modelId, pending.endpointId, { source: pending.source || 'manual', fresh });
     return true;
   }
 
@@ -256,20 +256,20 @@ async function _createDirectChatFromPreferredModel() {
   const currentId = sessionModule.getCurrentSessionId();
   const current = sessions.find(s => s.id === currentId);
   if (current && current.endpoint_url && current.model && current.endpoint_id) {
-    sessionModule.createDirectChat(current.endpoint_url, current.model, current.endpoint_id);
+    sessionModule.createDirectChat(current.endpoint_url, current.model, current.endpoint_id, { fresh });
     return true;
   }
 
   const dc = await _refreshDefaultChat();
   if (dc) {
-    sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id, { source: 'default' });
+    sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id, { source: 'default', fresh });
     return true;
   }
 
   const withModel = sessions.filter(s => s.endpoint_url && s.model);
   if (withModel.length > 0) {
     const last = withModel[0]; // sessions are sorted by recent
-    sessionModule.createDirectChat(last.endpoint_url, last.model, last.endpoint_id);
+    sessionModule.createDirectChat(last.endpoint_url, last.model, last.endpoint_id, { fresh });
     return true;
   }
 
@@ -875,7 +875,7 @@ function initializeEventListeners() {
     } catch (e) {
       console.warn('fresh chat stream detach failed:', e);
     }
-    if (sessionModule) sessionModule.setCurrentSessionId(null, { pushHistory: true });
+    if (sessionModule) sessionModule.startFreshChat({ pushHistory: true });
     const box = el('chat-history');
     if (box) box.innerHTML = '';
     if (chatModule && chatModule.showWelcomeScreen) {
@@ -2648,7 +2648,7 @@ function initializeEventListeners() {
       const welcomeName = document.querySelector('.welcome-name');
       if (chk.checked) {
         try {
-          if (sessionModule && sessionModule.setCurrentSessionId) sessionModule.setCurrentSessionId(null);
+          sessionModule?.setPendingDraftIncognito?.(true);
           const box = el('chat-history');
           if (box) box.innerHTML = '';
         } catch (_) {}
@@ -2701,6 +2701,7 @@ function initializeEventListeners() {
         ts.research = false;
         Storage.setJSON(Storage.KEYS.TOGGLES, ts);
       } else {
+        sessionModule?.setPendingDraftIncognito?.(false);
         incognitoBtn.innerHTML = INCOGNITO_EYE_OPEN + '<span class="incognito-label">Nobody</span>';
         if (welcomeName && welcomeName.dataset.originalHtml) {
           welcomeName.innerHTML = welcomeName.dataset.originalHtml;
@@ -3364,7 +3365,7 @@ function initializeEventListeners() {
       // Clear research mode if active
       const _resChk = el('research-toggle');
       if (_resChk && _resChk.checked) _syncResearchIndicator(false);
-      if (preferModel && await _createDirectChatFromPreferredModel()) return;
+      if (preferModel && await _createDirectChatFromPreferredModel({ fresh: true })) return;
       // No models at all — show welcome screen
       _startFreshChat();
       const docBtn3 = el('overflow-doc-btn');
@@ -4090,7 +4091,7 @@ function startOdysseusApp() {
           const currentId = sessionModule.getCurrentSessionId();
           const current = sessions.find(s => s.id === currentId);
           if (current && current.endpoint_url && current.model) {
-            sessionModule.createDirectChat(current.endpoint_url, current.model, current.endpoint_id);
+            sessionModule.createDirectChat(current.endpoint_url, current.model, current.endpoint_id, { fresh: true });
           } else {
             // Fallback to rail button
             const railNew = el('rail-new-session');

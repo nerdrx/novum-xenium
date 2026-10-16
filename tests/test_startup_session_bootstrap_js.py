@@ -30,8 +30,8 @@ _IMPORT_REWRITES = {
     "import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722ctxheader1';": (
         "import { initModelPicker, updateModelPicker } from './modelPicker.mjs';"
     ),
-    "import { installSessionHistory, setSessionHistory } from './sessionHistory.js';": (
-        "import { installSessionHistory, setSessionHistory } from './sessionHistory.mjs';"
+    "import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from './sessionHistory.js';": (
+        "import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from './sessionHistory.mjs';"
     ),
     "import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';": (
         "import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.mjs';"
@@ -39,8 +39,8 @@ _IMPORT_REWRITES = {
     "import { resetBrowserPreview } from './browserPreview.js';": (
         "import { resetBrowserPreview } from './browserPreview.mjs';"
     ),
-    "import { deleteComposerDraft, getComposerDraft, saveComposerDraft } from './composerDrafts.js';": (
-        "import { deleteComposerDraft, getComposerDraft, saveComposerDraft } from './composerDrafts.mjs';"
+    "import { deleteComposerDraft, getComposerDraft, getPendingChatMetadata, saveComposerDraft, transferComposerDraft } from './composerDrafts.js';": (
+        "import { deleteComposerDraft, getComposerDraft, getPendingChatMetadata, saveComposerDraft, transferComposerDraft } from './composerDrafts.mjs';"
     ),
     "import themeModule from './theme.js';": "import themeModule from './theme.mjs';",
     "import spinnerModule from './spinner.js';": "import spinnerModule from './spinner.mjs';",
@@ -78,6 +78,19 @@ export default ui;
     "modelPicker.mjs": (
         "export const initModelPicker = () => {};\n"
         "export const updateModelPicker = () => {};\n"
+    ),
+    "sessionHistory.mjs": (
+        "export const installSessionHistory = () => () => {};\n"
+        "export const pendingChatRouteId = () => '';\n"
+        "export const setPendingChatHistory = () => {};\n"
+        "export const setSessionHistory = () => {};\n"
+    ),
+    "composerDrafts.mjs": (
+        "export const deleteComposerDraft = () => {};\n"
+        "export const getComposerDraft = () => '';\n"
+        "export const getPendingChatMetadata = () => null;\n"
+        "export const saveComposerDraft = () => ({ persisted: true });\n"
+        "export const transferComposerDraft = () => ({ persisted: true });\n"
     ),
     "theme.mjs": "export default {};\n",
     "spinner.mjs": "export default {};\n",

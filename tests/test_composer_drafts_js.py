@@ -39,6 +39,12 @@ def test_composer_drafts_are_bounded_and_account_scoped():
       assert.equal(storage.getItem('ody-composer-drafts:alice:large'), null);
       memoryDrafts.delete(_draftKey('alice', 'large')); // oversized draft is not persisted
       assert.equal(getComposerDraft('large', {{ accountId: 'alice', storage }}), '');
+      saveComposerDraft('stale-source', 'older stored text', {{ accountId: 'alice', storage }});
+      const quotaStorage = {{ length: 0, key: () => null, getItem: () => null, removeItem: () => {{}}, setItem: () => {{ throw new Error('quota'); }} }};
+      assert.equal(saveComposerDraft('stale-source', 'newer memory text', {{ accountId: 'alice', storage: quotaStorage }}).reason, 'storage');
+      assert.equal(transferComposerDraft('stale-source', 'transferred-source', {{ accountId: 'alice', storage }}).persisted, true);
+      assert.equal(getComposerDraft('transferred-source', {{ accountId: 'alice', storage }}), 'newer memory text');
+      assert.equal(storage.getItem('ody-composer-drafts:alice:stale-source'), null);
       for (let i = 0; i < 40; i++) saveComposerDraft('chat-' + i, 'draft', {{ accountId: 'alice', storage }});
       assert.equal(saveComposerDraft('chat-40', 'draft', {{ accountId: 'alice', storage }}).reason, 'count');
       assert.equal(getComposerDraft('chat-40', {{ accountId: 'alice', storage }}), 'draft');

@@ -8,16 +8,20 @@ import { providerLogo } from './providers.js';
 import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722ctxheader1';
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
-import { installSessionHistory, setSessionHistory } from './sessionHistory.js';
+import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from './sessionHistory.js';
 import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';
 import { resetBrowserPreview } from './browserPreview.js';
-import { deleteComposerDraft, getComposerDraft, saveComposerDraft } from './composerDrafts.js';
+import { deleteComposerDraft, getComposerDraft, getPendingChatMetadata, saveComposerDraft, transferComposerDraft } from './composerDrafts.js';
 
 const API_BASE = window.location.origin;
 
 let sessions = [];
 let _sessionsLoaded = false;
 let currentSessionId = null;
+let _activePendingDraftId = '';
+const _incognitoPendingDraftIds = new Set();
+const _memoryOnlyPendingDraftIds = new Set();
+const _pendingDraftAccounts = new Map();
 let _sessionNavToken = 0;
 let _skipAutoSelect = false;
 let _suppressNextSessionLoading = false;
@@ -43,16 +47,23 @@ const _composerDraftWarnings = new Set();
 const _deletedComposerDraftSessions = new Set();
 
 function _composerDraftOptions(sessionId) {
-  let accountId = '';
-  try { accountId = localStorage.getItem('odysseus-auth-user') || ''; } catch {}
-  return { accountId, incognito: _isIncognitoSession(sessionId) };
+  let currentAccountId = '';
+  try { currentAccountId = localStorage.getItem('odysseus-auth-user') || ''; } catch {}
+  const accountId = _pendingDraftAccounts.get(sessionId) ?? currentAccountId;
+  const toggle = document.getElementById('incognito-toggle');
+  return { accountId, incognito: _isIncognitoSession(sessionId) || (!!sessionId && (_memoryOnlyPendingDraftIds.has(sessionId) || _incognitoPendingDraftIds.has(sessionId) || (sessionId === _activePendingDraftId && !!toggle?.checked))) };
 }
 
 function _saveComposerDraft(sessionId, msgInput = document.getElementById('message')) {
-  if (!sessionId || !msgInput || _deletedComposerDraftSessions.has(String(sessionId))) return;
-  const result = saveComposerDraft(sessionId, msgInput.value, _composerDraftOptions(sessionId));
+  if (!msgInput) return;
+  const targetId = sessionId || (!currentSessionId ? _activePendingDraftId : '');
+  if (!targetId || _deletedComposerDraftSessions.has(String(targetId))) return;
+  const options = _composerDraftOptions(targetId);
+  const result = !currentSessionId && targetId === _activePendingDraftId
+    ? saveComposerDraft(targetId, msgInput.value, { ...options, pendingMetadata: _pendingChat?.url && _pendingChat?.modelId ? _pendingChat : undefined })
+    : saveComposerDraft(targetId, msgInput.value, options);
   if (result?.persisted || !result?.reason || result.reason === 'incognito') return;
-  const warningKey = `${sessionId}:${result.reason}`;
+  const warningKey = `${targetId}:${result.reason}`;
   if (_composerDraftWarnings.has(warningKey)) return;
   _composerDraftWarnings.add(warningKey);
   const reason = result.reason === 'size'
@@ -84,8 +95,40 @@ const _deleteSessionRequest = deleteSessionById;
 function _bindComposerDraftInput(msgInput) {
   if (!msgInput || _composerDraftInput === msgInput) return;
   _composerDraftInput = msgInput;
-  // Unsaved New Chat has no stable ID; only materialized chats get reload-safe drafts.
-  msgInput.addEventListener('input', () => _saveComposerDraft(currentSessionId, msgInput));
+  msgInput.addEventListener('input', () => {
+    if (!currentSessionId && !_activePendingDraftId && msgInput.value) _ensurePendingDraftId();
+    _saveComposerDraft(currentSessionId, msgInput);
+  });
+}
+
+function _newPendingDraftId() {
+  return globalThis.crypto?.randomUUID?.() || `draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function _ensurePendingDraftId({ fresh = false, replaceRoute = false } = {}) {
+  const input = document.getElementById('message');
+  if (_activePendingDraftId && !fresh) return _activePendingDraftId;
+  if (_activePendingDraftId && input) _saveComposerDraft(_activePendingDraftId, input);
+  _activePendingDraftId = _newPendingDraftId();
+  _pendingDraftAccounts.set(_activePendingDraftId, _currentComposerAccountId());
+  if (document.getElementById('incognito-toggle')?.checked) {
+    _incognitoPendingDraftIds.add(_activePendingDraftId);
+    _memoryOnlyPendingDraftIds.add(_activePendingDraftId);
+  }
+  setPendingChatHistory(_activePendingDraftId, { replace: replaceRoute });
+  return _activePendingDraftId;
+}
+
+function _currentComposerAccountId() {
+  try { return localStorage.getItem('odysseus-auth-user') || ''; } catch { return ''; }
+}
+
+function _setPendingChat(value) {
+  if (!value) { _pendingChat = null; return; }
+  const draftId = value.draftId || _activePendingDraftId || _ensurePendingDraftId();
+  _activePendingDraftId = draftId;
+  _pendingChat = { ...value, draftId };
+  _saveComposerDraft(draftId);
 }
 
 function _shouldPreserveStartupComposer(msgInput) {
@@ -1774,6 +1817,7 @@ function _animateSessionRowsRemoving(ids, selector) {
 }
 
 export async function loadSessions() {
+  _bindComposerDraftInput(document.getElementById('message'));
   try {
     // Delete incognito sessions left over from a previous page load
     await _cleanupIncognitoSessions();
@@ -1824,9 +1868,11 @@ export async function loadSessions() {
     const _isTransient = (s) => !!s && (s.folder === 'Assistant' || s.folder === 'Tasks');
     const _realSessions = activeSessions.filter(s => !_isTransient(s));
     let hashId = window.location.hash.replace('#', '');
+    const pendingRouteId = pendingChatRouteId();
     if (/^(document|note|image|email|event|task|skill|research)-/.test(hashId) || /^open=notes&note=/.test(hashId)) {
       hashId = '';
     }
+    const invalidPendingRoute = !!pendingRouteId && !restorePendingChatDraft(pendingRouteId);
     const _isFirstLoad = !sessionStorage.getItem('ody-session-active');
     const _freshRootLoad = !_rootFreshChatApplied && !hashId && !currentSessionId && !_pendingChat;
     if (_freshRootLoad) {
@@ -1843,7 +1889,7 @@ export async function loadSessions() {
         savedId = null;
       }
     }
-    const hasPendingChat = !!_pendingChat;
+    const hasPendingChat = !!_pendingChat || (!!pendingRouteId && !invalidPendingRoute) || invalidPendingRoute;
     let targetId = null;
     if (hasPendingChat) {
       // A model was picked and the UI is showing a fresh New Chat, but the
@@ -1962,6 +2008,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
       _pendingChat = null;
       _pendingMaterializePromise = null;
     }
+    if (!prevSessionId) _activePendingDraftId = '';
     _clearHistoryPager();
     // Re-archive peeked session when navigating away
     _checkPeekCleanup(id);
@@ -2332,9 +2379,11 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
   }
   _sessionNavToken++;
   const msgInput = document.getElementById('message');
+  const hadPendingDraft = !currentSessionId && !!_activePendingDraftId;
   const preserveStartupText = !currentSessionId && _shouldPreserveStartupComposer(msgInput);
   _bindComposerDraftInput(msgInput);
   _saveComposerDraft(currentSessionId, msgInput);
+  const draftId = _ensurePendingDraftId({ fresh: !!opts.fresh });
   // Detach any active stream so it doesn't interfere with the new chat
   if (window.chatModule && window.chatModule.detachCurrentStream) {
     window.chatModule.detachCurrentStream(currentSessionId);
@@ -2348,14 +2397,15 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
 
   // Don't hit the API — just store the model info and prepare the UI
   resetBrowserPreview();
-  _pendingChat = { url, modelId, endpointId, source: incomingSource };
+  _pendingChat = { url, modelId, endpointId, source: incomingSource, draftId };
+  _saveComposerDraft(draftId, msgInput);
   _pendingMaterializePromise = null;
   _skipAutoSelect = true;
   _suppressNextSessionLoading = true;
   currentSessionId = null;
+  setPendingChatHistory(draftId);
   try { window.__odysseusLastSelectedSessionId = ''; } catch (_) {}
   Storage.remove('lastSessionId');
-  setSessionHistory(null);
   document.querySelectorAll('.list-item.active-session, .session-item.active').forEach(el => {
     el.classList.remove('active-session', 'active');
   });
@@ -2392,7 +2442,7 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
   // Enable input
   if (msgInput) {
     msgInput.disabled = false;
-    _clearComposerUnlessStartupTyped(msgInput, preserveStartupText);
+    if (opts.fresh || (!hadPendingDraft && !preserveStartupText)) _clearComposerUnlessStartupTyped(msgInput, preserveStartupText && !opts.fresh);
     msgInput.focus();
   }
 }
@@ -2406,7 +2456,8 @@ export async function materializePendingSession() {
   const materializePromise = (async () => {
 
     const incognitoChk = document.getElementById('incognito-toggle');
-    const isIncognito = incognitoChk && incognitoChk.checked;
+    const pendingDraftId = pending.draftId || _activePendingDraftId;
+    const isIncognito = !!(incognitoChk && incognitoChk.checked) || _incognitoPendingDraftIds.has(pendingDraftId);
     const base = (pending.modelId || 'model').split('/').pop();
     const name = isIncognito ? 'Nobody' : `${base} ${new Date().toLocaleTimeString()}`;
 
@@ -2456,6 +2507,21 @@ export async function materializePendingSession() {
       _markIncognito(payload.id);
     }
 
+    if (payload.id && pendingDraftId) {
+      const result = transferComposerDraft(pendingDraftId, payload.id, { ..._composerDraftOptions(pendingDraftId), incognito: isIncognito });
+      if (result.reason && result.reason !== 'incognito' && uiModule.showToast) {
+        const message = result.reason === 'size'
+          ? 'This draft is too large to save for reload. It will stay available while this page is open.'
+          : result.reason === 'count'
+            ? 'Your saved draft limit is full. This draft will stay available while this page is open.'
+            : 'This draft could not be saved for reload. It will stay available while this page is open.';
+        uiModule.showToast(message, { duration: 8000 });
+      }
+      _activePendingDraftId = '';
+      _incognitoPendingDraftIds.delete(pendingDraftId);
+      _memoryOnlyPendingDraftIds.delete(pendingDraftId);
+    }
+
     // Clear any leftover document text selection from the previous session
     if (window.documentModule?.clearSelection) {
       try { window.documentModule.clearSelection(); } catch {}
@@ -2464,7 +2530,9 @@ export async function materializePendingSession() {
     currentSessionId = payload.id;
     if (!isIncognito) {
       Storage.set('lastSessionId', payload.id);
-      setSessionHistory(payload.id);
+      setSessionHistory(payload.id, { replace: true });
+    } else {
+      setSessionHistory(null, { replace: true });
     }
 
     // Reload the sidebar in the background. Awaiting this used to block the first
@@ -2501,6 +2569,133 @@ export function preMaterializePendingSession() {
 
 export function hasPendingChat() { return !!_pendingChat; }
 export function getPendingChat() { return _pendingChat; }
+export function getPendingDraftId() { return _activePendingDraftId; }
+
+export function restorePendingChatDraft(draftId) {
+  if (!draftId) return false;
+  const accountId = _currentComposerAccountId();
+  if (_pendingDraftAccounts.has(draftId) && _pendingDraftAccounts.get(draftId) !== accountId) {
+    _activePendingDraftId = '';
+    _pendingChat = null;
+    _showHomeFromHistory();
+    return false;
+  }
+  const options = _composerDraftOptions(draftId);
+  const draft = getComposerDraft(draftId, options);
+  const metadata = getPendingChatMetadata(draftId, options);
+  if (!draft && !metadata) {
+    const input = document.getElementById('message');
+    const startupText = _shouldPreserveStartupComposer(input) ? input.value : '';
+    _showHomeFromHistory();
+    if (startupText && input) {
+      input.value = startupText;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    return false;
+  }
+  _pendingDraftAccounts.set(draftId, accountId);
+  if (draftId === _activePendingDraftId && !currentSessionId) return true;
+  const input = document.getElementById('message');
+  const preserveStartupText = _shouldPreserveStartupComposer(input);
+  const startupText = preserveStartupText ? input.value : '';
+  _saveComposerDraft(currentSessionId, input);
+  if (currentSessionId) window.chatModule?.detachCurrentStream?.(currentSessionId);
+  _sessionNavToken++;
+  currentSessionId = null;
+  _activePendingDraftId = draftId;
+  _pendingMaterializePromise = null;
+  _pendingChat = metadata ? { ...metadata, draftId } : null;
+  Storage.remove('lastSessionId');
+  _skipAutoSelect = true;
+  uiModule.el('chat-history').innerHTML = '';
+  window.chatModule?.showWelcomeScreen?.();
+  const meta = uiModule.el('current-meta');
+  if (meta) meta.textContent = 'New Chat';
+  if (input) {
+    input.disabled = false;
+    input.value = preserveStartupText ? startupText : draft;
+    if (preserveStartupText) _saveComposerDraft(draftId, input);
+    autoResize(input);
+  }
+  document.querySelectorAll('.list-item.active-session, .session-item.active').forEach(el => el.classList.remove('active-session', 'active'));
+  updateModelPicker();
+  window.refreshChatContextHeader?.('new-chat');
+  return true;
+}
+
+export function startFreshChat({ pushHistory = true } = {}) {
+  const input = document.getElementById('message');
+  _bindComposerDraftInput(input);
+  _saveComposerDraft(currentSessionId, input);
+  _sessionNavToken++;
+  currentSessionId = null;
+  _pendingChat = null;
+  _pendingMaterializePromise = null;
+  _activePendingDraftId = '';
+  const draftId = _ensurePendingDraftId({ fresh: true, replaceRoute: !pushHistory });
+  _skipAutoSelect = true;
+  _suppressNextSessionLoading = true;
+  Storage.remove('lastSessionId');
+  if (input) {
+    input.disabled = false;
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    autoResize(input);
+  }
+  uiModule.el('chat-history').innerHTML = '';
+  window.chatModule?.showWelcomeScreen?.();
+  const meta = uiModule.el('current-meta');
+  if (meta) meta.textContent = 'New Chat';
+  updateModelPicker();
+  window.refreshChatContextHeader?.('new-chat');
+  return draftId;
+}
+
+export function setPendingDraftIncognito(enabled) {
+  if (!enabled) {
+    if (!_activePendingDraftId) return;
+    _incognitoPendingDraftIds.delete(_activePendingDraftId);
+    // Text entered while Nobody was enabled remains memory-only after the
+    // toggle changes; changing modes must not silently persist private text.
+    _saveComposerDraft(_activePendingDraftId, document.getElementById('message'));
+    return;
+  }
+  const input = document.getElementById('message');
+  if (!_activePendingDraftId) {
+    const session = sessions.find(item => String(item.id) === String(currentSessionId));
+    const emptySession = session && Number(session.message_count || 0) === 0;
+    if (currentSessionId && !emptySession) return;
+    let sourceId = '';
+    let sourceText = '';
+    let sourceOptions = null;
+    if (currentSessionId && emptySession) {
+      sourceId = currentSessionId;
+      sourceOptions = _composerDraftOptions(sourceId);
+      _saveComposerDraft(sourceId, input);
+      sourceText = input?.value || getComposerDraft(sourceId, sourceOptions);
+      _pendingChat = {
+        url: session.endpoint_url || '', modelId: session.model || '',
+        endpointId: session.endpoint_id || '', source: 'manual'
+      };
+      currentSessionId = null;
+      _skipAutoSelect = true;
+      Storage.remove('lastSessionId');
+    }
+    _ensurePendingDraftId({ replaceRoute: true });
+    _incognitoPendingDraftIds.add(_activePendingDraftId);
+    _memoryOnlyPendingDraftIds.add(_activePendingDraftId);
+    if (sourceId) {
+      saveComposerDraft(_activePendingDraftId, sourceText, {
+        ..._composerDraftOptions(_activePendingDraftId),
+        pendingMetadata: _pendingChat
+      });
+      saveComposerDraft(sourceId, '', sourceOptions);
+    }
+  }
+  _incognitoPendingDraftIds.add(_activePendingDraftId);
+  _memoryOnlyPendingDraftIds.add(_activePendingDraftId);
+  _saveComposerDraft(_activePendingDraftId, input);
+}
 // Getters for external access
 export function getCurrentSessionId() {
   return currentSessionId;
@@ -2532,15 +2727,18 @@ export function getCurrentEndpointUrl() {
 
 export function setCurrentSessionId(id, { pushHistory = false } = {}) {
   _sessionNavToken++;
+  const hadPendingDraft = !id && !!_activePendingDraftId;
+  if (!id) _saveComposerDraft(currentSessionId, document.getElementById('message'));
   currentSessionId = id;
   try { window.__odysseusLastSelectedSessionId = id || ''; } catch (_) {}
   if (!id) {
+    _pendingChat = null;
+    _pendingMaterializePromise = null;
+    _activePendingDraftId = '';
     _suppressNextSessionLoading = true;
     Storage.remove('lastSessionId');
-    setSessionHistory(null, { replace: !pushHistory });
-    document.querySelectorAll('.list-item.active-session, .session-item.active').forEach(el => {
-      el.classList.remove('active-session', 'active');
-    });
+    setSessionHistory(null, { replace: hadPendingDraft ? false : !pushHistory });
+    document.querySelectorAll('.list-item.active-session, .session-item.active').forEach(el => el.classList.remove('active-session', 'active'));
   }
 }
 
@@ -2666,6 +2864,8 @@ export function initDragSort() {
 }
 
 function _showHomeFromHistory() {
+  const input = document.getElementById('message');
+  _saveComposerDraft(currentSessionId, input);
   resetBrowserPreview();
   clearSubagentInspector();
   if (currentSessionId) {
@@ -2675,6 +2875,7 @@ function _showHomeFromHistory() {
     _sessionNavToken++;
     _pendingChat = null;
     _pendingMaterializePromise = null;
+    _activePendingDraftId = '';
     uiModule.el('chat-history').innerHTML = '';
     window.chatModule?.showWelcomeScreen?.();
   }
@@ -2686,8 +2887,7 @@ function _showHomeFromHistory() {
     el.classList.remove('active-session', 'active');
   });
   uiModule.el('current-meta').textContent = 'Novum Xenium';
-  const input = document.getElementById('message');
-  if (input) input.disabled = false;
+  if (input) { input.disabled = false; input.value = ''; }
   updateModelPicker();
   window.refreshChatContextHeader?.('new-chat');
 }
@@ -2696,8 +2896,10 @@ function _showHomeFromHistory() {
 // (document-, note-, etc.) remain owned by their respective panels.
 installSessionHistory({
   getCurrentSessionId: () => currentSessionId,
+  getCurrentPendingDraftId: () => _activePendingDraftId,
   getSessions: () => sessions,
   selectSession,
+  restorePendingChat: restorePendingChatDraft,
   showHome: _showHomeFromHistory,
   isReady: () => _sessionsLoaded,
 });
@@ -3008,7 +3210,7 @@ function _initAllDropdowns() {
     getCurrentSessionId: () => currentSessionId,
     getSessions: () => sessions,
     getPendingChat: () => _pendingChat,
-    setPendingChat: (v) => { _pendingChat = v; },
+    setPendingChat: _setPendingChat,
     createDirectChat,
   });
   _initDropdownDismiss();
@@ -3893,6 +4095,10 @@ const sessionModule = {
   getCurrentModel,
   getCurrentEndpointUrl,
   setCurrentSessionId,
+  getPendingDraftId,
+  restorePendingChatDraft,
+  startFreshChat,
+  setPendingDraftIncognito,
   initDragSort,
   updateModelPicker,
   markResearching,

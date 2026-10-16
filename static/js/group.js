@@ -217,6 +217,11 @@ function _initGroupTab() {
     setActive(true);
     if (window._syncGroupIndicator) window._syncGroupIndicator(true);
     if (window.sessionModule) window.sessionModule.setCurrentSessionId(null);
+    const composer = document.getElementById('message');
+    if (composer) {
+      composer.value = '';
+      composer.dispatchEvent(new Event('input', { bubbles: true }));
+    }
     const box = document.getElementById('chat-history');
     if (box) box.innerHTML = '';
 

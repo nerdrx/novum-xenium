@@ -49,3 +49,15 @@ def test_video_is_not_hidden_by_earlier_navigation_icons():
     assert len(media) == 12
     assert media[0]['url'] == 'https://example.org/clip.webm'
     assert any(item['kind'] == 'image' for item in media)
+
+
+def test_ordinary_fetch_includes_media_before_long_text_without_optional_flag(monkeypatch):
+    text = 'Page content ' * 4000
+    def fetched(url, **kwargs):
+        return {'content': text, 'media': [{'kind': 'video', 'url': 'https://example.org/clip.webm', 'label': 'Clip'}]}
+    monkeypatch.setattr('src.search.content.fetch_webpage_content', fetched)
+    result = asyncio.run(WebFetchTool().execute('{"url":"https://example.org/gallery"}', {}))
+    assert result['exit_code'] == 0
+    assert result['output'].index('https://example.org/clip.webm') < result['output'].index('Page content')
+    text_only = asyncio.run(WebFetchTool().execute('{"url":"https://example.org/gallery","include_media":false}', {}))
+    assert 'https://example.org/clip.webm' not in text_only['output']

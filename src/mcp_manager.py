@@ -68,6 +68,21 @@ _BROWSER_MUTATING_TOOLS = {
 }
 
 
+def _empty_about_blank_snapshot(result: Dict) -> bool:
+    """Detect only the browser's empty default-tab snapshot response."""
+    output = result.get("stdout") if isinstance(result, dict) else None
+    if not isinstance(output, str):
+        return False
+    if not re.search(r"^\s*(?:-\s*)?Page URL:\s*about:blank\s*$", output, re.I | re.M):
+        return False
+    snapshot = re.search(
+        r"^### Snapshot\s*\n\s*```(?:yaml)?\s*\n(.*?)\n```\s*$",
+        output,
+        re.I | re.M | re.S,
+    )
+    return bool(snapshot and not snapshot.group(1).strip())
+
+
 def _browser_preview(action: str, arguments: Dict, result: Dict, screenshot: Optional[Dict]) -> Dict:
     """Build a compact metadata and safe image preview payload."""
     output = result.get("stdout") or ""
@@ -671,6 +686,19 @@ class McpManager:
         if server_id == "builtin_browser":
             async with self._browser_call_lock:
                 result = await self._call_tool_session(server_id, tool_name, arguments)
+                if (
+                    tool_name == "browser_snapshot"
+                    and result.get("exit_code") == 0
+                    and _empty_about_blank_snapshot(result)
+                ):
+                    return {
+                        "error": (
+                            "The browser is still on about:blank and the snapshot is empty. "
+                            "Navigate to the URL the user provided before taking a snapshot; "
+                            "do not guess or open a different URL."
+                        ),
+                        "exit_code": 1,
+                    }
                 if result.get("exit_code") == 0 and (
                     _browser_action_needs_preview(tool_name, arguments)
                     or tool_name == "browser_take_screenshot"

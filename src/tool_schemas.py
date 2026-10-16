@@ -148,13 +148,13 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": "Fetch and read a page; set include_media=true when the user wants its pictures, GIFs or videos. Returns exact media URLs present in the HTML, without downloading the media. Fetch and read the text content of a specific URL the user names (e.g. 'check example.com', 'what's on this page <url>'). Use when you already have a concrete URL/domain. NOT for open-ended searches (use web_search) or 'research X' jobs (use trigger_research). Downloads are size-budgeted; a '[partial content: ...]' notice means the download was cut short and you can re-call with full=true. Long results may appear as archived previews: search missing sections with context_search and the returned result_id. full=true raises the download budget, not the model context budget.",
+            "description": "Fetch and read a page, including exact image/GIF/direct-video URLs present in its HTML by default, without downloading the media. Set include_media=false for text-only results. Fetch and read the text content of a specific URL the user names (e.g. 'check example.com', 'what's on this page <url>'). Use when you already have a concrete URL/domain. NOT for open-ended searches (use web_search) or 'research X' jobs (use trigger_research). Downloads are size-budgeted; a '[partial content: ...]' notice means the download was cut short and you can re-call with full=true. Long results may appear as archived previews: search missing sections with context_search and the returned result_id. full=true raises the download budget, not the model context budget.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "The URL or domain to fetch (http/https; a bare domain like example.com is fine)"},
                     "full": {"type": "boolean", "description": "Raise the download budget to the hard cap for large pages/files. Use only after a result reported partial content."},
-                    "include_media": {"type": "boolean", "description": "Include bounded image/GIF/direct-video references found on this page, for inline chat display. Media pixels are not inspected by this tool."}
+                    "include_media": {"type": "boolean", "description": "Default true: include bounded image/GIF/direct-video references found on this page for inline chat display. Set false for text only. Media pixels are not inspected by this tool."}
                 },
                 "required": ["url"]
             }

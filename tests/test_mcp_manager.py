@@ -77,3 +77,43 @@ def test_mcp_deadline_leaves_room_for_images_and_bounds_custom_setting():
     for invalid in [None, 'invalid', 0, float('nan'), float('inf')]:
         with patch('src.settings.get_setting', return_value=invalid):
             assert _tool_call_timeout('mcp__custom__job') == 120.0
+
+
+def test_empty_about_blank_snapshot_returns_navigation_guidance():
+    from unittest.mock import AsyncMock
+
+    blank = {
+        "stdout": "### Page\n- Page URL: about:blank\n### Snapshot\n```yaml\n\n```",
+        "exit_code": 0,
+    }
+
+    async def run():
+        mgr = McpManager()
+        mgr._sessions['builtin_browser'] = object()
+        with patch.object(mgr, '_call_tool_session', new_callable=AsyncMock, return_value=blank):
+            return await mgr._call_tool_impl(
+                'mcp__builtin_browser__browser_snapshot', {'depth': 5}
+            )
+
+    result = asyncio.run(run())
+    assert result['exit_code'] == 1
+    assert 'about:blank' in result['error']
+    assert 'URL the user provided' in result['error']
+    assert 'do not guess' in result['error']
+
+
+def test_blank_snapshot_guard_preserves_real_page_and_nonempty_blank_state():
+    from src.mcp_manager import _empty_about_blank_snapshot
+
+    assert not _empty_about_blank_snapshot({
+        "stdout": "### Page\n- Page URL: https://example.test/\n### Snapshot\n```yaml\n\n```",
+        "exit_code": 0,
+    })
+    assert not _empty_about_blank_snapshot({
+        "stdout": "### Page\n- Page URL: about:blank\n### Snapshot\n```yaml\n- heading: test\n```",
+        "exit_code": 0,
+    })
+    assert not _empty_about_blank_snapshot({
+        "stdout": "### Page\n- Page URL: about:blank\n### Snapshot\n",
+        "exit_code": 0,
+    })

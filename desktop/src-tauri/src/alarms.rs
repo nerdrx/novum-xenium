@@ -98,7 +98,7 @@ fn unit_contents(checkout: &Path, script: &Path, state_dir: &Path) -> Result<Str
             .ok_or("Alarm state path is not valid UTF-8.")?,
     )?;
     Ok(format!(
-        "[Unit]\nDescription=Novum Xenium local alarm bridge\n# Novum-Checkout: {checkout}\nAfter=default.target\n\n[Service]\nType=simple\nUMask=0077\nNoNewPrivileges=true\nRestart=on-failure\nRestartSec=2s\nExecStart=/usr/bin/python3 {script} --token-file {token} --state-dir {state}\n\n[Install]\nWantedBy=default.target\n"
+        "[Unit]\nDescription=Novum Xenium local alarm bridge\n# Novum-Checkout: {checkout}\n\n[Service]\nType=simple\nUMask=0077\nNoNewPrivileges=true\nRestart=on-failure\nRestartSec=2s\nExecStart=/usr/bin/python3 {script} --token-file {token} --state-dir {state}\n\n[Install]\nWantedBy=default.target\n"
     ))
 }
 
@@ -331,6 +331,7 @@ mod tests {
         )
         .unwrap();
         assert!(unit.contains("# Novum-Checkout: /srv/novum\n"));
+        assert!(!unit.contains("After=default.target"));
         assert!(unit.contains("ExecStart=/usr/bin/python3 \"/home/test/.local/share/novum-xenium/alarms/v1/alarm_bridge.py\""));
         assert!(
             unit.contains("UMask=0077\nNoNewPrivileges=true\nRestart=on-failure\nRestartSec=2s\n")

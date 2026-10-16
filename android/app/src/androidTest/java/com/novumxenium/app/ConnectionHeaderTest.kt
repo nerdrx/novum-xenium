@@ -13,7 +13,13 @@ import java.net.URI
 
 /** Native UI checks with simulated connection state; no tailnet credentials required. */
 class ConnectionHeaderTest : Instrumentation() {
-    override fun onCreate(arguments: Bundle?) { super.onCreate(arguments); start() }
+    private var fullscreenOnly = false
+
+    override fun onCreate(arguments: Bundle?) {
+        super.onCreate(arguments)
+        fullscreenOnly = arguments?.getString("mode") == "fullscreen"
+        start()
+    }
 
     override fun onStart() {
         var activity: MainActivity? = null
@@ -36,6 +42,13 @@ class ConnectionHeaderTest : Instrumentation() {
                 waitForIdleSync()
             }
             cancelDialog()
+            if (fullscreenOnly) {
+                FullscreenMediaCheck.run(this, app)
+                finish(Activity.RESULT_OK, Bundle().apply {
+                    putString("stream", "PASS: local video user gesture, playback, fullscreen callback, Back exit, and system-bar restoration; no network or audio\n")
+                })
+                return
+            }
             fun field(name: String) = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }
             fun invoke(name: String) = MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(app)
             val header = field("header").get(app) as View
@@ -114,4 +127,5 @@ class ConnectionHeaderTest : Instrumentation() {
             activity?.let { runOnMainSync { it.finish() } }
         }
     }
+
 }

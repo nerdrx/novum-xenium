@@ -98,6 +98,9 @@ class MainActivity : Activity() {
     private var pageReady = false
     private var pageFailed = false
     private var startupPeekUntil = 0L
+    private var fullscreenView: View? = null
+    private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
+    private var fullscreenSystemUiVisibility: Int? = null
     private val hideHeader = Runnable {
         if (pageReady && connected && !closed) header.visibility = View.GONE
     }
@@ -716,6 +719,7 @@ class MainActivity : Activity() {
                 openExternal(address); return true
             }
             override fun onPageStarted(view: WebView, address: String, icon: android.graphics.Bitmap?) {
+                hideFullscreenCustomView(notifyCallback = true)
                 foregroundFeedReady = false
                 if (server?.let { ServerAddress.sameOrigin(it, address) } == true) notificationService?.pauseFeed()
                 updatePushForeground()
@@ -743,6 +747,37 @@ class MainActivity : Activity() {
             override fun onPageFinished(view: WebView, address: String) { CookieManager.getInstance().flush() }
         }
         web.webChromeClient = object : WebChromeClient() {
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                if (fullscreenView != null) {
+                    callback.onCustomViewHidden()
+                    return
+                }
+                val decor = window.decorView as? ViewGroup ?: run {
+                    callback.onCustomViewHidden()
+                    return
+                }
+                fullscreenSystemUiVisibility = decor.systemUiVisibility
+                fullscreenView = view
+                fullscreenCallback = callback
+                view.setBackgroundColor(Color.BLACK)
+                decor.addView(view, ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                ))
+                view.requestFocus()
+                decor.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    )
+            }
+
+            override fun onHideCustomView() {
+                hideFullscreenCustomView(notifyCallback = false)
+            }
+
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
                 chooser?.onReceiveValue(null); chooser = callback
                 val types = params.acceptTypes.flatMap { it.split(',') }.map { it.trim() }.filter { it.contains('/') }
@@ -786,6 +821,18 @@ class MainActivity : Activity() {
                 status.text = getString(R.string.no_file_saver)
             }
         }
+    }
+
+    private fun hideFullscreenCustomView(notifyCallback: Boolean) {
+        val view = fullscreenView ?: return
+        fullscreenView = null
+        val callback = fullscreenCallback
+        fullscreenCallback = null
+        (view.parent as? ViewGroup)?.removeView(view)
+        fullscreenSystemUiVisibility?.let { window.decorView.systemUiVisibility = it }
+        fullscreenSystemUiVisibility = null
+        web.requestFocus()
+        if (notifyCallback) callback?.onCustomViewHidden()
     }
 
     @Deprecated("Android legacy result API remains supported")
@@ -853,12 +900,14 @@ class MainActivity : Activity() {
     }
     @Deprecated("Legacy back dispatch")
     override fun onBackPressed() {
-        if (web.canGoBack()) web.goBack()
+        if (fullscreenView != null) hideFullscreenCustomView(notifyCallback = true)
+        else if (web.canGoBack()) web.goBack()
         else if (header.visibility == View.GONE) configure()
         else super.onBackPressed()
     }
     override fun onDestroy() {
         closed = true; generation++; handler.removeCallbacks(poll); handler.removeCallbacks(hideHeader)
+        hideFullscreenCustomView(notifyCallback = true)
         chooser?.onReceiveValue(null); chooser = null
         web.stopLoading(); web.destroy()
         bridge = null

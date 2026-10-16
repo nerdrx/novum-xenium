@@ -655,6 +655,11 @@ class SessionManager:
                 db.commit()
                 if clear_incognito_context is not None:
                     clear_incognito_context(session_id, context_owner)
+                try:
+                    from src.preview_store import delete_session as delete_preview_history
+                    delete_preview_history(session_id)
+                except Exception:
+                    logger.warning("Preview history cleanup failed while deleting session %s", session_id, exc_info=True)
                 if incognito_lock is not None:
                     incognito_lock.release()
                     incognito_lock = None

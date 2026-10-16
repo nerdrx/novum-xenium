@@ -6,6 +6,10 @@ let activeTab = 'Preview';
 let panel;
 let opener;
 let evidenceRequest;
+let dockResizeHandler;
+const previewHistory = new Map();
+const dockWidthKey = 'odysseus.workspaceDock.width';
+const defaultDockWidth = 420;
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : '';
 const text = (value, limit = 240) => typeof value === 'string' ? value.slice(0, limit) : '';
 function screenshot(value) {
@@ -28,9 +32,47 @@ function el(tag, value, className) {
 function close(restore = true) {
   evidenceRequest?.abort(); evidenceRequest = null;
   panel?.remove(); panel = null;
+  if (dockResizeHandler) window.removeEventListener('resize', dockResizeHandler);
+  dockResizeHandler = null;
   document.getElementById('chat-container')?.classList.remove('workspace-dock-open');
   opener?.setAttribute('aria-expanded', 'false');
   if (restore) opener?.focus();
+}
+function setDockWidth(value, save = false) {
+  const chat = document.getElementById('chat-container');
+  const margin = chat ? parseFloat(getComputedStyle(chat).marginRight) || 0 : 0;
+  const available = chat ? chat.getBoundingClientRect().width + margin : window.innerWidth;
+  const max = Math.max(280, Math.min(720, Math.floor(available - 420)));
+  const width = Math.round(Math.max(280, Math.min(max, Number(value) || defaultDockWidth)));
+  document.documentElement.style.setProperty('--workspace-dock-width', `${width}px`);
+  const separator = panel?.querySelector('.workspace-dock-resize');
+  separator?.setAttribute('aria-valuemin', '280');
+  separator?.setAttribute('aria-valuemax', String(max));
+  separator?.setAttribute('aria-valuenow', String(width));
+  if (save) { try { localStorage.setItem(dockWidthKey, String(width)); } catch {} }
+  return width;
+}
+function wireDockResize(separator) {
+  let dragging = false;
+  const widthAt = event => setDockWidth(window.innerWidth - event.clientX);
+  separator.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || !window.matchMedia('(min-width: 1000px)').matches) return;
+    event.preventDefault(); dragging = true; separator.setPointerCapture(event.pointerId);
+  });
+  separator.addEventListener('pointermove', event => { if (dragging) widthAt(event); });
+  const finish = () => { if (dragging) { dragging = false; setDockWidth(getComputedStyle(panel).width.replace('px', ''), true); } };
+  separator.addEventListener('pointerup', finish);
+  separator.addEventListener('pointercancel', finish);
+  separator.addEventListener('keydown', event => {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const currentWidth = parseFloat(getComputedStyle(panel).width) || defaultDockWidth;
+      setDockWidth(currentWidth + (event.key === 'ArrowLeft' ? step : -step), true);
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault(); setDockWidth(event.key === 'Home' ? 280 : 720, true);
+    }
+  });
 }
 async function renderRuns(content) {
   if (!current) { content.append(el('p', 'Open a chat to see its runs.')); return; }
@@ -75,6 +117,75 @@ async function renderRuns(content) {
   }
   if (!controller.signal.aborted && content.isConnected) content.append(refresh);
 }
+async function renderPreviewHistory(content, kindFilter = null) {
+  if (!current) { content.append(el('p', 'Open a chat to see its previews.')); return; }
+  const session = current;
+  const controller = new AbortController(); evidenceRequest = controller;
+  const status = el('p', 'Loading preview history…'); status.setAttribute('role', 'status');
+  content.append(status);
+  const retry = el('button', 'Refresh preview history'); retry.type = 'button';
+  retry.addEventListener('click', () => { previewHistory.delete(session); renderContent(); });
+  let history = previewHistory.get(session);
+  if (!history) {
+    try {
+      const response = await fetch(`/api/chat/previews/${encodeURIComponent(session)}?offset=0&limit=30`, {
+        credentials: 'same-origin', signal: controller.signal,
+      });
+      if (!response.ok) throw new Error('unavailable');
+      const data = await response.json();
+      if (!Array.isArray(data.previews)) throw new Error('invalid');
+      history = { previews: data.previews.slice(0, 30), hasMore: data.has_more === true,
+        nextOffset: Number.isInteger(data.next_offset) ? data.next_offset : data.previews.length };
+      previewHistory.set(session, history);
+      while (previewHistory.size > 8) previewHistory.delete(previewHistory.keys().next().value);
+    } catch {
+      if (controller.signal.aborted) return;
+      status.textContent = 'Could not load preview history. Check your connection and try again.';
+      content.append(retry); return;
+    }
+  }
+  if (controller.signal.aborted || current !== session || !content.isConnected) return;
+  const visible = history.previews.filter(item => !kindFilter || item.kind === kindFilter);
+  status.textContent = 'Previews captured from now on are kept for up to 7 days; storage limits may remove older previews.';
+  if (!visible.length) content.append(el('p', 'No saved previews for this chat yet.'));
+  for (const item of visible) {
+    if (!item || !validId(item.id) || !['browser', 'desktop'].includes(item.kind)) continue;
+    const card = el('article', '', 'workspace-preview-history-item');
+    const title = text(item.title) || (item.kind === 'browser' ? 'Browser preview' : 'Desktop preview');
+    const timestamp = Number.isFinite(item.created_at) ? new Date(item.created_at * 1000).toLocaleString() : 'Time unavailable';
+    card.append(el('p', `${item.kind === 'browser' ? 'Browser' : 'Desktop'} · ${title}`));
+    card.append(el('time', timestamp));
+    const img = el('img'); img.loading = 'lazy'; img.alt = `${item.kind === 'browser' ? 'Browser' : 'Desktop'} preview captured ${timestamp}`;
+    img.src = `/api/chat/previews/${encodeURIComponent(session)}/${encodeURIComponent(item.id)}?v=${encodeURIComponent(item.id)}`;
+    card.append(img); content.append(card);
+  }
+  if (history.hasMore) {
+    const older = el('button', 'Load older previews'); older.type = 'button';
+    older.addEventListener('click', async () => {
+      older.disabled = true; older.textContent = 'Loading older previews…';
+      try {
+        const response = await fetch(`/api/chat/previews/${encodeURIComponent(session)}?offset=${history.nextOffset}&limit=30`, {
+          credentials: 'same-origin', signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('unavailable');
+        const data = await response.json();
+        if (controller.signal.aborted || current !== session || !content.isConnected) return;
+        if (!Array.isArray(data.previews)) throw new Error('invalid');
+        history.previews.push(...data.previews.slice(0, 30));
+        history.hasMore = data.has_more === true;
+        history.nextOffset = Number.isInteger(data.next_offset) ? data.next_offset : history.nextOffset + data.previews.length;
+        previewHistory.set(session, history);
+        renderContent();
+      } catch {
+        if (!controller.signal.aborted && content.isConnected) {
+          older.disabled = false; older.textContent = 'Could not load older previews. Retry';
+        }
+      }
+    });
+    content.append(older);
+  }
+  if (!controller.signal.aborted && content.isConnected) content.append(retry);
+}
 function renderContent() {
   if (!panel) return;
   evidenceRequest?.abort(); evidenceRequest = null;
@@ -117,6 +228,7 @@ function renderContent() {
       const link = el('a', preview.url); link.href = preview.url;
       link.target = '_blank'; link.rel = 'noopener noreferrer'; content.append(link);
     }
+    void renderPreviewHistory(content, activeTab === 'Browser' ? 'browser' : null);
   }
 }
 function selectTab(name, focus = false) {
@@ -132,6 +244,12 @@ function open() {
   if (panel) { close(); return; }
   panel = el('aside', '', 'workspace-dock'); panel.id = 'workspace-dock';
   panel.setAttribute('aria-label', 'Workspace activity');
+  const savedWidth = Number(localStorage.getItem(dockWidthKey)) || defaultDockWidth;
+  const separator = el('div', '', 'workspace-dock-resize');
+  separator.setAttribute('role', 'separator'); separator.setAttribute('aria-orientation', 'vertical');
+  separator.setAttribute('aria-label', 'Resize Workspace panel'); separator.tabIndex = 0;
+  wireDockResize(separator); panel.append(separator);
+  setDockWidth(savedWidth);
   const header = el('header'); header.append(el('h2', 'Workspace'));
   const dismiss = el('button', 'Close'); dismiss.type = 'button';
   dismiss.addEventListener('click', () => close()); header.append(dismiss); panel.append(header);
@@ -173,6 +291,12 @@ function open() {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
   });
   document.body.append(panel);
+  dockResizeHandler = () => {
+    if (panel && window.matchMedia('(min-width: 1000px)').matches) {
+      setDockWidth(parseFloat(getComputedStyle(panel).width));
+    }
+  };
+  window.addEventListener('resize', dockResizeHandler);
   document.getElementById('chat-container')?.classList.add('workspace-dock-open');
   opener.setAttribute('aria-expanded', 'true'); selectTab(activeTab, true);
 }

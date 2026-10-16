@@ -27,6 +27,29 @@ const server = http.createServer((req,res) => {
   await page.locator('.workspace-dock-toggle').click();
   assert.equal(await page.locator('.workspace-dock img').count(),0);
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'420px');
+  const separator = page.locator('.workspace-dock-resize');
+  assert.equal(await separator.getAttribute('role'),'separator');
+  assert.equal(await separator.getAttribute('aria-valuemin'),'280');
+  const handle = await separator.boundingBox();
+  await page.mouse.move(handle.x + handle.width / 2, 300);
+  await page.mouse.down(); await page.mouse.move(780, 300); await page.mouse.up();
+  assert.equal(await page.locator('.workspace-dock').evaluate(el=>Math.round(el.getBoundingClientRect().width)),500);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('odysseus.workspaceDock.width')),'500');
+  await page.reload(); await page.waitForFunction(()=>window.dock);
+  await page.locator('.workspace-dock-toggle').click();
+  assert.equal(await page.locator('.workspace-dock').evaluate(el=>Math.round(el.getBoundingClientRect().width)),500,'saved width restores after reload');
+  await page.locator('.workspace-dock-resize').focus(); await page.keyboard.press('ArrowLeft');
+  assert.equal(await page.locator('.workspace-dock-resize').getAttribute('aria-valuenow'),'516','keyboard grows the panel and updates its accessible value');
+  await page.keyboard.press('End');
+  assert.equal(await page.locator('.workspace-dock-resize').getAttribute('aria-valuenow'),'720','keyboard resize clamps to the available width');
+  assert.ok(await page.locator('#chat-container').evaluate(el=>el.clientWidth>=420),'chat keeps its minimum readable width');
+  await page.locator('#workspace-tab-Preview').focus();
+  await page.evaluate(()=>{
+   dock.updateWorkspaceDock({type:'tool_output',tool:'native_preview',screenshot:'data:image/svg+xml;base64,PHN2Zz4=',exit_code:0},'alpha');
+   dock.updateWorkspaceDock({type:'tool_output',browser_preview:{screenshot:'javascript:alert(1)',url:'javascript:alert(1)',title:'<img onerror=alert(1)>',state:'unavailable'},diff:{path:'main.py',text:'+ hello'},subagent:{session_id:'child-1',title:'Worker'}},'alpha');
+   dock.updateWorkspaceDock({type:'diff',text:'beta secret'},'beta');
+  });
+  assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'720px');
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('[role=tab][aria-selected=true]').textContent(),'Files');
   assert.match(await page.locator('[role=tabpanel]').textContent(),/Observed edits this visit/);
@@ -51,6 +74,7 @@ const server = http.createServer((req,res) => {
   await page.setViewportSize({width:390,height:700});
   assert.equal(await page.locator('#chat-container').evaluate(el=>getComputedStyle(el).marginRight),'0px');
   assert.ok((await page.locator('.workspace-dock').boundingBox()).width<=390);
+  assert.equal(await page.locator('.workspace-dock-resize').evaluate(el=>getComputedStyle(el).display),'none','mobile dock remains full width with no resize handle');
   assert.equal(await page.locator('.workspace-dock-tabs').evaluate(e=>e.scrollWidth<=e.clientWidth),true);
   await page.setViewportSize({width:320,height:700});
   assert.equal(await page.locator('.workspace-dock-tabs').evaluate(e=>e.scrollWidth<=e.clientWidth),true);
@@ -68,24 +92,56 @@ const server = http.createServer((req,res) => {
   assert.match(await page.locator('[role=tabpanel]').textContent(), /Could not load runs/);
   assert.doesNotMatch(await page.locator('[role=tabpanel]').textContent(), /test_tool/);
   const previewPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9sAAAAASUVORK5CYII=';
+  let previewHistoryRequests = 0;
+  await page.route('**/api/chat/previews/browser-only*', route => {
+    previewHistoryRequests++;
+    const offset = new URL(route.request().url()).searchParams.get('offset');
+    return route.fulfill({json: offset === '1'
+      ? {retention_days:7,previews:[{id:'preview-old',kind:'desktop',title:'Older page',created_at:1791000000,expires_at:1791604800}],has_more:false,next_offset:2}
+      : {retention_days:7,previews:[{id:'preview-1',kind:'browser',title:'Saved page',created_at:1792000000,expires_at:1792604800}],has_more:true,next_offset:1}});
+  });
+  await page.route('**/api/chat/previews/browser-only/preview-1**', route => route.fulfill({status:200,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9sAAAAASUVORK5CYII=','base64')}));
+  await page.route('**/api/chat/previews/browser-only/preview-old**', route => route.fulfill({status:200,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9sAAAAASUVORK5CYII=','base64')}));
   await page.evaluate(pixel => {
     dock.resetWorkspaceDock('browser-only');
     dock.updateWorkspaceDock({type:'tool_output',browser_preview:{screenshot:pixel,url:'https://example.com/',title:'Example browser page',state:'updated'}},'browser-only');
   }, previewPixel);
   await page.locator('#workspace-tab-Preview').click();
-  assert.equal(await page.locator('.workspace-dock img').getAttribute('src'), previewPixel, 'Default Preview should show browser activity when no desktop preview exists');
+  assert.equal(await page.locator('.workspace-dock-content > img').getAttribute('src'), previewPixel, 'Default Preview should show browser activity when no desktop preview exists');
+  await page.locator('.workspace-preview-history-item').waitFor();
+  assert.equal(previewHistoryRequests,1,'preview history loads on explicit preview-tab open');
+  assert.match(await page.locator('.workspace-preview-history-item').first().innerText(),/Saved page/);
+  assert.match(await page.locator('.workspace-dock-content').innerText(),/storage limits may remove older previews/);
+  await page.getByRole('button',{name:'Load older previews'}).click();
+  await page.getByText(/Older page/).waitFor();
+  assert.equal(previewHistoryRequests,2,'older previews load from the next bounded page');
   await page.waitForFunction(() => document.querySelector('.workspace-dock img')?.naturalWidth > 0);
   await page.locator('#workspace-tab-Browser').click();
   await page.evaluate(() => dock.updateWorkspaceDock({type:'tool_output',browser_preview:{state:'unavailable'}},'browser-only'));
-  assert.equal(await page.locator('.workspace-dock img').getAttribute('src'), previewPixel, 'An unavailable browser update must preserve the last screenshot');
+  assert.equal(await page.locator('.workspace-dock-content > img').getAttribute('src'), previewPixel, 'An unavailable browser update must preserve the last screenshot');
   assert.match(await page.locator('[role=tabpanel]').textContent(), /Last available screenshot/);
-  assert.match(await page.locator('.workspace-dock img').getAttribute('alt'), /Previous browser screenshot/);
+  assert.match(await page.locator('.workspace-dock-content > img').getAttribute('alt'), /Previous browser screenshot/);
   assert.equal(await page.locator('.workspace-dock a').getAttribute('href'), 'https://example.com/');
-  assert.ok(await page.locator('.workspace-dock img').evaluate(img => img.getBoundingClientRect().right <= innerWidth));
+  assert.ok(await page.locator('.workspace-dock-content > img').evaluate(img => img.getBoundingClientRect().right <= innerWidth));
   await page.evaluate(() => dock.resetWorkspaceDock('empty-chat'));
   assert.equal(await page.locator('.workspace-dock img').count(), 0, 'Browser screenshot must not leak into another chat');
+  assert.doesNotMatch(await page.locator('.workspace-dock-content').innerText(),/Saved page/,'preview history is isolated by session');
   await page.evaluate(() => dock.resetWorkspaceDock('browser-only'));
-  assert.equal(await page.locator('.workspace-dock img').count(), 1);
+  assert.equal(await page.locator('.workspace-dock-content > img').count(), 1);
+  let staleRequestAborted = false;
+  page.on('requestfailed', request => {
+    if (request.url().includes('/api/chat/previews/slow-chat')) staleRequestAborted = true;
+  });
+  await page.route('**/api/chat/previews/slow-chat', async route => {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    try { await route.fulfill({json:{previews:[{id:'stale',kind:'browser',title:'Stale preview',created_at:1}]}}); } catch {}
+  });
+  await page.evaluate(() => dock.resetWorkspaceDock('slow-chat'));
+  await page.waitForTimeout(10);
+  await page.evaluate(() => dock.resetWorkspaceDock('browser-only'));
+  await page.waitForTimeout(120);
+  assert.equal(staleRequestAborted, true, 'switching chats aborts the old history request');
+  assert.doesNotMatch(await page.locator('.workspace-dock-content').innerText(),/Stale preview/);
   await page.getByRole('button', {name:'Files & project tools'}).click();
   await page.waitForFunction(() => window.projectToolsOpened === true);
   assert.equal(await page.locator('.workspace-dock').count(), 0);

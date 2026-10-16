@@ -7,11 +7,12 @@ import re
 import time
 import logging
 import uuid
+from urllib.parse import quote
 from datetime import datetime
 from typing import Dict, Any, AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, Request, HTTPException, Form, Query, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import ValidationError
 
 from core.models import ChatMessage
@@ -3253,6 +3254,48 @@ def setup_chat_routes(
         _verify_session_owner(request, session_id)
         from src.run_evidence import list_runs
         return {"runs": list_runs(session_id, effective_user(request))}
+
+    @router.get("/api/chat/previews/{session_id}")
+    async def chat_preview_history(
+        request: Request, session_id: str, response: Response,
+        offset: int = Query(0, ge=0, le=2000), limit: int = Query(30, ge=1, le=30),
+    ):
+        _verify_session_owner(request, session_id, session_manager)
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        from src.preview_store import list_for
+        owner = effective_user(request)
+        if not owner:
+            db = SessionLocal()
+            try:
+                row = db.query(DBSession.owner).filter(DBSession.id == session_id).first()
+                owner = row[0] if row and row[0] else "__single_user__"
+            finally:
+                db.close()
+        previews, has_more = await asyncio.to_thread(list_for, str(owner), session_id, limit, offset)
+        for item in previews:
+            item["image_url"] = f"/api/chat/previews/{quote(session_id, safe='')}/{item['id']}"
+        return {"previews": previews, "retention_days": 7, "has_more": has_more, "next_offset": offset + len(previews)}
+
+    @router.get("/api/chat/previews/{session_id}/{preview_id}")
+    async def chat_preview_image(request: Request, session_id: str, preview_id: str):
+        _verify_session_owner(request, session_id, session_manager)
+        from src.preview_store import get
+        owner = effective_user(request)
+        if not owner:
+            db = SessionLocal()
+            try:
+                row = db.query(DBSession.owner).filter(DBSession.id == session_id).first()
+                owner = row[0] if row and row[0] else "__single_user__"
+            finally:
+                db.close()
+        result = await asyncio.to_thread(get, str(owner), session_id, preview_id)
+        if result is None:
+            raise HTTPException(404, "Preview not found")
+        image, mime = result
+        return Response(image, media_type=mime, headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+        })
 
     @router.get("/api/chat/checkpoint/{session_id}")
     async def chat_checkpoint(request: Request, session_id: str) -> Dict[str, Any]:

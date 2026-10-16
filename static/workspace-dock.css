@@ -1,11 +1,16 @@
 .workspace-dock-toggle { margin-left: auto; }
 .workspace-dock {
   position: fixed; right: 0; top: var(--desktop-titlebar-height, 0px); bottom: 0;
-  width: min(420px, 100vw); z-index: 280; box-sizing: border-box;
+  width: min(var(--workspace-dock-width, 420px), 100vw); z-index: 280; box-sizing: border-box;
   background: var(--panel, #19171f); color: var(--fg, #eee);
   border-left: 1px solid var(--border, #39333f); padding: 16px;
   display: flex; flex-direction: column; gap: 12px;
 }
+.workspace-dock-resize {
+  position: absolute; z-index: 2; left: -6px; top: 0; bottom: 0; width: 12px;
+  cursor: col-resize; touch-action: none;
+}
+.workspace-dock-resize:focus-visible { outline: 2px solid var(--accent, #a88ad6); outline-offset: -3px; }
 .workspace-dock header { display: flex; align-items: center; justify-content: space-between; }
 .workspace-dock h2 { font-size: 1rem; margin: 0; }
 .workspace-dock-tabs { display: flex; gap: 4px; }
@@ -22,8 +27,11 @@
 .workspace-dock-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
 .workspace-dock-content a { display: block; padding: 8px 0; color: var(--accent, #bca1df); }
 .workspace-dock-content details { padding: 8px 0; border-bottom: 1px solid var(--border, #39333f); }
-@media (min-width: 1000px) { #chat-container.workspace-dock-open { margin-right: 420px; } }
-@media (max-width: 999px) { .workspace-dock { box-shadow: -12px 0 40px #0006; } }
+@media (min-width: 1000px) { #chat-container.workspace-dock-open { margin-right: var(--workspace-dock-width, 420px); } }
+@media (max-width: 999px) {
+  .workspace-dock { width: 100vw; box-shadow: -12px 0 40px #0006; }
+  .workspace-dock-resize { display: none; }
+}
 
 .workspace-dock-content pre { color: var(--fg); opacity: 1; background: var(--bg); padding: 12px; line-height: 1.55; }
 .workspace-dock-content summary { color: var(--fg); background: transparent; }
@@ -31,6 +39,9 @@
 .workspace-dock-content summary { padding: 10px 12px; line-height: 1.4; min-height: 40px; box-sizing: border-box; }
 .workspace-dock-content summary::before { flex: 0 0 10px; margin: 0; }
 .workspace-dock-content details { background: transparent; border-color: var(--border); padding: 0; }
+.workspace-preview-history-item { border-top: 1px solid var(--border); padding: 8px 0; }
+.workspace-preview-history-item p, .workspace-preview-history-item time { display: block; margin: 4px 0; overflow-wrap: anywhere; }
+.workspace-preview-history-item time { font-size: .8rem; opacity: .8; }
 
 .workspace-dock-project { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
 .workspace-dock-project p { margin: 0 0 10px; font-size: .85rem; line-height: 1.5; }

@@ -743,6 +743,11 @@ def setup_session_routes(
             from src.agent_runs import complete_session_deletion, delete_checkpoints
             for context_sid, context_owner in context_scopes.items():
                 try:
+                    from src.preview_store import delete_session as delete_preview_history
+                    delete_preview_history(context_sid)
+                except Exception:
+                    logger.warning("Preview history cleanup failed for deleted session %s", context_sid, exc_info=True)
+                try:
                     if context_owner:
                         delete_results(context_owner, context_sid)
                 except Exception:

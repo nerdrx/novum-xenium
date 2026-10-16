@@ -206,6 +206,14 @@ async def _drain(session_id: str, run: _Run, agen: AsyncGenerator[str, None],
         if prev_task is not None and not prev_task.done():
             await asyncio.wait({prev_task})
         async for ev in agen:
+            if run.persist_checkpoint and run.deleted_scope is None:
+                try:
+                    from src.preview_store import record_sse_preview
+                    await asyncio.to_thread(
+                        record_sse_preview, run.owner or "__single_user__", session_id, ev
+                    )
+                except Exception as exc:
+                    logger.debug("Preview history capture skipped: %s", type(exc).__name__)
             if run.persist_checkpoint:
                 change = run_checkpoints.checkpoint_event(ev)
                 if "output_delta" in change:

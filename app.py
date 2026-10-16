@@ -676,6 +676,7 @@ from routes.upload_routes import setup_upload_routes
 upload_router, upload_cleanup_func = setup_upload_routes(upload_handler)
 app.include_router(upload_router)
 upload_cleanup_task = None
+preview_history_cleanup_task = None
 
 # Emoji SVG proxy (same-origin, lazy-cached Twemoji) — lets the chat render
 # emojis as flat SVG instead of system color glyphs.
@@ -1051,7 +1052,7 @@ app.router.lifespan_context = _lifespan
 
 
 async def _startup_event():
-    global upload_cleanup_task
+    global upload_cleanup_task, preview_history_cleanup_task
     logger.info("Application starting up...")
     webhook_manager.set_loop(asyncio.get_running_loop())
     # Wipe any leftover incognito sessions from previous process — they're
@@ -1077,6 +1078,17 @@ async def _startup_event():
     app.state._startup_tasks = _startup_tasks
     if upload_cleanup_func:
         upload_cleanup_task = asyncio.create_task(upload_cleanup_func())
+    async def _preview_history_cleanup_loop():
+        from src.preview_store import cleanup as cleanup_preview_history
+        while True:
+            try:
+                await asyncio.to_thread(cleanup_preview_history)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Preview history cleanup failed: %s", type(exc).__name__)
+            await asyncio.sleep(3600)
+    preview_history_cleanup_task = asyncio.create_task(_preview_history_cleanup_loop())
     # Always-on monitor that auto-continues the agent when a background bash
     # job (#!bg) finishes — re-invokes the turn with the job output.
     try:
@@ -1307,6 +1319,12 @@ async def _shutdown_event():
         upload_cleanup_task.cancel()
         try:
             await upload_cleanup_task
+        except asyncio.CancelledError:
+            pass
+    if preview_history_cleanup_task:
+        preview_history_cleanup_task.cancel()
+        try:
+            await preview_history_cleanup_task
         except asyncio.CancelledError:
             pass
     # Stop task scheduler (no-op if it never started under the gate)

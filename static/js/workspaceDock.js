@@ -101,12 +101,16 @@ function renderContent() {
       content.append(link);
     }
   } else {
-    const preview = activeTab === 'Browser' ? state?.browser : state?.preview;
+    const isBrowser = activeTab === 'Browser' || (!state?.preview?.screenshot && !!state?.browser);
+    const preview = isBrowser ? state?.browser : state?.preview;
     content.append(el('p', preview?.title || (activeTab === 'Browser' ? 'No browser activity received for this chat yet.' : 'No desktop preview received for this chat yet.')));
     if (preview?.state) content.append(el('p', preview.state));
     if (preview?.screenshot) {
+      if (preview.screenshotStale) content.append(el('p', 'Last available screenshot; it may not show the current page.'));
       const img = el('img'); img.src = preview.screenshot;
-      img.alt = activeTab === 'Browser' ? 'Browser screenshot from the latest received activity' : 'Desktop screenshot from the latest received preview';
+      img.alt = isBrowser
+        ? (preview.screenshotStale ? 'Previous browser screenshot; the current page may differ' : 'Browser screenshot from the latest received activity')
+        : 'Desktop screenshot from the latest received preview';
       content.append(img);
     } else if (preview) content.append(el('p', 'No screenshot available for this activity.'));
     if (preview?.url) {
@@ -198,7 +202,15 @@ export function updateWorkspaceDock(event, sessionId) {
   }
   const browser = event.browser_preview || (event.type === 'browser_preview' ? event : null);
   if (browser && typeof browser === 'object') {
-    state.browser = { screenshot: screenshot(browser.screenshot), url: url(browser.url), title: text(browser.title) || 'Browser activity', state: text(browser.state) };
+    const previous = state.browser;
+    const image = screenshot(browser.screenshot);
+    state.browser = {
+      screenshot: image || previous?.screenshot || '',
+      screenshotStale: !image && !!previous?.screenshot,
+      url: url(browser.url) || previous?.url || '',
+      title: text(browser.title) || previous?.title || 'Browser activity',
+      state: text(browser.state),
+    };
     changed = true;
   }
   const diff = event.diff || (event.type === 'diff' ? event : null);

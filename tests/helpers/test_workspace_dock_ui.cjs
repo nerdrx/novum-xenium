@@ -67,6 +67,25 @@ const server = http.createServer((req,res) => {
   await page.getByRole('button', {name:'Refresh runs'}).waitFor();
   assert.match(await page.locator('[role=tabpanel]').textContent(), /Could not load runs/);
   assert.doesNotMatch(await page.locator('[role=tabpanel]').textContent(), /test_tool/);
+  const previewPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9sAAAAASUVORK5CYII=';
+  await page.evaluate(pixel => {
+    dock.resetWorkspaceDock('browser-only');
+    dock.updateWorkspaceDock({type:'tool_output',browser_preview:{screenshot:pixel,url:'https://example.com/',title:'Example browser page',state:'updated'}},'browser-only');
+  }, previewPixel);
+  await page.locator('#workspace-tab-Preview').click();
+  assert.equal(await page.locator('.workspace-dock img').getAttribute('src'), previewPixel, 'Default Preview should show browser activity when no desktop preview exists');
+  await page.waitForFunction(() => document.querySelector('.workspace-dock img')?.naturalWidth > 0);
+  await page.locator('#workspace-tab-Browser').click();
+  await page.evaluate(() => dock.updateWorkspaceDock({type:'tool_output',browser_preview:{state:'unavailable'}},'browser-only'));
+  assert.equal(await page.locator('.workspace-dock img').getAttribute('src'), previewPixel, 'An unavailable browser update must preserve the last screenshot');
+  assert.match(await page.locator('[role=tabpanel]').textContent(), /Last available screenshot/);
+  assert.match(await page.locator('.workspace-dock img').getAttribute('alt'), /Previous browser screenshot/);
+  assert.equal(await page.locator('.workspace-dock a').getAttribute('href'), 'https://example.com/');
+  assert.ok(await page.locator('.workspace-dock img').evaluate(img => img.getBoundingClientRect().right <= innerWidth));
+  await page.evaluate(() => dock.resetWorkspaceDock('empty-chat'));
+  assert.equal(await page.locator('.workspace-dock img').count(), 0, 'Browser screenshot must not leak into another chat');
+  await page.evaluate(() => dock.resetWorkspaceDock('browser-only'));
+  assert.equal(await page.locator('.workspace-dock img').count(), 1);
   await page.getByRole('button', {name:'Files & project tools'}).click();
   await page.waitForFunction(() => window.projectToolsOpened === true);
   assert.equal(await page.locator('.workspace-dock').count(), 0);

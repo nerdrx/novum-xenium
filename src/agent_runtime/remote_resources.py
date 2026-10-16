@@ -191,7 +191,10 @@ class BoundBackendOperation:
             raise ResourceIdentityError("Backend resource identity changed")
 
 
-def bind_backend_for_operation(authority, operation, *, context=None, approved=None, exact_admission=False):
+def bind_backend_for_operation(
+    authority, operation, *, context=None, approved=None, exact_admission=False,
+    server_required_local=False,
+):
     current = resolve_backend(operation.transport_tool, context=context, content=operation.input, owner=authority.owner)
     native = NativeBackendResource(operation.transport_tool)
     if approved is not None:
@@ -205,7 +208,9 @@ def bind_backend_for_operation(authority, operation, *, context=None, approved=N
         selected = current
     elif native in authority.backend_resources:
         selected = native
-    elif isinstance(current, NativeBackendResource) and not authority.inherited:
+    elif isinstance(current, NativeBackendResource) and (
+        not authority.inherited or server_required_local
+    ):
         # Legacy operation authority can only retain the fixed local backend;
         # it cannot reconstruct any external backend from current availability.
         selected = current

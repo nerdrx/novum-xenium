@@ -54,10 +54,14 @@ def test_notes_mobile_checklist_asset_versions_are_bumped():
     app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
-    assert re.search(r"notes\.js\?v=[A-Za-z0-9_-]+", app)
+    # Notes follows the split module graph and service-worker cache namespace.
+    assert re.search(r"from ['\"]\./js/notes\.js(?:\?v=[A-Za-z0-9_-]+)?['\"]", app)
+    sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
+    assert "novum-xenium-v395-upstream-sync" in sw
+    assert "/static/js/notes.js" in sw
     app_versions = re.findall(r"/static/app\.js\?v=([A-Za-z0-9_-]+)", html)
     assert app_versions and len(set(app_versions)) == 1
-    assert stylesheet_cache_version() == app_versions[0]
+    assert stylesheet_cache_version() == "20261016upstream1"
 
 
 def test_drawing_edits_mark_notes_dirty_and_keep_one_gallery_image():

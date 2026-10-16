@@ -218,7 +218,7 @@ def test_migration_adds_total_cost_usd_idempotently(tmp_path, monkeypatch):
 def test_sessions_list_route_exposes_total_cost_usd():
     from pathlib import Path
     source = Path(__file__).parents[1].joinpath("routes/session_routes.py").read_text()
-    assert '"total_cost_usd": s.total_cost_usd or 0.0' in source
+    assert '"total_cost_usd": row.total_cost_usd or 0.0' in source
 
 
 def test_llm_core_captures_openrouter_usage_cost():

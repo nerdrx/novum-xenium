@@ -157,6 +157,7 @@ _register(
     {"native_preview"},
     ToolEffect.READ_WORKSPACE,
     ToolEffect.WRITE_WORKSPACE,
+    ToolEffect.EXECUTE_CODE,
     result_integrity=ResultIntegrity.WORKSPACE_UNTRUSTED,
 )
 _register(

@@ -172,9 +172,9 @@ _SOFTWARE_RELEASE_HINTS = (
     "package",
 )
 
-# Verified with the pinned September SearXNG adapters. Bing can return unrelated
-# pages as successful results; deployments can override this setting.
-_GENERAL_ENGINES = os.environ.get("SEARXNG_GENERAL_ENGINES", "google,brave,duckduckgo")
+# Keep general search aligned with the bundled curated engine configuration.
+# Deployments can override this list, or use an empty value for category defaults.
+_GENERAL_ENGINES = os.environ.get("SEARXNG_GENERAL_ENGINES", "bing,mwmbl,wiby,wikipedia")
 
 
 def searxng_search_api(query: str, count: Optional[int] = None, categories: str = "general",

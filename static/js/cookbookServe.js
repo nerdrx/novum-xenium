@@ -64,7 +64,7 @@ function _fetchCookbookWithTimeout(input, init = {}, timeoutMs = 20000) {
 
 // Storage keys
 const SERVE_STATE_KEY = 'cookbook-serve-state';
-const SERVE_FAVORITES_KEY = 'cookbook-serve-favorite-models';
+export const SERVE_FAVORITES_KEY = 'cookbook-serve-favorite-models';
 
 let _cachedAllModels = [];
 const _CACHED_MODELS_SCAN_KEY = 'cookbook_cached_models_scan_v3_ltx_video';

@@ -39,6 +39,7 @@ def test_api_picker_groups_by_endpoint_name():
     # OpenRouter models often have ids like openai/* or google/*; browse mode
     # should still show them under the OpenRouter endpoint group.
     assert "function _providerGroupKey(m)" in SRC
-    assert "if (m && m.epName)" in SRC
+    assert "if (m.category !== 'local' && m.epName)" in SRC
+    assert "m.endpointId || m.url || (m.category !== 'local' && m.epName ? m.epName : '')" in SRC
     assert "`~endpoint:${m.epName}`" in SRC
     assert "_providerGroupName(provider)" in SRC

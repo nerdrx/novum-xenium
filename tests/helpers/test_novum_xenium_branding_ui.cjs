@@ -62,6 +62,7 @@ const server = http.createServer((req, res) => {
           themeClass: root.classList.contains('theme-novum-xenium'),
           rootFavicon: (() => { const icon = document.querySelector("link[rel='icon']"); return { href: icon.href, type: icon.type }; })(),
           logos: [...document.querySelectorAll('.welcome-logo, .sidebar-brand-logo')].map((img) => ({ src: img.currentSrc, width: img.naturalWidth, height: img.naturalHeight, alt: img.alt, ariaHidden: img.getAttribute('aria-hidden') })),
+          sidebarBrand: (() => { const el = document.querySelector('#sidebar-brand-btn'); return !!el && el.getAttribute('aria-label') === 'Home'; })(),
           welcome: (() => { const el = document.querySelector('#welcome-screen'); const cs = getComputedStyle(el); return { text: el.innerText, display: cs.display, opacity: cs.opacity, color: cs.color, fill: cs.webkitTextFillColor, rect: el.getBoundingClientRect().toJSON() }; })(),
         };
       });
@@ -72,8 +73,11 @@ const server = http.createServer((req, res) => {
       assert.equal(metrics.sidebarShadow, 'none');
       assert.equal(new URL(metrics.rootFavicon.href).pathname, '/static/icons/icon-192.png');
       assert.equal(metrics.rootFavicon.type, 'image/png');
-      assert.equal(metrics.logos.length, 2);
+      // The static shell owns the welcome logo. The sidebar home mark is
+      // rendered by app startup code, which this script-free fixture omits.
+      assert.equal(metrics.logos.length, 1);
       assert.ok(metrics.logos.every((logo) => logo.width > 0 && logo.height > 0 && (logo.alt === 'Novum Xenium' || (logo.alt === '' && logo.ariaHidden === 'true'))), `brand images: ${JSON.stringify(metrics.logos)}`);
+      assert.equal(metrics.sidebarBrand, true);
       assert.ok(metrics.documentWidth <= metrics.viewportWidth, `${viewport.name} horizontal overflow: ${JSON.stringify(metrics)}`);
       assert.ok(metrics.bodyWidth <= metrics.viewportWidth, `${viewport.name} body overflow: ${JSON.stringify(metrics)}`);
       assert.ok(metrics.composerRight <= metrics.viewportWidth + 1, `${viewport.name} composer outside viewport`);

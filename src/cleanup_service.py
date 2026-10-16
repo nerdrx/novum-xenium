@@ -178,6 +178,11 @@ def _cleanup_old_sessions_sync(session_manager, owner: Optional[str] = None) -> 
             try:
                 current = check.get(DbSession, session_id)
                 if current is None:
+                    # A concurrent delete may leave only a stale in-memory
+                    # entry. It is no longer a cleanup deletion candidate.
+                    cached_sessions = getattr(session_manager, "sessions", None)
+                    if isinstance(cached_sessions, dict):
+                        cached_sessions.pop(session_id, None)
                     continue
                 message_count = check.query(DbChatMessage).filter(
                     DbChatMessage.session_id == session_id
@@ -199,7 +204,16 @@ def _cleanup_old_sessions_sync(session_manager, owner: Optional[str] = None) -> 
             finally:
                 check.close()
 
-            if session_manager.delete_session(session_id):
+            if session_manager.delete_session(
+                    session_id,
+                    cleanup_guard={
+                        "expected_owner": expected_owner,
+                        "owner": owner,
+                        "cutoff": cutoff_date,
+                        "min_messages": CleanupConfig.MIN_MESSAGES_TO_KEEP,
+                        "protected_keywords": CleanupConfig.PROTECTED_KEYWORDS,
+                        "preserve_recent_count": CleanupConfig.PRESERVE_RECENT_COUNT,
+                    }):
                 deleted_count += 1
                 space_freed += message_count * CleanupConfig.ESTIMATED_MESSAGE_SIZE_BYTES
 

@@ -1900,7 +1900,7 @@ async def _notification_email_poller():
         try:
             batches = await asyncio.to_thread(_notification_email_scan_once)
             if batches:
-                from routes.email_routes import _record_email_received_events
+                from routes.email.email_routes import _record_email_received_events
                 from core.database import SessionLocal, NotificationEmailCursor
                 for owner, account_id, rows, target_uid, uidvalidity in batches:
                     if not _record_email_received_events(owner, account_id, "INBOX", rows, uidvalidity=uidvalidity):

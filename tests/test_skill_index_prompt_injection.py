@@ -214,7 +214,8 @@ def test_skill_procedure_is_loaded_only_by_view(tmp_path, monkeypatch):
     sm = SkillsManager(str(data_dir))
     sm.add_skill(name="receipt-render", title="receipt render", description="render safe receipt",
                  when_to_use="render safe receipt", procedure=["PRIVATE_PROCEDURE_BODY" * 100],
-                 pitfalls=["PRIVATE_PITFALL"], status="published", owner="alice")
+                 pitfalls=["PRIVATE_PITFALL"], status="published", confidence=0.9, owner="alice")
+    sm.set_audit("receipt-render", "pass", owner="alice")
     _patch_prefs(monkeypatch, data_dir)
     from src.agent_loop import _build_system_prompt
     messages = [{"role": "user", "content": "render safe receipt"}]
@@ -224,11 +225,11 @@ def test_skill_procedure_is_loaded_only_by_view(tmp_path, monkeypatch):
     assert "receipt-render" in text
     assert "PRIVATE_PROCEDURE_BODY" not in text
     assert "PRIVATE_PITFALL" not in text
-    assert sm.load(owner="alice")[0].get("uses", 0) == 0
+    assert next(row for row in sm.load(owner="alice") if row["name"] == "receipt-render").get("uses", 0) == 0
     from src.tools.system import do_manage_skills
     result = asyncio.run(do_manage_skills('{"action":"view","name":"receipt-render"}', owner="alice"))
     assert "PRIVATE_PROCEDURE_BODY" in result["results"]
-    assert sm.load(owner="alice")[0]["uses"] == 1
+    assert next(row for row in sm.load(owner="alice") if row["name"] == "receipt-render")["uses"] == 1
     assert "results" not in asyncio.run(do_manage_skills('{"action":"view","name":"receipt-render"}', owner="bob"))
 
 
@@ -273,6 +274,7 @@ def _seed_gui_skill(data_dir):
     from services.memory.skills import SkillsManager
     sm = SkillsManager(str(data_dir))
     sm.add_skill(
+        confidence=0.9,
         name="ffmpeg-gui-layout",
         title="FFmpeg GUI layout",
         description="Design a clear GUI layout for an FFmpeg desktop wrapper",
@@ -283,6 +285,7 @@ def _seed_gui_skill(data_dir):
         owner="alice",
     )
 
+    sm.set_audit("ffmpeg-gui-layout", "pass", owner="alice")
 
 def test_skill_suggestions_keep_gui_task_after_name_reply(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"

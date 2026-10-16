@@ -1,4 +1,4 @@
-// static/js/document.js?v=20260815approvalsave1
+// static/js/document.js?v=20261016approvalflow1
 /**
  * Document editor module — multi-document tabbed panel alongside chat.
  * Supports multiple open documents with tab switching, per-doc state,
@@ -33,6 +33,7 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
   let _isEditingTabTitle = false;
   let _autoDetectDebounce = null;
   let _autoTitleDebounce = null;
+  let _autoSaveDebounce = null;
   const _autoSaveTimers = new Map(); // docId -> pending autosave timer
   let _lastAutoSaveErrorAt = 0;
   let _animationInProgress = false;
@@ -491,7 +492,7 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
       event.preventDefault();
       items[next]?.focus();
     });
-    requestAnimationFrame(() => (menu.querySelector('.doc-outline-item') || menu).focus());
+    (menu.querySelector('.doc-outline-item') || menu).focus();
   }
 
   function _hideRichSelectionToolbar() {
@@ -11779,7 +11780,6 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
     });
 
     requestAnimationFrame(syncOverflow);
-    _syncOverflow = syncOverflow;
   }
 
   /** Divider drag to resize the editor pane */
@@ -15061,7 +15061,9 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
         // An edit may land while this PUT is in flight. Keep that newer
         // content and queue one more write instead of rolling it back to the
         // snapshot this request sent.
-        if (latestDoc.content !== contentToSave) _scheduleDocAutosave(0, savingDocId);
+        if (latestDoc._saveRequest === saveRequest && latestDoc.content !== contentToSave) {
+          _scheduleDocAutosave(0, savingDocId);
+        }
       }
       if (versionChanged) renderTabs();
       _syncDocIndicator();

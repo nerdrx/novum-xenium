@@ -32,6 +32,12 @@ let loaded = false;
 let _loadPromise = null;
 let _bulkOperation = false;
 
+function _confColor(confidence) {
+  if (confidence >= 80) return 'var(--color-success, #4ade80)';
+  if (confidence >= 50) return 'var(--color-warning, #f0ad4e)';
+  return 'var(--color-danger, #e06c75)';
+}
+
 function esc(s) { return uiModule.esc(String(s ?? '')); }
 
 let _pendingFocusSkill = null;

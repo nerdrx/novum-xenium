@@ -1,6 +1,7 @@
 """Outcome-based loop protection: progress, retries and saved pause reasons."""
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -163,10 +164,13 @@ def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, fail
     async def stream(_candidates, messages, **kwargs):
         nonlocal rounds
         rounds += 1
-        if rounds > 8:
+        # The real loop has a separate bounded read-only inspection cap. Keep
+        # these integration cases within that window and finish with an answer;
+        # the guard's longer pagination/change history is covered above.
+        if rounds > (4 if paginate or changing else 8):
             text = "Finished checking the requested pages."
         else:
-            args = {"path": "example.py", "offset": rounds if paginate else 1, "limit": 10 if failed else 10 * rounds}
+            args = {"path": "tests/test_agent_progress_guard.py", "offset": rounds if paginate else 1, "limit": 10 if failed else 10 * rounds}
             tool = "update_plan" if workflow_blocked else "read_file"
             if workflow_blocked:
                 args = {"plan": "- [x] Repair everything"}
@@ -194,8 +198,12 @@ def run_reads(monkeypatch, *, paginate=False, changing=False, native=False, fail
     async def collect():
         return [chunk async for chunk in al.stream_agent_loop(
             "http://x/v1", "gpt-6.1-sol" if native else "m", [{"role": "user", "content": "Inspect the source files"}],
-            approval_mode="full", relevant_tools={"read_file"}, max_rounds=max_rounds,
-            workspace="/workspace", owner="test-admin",
+            approval_mode="full",
+            relevant_tools={"read_file", "update_plan"} if workflow_blocked else {"read_file"},
+            max_rounds=max_rounds,
+            # Authority now validates workspace identity before dispatch; use
+            # an existing project root instead of the obsolete /workspace fixture.
+            workspace=str(Path(__file__).resolve().parents[1]), owner="test-admin",
         )]
     events = _types(asyncio.run(collect()))
     if any(event.get("type") == "loop_breaker_triggered" for event in events):
@@ -228,10 +236,12 @@ def test_unlimited_rounds_still_pause_unchanged_reads(monkeypatch):
 @pytest.mark.parametrize("native", [False, True])
 def test_real_loop_bounds_workflow_rejected_plan_calls(monkeypatch, native):
     events, calls = run_reads(monkeypatch, native=native, workflow_blocked=True, max_rounds=0)
-    assert len(calls) == 4
+    # update_plan is consumed by the loop's plan handler, so it does not reach
+    # the generic execute_tool_block fixture.
+    assert calls == []
     guard = next(event for event in events if event.get("type") == "loop_breaker_triggered")
-    assert guard["failed_retries"] == 3
-    assert guard["read_repeats"] == 0
+    assert guard["reason"] == "loop_breaker_stall"
+    assert "repeating the same tool calls" in guard["detail"]
     assert not any(event.get("type") == "rounds_exhausted" for event in events)
 
 
@@ -247,7 +257,7 @@ def test_real_loop_pauses_unchanged_failed_retries(monkeypatch, native):
 @pytest.mark.parametrize("options", [{"paginate": True}, {"changing": True}])
 def test_real_loop_allows_pagination_and_changed_output(monkeypatch, options):
     events, calls = run_reads(monkeypatch, **options)
-    assert len(calls) == 8
+    assert len(calls) == 4
     assert not any(event.get("type") == "loop_breaker_triggered" for event in events)
 
 

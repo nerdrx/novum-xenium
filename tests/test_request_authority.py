@@ -145,6 +145,20 @@ def test_normalization_and_aliases_do_not_erase_denials():
     assert ExactOperation.normalize("manage_tasks", '{ "action": "list" }').input == '{"action":"list"}'
 
 
+def test_restrict_normalizes_list_valued_policy_denials():
+    policy = SimpleNamespace(
+        all_disabled_names=lambda: ["bash", "mcp__email__read_email"],
+        block_all_tool_calls=False,
+        disable_mcp=False,
+    )
+    grant = authority("bash", "read_email").restrict(
+        policy, disabled_tools=["python"]
+    )
+    assert grant.denied == frozenset({"bash", "read_email", "python"})
+    assert not grant.permits(ExactOperation.normalize("bash", "pwd"))
+    assert not grant.permits(ExactOperation.normalize("read_email", "{}"))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", [MISSING_AUTHORITY, None, {}, "authorized"])
 async def test_missing_and_malformed_dispatch_authority_fail_closed(monkeypatch, state):

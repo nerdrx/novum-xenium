@@ -59,7 +59,7 @@ function _withoutMyAddresses(raw, myAddresses) {
 function _openCalendarEventFromEmail(uid) {
   const target = String(uid || '').trim();
   if (!target) return;
-  import('./calendar.js').then(mod => {
+  import('./calendar.js?v=20261016calvisual1').then(mod => {
     const open = mod.openCalendarTo || (mod.default && mod.default.openCalendarTo);
     if (open) open(target);
   }).catch(() => {});

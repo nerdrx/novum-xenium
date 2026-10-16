@@ -28,6 +28,7 @@ class _IdentityMiddleware(BaseHTTPMiddleware):
 
 class _ToolPolicy:
     block_all_tool_calls = False
+    disable_mcp = False
 
     @staticmethod
     def blocks(_tool):
@@ -39,7 +40,7 @@ class _ToolPolicy:
 
     @staticmethod
     def all_disabled_names():
-        return []
+        return set()
 
 
 class _PreservingToolPolicy(_ToolPolicy):
@@ -123,6 +124,16 @@ def _recovery_post_client(monkeypatch, *, checkpoint_store, workspace, model="mo
     monkeypatch.setattr(chat_routes, "build_foreground_route_descriptors", lambda *_args, **_kwargs: [{"endpoint_id": "endpoint-a", "endpoint_label": "Test"}])
     monkeypatch.setattr(chat_routes, "build_chat_context", lambda *_args, **_kwargs: _async_value(context))
     monkeypatch.setattr(chat_routes, "SessionLocal", _NullDb)
+    # Route recovery tests do not exercise configured MCP inventory. Keep the
+    # manager on its no-server path instead of consulting a process-global DB
+    # binding that may belong to another suite fixture.
+    import src.tool_utils as tool_utils
+    monkeypatch.setattr(tool_utils, "get_mcp_manager", lambda: None)
+    # The route calls the disabled-tool map directly while building its
+    # contract. Do not let a process-global database binding from another
+    # suite shard leak into these recovery-only fixtures.
+    import src.agent_loop as agent_loop
+    monkeypatch.setattr(agent_loop, "_load_mcp_disabled_map", lambda: {})
     monkeypatch.setattr(chat_routes, "estimate_tokens", lambda _messages: 10)
     monkeypatch.setattr(chat_routes, "accumulate_token_usage", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(chat_routes, "save_assistant_response", lambda *_args, **_kwargs: None)
@@ -413,7 +424,7 @@ def test_recovery_copy_does_not_override_explicit_bash_off(tmp_path, monkeypatch
     assert store.get("session-a", "alice")["status"] == "continued"
 
 
-def test_ordinary_workspace_intent_still_auto_enables_bash(tmp_path, monkeypatch):
+def test_ordinary_workspace_intent_does_not_override_explicit_bash_off(tmp_path, monkeypatch):
     from src.action_intents import classify_tool_intent
 
     workspace = str(tmp_path / "workspace")
@@ -434,7 +445,7 @@ def test_ordinary_workspace_intent_still_auto_enables_bash(tmp_path, monkeypatch
     }, headers={"x-test-user": "alice"})
 
     assert response.status_code == 200, response.text[:500]
-    assert "bash" not in (captured["loop_kwargs"]["disabled_tools"] or [])
+    assert "bash" in (captured["loop_kwargs"]["disabled_tools"] or [])
 
 
 @pytest.mark.parametrize("status", ["interrupted", "stopped"])

@@ -8,6 +8,7 @@ import src.agent_loop as al
 from src.coding_grounding import CodingGrounding
 from src.settings import DEFAULT_SETTINGS
 from src.agent_tools import coding_tools
+from src.agent_runtime.authority import create_request_authority
 from src.tool_approval_scopes import TASK_APPROVAL_DECISION
 from src.tool_approvals import ToolApprovalStore
 from src.tool_capabilities import capabilities_for_action
@@ -124,12 +125,18 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
     executed = []
     initial_todowrite = json.dumps(actions[0][1])
     approvals = ToolApprovalStore()
+    request_text = "Fix the auth refresh bug in this workspace and run tests"
+    request_authority = create_request_authority(
+        request_text, owner="alice", session_id="coding-packet-test", workspace=str(tmp_path),
+    )
     pending = approvals.create(
         owner="alice", session_id="coding-packet-test", origin_run_id="packet-origin",
         tool_name="todowrite", content=initial_todowrite, workspace=str(tmp_path),
         selected_tools={"todowrite", "bash", "write_file", "python"},
         external_untrusted_context_seen=True,
         capabilities=capabilities_for_action("todowrite", initial_todowrite),
+        request_text=request_text,
+        request_authority=request_authority,
     )
     grant = None if no_packet_start else approvals.consume(
         pending.approval_id, decision=TASK_APPROVAL_DECISION,
@@ -224,7 +231,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         "http://x/v1", "gpt-4o",
         [{"role": "user", "content": "Preserve keyboard support"},
          {"role": "assistant", "content": "obsolete implementation chatter"},
-         {"role": "user", "content": user_request or "Fix the auth refresh bug in this workspace and run tests"}],
+         {"role": "user", "content": user_request or request_text}],
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
         approval_mode="auto", exact_approval=grant, server_run_id="packet-resume",
         relevant_tools={"todowrite", "bash", "write_file", "edit_file", "apply_patch",
@@ -250,15 +257,18 @@ def test_initial_checked_schema_keeps_readers_and_hides_blocked_actions(monkeypa
 def test_read_stall_recovers_to_truthful_packet_prompt(monkeypatch, tmp_path):
     events, executed, requested = _run_packet(
         monkeypatch, tmp_path, checked_workflow=True, no_packet_start=True,
-        stall_before_packet=True,
+        stall_before_packet=True, max_rounds=5,
     )
 
     assert {"todowrite", "ask_user"} <= requested[4]
     assert not ({"read_file", "grep", "glob", "ls", "bash", "write_file"} & requested[4])
     assert requested[-1] == {"todowrite", "ask_user"}
-    # Packet creation remains subject to the ordinary approval boundary.
-    assert any("approval" in json.dumps(event).lower() for event in events)
-    assert [tool for tool, _content in executed][-1] == "read_file"
+    # The recovery surface permits one TodoWrite plan, but no code/check action
+    # before its reproduction boundary has produced evidence.
+    assert {tool for tool, _content in executed} <= {"read_file", "todowrite"}
+    packet_events = [event for event in events if event.get("type") == "coding_work_packet"]
+    assert len(packet_events) == 1
+    assert packet_events[0]["stage"] == "reproduce"
 
 
 def test_failed_reads_do_not_activate_packet_stall_recovery(monkeypatch, tmp_path):
@@ -268,7 +278,10 @@ def test_failed_reads_do_not_activate_packet_stall_recovery(monkeypatch, tmp_pat
     )
 
     assert "read_file" in requested[-1]
-    assert any("Agent paused" in event.get("delta", "") for event in events)
+    paused = [event for event in events if event.get("type") == "loop_breaker_triggered"]
+    assert paused
+    assert paused[-1]["reason"] == "repeated_tool_results"
+    assert paused[-1]["persisted_in_text"] is True
 
 
 def test_packet_requires_reproduction_then_edit_then_successful_acceptance(monkeypatch, tmp_path):

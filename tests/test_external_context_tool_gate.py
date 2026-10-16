@@ -167,7 +167,7 @@ def _run_required_skill_view_case(
     monkeypatch.setattr(tool_execution, "_execute_tool_block_impl", fake_execute_impl)
     events = _collect_agent_events(agent_loop.stream_agent_loop(
         "http://local.test/v1", "small-local-model",
-        [{"role": "user", "content": "Build a Python GUI app using a framework."}],
+        [{"role": "user", "content": "Build a Python GUI app in the workspace using a framework."}],
         workspace=str(tmp_path), owner="alice", session_id="required-skill-view",
         max_rounds=3, relevant_tools={"read_file", "manage_skills"},
         disabled_tools=set(disabled_tools or ()), approval_mode=approval_mode,

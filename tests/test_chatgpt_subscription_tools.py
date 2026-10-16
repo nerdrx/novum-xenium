@@ -20,7 +20,7 @@ def _tool_schema():
     }
 
 
-def test_subscription_payload_converts_schemas_and_tool_history():
+def test_subscription_payload_keeps_internal_tool_transcript_as_plain_text():
     payload = _build_chatgpt_responses_payload(
         "gpt-6.1-sol",
         [
@@ -38,16 +38,11 @@ def test_subscription_payload_converts_schemas_and_tool_history():
         tools=[_tool_schema()],
     )
 
-    assert payload["tools"] == [{
-        "type": "function",
-        "name": "web_search",
-        "description": "Search the web",
-        "parameters": _tool_schema()["function"]["parameters"],
-    }]
-    assert payload["input"][-2:] == [
-        {"type": "function_call", "call_id": "call_1", "name": "web_search", "arguments": '{"query":"topic"}'},
-        {"type": "function_call_output", "call_id": "call_1", "output": "Found it"},
-    ]
+    assert "tools" not in payload
+    assert "tool_choice" not in payload
+    assert payload["input"][-1] == {
+        "role": "user", "content": [{"type": "input_text", "text": "Found it"}],
+    }
 
 
 class _Response:
@@ -95,7 +90,7 @@ async def _run_subscription_stream(monkeypatch, lines, *, tool_choice_none=False
 
 
 @pytest.mark.asyncio
-async def test_subscription_stream_emits_responses_function_call(monkeypatch):
+async def test_subscription_stream_ignores_provider_function_calls(monkeypatch):
     lines = [
         "event: response.output_item.added",
         "data: " + json.dumps({
@@ -121,16 +116,13 @@ async def test_subscription_stream_emits_responses_function_call(monkeypatch):
     ]
     client, chunks = await _run_subscription_stream(monkeypatch, lines)
 
-    assert client.payload["tools"][0]["name"] == "web_search"
-    tool_event = next(json.loads(chunk[6:]) for chunk in chunks if '"type": "tool_calls"' in chunk)
-    assert tool_event["calls"] == [{
-        "id": "call_1", "name": "web_search", "arguments": '{"query":"topic"}',
-    }]
+    assert "tools" not in client.payload
+    assert not any('"type": "tool_calls"' in chunk for chunk in chunks)
     assert chunks[-1] == "data: [DONE]\n\n"
 
 
 @pytest.mark.asyncio
-async def test_subscription_stream_falls_back_to_collected_call_when_completed_output_omits_it(monkeypatch):
+async def test_subscription_stream_does_not_emit_collected_provider_call(monkeypatch):
     lines = [
         "event: response.output_item.added",
         "data: " + json.dumps({
@@ -153,10 +145,8 @@ async def test_subscription_stream_falls_back_to_collected_call_when_completed_o
 
     _, chunks = await _run_subscription_stream(monkeypatch, lines)
 
-    tool_event = next(json.loads(chunk[6:]) for chunk in chunks if '"type": "tool_calls"' in chunk)
-    assert tool_event["calls"] == [{
-        "id": "call_1", "name": "web_search", "arguments": '{"query":"topic"}',
-    }]
+    assert not any('"type": "tool_calls"' in chunk for chunk in chunks)
+    assert chunks[-1] == "data: [DONE]\n\n"
 
 
 @pytest.mark.asyncio

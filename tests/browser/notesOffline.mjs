@@ -30,7 +30,7 @@ try {
   offline.on('console', message => { if (message.type() === 'error') console.log('browser:', message.text()); });
   await offline.goto(`${origin}/static/js/panels.js`);
   const result = await offline.evaluate(async () => {
-    const facade = await import('/static/js/notes.js?v=20260911notesselectioncancel1');
+    const facade = await import('/static/js/notes.js');
     const feature = await import('/static/js/features/notes/index.js');
     return { identity: facade.default === feature.default && window.notesModule === feature.default, closed: facade.isPanelOpen() === false, exports: Object.keys(facade).sort() };
   });

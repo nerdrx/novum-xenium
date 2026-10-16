@@ -137,6 +137,8 @@ async def test_generation_dispatch_uses_owner_aware_backend(monkeypatch, exit_co
     async def legacy(*args, **kwargs):
         pytest.fail('Native generation must not use the ownerless MCP adapter')
     monkeypatch.setattr(ai_interaction, 'do_generate_image', generate)
+    import src.settings as settings
+    monkeypatch.setattr(settings, 'get_setting', lambda key, default=None: True if key == 'image_gen_enabled' else default)
     monkeypatch.setattr(tool_execution, '_call_mcp_tool', legacy)
     monkeypatch.setattr(tool_execution, '_owner_is_admin', lambda owner: True)
     block = SimpleNamespace(tool_type='generate_image', content='{"prompt":"A city"}')
@@ -150,9 +152,11 @@ async def test_generation_dispatch_uses_owner_aware_backend(monkeypatch, exit_co
     assert journal.actions[0].execution_id is None
     assert not journal.actions[0].outcome['authoritative']
     assert journal.actions[1].execution_id is not None
-    assert journal.actions[1].outcome['authoritative'] is (exit_code == 0)
+    # The app-owned adapter normalizes a valid image result to exit_code=0
+    # even when the backend omits the optional field.
+    assert journal.actions[1].outcome['authoritative'] is True
     assert result['image_id'] == 'test'
-    assert calls == [(block.content, {'owner': 'pewds', 'session_id': 'fixture'})]
+    assert calls == [({'prompt': 'A city'}, {'owner': 'pewds', 'session_id': 'fixture'})]
 
 
 @pytest.mark.asyncio

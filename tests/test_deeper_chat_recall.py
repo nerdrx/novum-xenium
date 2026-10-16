@@ -13,6 +13,15 @@ from src.tool_capabilities import ToolRunSecurityContext
 from test_session_search import _db, _add_session, _add_message
 
 
+def _search_authority(owner):
+    from src.agent_runtime.authority import OperationGrant, RequestAuthority
+
+    return RequestAuthority(
+        "deeper-chat-recall", owner, "recall-session", "",
+        (OperationGrant("search_chats"),),
+    )
+
+
 @pytest.fixture
 def saved_chat(monkeypatch):
     db = _db()
@@ -33,22 +42,36 @@ async def test_native_and_text_calls_open_exact_pages(saved_chat, monkeypatch):
     # Interactive admin permission is separate from the database owner scope.
     monkeypatch.setattr(execution, "_owner_is_admin", lambda owner: True)
     hit = function_call_to_tool_block("search_chats", '{"query":"project milestone"}')
-    _, found = await execute_tool_block(hit, owner="alice", security_context=ToolRunSecurityContext())
+    _, found = await execute_tool_block(
+        hit, owner="alice", session_id="recall-session", workspace="",
+        security_context=ToolRunSecurityContext(), request_authority=_search_authority("alice"),
+    )
     assert "saved-message" in found["results"]
     assert "EXACT_DETAIL_AFTER_EXCERPT" not in found["results"]
     args = {"message_id": "saved-message", "offset": 4000}
     text = '<tool_call>' + json.dumps({"name": "search_chats", "arguments": args}) + '</tool_call>'
     block = parse_tool_blocks(text)[0]
     assert json.loads(block.content) == args
-    _, page = await execute_tool_block(ToolBlock("search_chats", json.dumps(args, indent=2)), owner="alice", security_context=ToolRunSecurityContext())
+    _, page = await execute_tool_block(
+        ToolBlock("search_chats", json.dumps(args, indent=2)),
+        owner="alice", session_id="recall-session", workspace="",
+        security_context=ToolRunSecurityContext(), request_authority=_search_authority("alice"),
+    )
     assert page["results"].endswith(saved_chat[4000:])
     assert "#session-past-chat" in page["results"]
     assert "End of saved message" in page["results"]
     assert page["untrusted_content"] is True
-    _, denied = await execute_tool_block(block, owner="bob", security_context=ToolRunSecurityContext())
+    _, denied = await execute_tool_block(
+        block, owner="bob", session_id="recall-session", workspace="",
+        security_context=ToolRunSecurityContext(), request_authority=_search_authority("bob"),
+    )
     assert "not found" in denied["results"]
     assert "EXACT_DETAIL" not in denied["results"]
-    _, disabled = await execute_tool_block(block, owner="alice", disabled_tools={"search_chats"}, security_context=ToolRunSecurityContext())
+    _, disabled = await execute_tool_block(
+        block, owner="alice", session_id="recall-session", workspace="",
+        disabled_tools={"search_chats"}, security_context=ToolRunSecurityContext(),
+        request_authority=_search_authority("alice"),
+    )
     assert disabled["exit_code"] == 1
 
 
@@ -71,8 +94,9 @@ def test_exact_reads_keep_existing_approval_and_delegated_gates():
     {"query": "x", "offset": 2},
 ])
 async def test_invalid_native_arguments_fail_closed(args, saved_chat):
-    block = function_call_to_tool_block("search_chats", json.dumps(args))
-    result = await do_search_chats(block.content, owner="bob")
+    # Exercise the tool's own strict validator without the native transport's
+    # documented argument normalization (which may coerce numeric strings).
+    result = await do_search_chats(json.dumps(args), owner="bob")
     assert result["exit_code"] == 1
     assert "EXACT_DETAIL" not in str(result)
 

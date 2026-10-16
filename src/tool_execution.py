@@ -1453,7 +1453,9 @@ async def _call_mcp_tool(
     args = _build_mcp_args(tool, content)
     if server_id == "image_gen":
         args = dict(args)
-        args[_MCP_OWNER_ARG] = owner or ""
+        args.pop(_MCP_OWNER_ARG, None)
+        if owner:
+            args[_MCP_OWNER_ARG] = owner
     result = await mcp.call_tool(qualified, args)
 
     # Stdio MCP servers can only return TextContent, so an explicit
@@ -1821,7 +1823,16 @@ async def execute_tool_block(
             and exact_approval is not None and exact_approval.matches(
                 owner=owner, session_id=session_id, workspace=workspace,
                 tool_name=getattr(block, "tool_type", None), content=getattr(block, "content", None)))
-        admitted = valid and (authority.permits(operation) or exact_admission)
+        required_skill_admission = False
+        if valid and not authority.restricted(operation):
+            if isinstance(security_context, ToolRunSecurityContext):
+                required_skill_admission = security_context.consume_required_skill_view_once(
+                    getattr(block, "tool_type", None), getattr(block, "content", None),
+                    workspace, owner, session_id,
+                )
+        admitted = valid and (
+            authority.permits(operation) or exact_admission or required_skill_admission
+        )
     except (ValueError, TypeError) as error:
         return f"{getattr(block, 'tool_type', '')}: invalid arguments", {
             "error": (f"Tool arguments are not valid JSON: {error}"
@@ -1872,7 +1883,9 @@ async def execute_tool_block(
         backend_operation = bind_backend_for_operation(
             authority, operation, context=client_runtime_context,
             approved=pending.backend_operation if pending is not None else None,
-            exact_admission=exact_admission)
+            exact_admission=exact_admission,
+            server_required_local=required_skill_admission,
+        )
         external_resource_call = isinstance(backend_operation.resource, ExternalResource)
         if operation.tool == "private_browser" and external_resource_call:
             raise ResourceIdentityError("External backend cannot supply native browser session authority")
@@ -2001,15 +2014,9 @@ async def execute_tool_block(
                 },
             )
 
-    required_skill_view_claimed = False
-    if isinstance(security_context, ToolRunSecurityContext):
-        required_skill_view_claimed = security_context.consume_required_skill_view_once(
-            getattr(block, "tool_type", None),
-            getattr(block, "content", None),
-            workspace,
-            owner,
-            session_id,
-        )
+    # The authority gate above consumes this one-shot exception exactly once;
+    # carry its result through the independent external-context gate here.
+    required_skill_view_claimed = required_skill_admission
     if (
         isinstance(security_context, ToolRunSecurityContext)
         and not approval_claimed

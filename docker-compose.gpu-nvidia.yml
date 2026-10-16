@@ -11,6 +11,12 @@
 # for setup details.
 services:
   odysseus:
+    # Keep Docker's syscall deny-list; allow only the nested namespace
+    # operations required by the per-command bubblewrap sandbox.
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/seccomp-bubblewrap.json
+      - systempaths=unconfined
     # Build the Novum fork locally so upstream images cannot replace NX features.
     build: .
     ports:

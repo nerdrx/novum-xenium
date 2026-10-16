@@ -1,5 +1,6 @@
 """Regression guards for document-selection references in chat bubbles."""
 
+import re
 from pathlib import Path
 from tests.helpers.stylesheets import app_css
 from tests.helpers.document_source import document_source, function_body
@@ -42,9 +43,11 @@ def test_document_reference_looks_clickable_and_has_keyboard_focus_feedback():
 
 def test_document_module_has_one_browser_identity_for_restore_and_chat_send():
     """Different query strings create separate JS module selection stores."""
-    assert "/static/js/document.js?v=20260916docctx2" in INDEX
-    assert "./js/document.js?v=20260916docctx2" in APP
-    assert "document.js?v=20260913dirtysaveicon1" not in INDEX
+    index_version = re.search(r"/static/js/document\.js\?v=([A-Za-z0-9_-]+)", INDEX)
+    app_version = re.search(r"\./js/document\.js\?v=([A-Za-z0-9_-]+)", APP)
+    assert index_version and app_version
+    assert index_version.group(1) == app_version.group(1)
+    assert len(re.findall(r"/static/js/document\.js\?v=", INDEX)) == 1
 
 
 def test_clearing_a_rich_selection_also_resets_native_selection_stats():

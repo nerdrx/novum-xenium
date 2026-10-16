@@ -13,8 +13,8 @@ import ragModule from './js/rag.js';
 import presetsModule from './js/presets.js?v=20260908personaname1';
 import searchModule from './js/search.js';
 import chatModule from './js/chat.js?v=20261007approvalfix2';
-import compareModule from './js/compare/index.js';
-import documentModule from './js/document.js?v=20260815approvalsave1';
+import compareModule from './js/compare/index.js?v=20261016compareshuffle1';
+import documentModule from './js/document.js?v=20261016approvalflow1';
 import searchChatModule from './js/search-chat.js';
 import { makeWindowDraggable } from './js/windowDrag.js';
 import {
@@ -32,7 +32,7 @@ import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import { UI_VIS_DEFAULT_OFF, resolveVisibility } from './js/ui_visibility.js';
 import tasksModule from './js/tasks.js';
-import calendarModule from './js/calendar.js';
+import calendarModule from './js/calendar.js?v=20261016calvisual1';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js?v=20261007toolqueue1';
 import settingsModule from './js/settings.js';
@@ -4722,7 +4722,7 @@ function startOdysseusApp() {
 
   // Section collapse/expand + drag reorder (extracted to js/section-management.js)
   initSectionCollapse(Storage);
-  initSectionDrag(Storage, loadUIVis);
+  initSectionDrag(Storage, () => window.loadUIVis?.() || {});
   
   // Handle drag over and out for individual sections
   const sections = document.querySelectorAll('.section[draggable="true"]');

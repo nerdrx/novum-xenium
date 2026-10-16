@@ -10,13 +10,13 @@ CHAT_STREAM_JS = (ROOT / "static" / "js" / "chatStream.js").read_text(encoding="
 INIT_JS = (ROOT / "static" / "js" / "init.js").read_text(encoding="utf-8")
 
 TOOL_ORDER = [
+    "tool-memory-btn",
     "tool-calendar-btn",
     "tool-compare-btn",
     "tool-cookbook-btn",
     "tool-research-btn",
     "tool-gallery-btn",
     "tool-library-btn",
-    "tool-memory-btn",
     "tool-notes-btn",
     "tool-skills-btn",
     "tool-tasks-btn",
@@ -48,19 +48,18 @@ def _element_by_id(source: str, tag: str, element_id: str) -> str:
     return match.group(0)
 
 
-def test_memory_modal_and_sidebar_are_renamed_from_brain():
+def test_memory_modal_has_memory_title_and_sidebar_keeps_brain_launcher():
     assert 'role="dialog" aria-label="Memory"' in INDEX
     assert 'id="memory-modal-title-text">Memory</span>' in INDEX
 
-    memory_row = _element_by_id(INDEX, "div", "tool-memory-btn")
-    assert "<span class=\"grow\">Memory</span>" in memory_row
-    assert "Brain" not in memory_row
+    memory_row = _element_by_id(INDEX, "button", "tool-memory-btn")
+    assert "<span class=\"grow\">Brain</span>" in memory_row
 
     assert 'id="rail-memory" title="Memory"' in INDEX
 
 
 def test_skills_has_its_own_sidebar_and_rail_launcher():
-    skills_row = _element_by_id(INDEX, "div", "tool-skills-btn")
+    skills_row = _element_by_id(INDEX, "button", "tool-skills-btn")
     assert "<span class=\"grow\">Skills</span>" in skills_row
     assert "<polygon" in skills_row
     assert 'id="rail-skills" title="Skills"' in INDEX

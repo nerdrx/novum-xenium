@@ -407,7 +407,9 @@ def test_audit_explanation_survives_reload_and_is_replaced(tmp_path):
     manager = SkillsManager(str(tmp_path))
     manager.set_audit("release-checklist", "inconclusive", owner="alice",
                       audit_summary="Missing a safe test fixture.")
-    assert SkillsManager(str(tmp_path)).load(owner="alice")[0]["audit_summary"] == "Missing a safe test fixture."
+    alice_skills = SkillsManager(str(tmp_path)).load(owner="alice")
+    release_checklist = next(skill for skill in alice_skills if skill["name"] == "release-checklist")
+    assert release_checklist["audit_summary"] == "Missing a safe test fixture."
     assert SkillsManager(str(tmp_path)).load(owner="bob") == []
     manager.set_audit("release-checklist", "pass", owner="alice")
     assert manager.load(owner="alice")[0]["audit_summary"] == ""

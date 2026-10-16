@@ -35,4 +35,6 @@ def test_compact_footer_and_details_show_real_performance_counters():
     assert 'Tool schemas' in RENDERER
     assert 'Agent rounds' in RENDERER
     assert 'Tool calls' in RENDERER
-    assert "metrics.tps_source === 'computed' ? 'Speed (wall)'" in RENDERER
+    assert "metrics.tps_source === 'computed'" in RENDERER
+    assert "metrics.tps_source === 'estimated'" in RENDERER
+    assert "const speedLabel = approximateTps ? 'Speed (wall)' : 'Speed'" in RENDERER

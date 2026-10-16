@@ -1,8 +1,26 @@
 # Novum Xenium and NX Odysseus changes
 
-Modified by nerdrx on October 8, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `main` at `934d23c0be29c9721385f34565c0ae2cbd60da04`.
+Modified by nerdrx through October 16, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `dev` at `0590edd4f2e9a9eeb294d67864bdc8d9699876ac`.
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
+
+## Mainline base sync (October 16, 2026)
+
+The full upstream development history is merged, preserving ancestry for later
+updates. Novum retains its branding, desktop/Android companions, local model
+router integration, notification connection, media delivery and mobile layouts.
+
+Upstream additions include sealed request/tool/resource authority, enforced
+native process containment, progressive skill discovery and a Skills surface,
+expanded communication skills, document/gallery editor tools, notes and search
+improvements, and bounded task/context recovery. Frontend modules and styles
+now follow upstream's split build and offline asset graph.
+
+Integration fixes preserve run-scoped awaited Stop, exact required skill reads,
+explicitly disabled tools, owner-scoped media, guarded cleanup and library
+artifacts, single-instance renderer modules, and chat-bound plan execution.
+The Docker image and Compose configuration include the nested namespace setup
+needed by the new native tools; see [Docker containment](docs/native-containment-docker.md).
 
 ## Local agent reliability (October 12, 2026)
 

@@ -169,9 +169,13 @@ def test_dependency_probe_cache_is_scoped_and_invalidated_after_install():
 def test_terminal_download_status_skips_remote_cache_probes():
     source = _read("routes/cookbook_routes.py")
 
-    assert "_persisted_terminal = _task_status in" in source
+    terminal_logic = source.split("_persisted_terminal = (", 1)[1].split("if _persisted_terminal:", 1)[0]
+    for status in ('"stopped"', '"completed"', '"crashed"', '"failed"'):
+        assert status in terminal_logic
+    assert "if _persisted_terminal:\n                    is_alive = False" in source
     assert "or (not _persisted_terminal and _download_cache_incomplete(" in source
-    assert "and not _persisted_terminal\n                    and not download_has_incomplete_evidence" in source
+    assert "and not _persisted_terminal" in source
+    assert "and not download_has_incomplete_evidence" in source
 
 
 def test_download_start_has_concurrent_click_guard():

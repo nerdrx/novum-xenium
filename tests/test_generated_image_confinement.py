@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -8,6 +9,10 @@ from fastapi import HTTPException
 def _generated_images_module():
     from src import generated_images
     return generated_images
+
+
+def _request(owner=None):
+    return SimpleNamespace(state=SimpleNamespace(current_user=owner, api_token=False))
 
 
 def test_generated_image_path_allows_safe_existing_file(tmp_path, monkeypatch):
@@ -72,11 +77,10 @@ def test_generated_image_route_uses_confining_resolver():
     assert "headers=GENERATED_IMAGE_HEADERS" in source
 
 
-def test_generated_image_route_fails_closed_when_owner_lookup_fails(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-    monkeypatch.setenv("AUTH_ENABLED", "false")
+@pytest.mark.asyncio
+async def test_generated_image_route_fails_closed_when_owner_lookup_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTH_ENABLED", "true")
     import app
-    import src.auth_helpers as auth_helpers
     import core.database as database
     from src import generated_images
 
@@ -85,21 +89,17 @@ def test_generated_image_route_fails_closed_when_owner_lookup_fails(tmp_path, mo
     filename = "c" * 12 + ".png"
     (image_dir / filename).write_bytes(b"fixture image")
     monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", image_dir)
-    monkeypatch.setattr(auth_helpers, "get_current_user", lambda _request: "alice")
-
     def unavailable_database():
         raise RuntimeError("fixture database unavailable")
 
     monkeypatch.setattr(database, "SessionLocal", unavailable_database)
-    response = TestClient(app.app, raise_server_exceptions=False).get(
-        f"/api/generated-image/{filename}"
-    )
-
-    assert response.status_code == 503
+    with pytest.raises(HTTPException) as exc:
+        await app.serve_generated_image(filename, _request("alice"))
+    assert exc.value.status_code == 503
 
 
-def test_generated_image_route_still_serves_in_auth_disabled_mode(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
+@pytest.mark.asyncio
+async def test_generated_image_route_still_serves_in_auth_disabled_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_ENABLED", "false")
     import app
     import core.database as database
@@ -116,9 +116,7 @@ def test_generated_image_route_still_serves_in_auth_disabled_mode(tmp_path, monk
         raise RuntimeError("the disabled-auth path must not query ownership")
 
     monkeypatch.setattr(database, "SessionLocal", unavailable_database)
-    response = TestClient(app.app, raise_server_exceptions=False).get(
-        f"/api/generated-image/{filename}"
-    )
+    response = await app.serve_generated_image(filename, _request())
 
     assert response.status_code == 200
-    assert response.content == payload
+    assert Path(response.path).read_bytes() == payload

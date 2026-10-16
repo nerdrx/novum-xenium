@@ -10,9 +10,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 
+def _image_authority(owner, session_id="fixture-session", tool="generate_image"):
+    from src.agent_runtime.authority import ExactOperation, OperationGrant, RequestAuthority
+    canonical = ExactOperation.normalize(tool, '{"prompt":"fixture"}').tool
+    return RequestAuthority(
+        "image-owner-fixture", owner or "", session_id, "",
+        (OperationGrant(canonical),),
+    )
+
+
 @pytest.mark.parametrize("tool", [
     "generate_image",
-    "mcp__image_gen__generate_image",
 ])
 @pytest.mark.parametrize("owner,trusted_owner", [("alice", "alice"), (None, "")])
 @pytest.mark.asyncio
@@ -37,12 +45,13 @@ async def test_tool_dispatch_overwrites_model_supplied_image_owner(monkeypatch, 
         content=json.dumps({"prompt": "fixture", "_odysseus_owner": "bob"}),
     )
 
-    await execute_tool_block(
+    desc, result = await execute_tool_block(
         block, session_id="fixture-session", owner=owner,
         security_context=NO_TOOL_SECURITY_CONTEXT,
+        request_authority=_image_authority(owner, tool=tool),
     )
 
-    assert calls == [({"prompt": "fixture"}, "fixture-session", trusted_owner or None)]
+    assert calls == [({"prompt": "fixture"}, "fixture-session", trusted_owner or None)], (desc, result)
 
 
 def test_ownerless_mcp_fails_closed_for_private_endpoints_but_allows_single_user(monkeypatch):
@@ -108,14 +117,15 @@ async def test_untrusted_owner_cannot_authorize_ownerless_tool_call(monkeypatch)
     monkeypatch.setattr(execution, "get_mcp_manager", lambda: FakeMcp())
     desc, result = await execute_tool_block(
         SimpleNamespace(
-            tool_type="mcp__image_gen__generate_image",
+            tool_type="generate_image",
             content=json.dumps({"prompt": "fixture", "_odysseus_owner": "alice"}),
         ),
         owner=None,
         security_context=NO_TOOL_SECURITY_CONTEXT,
+        request_authority=_image_authority(None, "", "generate_image"),
     )
 
-    assert desc.startswith("mcp: mcp__image_gen__")
+    assert desc.startswith("generate_image:")
     assert result["exit_code"] == 1
     assert "requires an authenticated owner" in result["error"]
     engine.dispose()
@@ -136,9 +146,10 @@ async def test_qualified_image_mcp_marks_text_error_as_failure(monkeypatch):
     monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
     monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
     _, result = await execute_tool_block(
-        SimpleNamespace(tool_type="mcp__image_gen__generate_image", content='{"prompt":"fixture"}'),
+        SimpleNamespace(tool_type="generate_image", content='{"prompt":"fixture"}'),
         owner="alice",
         security_context=NO_TOOL_SECURITY_CONTEXT,
+        request_authority=_image_authority("alice", "", "generate_image"),
     )
 
     assert result["exit_code"] == 1
@@ -166,9 +177,10 @@ async def test_qualified_image_mcp_promotes_result_fields(monkeypatch):
     monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
     monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
     _, result = await execute_tool_block(
-        SimpleNamespace(tool_type="mcp__image_gen__generate_image", content='{"prompt":"fixture"}'),
+        SimpleNamespace(tool_type="generate_image", content='{"prompt":"fixture"}'),
         owner="alice",
         security_context=NO_TOOL_SECURITY_CONTEXT,
+        request_authority=_image_authority("alice", "", "generate_image"),
     )
 
     assert result["image_url"] == "/api/generated-image/fixture.png"
@@ -193,9 +205,10 @@ async def test_in_process_image_tool_preserves_admin_disable(monkeypatch):
     monkeypatch.setattr(image_gen_server, "_mcp_owner_required", lambda _owner: False)
     monkeypatch.setattr(execution, "_owner_is_admin", lambda _owner: True)
     _, result = await execute_tool_block(
-        SimpleNamespace(tool_type="mcp__image_gen__generate_image", content='{"prompt":"fixture"}'),
+        SimpleNamespace(tool_type="generate_image", content='{"prompt":"fixture"}'),
         owner="alice",
         security_context=NO_TOOL_SECURITY_CONTEXT,
+        request_authority=_image_authority("alice", "", "generate_image"),
     )
 
     assert result["exit_code"] == 1
@@ -243,6 +256,7 @@ async def test_agent_image_tool_edits_only_current_manifest_attachment(monkeypat
         session_id="chat-1", owner="alice",
         uploaded_files=[{"id": "upload-1", "path": str(source), "mime": "image/png"}],
         security_context=NO_TOOL_SECURITY_CONTEXT,
+        request_authority=_image_authority("alice", "chat-1"),
     )
 
     assert calls == [(
@@ -281,8 +295,9 @@ async def test_agent_image_tool_rejects_missing_or_out_of_root_attachment(monkey
                 tool_type="generate_image",
                 content=json.dumps({"prompt": "edit", "attachment_id": attachment_id}),
             ),
-            owner="alice", uploaded_files=manifest,
-            security_context=NO_TOOL_SECURITY_CONTEXT,
+                owner="alice", uploaded_files=manifest,
+                security_context=NO_TOOL_SECURITY_CONTEXT,
+                request_authority=_image_authority("alice", ""),
         )
         assert result["exit_code"] == 1
         assert "current user turn" in result["error"]

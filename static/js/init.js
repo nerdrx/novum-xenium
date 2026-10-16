@@ -3,6 +3,7 @@
 
 import Storage from './storage.js';
 import { applyInitialSectionCollapse } from './section-management.js';
+import { syncRailSide } from './sidebar-layout.js?v=20260910sidebarbounce1';
 
 function markComposerUserEdited() {
   const msgInput = document.getElementById('message');

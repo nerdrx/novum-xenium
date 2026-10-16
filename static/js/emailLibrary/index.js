@@ -7,8 +7,8 @@
  */
 
 import spinnerModule from '../spinner.js';
-import { styledConfirm, showToast, emptyStateIcon } from '../ui.js?v=20260916largetoolscroll1';
-import { folderDisplayName, sortedFolders } from '../emailInbox.js?v=20260815approvalsave1';
+import uiModule, { styledConfirm, showToast, emptyStateIcon } from '../ui.js?v=20260916largetoolscroll1';
+import { folderDisplayName, sortedFolders } from '../emailInbox.js?v=20261016approvalflow1';
 import settingsModule from '../settings.js';
 import * as Modals from '../modalManager.js';
 import { makeWindowDraggable } from '../windowDrag.js';
@@ -181,7 +181,7 @@ export function _showEmailReaderLoadError(reader, message, onRetry) {
 export function _openCalendarEventFromEmail(uid) {
   const target = String(uid || '').trim();
   if (!target) return;
-  import('../calendar.js').then(mod => {
+  import('../calendar.js?v=20261016calvisual1').then(mod => {
     const open = mod.openCalendarTo || (mod.default && mod.default.openCalendarTo);
     if (open) open(target);
   }).catch(() => {});

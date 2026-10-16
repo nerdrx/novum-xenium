@@ -1684,8 +1684,9 @@ def _build_chatgpt_responses_payload(
         "stream": stream,
         "store": False,
     }
-    if not _restricts_temperature(model):
-        payload["temperature"] = temperature
+    # The ChatGPT Subscription/Codex endpoint accepts a narrow Responses API
+    # surface. It rejects explicit sampling temperature across the supported
+    # catalog, including models that accept it on the public API.
     if reasoning_effort and str(reasoning_effort).strip().lower() not in {"", "default"}:
         payload["reasoning"] = {"effort": str(reasoning_effort).strip().lower()}
     return _strip_chatgpt_native_tool_surfaces(payload)
@@ -1712,39 +1713,21 @@ def _chatgpt_safe_error(message: str, headers: Dict) -> str:
 
 
 def _build_chatgpt_responses_input(messages: List[Dict], build_text_input) -> List[Dict]:
-    """Preserve function-call and result items in a Responses conversation."""
+    """Convert the internal text-tool transcript to plain Responses input."""
     items: List[Dict] = []
     for message in messages or []:
         role = message.get("role") or "user"
         if role == "tool":
-            call_id = message.get("tool_call_id")
-            if call_id:
-                content = message.get("content")
-                if not isinstance(content, str):
-                    content = json.dumps(content, ensure_ascii=False) if content is not None else ""
-                items.append({"type": "function_call_output", "call_id": call_id, "output": content})
-            continue
+            # The subscription transport has no native tool surface. Keep the
+            # result useful as ordinary conversation context without emitting
+            # a Responses function_call_output item.
+            role = "user"
         if role == "assistant" and message.get("tool_calls"):
             content = message.get("content")
             if content:
                 items.extend(build_text_input([{"role": role, "content": content}]))
-            for call in message.get("tool_calls") or []:
-                function = call.get("function") or {}
-                name = function.get("name")
-                call_id = call.get("id")
-                if not name or not call_id:
-                    continue
-                arguments = function.get("arguments") or "{}"
-                if not isinstance(arguments, str):
-                    arguments = json.dumps(arguments, ensure_ascii=False)
-                items.append({
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": name,
-                    "arguments": arguments,
-                })
             continue
-        items.extend(build_text_input([message]))
+        items.extend(build_text_input([{**message, "role": role}]))
     return items
 
 
@@ -3387,7 +3370,6 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         event_name = ""
         input_tokens = 0
         output_tokens = 0
-        _responses_tool_calls: Dict[int, Dict] = {}
         _responses_actual_model = ""
         _responses_model_announced = False
         try:
@@ -3439,60 +3421,11 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                                 yield _degenerate
                                 return
                             yield f'data: {json.dumps({"delta": delta})}\n\n'
-                    elif evt in ("response.output_item.added", "response.output_item.done"):
-                        item = data.get("item") or {}
-                        if item.get("type") == "function_call":
-                            output_index = data.get("output_index", len(_responses_tool_calls))
-                            _responses_tool_calls[output_index] = {
-                                "id": item.get("call_id") or item.get("id") or f"call_{output_index}",
-                                "item_id": item.get("id"),
-                                "name": item.get("name") or "",
-                                "arguments": item.get("arguments") or "",
-                            }
-                    elif evt == "response.function_call_arguments.delta":
-                        output_index = data.get("output_index")
-                        item = _responses_tool_calls.get(output_index)
-                        if item is None:
-                            item_id = data.get("item_id")
-                            item = next(
-                                (candidate for candidate in _responses_tool_calls.values()
-                                 if candidate.get("item_id") == item_id),
-                                None,
-                            )
-                        if item is not None:
-                            item["arguments"] = (item.get("arguments") or "") + (data.get("delta") or "")
-                    elif evt == "response.function_call_arguments.done":
-                        output_index = data.get("output_index")
-                        item = _responses_tool_calls.get(output_index)
-                        if item is not None and data.get("arguments") is not None:
-                            item["arguments"] = data["arguments"]
                     elif evt == "response.completed":
                         response = data.get("response") or {}
-                        response_output = response.get("output") or []
-                        calls = []
-                        for output_index, item in enumerate(response_output):
-                            if not isinstance(item, dict) or item.get("type") != "function_call":
-                                continue
-                            arguments = item.get("arguments") or "{}"
-                            if not isinstance(arguments, str):
-                                arguments = json.dumps(arguments, ensure_ascii=False)
-                            calls.append({
-                                "id": item.get("call_id") or item.get("id") or f"call_{output_index}",
-                                "name": item.get("name") or "",
-                                "arguments": arguments,
-                            })
-                        if not calls:
-                            calls = [
-                                {
-                                    "id": item.get("id"),
-                                    "name": item.get("name"),
-                                    "arguments": item.get("arguments") or "{}",
-                                }
-                                for _, item in sorted(_responses_tool_calls.items())
-                                if item.get("name")
-                            ]
-                        if calls:
-                            yield f'data: {json.dumps({"type": "tool_calls", "calls": calls})}\n\n'
+                        # Subscription endpoints are inference-only. Ignore any
+                        # provider-emitted function_call output even if a remote
+                        # response includes it despite the request omitting tools.
                         usage = response.get("usage") or data.get("usage") or {}
                         if isinstance(usage, dict):
                             raw_input = (

@@ -27,4 +27,4 @@ def test_conversation_search_keyboard_accessibility_in_chromium():
         env=env,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "PASS: quick actions, keyboard selection" in proc.stdout
+    assert "PASS: quick actions, failed-search recovery, stable selection" in proc.stdout

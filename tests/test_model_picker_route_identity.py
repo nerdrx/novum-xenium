@@ -21,10 +21,13 @@ def test_same_local_model_keeps_distinct_endpoint_keys():
     assert ': mid;' not in source
 
 
-def test_selected_route_is_visible_and_last_pick_is_session_scoped():
+def test_selected_route_is_visible_and_send_uses_active_chat_route():
     picker = (ROOT / 'static/js/modelPicker.js').read_text()
     chat = (ROOT / 'static/js/chat.js').read_text()
     assert 's?.endpoint_name || selectedEndpoint?.endpoint_name' in picker
     assert 'label.appendChild(document.createTextNode(displayName))' in picker
     send = chat.split('const selectedRouteForSend =', 1)[1].split('})();', 1)[0]
-    assert '(lastPicked.session_id || null) === (sessionModule.getCurrentSessionId?.() || null)' in send
+    assert 'selectModelRouteForSend({' in send
+    assert 'pending: sessionModule.getPendingChat && sessionModule.getPendingChat()' in send
+    assert 'model: sessionModule.getCurrentModel && sessionModule.getCurrentModel()' in send
+    assert 'endpointUrl: sessionModule.getCurrentEndpointUrl && sessionModule.getCurrentEndpointUrl()' in send

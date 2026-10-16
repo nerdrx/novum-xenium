@@ -3951,7 +3951,7 @@ def setup_chat_routes(
                 _privs,
                 _global_disabled,
             )
-        disabled_tools = tool_policy.all_disabled_names()
+        disabled_tools = set(tool_policy.all_disabled_names() or ())
         # ui_control executes server-side, while these interactive toggles are
         # resolved from this request. Carry the effective, sanitized booleans
         # into the agent runtime so a get_toggles call reports real turn state

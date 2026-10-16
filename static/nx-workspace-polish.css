@@ -59,6 +59,10 @@ html.nx-workspace .model-picker-btn {
   html.nx-workspace .chat-meta-overlay {
     position: relative;
     inset: auto;
+    /* Upstream mobile centering uses important offsets; this is a flex row. */
+    left: auto !important;
+    right: auto !important;
+    width: auto;
     transform: none;
     flex: 1 1 auto;
     min-width: 0;
@@ -105,3 +109,17 @@ html.nx-workspace .model-picker-btn {
 
 .chat-history .msg { border-color: var(--nx-panel-border); }
 :root:not(.density-compact) .chat-history .msg { padding: 14px 16px; }
+
+/* Keep a readable chat title beside Workspace on narrow phones. The live
+   status retains its text for assistive technology while using its state dot. */
+@media (max-width: 380px) {
+  html.nx-workspace .chat-top-bar #nx-run-status {
+    width: 18px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+    justify-content: center;
+  }
+}

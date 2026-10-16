@@ -38,10 +38,25 @@ def image_transport(monkeypatch, tmp_path):
     rows = []
 
     class GalleryDb:
+        def query(self, model):
+            class Query:
+                def filter(self, *_args, **_kwargs):
+                    return self
+
+                def first(self):
+                    # The fixture session belongs to the requested owner;
+                    # keep the production ownership lookup active.
+                    return type('OwnedSession', (), {'owner': 'alice'})()
+
+            return Query()
+
         def add(self, row):
             rows.append(row)
 
         def commit(self):
+            pass
+
+        def rollback(self):
             pass
 
         def close(self):

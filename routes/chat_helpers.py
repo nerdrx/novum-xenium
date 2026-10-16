@@ -612,9 +612,16 @@ async def auto_name_session_after_stream(session_id: str, session_manager, sess)
 
 def extract_preset(chat_handler, preset_id) -> PresetInfo:
     """Extract preset parameters via chat_handler."""
-    temperature, max_tokens, system_prompt, char_name, persona_memory, persona_memory_schema = (
-        chat_handler.validate_and_extract_preset(preset_id)
-    )
+    extracted = chat_handler.validate_and_extract_preset(preset_id)
+    if not isinstance(extracted, (tuple, list)):
+        raise ValueError("Preset extraction must return a tuple")
+    if len(extracted) == 4:
+        temperature, max_tokens, system_prompt, char_name = extracted
+        persona_memory, persona_memory_schema = "", "general"
+    elif len(extracted) == 6:
+        temperature, max_tokens, system_prompt, char_name, persona_memory, persona_memory_schema = extracted
+    else:
+        raise ValueError("Preset extraction returned an unsupported tuple shape")
     preset_manager = getattr(chat_handler, "preset_manager", None)
     presets = getattr(preset_manager, "presets", {})
     preset = presets.get(preset_id) if preset_id and isinstance(presets, dict) else None

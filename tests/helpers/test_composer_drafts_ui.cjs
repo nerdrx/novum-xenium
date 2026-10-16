@@ -6,19 +6,21 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
-const imports = new Map([
-  ["import Storage from './storage.js';", "import Storage from '/stubs/storage.js';"],
-  ["import uiModule, { autoResize, styledPrompt } from './ui.js';", "import uiModule, { autoResize, styledPrompt } from '/stubs/ui.js';"],
-  ["import chatRenderer from './chatRenderer.js?v=20261007toolstatus1';", "import chatRenderer from '/stubs/chatRenderer.js';"],
-  ["import { providerLogo } from './providers.js';", "import { providerLogo } from '/stubs/providers.js';"],
-  ["import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722ctxheader1';", "import { initModelPicker, updateModelPicker } from '/stubs/modelPicker.js';"],
-  ["import themeModule from './theme.js';", "import themeModule from '/stubs/theme.js';"],
-  ["import spinnerModule from './spinner.js';", "import spinnerModule from '/stubs/spinner.js';"],
-  ["import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from './sessionHistory.js';", "import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from '/static/js/sessionHistory.js';"],
-  ["import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';", "import { applySubagentInspector, clearSubagentInspector } from '/stubs/subagentInspector.js';"],
-  ["import { resetBrowserPreview } from './browserPreview.js';", "import { resetBrowserPreview } from '/stubs/browserPreview.js';"],
-  ["import { deleteComposerDraft, getComposerDraft, getPendingChatMetadata, saveComposerDraft, transferComposerDraft } from './composerDrafts.js';", "import { deleteComposerDraft, getComposerDraft, getPendingChatMetadata, saveComposerDraft, transferComposerDraft } from '/static/js/composerDrafts.js';"],
-]);
+const imports = [
+  [/import Storage from '\.\/storage\.js';/, "import Storage from '/stubs/storage.js';"],
+  [/import uiModule, \{ autoResize, styledPrompt \} from '\.\/ui\.js(?:\?[^']*)?';/, "import uiModule, { autoResize, styledPrompt } from '/stubs/ui.js';"],
+  [/import chatRenderer from '\.\/chatRenderer\.js(?:\?[^']*)?';/, "import chatRenderer from '/stubs/chatRenderer.js';"],
+  [/import \{ providerLogo \} from '\.\/providers\.js';/, "import { providerLogo } from '/stubs/providers.js';"],
+  [/import \{ initModelPicker, updateModelPicker \} from '\.\/modelPicker\.js(?:\?[^']*)?';/, "import { initModelPicker, updateModelPicker } from '/stubs/modelPicker.js';"],
+  [/import themeModule from '\.\/theme\.js(?:\?[^']*)?';/, "import themeModule from '/stubs/theme.js';"],
+  [/import spinnerModule from '\.\/spinner\.js';/, "import spinnerModule from '/stubs/spinner.js';"],
+  [/import \{ installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory \} from '\.\/sessionHistory\.js';/, "import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from '/static/js/sessionHistory.js';"],
+  [/import \{ applySubagentInspector, clearSubagentInspector \} from '\.\/subagentInspector\.js';/, "import { applySubagentInspector, clearSubagentInspector } from '/stubs/subagentInspector.js';"],
+  [/import \{ resetBrowserPreview \} from '\.\/browserPreview\.js';/, "import { resetBrowserPreview } from '/stubs/browserPreview.js';"],
+  [/import \{ deleteComposerDraft, getComposerDraft, getPendingChatMetadata, saveComposerDraft, transferComposerDraft \} from '\.\/composerDrafts\.js';/, "import { deleteComposerDraft, getComposerDraft, getPendingChatMetadata, saveComposerDraft, transferComposerDraft } from '/static/js/composerDrafts.js';"],
+  [/import \{ actionMenuRank, orderActionMenuItems, SELECT_MENU_ICON \} from '\.\/actionMenuOrder\.js';/, "import { actionMenuRank, orderActionMenuItems, SELECT_MENU_ICON } from '/stubs/actionMenuOrder.js';"],
+  [/import \{ registerEscapeLayer, bindMenuDismiss \} from '\.\/escMenuStack\.js';/, "import { registerEscapeLayer, bindMenuDismiss } from '/stubs/escMenuStack.js';"],
+];
 const stubs = {
   'storage.js': `const Storage={get:(k,f=null)=>localStorage.getItem(k)??f,set:(k,v)=>localStorage.setItem(k,v),remove:k=>localStorage.removeItem(k)};export default Storage;`,
   'ui.js': `export const autoResize=()=>{};export const styledPrompt=async()=>null;const ui={el:id=>document.getElementById(id),showToast:message=>window.__toastMessages.push(message),showError:console.error,scrollHistoryInstant:()=>{},isTouchInsideModal:()=>false};export default ui;`,
@@ -30,6 +32,8 @@ const stubs = {
   'subagentInspector.js': `export const applySubagentInspector=()=>{};export const clearSubagentInspector=()=>{};`,
   'browserPreview.js': `export const resetBrowserPreview=()=>{};`,
   'presets.js': `export default {onSessionSwitch(){}};`,
+  'actionMenuOrder.js': `export const actionMenuRank=()=>0;export const orderActionMenuItems=items=>items;export const SELECT_MENU_ICON='';`,
+  'escMenuStack.js': `export const registerEscapeLayer=()=>()=>{};export const bindMenuDismiss=()=>()=>{};`,
 };
 
 const html = `<!doctype html><meta charset="utf-8"><textarea id="message"></textarea><input id="incognito-toggle" type="checkbox"><section id="sessions-section"><div id="session-list"></div></section><div id="chat-history"></div><div id="current-meta"></div><div id="app-loader"></div><button class="send-btn"></button><script type="module">
@@ -62,9 +66,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/test/sessions.js') {
     let source = fs.readFileSync(path.join(repo, 'static/js/sessions.js'), 'utf8');
-    for (const [before, after] of imports) {
-      assert.ok(source.includes(before), `missing sessions import: ${before}`);
-      source = source.replace(before, after);
+    for (const [pattern, after] of imports) {
+      assert.ok(pattern.test(source), `missing sessions import: ${pattern}`);
+      source = source.replace(pattern, after);
     }
     source = source.replace('let sessions = [];', `let sessions = [
       { id: 'chat-a', name: 'Chat A', message_count: 4 },
@@ -74,6 +78,10 @@ const server = http.createServer(async (req, res) => {
     ];`);
     source = source.replaceAll('renderSessionList();', 'window.__renderSessionListStub?.();');
     res.setHeader('Content-Type', 'text/javascript'); return res.end(source);
+  }
+  if (url.pathname === '/test/presets.js') {
+    res.setHeader('Content-Type', 'text/javascript');
+    return res.end(stubs['presets.js']);
   }
   if (url.pathname.startsWith('/api/history/')) {
     res.setHeader('Content-Type', 'application/json');
@@ -144,7 +152,9 @@ const server = http.createServer(async (req, res) => {
     page.on('pageerror', error => errors.push(error.message));
     const origin = `http://127.0.0.1:${server.address().port}`;
     await page.goto(`${origin}/?session=chat-a`);
-    await page.waitForFunction(() => window.integrationReady);
+    await page.waitForFunction(() => window.integrationReady, null, { timeout: 10000 }).catch(error => {
+      throw new Error(`${error.message}\n${errors.join('\n')}`);
+    });
     const input = page.locator('#message');
     assert.equal(await input.inputValue(), 'saved A', 'stored draft restores for the selected chat');
     await input.fill('new A');

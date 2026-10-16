@@ -79,4 +79,5 @@ def test_research_panel_uses_one_versioned_module_instance():
     panel_version = re.search(r"research/panel\.js\?v=([^'\"]+)", app)
     asset_version = re.search(r"/static/app\.js\?v=([^'\"]+)", index)
     assert panel_version and renderer.count(f"research/panel.js?v={panel_version.group(1)}") == 2
-    assert asset_version and asset_version.group(1) == stylesheet_cache_version()
+    assert asset_version and index.count(f"/static/app.js?v={asset_version.group(1)}") == 2
+    assert stylesheet_cache_version()

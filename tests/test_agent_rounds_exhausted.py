@@ -46,12 +46,18 @@ def _patch_common(monkeypatch):
     # supplying its context window instead of probing the dummy endpoint.
     import src.context_compactor as context_compactor
     monkeypatch.setattr(context_compactor, "get_context_length", lambda *a, **k: 128_000)
+    import src.model_context as model_context
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 128_000)
     # These fixtures supply the round provider below. Any direct grace-synthesis
     # request has no configured response, rather than contacting the fake URL.
     async def _unconfigured_direct_provider(*args, **kwargs):
         raise RuntimeError("No direct-provider completion configured in this fixture")
         yield  # Keep the direct-provider async-generator interface.
     monkeypatch.setattr(al, "stream_llm", _unconfigured_direct_provider)
+    import src.llm_core as llm_core
+    async def _unconfigured_direct_call(*args, **kwargs):
+        raise RuntimeError("No direct-provider completion configured in this fixture")
+    monkeypatch.setattr(llm_core, "llm_call_async", _unconfigured_direct_call)
     # These tests exercise round convergence. Keep the prompt-integrity gate
     # out of the fixture so a synthetic tool result does not turn the next
     # round into an approval test instead.

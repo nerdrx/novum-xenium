@@ -98,6 +98,8 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Check frontend architecture
         run: node scripts/check_frontend.mjs
+      - name: Check browser module bindings
+        run: npm run lint:frontend
       # Syntax-check our own JS (skip vendored libs in static/lib).
       - name: node --check
         run: |

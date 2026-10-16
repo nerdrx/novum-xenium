@@ -1,0 +1,4 @@
+Derived from moby/profiles seccomp/default.json at 6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef.
+Source: https://github.com/moby/profiles
+License: Apache-2.0; see licenses/moby-profiles-Apache-2.0.txt.
+Novum changes: allow five kernel namespace/mount syscalls for unprivileged bubblewrap.

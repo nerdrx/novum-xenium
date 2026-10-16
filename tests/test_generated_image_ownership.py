@@ -265,7 +265,7 @@ async def test_database_failure_fails_closed_503(sample_image):
         with pytest.raises(HTTPException) as exc_info:
             await serve_generated_image(sample_image, req)
         assert exc_info.value.status_code == 503
-        assert exc_info.value.detail == "Ownership verification unavailable"
+        assert exc_info.value.detail == "Image ownership could not be verified"
 
 
 @pytest.mark.asyncio
@@ -398,31 +398,20 @@ async def test_missing_or_empty_owner_removes_forged_owner_claim():
 async def test_qualified_mcp_image_gen_sanitizes_forged_owner():
     """Qualified mcp__image_gen__generate_image tool dispatches with sanitized owner."""
     import json
-    from unittest.mock import AsyncMock
     from src import tool_execution
-    from src.tool_types import ToolBlock
-
-    mock_mcp = MagicMock()
-    mock_mcp.call_tool = AsyncMock(return_value={"stdout": "ok", "exit_code": 0})
+    seen = []
     forged_content = json.dumps({"prompt": "cat", "_odysseus_owner": "bob"})
 
-    with patch.object(tool_execution, "get_mcp_manager", return_value=mock_mcp), \
-         patch.object(tool_execution, "_owner_is_admin", return_value=True):
-        # With trusted owner 'alice' -> sets 'alice'
-        await tool_execution._execute_tool_block_impl(
-            ToolBlock("mcp__image_gen__generate_image", forged_content),
-            owner="alice",
-        )
-        call_args = mock_mcp.call_tool.call_args[0]
-        assert call_args[1].get("_odysseus_owner") == "alice"
+    async def capture(args, *, session_id=None, owner=None):
+        seen.append((args, session_id, owner))
+        return {"results": "ok"}
 
-        # Without owner -> removes forged owner
-        await tool_execution._execute_tool_block_impl(
-            ToolBlock("mcp__image_gen__generate_image", forged_content),
-            owner=None,
-        )
-        call_args = mock_mcp.call_tool.call_args[0]
-        assert "_odysseus_owner" not in call_args[1]
+    with patch("src.ai_interaction.do_generate_image", capture), \
+         patch("src.settings.get_setting", return_value=True), \
+         patch("mcp_servers.image_gen_server._mcp_owner_required", return_value=False):
+        await tool_execution._call_image_tool_in_process(forged_content, session_id="s", owner="alice")
+        await tool_execution._call_image_tool_in_process(forged_content, session_id="s", owner=None)
+    assert seen == [({"prompt": "cat"}, "s", "alice"), ({"prompt": "cat"}, "s", None)]
 
 
 @pytest.mark.asyncio
@@ -458,12 +447,14 @@ async def test_image_gen_server_owner_sanitization():
     from unittest.mock import AsyncMock
     from mcp_servers import image_gen_server
 
+    persisted = []
     with patch("src.database.SessionLocal") as mock_sl, \
          patch("httpx.AsyncClient") as mock_http, \
          patch("src.ai_interaction._resolve_model", return_value=("https://host/v1/chat/completions", "gpt-image-1", {})), \
          patch("src.settings.get_setting", return_value="dummy_key"), \
          patch("src.settings.load_settings", return_value={"image_model": "gpt-image-1"}), \
-         patch("pathlib.Path.write_bytes"):
+         patch("mcp_servers.image_gen_server._mcp_owner_required", return_value=False), \
+         patch("src.session_image_cleanup.persist_generated_image", side_effect=lambda *args, **kwargs: (persisted.append(kwargs) or ("a" * 12 + ".png", "image-id"))):
         mock_db = MagicMock()
         mock_sl.return_value = mock_db
 
@@ -477,17 +468,15 @@ async def test_image_gen_server_owner_sanitization():
         mock_http.return_value.__aenter__.return_value = mock_client
 
         # Call with whitespace owner: "   " -> owner becomes None
-        await image_gen_server.call_tool(
+        result = await image_gen_server.call_tool(
             "generate_image",
             {"prompt": "cat", "_odysseus_owner": "   "},
         )
-        added = mock_db.add.call_args[0][0]
-        assert added.owner is None
+        assert persisted and persisted[-1]["owner"] is None, result[0].text
 
         # Call with valid owner: "alice" -> owner becomes "alice"
         await image_gen_server.call_tool(
             "generate_image",
             {"prompt": "cat", "_odysseus_owner": "alice"},
         )
-        added = mock_db.add.call_args[0][0]
-        assert added.owner == "alice"
+        assert persisted[-1]["owner"] == "alice"

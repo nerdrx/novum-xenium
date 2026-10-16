@@ -15,7 +15,7 @@ import threading
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional
 
-from sqlalchemy import func
+from sqlalchemy import delete, func, select
 
 from .database import Session as DbSession, ChatMessage as DbChatMessage, Document as DbDocument, SessionLocal, utcnow_naive
 from .models import Session, ChatMessage
@@ -624,7 +624,8 @@ class SessionManager:
         finally:
             db.close()
 
-    def delete_session(self, session_id: str, *, delete_images: bool = False) -> bool:
+    def delete_session(self, session_id: str, *, delete_images: bool = False,
+                       cleanup_guard: Optional[dict] = None) -> bool:
         """Permanently delete a session and all its messages."""
         incognito_lock = None
         clear_incognito_context = None
@@ -646,30 +647,83 @@ class SessionManager:
             from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
             image_lock = IMAGE_PERSISTENCE_LOCK
             image_lock.acquire()
-            try:
-                from src.session_image_cleanup import cleanup_session_images, preserve_session_images
+            deleted_by_guard = False
+            if cleanup_guard is not None:
                 if delete_images:
-                    cleanup_session_images(session_id, db=db)
-                else:
+                    raise ValueError("Guarded cleanup cannot delete gallery images")
+                # Run this conditional DELETE before any read/write transaction
+                # work so concurrent transcript inserts and deletes are visible
+                # to the predicates at the actual destructive boundary.
+                expected_owner = cleanup_guard["expected_owner"]
+                predicates = [DbSession.id == session_id]
+                predicates.append(
+                    DbSession.owner.is_(None) if expected_owner is None
+                    else DbSession.owner == expected_owner
+                )
+                owner_filter = cleanup_guard.get("owner")
+                if owner_filter is not None:
+                    predicates.append(DbSession.owner == owner_filter)
+                predicates.extend((
+                    DbSession.archived.is_(True),
+                    DbSession.last_accessed < cleanup_guard["cutoff"],
+                    DbSession.is_important.is_(False),
+                ))
+                actual_count = (
+                    select(func.count(DbChatMessage.id))
+                    .where(DbChatMessage.session_id == DbSession.id)
+                    .correlate(DbSession)
+                    .scalar_subquery()
+                )
+                predicates.append(actual_count < cleanup_guard["min_messages"])
+                for keyword in cleanup_guard["protected_keywords"]:
+                    predicates.append(~func.lower(func.coalesce(DbSession.name, "")).contains(keyword.lower()))
+                recent = select(DbSession.id).order_by(DbSession.created_at.desc())
+                if owner_filter is not None:
+                    recent = recent.where(DbSession.owner == owner_filter)
+                recent = recent.limit(cleanup_guard["preserve_recent_count"])
+                predicates.append(DbSession.id.not_in(recent))
+                result = db.execute(delete(DbSession).where(*predicates).execution_options(synchronize_session=False))
+                if result.rowcount != 1:
+                    # A same-connection transcript insert can arrive in the
+                    # execute hook before this statement; retain that message.
+                    db.commit()
+                    return False
+                deleted_by_guard = True
+                context_owner = expected_owner or getattr(self.sessions.get(session_id), "owner", None)
+                if context_owner is None:
+                    from src.agent_runs import get_run_owner
+                    context_owner = get_run_owner(session_id)
+
+                # The guarded row is now claimed. Detach library artifacts and
+                # remove transcript rows in this same transaction.
+                db.query(DbDocument).filter(DbDocument.session_id == session_id).update(
+                    {DbDocument.session_id: None}, synchronize_session=False
+                )
+                try:
+                    from src.session_image_cleanup import preserve_session_images
                     preserve_session_images(session_id, db=db)
-            except Exception as e:
-                logger.warning(f"Image cleanup failed while deleting session {session_id}: {e}")
-
-            # Detach documents so they survive as orphans in the library
-            db.query(DbDocument).filter(DbDocument.session_id == session_id).update(
-                {DbDocument.session_id: None}, synchronize_session=False
-            )
-
-            # Delete messages
-            db.query(DbChatMessage).filter(DbChatMessage.session_id == session_id).delete()
-
-            # Delete session
-            db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
-            context_owner = getattr(db_session, "owner", None) or getattr(self.sessions.get(session_id), "owner", None)
-            if context_owner is None:
-                from src.agent_runs import get_run_owner
-                context_owner = get_run_owner(session_id)
-            if db_session:
+                except Exception as e:
+                    logger.warning("Image detachment failed while deleting session %s: %s", session_id, e)
+                db.query(DbChatMessage).filter(DbChatMessage.session_id == session_id).delete()
+            else:
+                db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
+                context_owner = getattr(db_session, "owner", None) or getattr(self.sessions.get(session_id), "owner", None)
+                if context_owner is None:
+                    from src.agent_runs import get_run_owner
+                    context_owner = get_run_owner(session_id)
+                try:
+                    from src.session_image_cleanup import cleanup_session_images, preserve_session_images
+                    if delete_images:
+                        cleanup_session_images(session_id, db=db)
+                    else:
+                        preserve_session_images(session_id, db=db)
+                except Exception as e:
+                    logger.warning(f"Image cleanup failed while deleting session {session_id}: {e}")
+                db.query(DbDocument).filter(DbDocument.session_id == session_id).update(
+                    {DbDocument.session_id: None}, synchronize_session=False
+                )
+                db.query(DbChatMessage).filter(DbChatMessage.session_id == session_id).delete()
+            if not deleted_by_guard and db_session:
                 db.delete(db_session)
 
             # Drop the in-memory copy even when there is no DB row. A "ghost"
@@ -678,7 +732,7 @@ class SessionManager:
             # 404ing on every operation (issue #1044).
             removed_in_memory = self.sessions.pop(session_id, None) is not None
 
-            if db_session or removed_in_memory:
+            if deleted_by_guard or db_session or removed_in_memory:
                 from src.agent_runs import fence_deleted_session
                 fenced_run = fence_deleted_session(session_id, context_owner)
                 # Commit the document-detach / message-delete above (a no-op when

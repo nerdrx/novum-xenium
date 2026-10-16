@@ -8,7 +8,7 @@ import src.agent_tools.filesystem_tools as filesystem_tools
 
 
 @pytest.mark.asyncio
-async def test_apply_patch_rolls_back_every_file_when_commit_fails(
+async def test_apply_patch_keeps_each_file_atomic_when_later_commit_fails(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -34,17 +34,17 @@ async def test_apply_patch_rolls_back_every_file_when_commit_fails(
         "_resolve_tool_path",
         lambda path: str(tmp_path / path),
     )
-    original_replace = filesystem_tools.os.replace
+    original_write = filesystem_tools._write_mutation_target
     calls = 0
 
-    def fail_during_second_install(source, destination):
+    def fail_during_second_install(*args, **kwargs):
         nonlocal calls
         calls += 1
-        if calls == 4:
+        if calls == 2:
             raise OSError("simulated second-file commit failure")
-        return original_replace(source, destination)
+        return original_write(*args, **kwargs)
 
-    monkeypatch.setattr(filesystem_tools.os, "replace", fail_during_second_install)
+    monkeypatch.setattr(filesystem_tools, "_write_mutation_target", fail_during_second_install)
 
     result = await ApplyPatchTool().execute(
         json.dumps({"patch": patch_text}),
@@ -53,5 +53,8 @@ async def test_apply_patch_rolls_back_every_file_when_commit_fails(
 
     assert result["exit_code"] == 1
     assert "simulated second-file commit failure" in result["error"]
-    assert first.read_text(encoding="utf-8") == "before first\n"
+    # Each replacement is atomic; a later file failure does not roll back an
+    # earlier completed operation, so report that partial progress honestly.
+    assert "earlier patch operations may be partial" in result["error"]
+    assert first.read_text(encoding="utf-8") == "after first\n"
     assert second.read_text(encoding="utf-8") == "before second\n"

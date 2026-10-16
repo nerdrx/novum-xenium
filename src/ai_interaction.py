@@ -1236,11 +1236,13 @@ async def do_generate_image(content: str | Dict, session_id: Optional[str] = Non
         prompt = str(args.get('prompt') or '').strip()
         model_spec = str(args.get('model') or '').strip()
         size = str(args.get('size') or '1024x1024')
+        size_was_provided = bool(args.get('size'))
         quality = str(args.get('quality') or 'medium')
     else:
         lines = content.strip().split("\n")
         prompt = lines[0].strip() if lines else ""
         model_spec = lines[1].strip() if len(lines) > 1 and lines[1].strip() else ""
+        size_was_provided = bool(len(lines) > 2 and lines[2].strip())
         size = lines[2].strip() if len(lines) > 2 and lines[2].strip() else "1024x1024"
         quality = lines[3].strip() if len(lines) > 3 and lines[3].strip() else "medium"
 
@@ -1296,7 +1298,6 @@ async def do_generate_image(content: str | Dict, session_id: Optional[str] = Non
 
     # Detect if this is a GPT image model vs DALL-E vs local diffusion
     _model_leaf = model_id_leaf(model_id)
-    size_was_provided = bool(content.get("size")) if isinstance(content, dict) else bool(len(lines) > 2 and lines[2].strip())
     if _model_leaf == "sd-cpp-local" and not size_was_provided:
         size = "512x512"
     is_gpt_image = is_gpt_image_model(_model_leaf)

@@ -917,12 +917,17 @@ def creation_container_tool(message: str) -> str | None:
 def standalone_code_request(message: str) -> bool:
     """Recognize a new code artifact, leaving explicit filesystem work alone."""
     text = _normalize_request_lead(message)
+    if creation_container_tool(text):
+        return False
     if re.search(r'\b(?:repo(?:sitory)?|workspace|directory|folder|filesystem|on disk|terminal)\b|(?:~?/|[A-Za-z]:\\\\)\S+', text, re.I):
         return False
     if re.search(r'\b(?:using|with|via)\s+(?:bash|shell|python)\b', text, re.I):
         return False
     if re.match(r'^' + _REQUEST_PREFIX + r'(?:write|create|make|build|generate|implement|code)\s+', text, re.I):
         body = re.sub(r'^' + _REQUEST_PREFIX + r'(?:write|create|make|build|generate|implement|code)\s+', '', text, flags=re.I)
+        if (re.search(r"\b(?:python|javascript|typescript|rust|golang|java|c\+\+|c#|bash|shell|framework|gui|database|api)\b", body, re.I)
+                and re.search(r"\b(?:app|application|program|tool|script|software|service|game|website|webapp)\b", body, re.I)):
+            return True
         if re.match(r'(?:(?:a|an|the|new|short|brief|simple)\s+)*(?:email|reply|note|task|document|article|explanation|tutorial|example|snippet)\b', body, re.I):
             return False
         return bool(re.search(r'\b(?:code|script|program|game|app|website|webpage|html|svg)\b|\bin\s+(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php)\b', body, re.I))
@@ -4766,6 +4771,10 @@ def requested_capabilities(message: str, history: Iterable = (), *, active_docum
     if image_tools:
         return frozenset({'image_generation'} | ({'documents'} if 'update_document' in image_tools else set()))
     if standalone_code_request(raw_text):
+        # With an active workspace, a language/framework implementation request
+        # is a coding task and needs its scoped filesystem/tool authority.
+        if workspace and re.search(r"\b(?:python|javascript|typescript|rust|golang|java|c\+\+|c#|bash|shell|framework|gui|database|api)\b", raw_text, re.I):
+            return frozenset({'shell_files'})
         return frozenset({'documents'})
     repeated_subject = _subject_tokens(text) & _immediate_prior_user_subject_tokens(history)
     scope_text = " ".join(
@@ -6379,7 +6388,17 @@ def resolve_turn_contract(*, capabilities: Iterable[str], schemas: Iterable[dict
         operation = required_read_operation_for_request(message, history)
     if operation is not None and not isinstance(operation, RequiredReadOperation):
         raise TypeError("required_read_operation must be a RequiredReadOperation")
-    inventory = {s["function"]["name"]: s for s in schemas if isinstance(s.get("function"), dict) and s["function"].get("name")}
+    inventory = {}
+    for schema in schemas:
+        if not isinstance(schema.get("function"), dict):
+            continue
+        name = schema["function"].get("name")
+        if name:
+            # Keep the first canonical definition. Some merged inventories
+            # temporarily contain a later compatibility duplicate with a
+            # reduced parameter schema; last-write wins silently strips real
+            # capabilities such as image attachment editing.
+            inventory.setdefault(name, schema)
     # Email aliases are one permission identity in both directions, including
     # when only the legacy schema is present in the inventory.
     denied = {canonical_tool(n) for n in policy.all_disabled_names()}

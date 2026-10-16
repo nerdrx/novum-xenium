@@ -55,6 +55,7 @@
 import { state } from './state.js';
 import { isAltGrEvent } from '../platform.js';
 import { createMarqueeMask } from './selection-mask.js';
+import { buildLassoMask } from './tools/lasso-mask.js';
 
 let keyboardBindings;
 
@@ -252,7 +253,7 @@ export function wireKeyboardShortcuts(deps) {
         const feather = parseInt(document.getElementById('ge-lasso-feather')?.value || '0');
         const grow = parseInt(document.getElementById('ge-lasso-grow')?.value || '0');
         const w = layer.canvas.width, h = layer.canvas.height;
-        const mask = buildLassoMask(w, h, off.x, off.y, feather, grow);
+        const mask = buildLassoMask(state.lassoPoints, w, h, off.x, off.y, feather, grow);
         const srcData = layer.ctx.getImageData(0, 0, w, h);
         const maskData = mask.getContext('2d').getImageData(0, 0, w, h);
         // Build clipped image.

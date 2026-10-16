@@ -105,7 +105,7 @@ def test_document_image_paste_and_drop_stop_global_chat_attachment_handlers():
     assert "e.stopPropagation();" in rich_handlers
     assert "e.stopPropagation();" in markdown_handlers
     app_js = (ROOT / "static/app.js").read_text(encoding="utf-8")
-    assert "e.defaultPrevented || e.target?.closest?.('#doc-editor-pane, [contenteditable=\"true\"]')" in app_js
+    assert "e.defaultPrevented || !e.clipboardData || e.target?.closest?.('#doc-editor-pane, [contenteditable=\"true\"]')" in app_js
     assert "e.target?.closest?.('#doc-editor-pane')" in app_js
 
 

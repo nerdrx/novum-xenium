@@ -89,6 +89,7 @@ def test_first_resumed_request_has_grounding_and_real_skill_references(monkeypat
     monkeypatch.setattr(al, 'get_setting', lambda key, default=None: True if key == 'agent_milestone_workflow' else default)
     monkeypatch.setattr(coding_tools, 'read_todos', lambda ctx: [])
     skills = [{'name': name, 'description': 'Repair Electron GUI app', 'status': 'published',
+               'audit_verdict': 'pass', 'confidence': 1.0,
                'category': 'design', 'tags': ['gui'], 'procedure': []} for name in NAMES]
     monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: skills)
     monkeypatch.setattr(SkillsManager, 'get_relevant_skills', lambda self, *args, **kwargs: skills)
@@ -122,7 +123,7 @@ def test_first_resumed_request_has_grounding_and_real_skill_references(monkeypat
         assert block.tool_type == 'bash' and block.content == 'node qa.js'
         return 'baseline', {'exit_code': 1, 'output': 'Expected GUI failure'}
     async def stream(candidates, messages, **kwargs):
-        assert executed == ['todowrite', 'bash']
+        assert executed == ['todowrite']
         request = await kwargs['candidate_request_factory'](0, *candidates[0])
         requests.append(request)
         names = {schema['function']['name'] for schema in request['kwargs']['tools']}

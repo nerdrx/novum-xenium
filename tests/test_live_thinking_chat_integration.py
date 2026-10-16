@@ -172,22 +172,21 @@ def test_detach_synchronously_cancels_delayed_view_work():
     assert detach.index(cancel) < detach.index(background)
 
 
-def test_background_spinner_distinguishes_waiting_from_streaming():
+def test_background_running_subscriber_rejoins_structured_server_events():
     background = _between(
         "export function checkBackgroundStream(sessionId)",
         "async function refreshRecoveryCheckpoint",
     )
-    assert "_backgroundStreamStatusText(entry, startedAt)" in background
-    assert "spinner.updateMessage(nextStatusText)" in background
-    assert "_backgroundStreamStatusText(curPoll || entry, startedAt)" in background
-    status_helper = _between(
-        "function _backgroundStreamStatusText(",
-        "let API_BASE =",
-    )
-    assert "Response streaming in background · ${elapsed}" in status_helper
-    assert "${entry.accumulated.length} characters received" in status_helper
-    assert "The reply will appear when this background run finishes." in status_helper
-    assert "Stop or retry if stuck." in status_helper
+    running = background.split("if (entry.status === 'running')", 1)[1]
+    assert "_backgroundStreams.delete(sessionId)" in running
+    assert "_syncForegroundStreamGlobals()" in running
+    assert "setInterval" not in running
+    # The session entry path rejoins the server stream rather than displaying a
+    # second unformatted local buffer/spinner until the run has finished.
+    sessions = (Path(__file__).resolve().parent.parent / "static/js/sessions.js").read_text(encoding="utf-8")
+    assert "checkBackgroundStream" in sessions
+    assert "window.chatModule.resumeStream(sessionId)" in sessions
+    assert "/api/chat/resume/" in _CHAT
 
 
 def test_foreground_wait_copy_reports_elapsed_without_guessing_cause():
@@ -236,8 +235,8 @@ def test_tab_recovery_is_neutral_status_while_fatal_stream_errors_stay_red():
 
 def test_background_terminal_error_keeps_provider_message():
     catch_path = _between(
-        "if (_isBgCatch) {\n        // Error happened while backgrounded",
-        "} else {\n        // Stop streaming TTS on any error/abort",
+        "// Detaching intentionally closes only this browser subscriber.",
+        "if (!_isBgCatch) {",
     )
     assert "err && err.message ? err.message : String(err || 'Background stream failed')" in catch_path
     assert "_clientTimeoutMessage(_isAgent, bgErr.startedAt || streamStartedAt, !!accumulated)" in catch_path
@@ -250,7 +249,7 @@ def test_background_terminal_error_keeps_provider_message():
         "if (entry.status === 'running')",
         "async function refreshRecoveryCheckpoint",
     )
-    assert "_appendBackgroundStreamError(box, curPoll.error)" in running
+    assert "_backgroundStreams.delete(sessionId)" in running
     error_helper = _between(
         "function _appendBackgroundStreamError(box, message)",
         "async function refreshRecoveryCheckpoint",

@@ -56,7 +56,7 @@ def test_all_runtime_document_imports_share_one_module_url():
         for match in re.findall(r"document\.js\?v=([A-Za-z0-9_-]+)", path.read_text(encoding="utf-8"))
     }
     # All entry points share the module's normalized URL-cache identity.
-    assert versions == {"20260815approvalsave1"}
+    assert versions == {"20261016approvalflow1"}
 
 
 def test_server_fallback_is_legacy_only_when_ui_state_is_absent():

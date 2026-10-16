@@ -50,11 +50,11 @@ def test_gallery_static_cache_key_bumped():
     service_worker = _read("static/sw.js")
 
     assert stylesheet_cache_version()
-    html_version = re.search(r"/static/js/gallery\.js\?v=([A-Za-z0-9_-]+)", html)
-    app_version = re.search(r"gallery\.js\?v=([A-Za-z0-9_-]+)", app)
-    sw_version = re.search(r"/static/js/gallery\.js\?v=([A-Za-z0-9_-]+)", service_worker)
-    assert html_version and app_version and sw_version
-    assert len({html_version.group(1), app_version.group(1), sw_version.group(1)}) == 1
+    # The split gallery graph uses one identity in preload, app and offline cache.
+    for source in (html, app, service_worker):
+        assert re.search(r"(?:/static/|\./)js/gallery\.js['\"]", source)
+    assert "novum-xenium-v395-upstream-sync" in service_worker
+
 
 
 def test_gallery_bulk_select_button_keeps_toolbar_alignment():

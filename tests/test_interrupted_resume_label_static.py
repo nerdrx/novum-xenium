@@ -11,14 +11,17 @@ APP = (ROOT / "static/app.js").read_text()
 INDEX = (ROOT / "static/index.html").read_text()
 
 
-def test_live_interruption_controls_have_visible_resume_labels():
-    assert CHAT.count('continueBtn.innerHTML = \'<span class="resume-btn-label">Resume</span>') == 2
+def test_live_interruption_controls_label_new_text_continuation_honestly():
+    assert CHAT.count("continueBtn.textContent = 'Continue text';") == 2
+    assert CHAT.count("saved run state is not resumed") >= 2
     assert "_cont.innerHTML = '<span class=\"resume-btn-label\">Resume</span>" in CHAT
+    assert "button.textContent = 'Resume saved run';" in CHAT
 
 
-def test_restored_interruption_control_has_visible_resume_label():
-    assert "continueBtn.className = 'continue-btn resume-btn';" in RENDERER
-    assert 'continueBtn.innerHTML = \'<span class="resume-btn-label">Resume</span>' in RENDERER
+def test_restored_interruption_control_labels_new_text_continuation():
+    assert "continueBtn.className = 'continue-btn';" in RENDERER
+    assert "continueBtn.textContent = 'Continue text';" in RENDERER
+    assert "saved run state is not resumed" in RENDERER
 
 
 def test_resume_label_uses_scoped_compact_button_styling():

@@ -203,7 +203,8 @@ def _open_mutation_parent(path: str, *, create: bool = False) -> Tuple[int, str]
 
 
 def _read_mutation_target(
-    parent_fd: int, leaf: str, *, optional: bool = False, read_optional: bool = False
+    parent_fd: int, leaf: str, *, optional: bool = False, read_optional: bool = False,
+    preserve_newlines: bool = False,
 ):
     """Read a single-link regular file through its pinned parent descriptor."""
     try:
@@ -226,7 +227,10 @@ def _read_mutation_target(
                 or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)):
             raise ValueError("file path changed during mutation")
         try:
-            with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as handle:
+            with os.fdopen(
+                fd, "r", encoding="utf-8", newline="" if preserve_newlines else None,
+                closefd=False,
+            ) as handle:
                 content = handle.read()
         except (PermissionError, UnicodeDecodeError):
             if not read_optional:
@@ -507,7 +511,9 @@ class EditFileTool:
         def _apply():
             parent_fd, leaf = _open_mutation_parent(path)
             try:
-                original, identity, mode, metadata = _read_mutation_target(parent_fd, leaf)
+                original, identity, mode, metadata = _read_mutation_target(
+                    parent_fd, leaf, preserve_newlines=True
+                )
                 _verify_mutation_write_access(parent_fd, leaf, identity)
                 count = original.count(old)
                 if count == 0:
@@ -515,6 +521,7 @@ class EditFileTool:
                 if count > 1 and not replace_all:
                     return original, None, f"not_unique:{count}"
                 updated = original.replace(old, new) if replace_all else original.replace(old, new, 1)
+                attempted.append(True)
                 _write_mutation_target(
                     parent_fd, leaf, updated, expected=identity, mode=mode, metadata=metadata
                 )
@@ -522,7 +529,8 @@ class EditFileTool:
             finally:
                 os.close(parent_fd)
 
-        # In-place rewrite: a failure after truncation may leave partial bytes.
+        # Once the atomic writer starts, a reported failure leaves execution
+        # unresolved even though it preserves the previous file until commit.
         attempted = []
         partial = lambda: {"mutation_attempted": True} if attempted else {}
         try:
@@ -589,12 +597,24 @@ class ReadFileTool:
                         display_name=os.path.basename(path),
                         analyze_embedded_images=False,
                     )
+                    lines = extracted.splitlines(keepends=True)
                     if offset > 0 or limit > 0:
-                        lines = extracted.splitlines(keepends=True)
                         start = max(offset, 1) - 1
                         stop = start + limit if limit > 0 else None
-                        return "".join(lines[start:stop])[:MAX_READ_CHARS]
-                    return extracted[:MAX_READ_CHARS + 1]
+                        data = "".join(lines[start:stop])[:MAX_READ_CHARS]
+                        reached_eof = stop is None or stop >= len(lines)
+                        metadata = {"start_line": start + 1, "reached_eof": reached_eof}
+                        if not reached_eof:
+                            metadata["next_offset"] = stop + 1
+                        return data, metadata
+                    data = extracted[:MAX_READ_CHARS + 1]
+                    metadata = {
+                        "start_line": 1,
+                        "reached_eof": len(data) <= MAX_READ_CHARS,
+                    }
+                    if not metadata["reached_eof"]:
+                        metadata["next_offset"] = data[:MAX_READ_CHARS].count("\n") + 1
+                    return data, metadata
                 if offset > 0 or limit > 0:
                     start = max(offset, 1)
                     out, n, budget = [], 0, MAX_READ_CHARS
@@ -805,6 +825,7 @@ class WriteFileTool:
                         if old:
                             raise _EmptyBodyWouldTruncate(path, len(old.encode("utf-8")))
                         return old, 0
+                    attempted.append(True)
                     _write_mutation_target(
                         parent_fd, leaf, body, expected=identity, mode=mode, metadata=metadata,
                         create_only=(identity is None),

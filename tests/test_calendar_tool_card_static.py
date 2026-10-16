@@ -51,7 +51,7 @@ def test_calendar_chat_event_links_fetch_uid_and_show_title_time():
     assert "cal-event-link-target-flash" in style_src
     versions = []
     for src in (app_src, renderer_src, inbox_src, library_src):
-        match = re.search(r"calendar\.js\?v=([A-Za-z0-9_-]+)", src)
+        match = re.search(r"calendar\.js(?:\?v=([A-Za-z0-9_-]+))?[\'\"]", src)
         assert match
         versions.append(match.group(1))
     assert len(set(versions)) == 1

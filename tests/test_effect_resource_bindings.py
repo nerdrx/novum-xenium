@@ -192,19 +192,15 @@ def test_mid_write_failure_unsettles_but_refusal_preserves(run, ws, monkeypatch)
     assert run.journal.effects.assessments()[-1].execution is fx.ExecutionOutcome.FAILED
     assert ledger(run.journal, ws).evaluate().can_complete
 
-    real_open = open
+    from src.agent_tools import filesystem_tools
 
-    def failing_open(path, mode="r", *args, **kwargs):
-        if "w" in mode and str(path).endswith("a.txt"):
-            handle = real_open(path, mode, *args, **kwargs)  # truncates
-            handle.close()
-            raise OSError("disk full")
-        return real_open(path, mode, *args, **kwargs)
+    def failing_atomic_write(*args, **kwargs):
+        raise OSError("disk full")
 
-    monkeypatch.setattr("builtins.open", failing_open)
+    monkeypatch.setattr(filesystem_tools, "_write_mutation_target", failing_atomic_write)
     _, result = run("write_file", {"path": "a.txt", "content": "hello again\n"})
-    monkeypatch.setattr("builtins.open", real_open)
     assert result.get("mutation_attempted") is True
+    assert (ws / "a.txt").read_text() == "hello\n"
     decision = ledger(run.journal, ws).evaluate()
     assert decision.status == CompletionStatus.BLOCKED and decision.missing_artifacts == ("a.txt",)
 

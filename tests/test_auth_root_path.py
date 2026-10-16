@@ -39,7 +39,7 @@ def test_login_page_uses_mount_aware_urls():
 
     assert "window.location.replace(appUrl('/'))" in html
     assert (
-        "__odysseusLoginAppUrl || ((path) => path))('/static/js/theme.js')"
+        "__odysseusLoginAppUrl || ((path) => path))('/static/js/theme.js"
         in html
     )
 

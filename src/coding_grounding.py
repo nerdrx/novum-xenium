@@ -384,6 +384,13 @@ class CodingGrounding:
         return any(_same_requested_url(preferred, fetched)
                    for preferred in self.preferred_urls)
 
+    def _already_fetched(self, content):
+        fetched = _fetch_url_from_content(content)
+        return bool(fetched and any(
+            _same_requested_url(previous, fetched)
+            for previous in self.fetched_urls
+        ))
+
     @property
     def phase_tools(self):
         """Expose only tools that can advance an outstanding research gate."""
@@ -399,6 +406,16 @@ class CodingGrounding:
 
     def allows_tool(self, tool_name, content=None):
         """Expose skill discovery, while keeping skill mutations behind the gate."""
+        # A no-web request remains in force after the research gate opens.
+        # Successful evidence should not silently widen the user's instruction.
+        if (self.required and not self.web_allowed
+                and tool_name in {"web_search", "web_fetch"}):
+            return False
+        # A successful URL read is sufficient evidence; retrying that exact
+        # resource cannot advance the gate. Distinct URLs remain available for
+        # follow-up research.
+        if self.required and tool_name == "web_fetch" and self._already_fetched(content):
+            return False
         if self.may_mutate:
             return True
         if self.skill_preparation_required:
@@ -514,6 +531,11 @@ class CodingGrounding:
 
     def observe(self, tool_name, result, content=None):
         """Record actual result; return True only when it supplies usable evidence."""
+        if (self.required and not self.web_allowed
+                and tool_name in {"web_search", "web_fetch"}):
+            return False
+        if self.required and tool_name == "web_fetch" and self._already_fetched(content):
+            return False
         if self.required and tool_name == "manage_skills" and self.skill_candidates:
             # A rejected malformed/non-view call is still one bounded attempt
             # once skill preparation is the active phase. It never counts as

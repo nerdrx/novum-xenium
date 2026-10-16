@@ -75,7 +75,9 @@ def test_provision_creates_owner_scoped_auth_session_and_endpoint(monkeypatch):
         assert ep.provider_auth_id == auth.id
         assert ep.endpoint_kind == "api"
         assert ep.model_refresh_mode == "manual"
-        assert ep.supports_tools is True
+        # Subscription auth provides inference; local agent tools are not sent
+        # to the provider as native function schemas.
+        assert ep.supports_tools is False
         assert json.loads(ep.cached_models) == ["gpt-5.5", "o4-mini"]
     finally:
         db.close()

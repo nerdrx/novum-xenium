@@ -370,7 +370,11 @@ def test_read_file_extracts_structured_documents(repo, monkeypatch):
 
     r = _run("read_file", f'{{"path": "{p}", "offset": 2, "limit": 2}}')
 
-    assert r == {"output": "First fact\nSecond fact\n", "exit_code": 0}
+    assert r == {
+        "output": "First fact\nSecond fact\n",
+        "exit_code": 0,
+        "read_metadata": {"start_line": 2, "reached_eof": True},
+    }
     assert calls == [(p, {
         "display_name": "report.docx",
         "analyze_embedded_images": False,
@@ -391,7 +395,11 @@ def test_read_file_extracts_legacy_word_documents(repo, monkeypatch):
     monkeypatch.setattr("src.document_processor.extract_local_document", _fake_extract)
     r = _run("read_file", p)
 
-    assert r == {"output": "Legacy Word content\nShipping price\n", "exit_code": 0}
+    assert r == {
+        "output": "Legacy Word content\nShipping price\n",
+        "exit_code": 0,
+        "read_metadata": {"start_line": 1, "reached_eof": True},
+    }
     assert calls == [(p, {
         "display_name": "report.doc",
         "analyze_embedded_images": False,

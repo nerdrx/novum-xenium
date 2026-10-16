@@ -7,11 +7,11 @@ const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 const repo = path.resolve(__dirname, '../..');
 const imports = new Map([
   ["import Storage from './storage.js';", "import Storage from '/stubs/storage.js';"],
-  ["import uiModule, { autoResize, styledPrompt } from './ui.js';", "import uiModule, { autoResize, styledPrompt } from '/stubs/ui.js';"],
+  ["import uiModule, { autoResize, styledPrompt } from './ui.js?v=20260916largetoolscroll1';", "import uiModule, { autoResize, styledPrompt } from '/stubs/ui.js';"],
   ["import chatRenderer from './chatRenderer.js?v=20261007toolstatus1';", "import chatRenderer from '/stubs/chatRenderer.js';"],
   ["import { providerLogo } from './providers.js';", "import { providerLogo } from '/stubs/providers.js';"],
-  ["import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722ctxheader1';", "import { initModelPicker, updateModelPicker } from '/stubs/modelPicker.js';"],
-  ["import themeModule from './theme.js';", "import themeModule from '/stubs/theme.js';"],
+  ["import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260909routeidentity1';", "import { initModelPicker, updateModelPicker } from '/stubs/modelPicker.js';"],
+  ["import themeModule from './theme.js?v=20260911organsrain1';", "import themeModule from '/stubs/theme.js';"],
   ["import spinnerModule from './spinner.js';", "import spinnerModule from '/stubs/spinner.js';"],
   ["import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from './sessionHistory.js';", "import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from '/stubs/sessionHistory.js';"],
   ["import { applySubagentInspector, clearSubagentInspector } from './subagentInspector.js';", "import { applySubagentInspector, clearSubagentInspector } from '/stubs/subagentInspector.js';"],
@@ -47,6 +47,8 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/') { res.setHeader('Content-Type','text/html'); return res.end(html); }
   if (url.pathname === '/test/sessions.js') {
     let source = fs.readFileSync(path.join(repo, 'static/js/sessions.js'), 'utf8');
+    source = source.replace("from './actionMenuOrder.js'", "from '/static/js/actionMenuOrder.js'")
+      .replace("from './escMenuStack.js'", "from '/static/js/escMenuStack.js'");
     for (const [from, to] of imports) {
       assert.ok(source.includes(from), `missing sessions import: ${from}`);
       source = source.replace(from, to);

@@ -4719,9 +4719,11 @@ def setup_cookbook_routes() -> APIRouter:
                     and bool(full_snapshot)
                     and _parse_serve_phase(full_snapshot, task_type).get("status") == "ready"
                 )
-                _persisted_terminal = _task_status in {"stopped", "done", "completed",
-                                    "crashed", "error", "failed",
-                                    "ended", "killed"} and not _persisted_serve_ready
+                # Local serves may have been restarted outside this poller. Their
+                # cheap process check remains authoritative over persisted status.
+                _persisted_terminal = (bool(remote) or task_type != "serve") and _task_status in {
+                    "stopped", "done", "completed", "crashed", "error", "failed", "ended", "killed"
+                } and not _persisted_serve_ready
                 if _persisted_terminal:
                     is_alive = False
                     # Keep the persisted output_tail for the UI — it's

@@ -1999,7 +1999,7 @@ function _activateEntityAnchor(e, forcedAnchor = null) {
       } catch {}
     });
   } else if (kind === 'document') {
-    import('./document.js?v=20260815approvalsave1').then(mod => {
+    import('./document.js?v=20261016approvalflow1').then(mod => {
       const open = mod.loadDocument
         || mod.openDocument
         || (mod.default && (mod.default.loadDocument || mod.default.openDocument));
@@ -2040,7 +2040,7 @@ function _activateEntityAnchor(e, forcedAnchor = null) {
       }
     }).catch(() => {});
   } else if (kind === 'event') {
-    import('./calendar.js').then(mod => {
+    import('./calendar.js?v=20261016calvisual1').then(mod => {
       const open = mod.openCalendarTo || (mod.default && mod.default.openCalendarTo);
       if (open) open(id);
     }).catch(() => {});
@@ -3852,7 +3852,7 @@ export function addMessage(role, content, modelName, metadata) {
 
       b.querySelectorAll('[data-doc-edit-ref]').forEach(button => {
         button.addEventListener('click', () => {
-          import('./document.js?v=20260815approvalsave1').then(mod => {
+          import('./document.js?v=20261016approvalflow1').then(mod => {
             const restore = mod.restoreSelectionReference
               || mod.default?.restoreSelectionReference;
             return restore?.(button.dataset.docEditRef || '', {

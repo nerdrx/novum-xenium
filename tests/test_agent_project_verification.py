@@ -38,6 +38,8 @@ def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, 
                         raising=False)
     monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
     monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *_a, **_k: 10, raising=False)
+    import src.model_context as model_context
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *_a, **_k: 128_000)
     monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda _owner: set())
     monkeypatch.setattr(agent_runs, "get_run_id", lambda _sid: "run-verification")
     writes = []
@@ -45,6 +47,10 @@ def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, 
     async def execute(block, *args, **kwargs):
         if block.tool_type == "read_file":
             return block.tool_type, {"output": "Electron app setup and project structure", "exit_code": 0}
+        if block.tool_type == "web_fetch":
+            return block.tool_type, {"output": "Official GUI documentation", "exit_code": 0}
+        if block.tool_type == "manage_skills":
+            return block.tool_type, {"results": "Follow the reviewed GUI and visual verification procedures.", "exit_code": 0}
         if block.tool_type == "write_file":
             writes.append(block)
             try:
@@ -66,10 +72,25 @@ def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, 
             yield 'data: {"delta":"I will inspect the project files now."}\n\n'
         elif scenario == "promise_then_write" and llm_round == 2:
             yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
+                "id": "docs-first", "name": "web_fetch",
+                "arguments": json.dumps({"url": "https://vendor.example/docs/gui"}),
+            }]}) + "\n\n"
+        elif scenario == "promise_then_write" and llm_round == 3:
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
+                "id": "view-ui-design", "name": "manage_skills",
+                "arguments": json.dumps({"action": "view", "name": "ui-design"}),
+            }]}) + "\n\n"
+        elif scenario == "promise_then_write" and llm_round == 4:
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
+                "id": "view-visual-verification", "name": "manage_skills",
+                "arguments": json.dumps({"action": "view", "name": "visual-verification"}),
+            }]}) + "\n\n"
+        elif scenario == "promise_then_write" and llm_round == 5:
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
                 "id": "read-after-nudge", "name": "read_file",
                 "arguments": json.dumps({"path": "README.md"}),
             }]}) + "\n\n"
-        elif scenario == "promise_then_write" and llm_round == 3:
+        elif scenario == "promise_then_write" and llm_round == 6:
             yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
                 "id": "write-after-nudge", "name": "write_file",
                 "arguments": json.dumps({"path": "result.txt", "content": "verified"}),
@@ -130,7 +151,7 @@ def _run_native_write(monkeypatch, workspace, verification, *, plan_mode=False, 
         return [chunk async for chunk in agent_loop.stream_agent_loop(
             "http://fake/v1", "test-model", [{"role": "user", "content": coding_prompt or "Write the result file"}],
             session_id="session-1", owner="alice", workspace=str(workspace),
-            relevant_tools={"read_file", "write_file", "manage_skills"}, approval_mode="full",
+                relevant_tools={"read_file", "write_file", "manage_skills", "web_fetch"}, approval_mode="full",
             plan_mode=plan_mode, incognito=incognito,
             exact_approval=exact_approval,
         )]
@@ -241,7 +262,8 @@ def test_unresolved_completion_verifier_emits_failed_terminal(monkeypatch, tmp_p
         monkeypatch, tmp_path, {"managed": True, "configured": True, "complete": True},
         verifier_issues=["Unverified: no functional test evidence"],
     )
-    terminal = next(event for event in events if event.get("type") == "agent_terminal")
+    terminal = next((event for event in events if event.get("type") == "agent_terminal"), None)
+    assert terminal is not None, events
     assert terminal["status"] == "failed"
     assert terminal["reason"] == "completion_unverified"
     assert "no functional test evidence" in terminal["message"]
@@ -257,7 +279,8 @@ def test_failed_review_remains_held_during_force_answer_round(monkeypatch, tmp_p
         verifier_issues=["Unverified: functional check missing"],
         force_answer_after_recovery=True,
     )
-    terminal = next(event for event in events if event.get("type") == "agent_terminal")
+    terminal = next((event for event in events if event.get("type") == "agent_terminal"), None)
+    assert terminal is not None, events
     deltas = "".join(event.get("delta", "") for event in events)
     metrics = next(event["data"] for event in events if event.get("type") == "metrics")
     assert terminal["status"] == "failed"
@@ -284,12 +307,25 @@ def test_substantive_repair_holds_read_only_fake_completion(monkeypatch, tmp_pat
 
 
 def test_substantive_repair_releases_completion_only_after_review(monkeypatch, tmp_path):
+    from services.memory.skills import SkillsManager
+    skills = [
+        {"name": name, "description": "Review this GUI task", "status": "published",
+         "audit_verdict": "pass", "confidence": 1.0, "category": "design",
+         "tags": ["gui"], "procedure": [], "requires_toolsets": []}
+        for name in ("ui-design", "visual-verification")
+    ]
+    monkeypatch.setattr(SkillsManager, "load", lambda self, owner=None: skills)
+    monkeypatch.setattr(
+        SkillsManager, "get_relevant_skills",
+        lambda self, query, **kwargs: skills,
+    )
     reviews = []
     events, _calls, _writes = _run_native_write(
         monkeypatch, tmp_path,
         {"managed": True, "configured": True, "complete": True},
         verifier_issues=[], scenario="promise_then_write", review_calls=reviews,
-        coding_prompt="Repair the existing desktop GUI layout in this workspace.",
+        coding_prompt=("Repair the existing desktop GUI layout in this workspace using "
+                       "https://vendor.example/docs/gui."),
     )
     deltas = "".join(event.get("delta", "") for event in events)
     assert len(reviews) == 1

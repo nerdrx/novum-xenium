@@ -129,7 +129,7 @@ def test_wrapper_exposes_every_statically_imported_name():
 
 
 _IMPORT_STATEMENT = re.compile(
-    r"^import\s+(\{[^}]*\}|\*\s+as\s+[\w$]+|[\w$]+)\s+from\s+'[^']+';", re.M | re.S
+    r"^import\s+((?:[\w$]+\s*,\s*)?(?:\{[^}]*\}|\*\s+as\s+[\w$]+|[\w$]+))\s+from\s+'[^']+';", re.M | re.S
 )
 _TOP_LEVEL_DECL = re.compile(
     r"^(?:export\s+)?(?:async\s+)?(?:function|const|let|var)\s+([A-Za-z_$][\w$]*)", re.M
@@ -141,6 +141,10 @@ def _bound_names(source: str) -> set[str]:
     names = set(_TOP_LEVEL_DECL.findall(source))
     for clause in _IMPORT_STATEMENT.findall(source):
         clause = clause.strip()
+        if "," in clause and not clause.startswith("{"):
+            default, clause = clause.split(",", 1)
+            names.add(default.strip())
+            clause = clause.strip()
         if clause.startswith("{"):
             names |= {
                 part.strip().split(" as ")[-1].strip()

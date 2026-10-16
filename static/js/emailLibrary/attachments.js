@@ -9,6 +9,7 @@
 // are, so the chips are rendered late and the card icon repaired afterwards.
 
 import spinnerModule from '../spinner.js';
+import uiModule from '../ui.js?v=20260916largetoolscroll1';
 import * as Modals from '../modalManager.js';
 import { state } from './state.js';
 import { _esc } from './utils.js';
@@ -187,7 +188,7 @@ function _wireAttachmentHandlers(reader, folder) {
               ownerModal.classList.add('hidden');
             }
           }
-          const docMod = await import('../document.js?v=20260815approvalsave1');
+          const docMod = await import('../document.js?v=20261016approvalflow1');
           const load = (docMod && docMod.loadDocument) || (docMod && docMod.default && docMod.default.loadDocument);
           if (typeof load === 'function') {
             await load(json.doc_id);

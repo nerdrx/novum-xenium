@@ -516,7 +516,7 @@ def _record_email_received_events(owner: str, account_id: str | None, folder: st
 
                 async def _run_away_reply_check():
                     try:
-                        from routes.email_pollers import _auto_summarize_pass
+                        from routes.email.email_pollers import _auto_summarize_pass
                         result = await _auto_summarize_pass(
                             days_back=1,
                             account_id=account_id,

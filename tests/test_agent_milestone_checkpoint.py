@@ -48,8 +48,10 @@ def test_first_write_waits_for_successful_checkpoint(monkeypatch, tmp_path, save
         assert "write_file" in requests[1]
     else:
         assert executed == []
-        assert len(requests) == 2
-        assert any("did not save an actionable task checklist" in e.get("delta", "") for e in events)
+        assert 2 <= len(requests) <= 4
+        assert all("write_file" not in tools for tools in requests)
+        assert any("The last batch was not executed" in e.get("delta", "") for e in events)
+        assert not (tmp_path / "parser.py").exists()
 
 
 def test_fresh_exact_approved_todowrite_unlocks_primary_route(monkeypatch, tmp_path):

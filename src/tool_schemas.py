@@ -1168,7 +1168,7 @@ FUNCTION_TOOL_SCHEMAS = [
                     "start": {"type": "string", "description": "list_events range start (ISO datetime). Use this for month/week requests after resolving the date range; pass start and end in the same call. Prefer start; backend also accepts start_time, start_date, range_start, from, dtstart, since."},
                     "end": {"type": "string", "description": "list_events range end (ISO datetime). Use this for month/week requests after resolving the date range; defaults to +14 days only when no range is requested. Prefer end; backend also accepts end_time, end_date, range_end, to, dtend, until."},
                     "query": {"type": "string", "description": "Optional text filter for list_events. Use with explicit start/end when verifying whether a named event is present or absent; do not pass query by itself."},
-                    "event_type": {"type": "string", "description": "Tag / category for the event. Common values: work, personal, health, travel, meal, social, admin, other. Aliases accepted: tag, category, type. For update_event, omit this unless the user explicitly asks to tag, retag, categorize, or clear the tag; omitting preserves manual tags."},
+                    "event_type": {"type": "string", "description": "Tag / category for the event. Common values: work, personal, health, travel, meal, social, admin, other. Aliases accepted: tag, category, type. For update_event, only pass this when the user explicitly asks to tag, retag, categorize, or clear the tag; otherwise omit it so manually tagged events keep their existing tag. omitting preserves manual tags."},
                     "importance": {"type": "string", "enum": ["low", "normal", "high", "critical"], "description": "Priority level (defaults to 'normal')"},
                     "reminder_minutes": {"type": "integer", "description": "For create_event: create a Novum Xenium reminder this many minutes before the event, e.g. 5 for 'reminder 5 min before'."},
                     "rrule": {"type": "string", "description": "Recurrence rule in iCalendar RRULE format, e.g. 'FREQ=WEEKLY;BYDAY=MO' for weekly on Monday. Use with create_event or update_event. For update_event, pass an explicit empty string to remove recurrence and make the event single-occurrence."}
@@ -1224,7 +1224,7 @@ FUNCTION_TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["create", "list", "stop"]},
-                    "at": {"type": "string", "description": "HH:MM local time or ISO date-time; past times are rejected, not moved to tomorrow."},
+                    "at": {"type": "string", "description": "HH:MM local time means today only. If the time is past, ask the user for the exact date rather than moving it to tomorrow. A full ISO date-time is also accepted."},
                     "label": {"type": "string", "description": "Short alarm label, up to 120 characters."},
                     "volume_percent": {"type": "integer", "minimum": 0, "maximum": 100, "default": 100},
                     "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "default": 300},
@@ -2207,6 +2207,27 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
             return None
         logger.warning(f"Non-object function call arguments for {name}: {args!r}; treating as empty")
         args = {}
+
+    # The generic native normalizer repairs scalar strings for transports that
+    # serialize typed arguments as text. Keep this preview boundary strict: it
+    # builds a host command, so schema-invalid JSON types must fail closed.
+    if name == "native_preview":
+        allowed = {"project_path", "test_script", "timeout", "no_sandbox"}
+        if set(args) - allowed:
+            reject_native_preview("unknown_fields")
+            return None
+        if not isinstance(args.get("project_path"), str):
+            reject_native_preview("invalid_project_path")
+            return None
+        if "test_script" in args and not isinstance(args["test_script"], str):
+            reject_native_preview("invalid_test_script_path")
+            return None
+        if "timeout" in args and (type(args["timeout"]) is not int):
+            reject_native_preview("invalid_timeout")
+            return None
+        if "no_sandbox" in args and not isinstance(args["no_sandbox"], bool):
+            reject_native_preview("invalid_no_sandbox")
+            return None
 
     # Native call conversion is also used by the legacy streamed-tool path,
     # which does not pass through the clean-runtime schema normalizer. Apply

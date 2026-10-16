@@ -30,7 +30,7 @@ import {
   mountMobilePaneTabs, syncShuffleButtonPlacement,
   paneSettingsButtonHtml, togglePaneSettings,
   registerPaneActions,
-} from './panes.js?v=20260908compareheader1';
+} from './panes.js?v=20261016compareshuffle1';
 import { handleVote, buildVoteBar, addFinishBadge, spawnConfetti, _saveVote, registerCompareActions } from './vote.js?v=20260828resendcaldrag1';
 import { showScoreboard } from './scoreboard.js?v=20260909voteconfirmalign1';
 

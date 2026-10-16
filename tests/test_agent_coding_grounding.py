@@ -51,7 +51,7 @@ def test_agent_prompt_keeps_latest_scope_rule_in_both_tool_modes():
 
 def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_tools=None,
          exact_approval=None, schema_details=None, server_run_id=None,
-         checked_workflow=False):
+         checked_workflow=False, relevant_tools=None):
     _patch_common(monkeypatch)
     monkeypatch.setattr(al, "get_setting", lambda key, default=None: (
         (checked_workflow if key == "agent_milestone_workflow" else default)
@@ -90,6 +90,7 @@ def _run(monkeypatch, tmp_path, task_text, replies, tool_results, *, disabled_to
         "http://x/v1", "gpt-4o", [{"role": "user", "content": task_text}],
         workspace="/workspace", approval_mode="full", max_rounds=len(replies) + 1,
         disabled_tools=disabled_tools or set(),
+        relevant_tools=relevant_tools,
         exact_approval=exact_approval,
         server_run_id=server_run_id,
     )))
@@ -239,6 +240,7 @@ def test_research_can_load_owned_skill_but_cannot_edit_it(monkeypatch, tmp_path)
     from services.memory.skills import SkillsManager
     monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
         'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
+        'audit_verdict': 'pass', 'confidence': 1.0,
         'category': 'design', 'tags': ['gui'], 'procedure': [],
         'when_to_use': 'Build a GUI app following a framework documentation guide.',
     }])
@@ -310,6 +312,7 @@ def test_read_only_skill_approval_keeps_research_gate(monkeypatch, tmp_path):
     monkeypatch.setattr(workflows, 'run_workspace_verification', no_workspace_verification)
     monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
         'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
+        'audit_verdict': 'pass', 'confidence': 1.0,
         'category': 'design', 'tags': ['gui'], 'procedure': [],
     }])
     url = 'https://vendor.example/docs/gui'
@@ -356,6 +359,7 @@ def test_documentation_evidence_still_waits_for_suggested_skill_view(monkeypatch
     from services.memory.skills import SkillsManager
     monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
         'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
+        'audit_verdict': 'pass', 'confidence': 1.0,
         'category': 'design', 'tags': ['gui'], 'procedure': [],
         'when_to_use': 'Build a GUI app following a framework documentation guide.',
     }])
@@ -563,6 +567,7 @@ def _seed_ui_skill(monkeypatch):
     from services.memory.skills import SkillsManager
     monkeypatch.setattr(SkillsManager, 'load', lambda self, owner=None: [{
         'name': 'ui-design', 'description': 'Build a GUI app', 'status': 'published',
+        'audit_verdict': 'pass', 'confidence': 1.0,
         'category': 'design', 'tags': ['gui'], 'procedure': [],
         'when_to_use': 'Build a GUI app following a framework documentation guide.',
     }])
@@ -576,7 +581,7 @@ def test_exhausted_search_allowance_reminds_about_skill_without_claiming_sources
     ]
     events, requests, histories, executed = _run(
         monkeypatch, tmp_path,
-        'Build a GUI app following https://vendor.example/docs/gui.',
+        'Build a GUI app following https://vendor.example/docs/gui. Search the web for additional official GUI implementation guidance.',
         [*searches,
          _call('manage_skills', {'action': 'view', 'name': 'ui-design'}, 'view'),
          _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
@@ -585,9 +590,11 @@ def test_exhausted_search_allowance_reminds_about_skill_without_claiming_sources
                         for i in range(6)],
          'manage_skills': [{'results': 'Use a compact GUI layout.', 'exit_code': 0}],
          'write_file': [{'output': 'saved', 'exit_code': 0}]},
+        relevant_tools={"web_search", "web_fetch", "manage_skills", "write_file"},
     )
 
     reminder = 'The bounded documentation lookup allowance is exhausted; no source was verified.'
+    assert len(histories) >= 7, [(len(request), "web_search" in request, "web_fetch" in request, "manage_skills" in request) for request in requests]
     assert reminder in str(histories[6])
     assert 'Documentation has been read' not in str(histories[6])
     assert all('write_file' not in requests[i] for i in range(7))
@@ -606,17 +613,19 @@ def test_exhausted_search_without_skill_candidate_gets_no_skill_reminder(monkeyp
     ]
     events, requests, histories, executed = _run(
         monkeypatch, tmp_path,
-        'Build a GUI app following https://vendor.example/docs/gui.',
+        'Build a GUI app following https://vendor.example/docs/gui. Search the web for additional official GUI implementation guidance.',
         [*searches,
          _call('write_file', {'path': 'app.py', 'content': 'ready'}, 'write'),
          'data: {"delta":"Implemented with uncertainty noted."}\n\n'],
         {'web_search': [{'output': f'Search result snippet {i}', 'exit_code': 0}
                         for i in range(6)],
          'write_file': [{'output': 'saved', 'exit_code': 0}]},
+        relevant_tools={"web_search", "web_fetch", "manage_skills", "write_file"},
     )
 
     assert all('The bounded documentation lookup allowance is exhausted'
                not in str(history) for history in histories)
+    assert len(requests) >= 7, [(len(request), "web_search" in request, "web_fetch" in request, "write_file" in request) for request in requests]
     assert 'write_file' in requests[6]
     assert executed == ['web_search'] * 6 + ['write_file']
 

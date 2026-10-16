@@ -25,7 +25,7 @@ def test_old_search_reroll_cleanup_preserves_new_controller():
         class El {
           constructor(text = '') {
             this.children = []; this.style = {}; this.textContent = text;
-            this.scrollTop = 0; this.classList = { remove() {} };
+            this.scrollTop = 0; this.classList = { remove() {}, add() {} };
           }
           set innerHTML(value) {
             this._html = String(value);

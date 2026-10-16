@@ -34,6 +34,37 @@ def test_local_docs_qualify_but_source_code_and_errors_do_not():
     assert gate.may_mutate
 
 
+def test_explicit_no_web_remains_denied_after_local_docs_open_mutation_gate():
+    gate = CodingGrounding(task(), web_allowed=False)
+    assert gate.observe("read_file", {"output": "Use framework v2", "exit_code": 0}, "README.md")
+    assert gate.may_mutate
+    for tool in ("web_search", "web_fetch"):
+        assert not gate.allows_tool(tool, '{"url":"https://example.test/docs"}')
+        assert not gate.observe(tool, {"output": "unexpected", "exit_code": 0}, "query")
+    assert gate.attempts == 1  # only the local README lookup was counted
+
+
+def test_successful_fetch_cannot_be_repeated_but_other_requested_url_remains_allowed():
+    first = "https://vendor.example/docs/api"
+    second = "https://vendor.example/docs/auth"
+    gate = CodingGrounding(f"Build an app following {first} and {second}.")
+    assert gate.observe(
+        "web_fetch", {"output": "API reference", "exit_code": 0},
+        json.dumps({"url": first}),
+    )
+    assert gate.may_mutate
+    assert not gate.allows_tool("web_fetch", json.dumps({"url": first}))
+    assert not gate.observe(
+        "web_fetch", {"output": "duplicate", "exit_code": 0},
+        json.dumps({"url": first}),
+    )
+    assert gate.allows_tool("web_fetch", json.dumps({"url": second}))
+    assert gate.observe(
+        "web_fetch", {"output": "Authentication guide", "exit_code": 0},
+        json.dumps({"url": second}),
+    )
+
+
 def test_failed_lookup_escape_is_bounded_and_respects_disabled_tools():
     gate = CodingGrounding(task(), disabled_tools={"read_file", "web_search", "web_fetch",
                                                     "mcp__builtin_browser__browser_snapshot",

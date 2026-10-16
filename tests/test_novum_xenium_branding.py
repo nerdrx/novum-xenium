@@ -20,9 +20,9 @@ def test_default_brand_and_theme_keep_internal_storage_key():
     assert "'novum-xenium': 'orbits'" in _THEME
     assert "const DEFAULT_FONT = 'sans';" in _THEME
     assert "const LEGACY_DEFAULT_FONT = 'mono';" in _THEME
-    assert "opts.font !== _defaultFontForTheme(name)" in _THEME
+    assert "normalizeFont(opts.font) !== _defaultFontForTheme(name)" in _THEME
     assert "opts.font || _defaultFontForTheme(slug)" in _THEME
-    assert "const _initFont = (saved && saved.font) || _defaultFontForTheme(_initTheme);" in _THEME
+    assert "const _initFont = normalizeFont(saved && saved.font);" in _THEME
     assert "Novum Xenium" in _INDEX
     assert "odysseus-theme" in _INDEX
     assert '"name": "Novum Xenium"' in _MANIFEST

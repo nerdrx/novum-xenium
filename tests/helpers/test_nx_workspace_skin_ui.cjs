@@ -71,7 +71,7 @@ function noOverflow(metrics, label) {
         if (innerWidth <= 768) document.querySelector('#sidebar')?.classList.add('hidden');
       });
       const theme = await page.evaluate(async () => {
-        const module = await import('/static/js/theme.js');
+        const module = await import('/static/js/theme.js?v=20260911organsrain1');
         window.nxTheme = module.default;
         window.nxThemes = module.THEMES;
         return true;

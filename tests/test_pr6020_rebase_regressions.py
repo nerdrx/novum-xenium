@@ -12,14 +12,13 @@ NOTES_TOOLS = {
     "manage_notes",
     "manage_calendar",
     "manage_tasks",
-    "manage_alarms",
     "ask_user",
     "update_plan",
 }
 GENERAL_COMPACT_TOOLS = {"ask_user", "web_search", "web_fetch"}
 CALENDAR_COMPACT_TOOLS = {
     "ask_user", "bash", "get_workspace", "manage_calendar", "manage_notes",
-    "python", "read_file", "web_fetch", "web_search",
+    "python", "read_file", "web_fetch", "web_search", "manage_alarms",
 }
 
 

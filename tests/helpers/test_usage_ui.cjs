@@ -165,7 +165,10 @@ function assertNoOverflow(metrics, name) {
         const welcome = document.querySelector('#welcome-screen');
         welcome.style.animation = 'none';
         welcome.style.transition = 'none';
-        welcome.style.setProperty('opacity', '1', 'important');
+        document.body.classList.add('welcome-ready');
+        document.getElementById('message').focus();
+        const assertHomeVisible = getComputedStyle(welcome).opacity;
+        if (assertHomeVisible !== '1') throw new Error('Home dashboard disappeared while composer focused');
       });
       const loaded = await page.evaluate(async () => {
         window.__usageCalls = [];

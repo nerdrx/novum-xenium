@@ -17,11 +17,11 @@ import spinnerModule from './spinner.js';
 import presetsModule from './presets.js?v=20260908personaname1';
 import fileHandlerModule from './fileHandler.js?v=20260909mobileattachmentedit1';
 import searchModule from './search.js';
-import documentModule from './document.js?v=20260815approvalsave1';
-import * as emailInbox from './emailInbox.js?v=20260815approvalsave1';
+import documentModule from './document.js?v=20261016approvalflow1';
+import * as emailInbox from './emailInbox.js?v=20261016approvalflow1';
 import codeRunnerModule from './codeRunner.js';
-import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js';
-import createResearchSynapse from './researchSynapse.js';
+import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js?v=20260921chatgptusage1';
+import createResearchSynapse from './researchSynapse.js?v=20260910roundlabels2';
 import { createStreamRenderer } from './streamingRenderer.js';
 import { parkMediaFrames, preserveMediaFrames, setHtmlPreservingMedia } from './chatMedia.js';
 import { createTurnRendering, startsContinuationRound } from './turnRendering.js?v=20260910round1stable1';
@@ -39,7 +39,7 @@ import {
   selectModelRouteForSend,
 } from './chatModelProvenance.js';
 import { createTerminalStreamError, isRecoverableStreamError, isUnsupportedToolCapabilityError } from './chatStreamErrors.js';
-import { loadPanel } from './panels.js';
+import { loadPanel } from './panels.js?v=20260909movepicklayer1';
 import { appendSubagentCard } from './subagentCard.js';
 import { updateBrowserPreview } from './browserPreview.js';
 import { updateRunStatus } from './runStatus.js';
@@ -182,9 +182,7 @@ import { invalidateSettings } from './appConfig.js';
   }
 
   function _ensurePrivateBrowserPreview(contentEl) {
-    const host = contentEl || (typeof currentToolBubble !== 'undefined' && currentToolBubble
-      ? currentToolBubble.querySelector('.agent-thread-content')
-      : null);
+    const host = contentEl;
     if (!host) return null;
     let root = host.querySelector('.private-browser-preview');
     if (root) {
@@ -1343,7 +1341,7 @@ import { invalidateSettings } from './appConfig.js';
 
   /** Check if an SSE reader is still actively connected for a session. */
   function hasActiveStream(sessionId) {
-    return _activeStreams.has(sessionId) || _streamSessionId === sessionId || _backgroundStreams.has(sessionId) ||
+    return _activeStreams.has(sessionId) || _streamSessionId === sessionId ||
            _resumingStreams.has(sessionId) || _resumeStreams.has(sessionId);
   }
 
@@ -2436,6 +2434,7 @@ import { invalidateSettings } from './appConfig.js';
     let _streamSawDone = false;
     let spinner = null;
     let timedOut = false;
+    let _isAgent = false;
     let processingProbeTimer = null;
     let processingProbeAbort = null;
     let _renderStream = () => {};
@@ -2923,7 +2922,7 @@ import { invalidateSettings } from './appConfig.js';
       currentAbort = abortCtrl;
 
 	      const _tState = Storage.loadToggleState();
-	      const _isAgent = (_tState.mode || 'chat') === 'agent' || !!_tState.plan_mode || workspaceAgentIntent;
+	      _isAgent = isAgentMode;
 
       // Timeout: 6 min for research and agent mode, 3 min otherwise
       const timeoutMs = el('research-toggle').checked || _isAgent ? RESEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
@@ -6200,7 +6199,6 @@ import { invalidateSettings } from './appConfig.js';
                 // Preserve the live answer and append the escaped error.
                 const terminalBody =
                   _catchViewHolder?.querySelector('.body')
-                  || roundHolder?.querySelector('.body')
                   || document.querySelector('.msg-ai:last-of-type .body');
                 if (terminalBody) {
                   const terminalNote = document.createElement('div');

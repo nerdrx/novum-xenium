@@ -10,6 +10,7 @@
 // holds that.
 
 import spinnerModule from '../spinner.js';
+import uiModule from '../ui.js?v=20260916largetoolscroll1';
 import * as Modals from '../modalManager.js';
 import { showToast } from '../ui.js?v=20260916largetoolscroll1';
 import { state } from './state.js';

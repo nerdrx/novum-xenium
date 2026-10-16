@@ -96,7 +96,9 @@ def test_custom_preset_route_forwards_reasoning_mode():
     result = asyncio.run(endpoint(PresetUpdateRequest(reasoning_mode="off")))
 
     assert result["success"] is True
-    assert manager.args[-1] == "off"
+    # The route forwards reasoning_mode after the legacy seven preset fields,
+    # before persona-memory and UI fields added later.
+    assert manager.args[7] == "off"
 
 
 def test_template_request_preserves_mode_and_legacy_defaults_to_auto():

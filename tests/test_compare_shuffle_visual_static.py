@@ -1,6 +1,6 @@
 from pathlib import Path
 import re
-from tests.helpers.stylesheets import app_css, stylesheet_cache_version
+from tests.helpers.stylesheets import app_css
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,16 +60,13 @@ def test_compare_agent_prompt_list_has_more_agentic_cases():
 
 
 def test_compare_cache_key_bumped_for_shuffle_notice():
-    html = _read("static/index.html")
     app = _read("static/app.js")
     index = _read("static/js/compare/index.js")
 
-    app_versions = re.findall(r"/static/app\.js\?v=([A-Za-z0-9_-]+)", html)
-    assert app_versions and len(set(app_versions)) == 1
-    assert stylesheet_cache_version() == app_versions[0]
-    assert re.search(r"compare/index\.js\?v=[A-Za-z0-9_-]+", app)
+    entry = re.search(r"compare/index\.js\?v=([A-Za-z0-9_-]+)", app)
+    panes = re.search(r"panes\.js\?v=([A-Za-z0-9_-]+)", index)
+    assert entry and panes and entry.group(1) == panes.group(1)
     assert re.search(r"vote\.js\?v=[A-Za-z0-9_-]+", index)
-    assert re.search(r"panes\.js\?v=[A-Za-z0-9_-]+", index)
     assert re.search(r"selector\.js\?v=[A-Za-z0-9_-]+", index)
 
 

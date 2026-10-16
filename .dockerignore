@@ -68,3 +68,6 @@ desktop/
 # Include distribution notices despite the general documentation exclusion.
 !ACKNOWLEDGMENTS.md
 !services/hwfit/data/README.md
+
+# Packaged owner-scoped design skills are backend runtime data.
+!agent-skills/**

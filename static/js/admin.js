@@ -14,6 +14,8 @@ import {
 } from './chatgptSubscriptionUsage.js';
 import { getSettings, getTools, invalidateSettings, invalidateTools } from './appConfig.js';
 
+const API_BASE = window.location.origin;
+
 let initialized = false;
 let modalEl = null;
 // /api/tools replaces the complete disabled list, so overlapping saves must

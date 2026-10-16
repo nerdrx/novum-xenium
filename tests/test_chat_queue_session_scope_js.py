@@ -27,6 +27,10 @@ def test_queued_request_stays_with_origin_chat_and_stop_is_scoped():
             function("function _setComposerAndSend(message", "function _promoteQueuedRequest"),
             function("function _promoteQueuedRequest(id)", "function _queueAgentRequest"),
             function("function _queueAgentRequest(message)", "export function queueStreamingComposerRequest"),
+            function("function _queuedSessionId()", "function _readPersistedQueuedRequests()"),
+            function("function _readPersistedQueuedRequests()", "function _persistQueuedRequests()"),
+            function("function _persistQueuedRequests()", "function _restoreQueuedRequestsForCurrentSession"),
+            function("function _restoreQueuedRequestsForCurrentSession()", "function _extractPlanText"),
             function("export function queueStreamingComposerRequest()", "function _drainQueuedAgentRequests").replace("export function ", "function "),
             function("function _drainQueuedAgentRequests()", "\n\n\n  /**\n   * Handle chat form submission"),
         ]
@@ -44,6 +48,11 @@ def test_queued_request_stays_with_origin_chat_and_stop_is_scoped():
       let _queuedBubbleObserver = null;
       const _queuedAgentRequests = [];
       const timers = [];
+      const savedQueue = {{}};
+      const localStorage = {{
+        getItem(key) {{ return savedQueue[key] || null; }},
+        setItem(key, value) {{ savedQueue[key] = value; }},
+      }};
       const sent = [];
       const stopped = [];
       const input = {{ value: '', dispatchEvent() {{}} }};

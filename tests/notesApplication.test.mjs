@@ -27,7 +27,7 @@ test('views cannot mutate Notes state, but captured identities observe applicati
   assert.equal(note.title, 'Changed');
 });
 
-test('fetch preserves archived query, failures clear notes, and successful fallback shapes', async () => {
+test('fetch preserves archived query, failures preserve the last good notes, and supports fallback shapes', async () => {
   const app = createNotesState(), requests = [];
   let response = { ok: true, json: async () => [{ id: 'a' }] };
   const workflows = createNotesWorkflows({ app, api: { listNotes: async archived => { requests.push(archived); return response; } }, effects: {} });
@@ -38,13 +38,13 @@ test('fetch preserves archived query, failures clear notes, and successful fallb
   assert.equal(app.state.notes[0].id, 'a');
   response = { ok: false };
   await workflows._fetchNotes();
-  assert.equal(app.state.notes.length, 0);
+  assert.equal(app.state.notes[0].id, 'a');
   response = { ok: true, json: async () => ({ notes: [{ id: 'b' }] }) };
   await workflows._fetchNotes();
   assert.equal(app.state.notes[0].id, 'b');
 });
 
-test('fetch completions retain the original last-completion ordering', async () => {
+test('stale fetch completion cannot replace results from the latest request', async () => {
   const app = createNotesState(), releases = [];
   const workflows = createNotesWorkflows({ app, api: { listNotes: () => new Promise(resolve => releases.push(resolve)) }, effects: {} });
   const first = workflows._fetchNotes(), second = workflows._fetchNotes();
@@ -53,7 +53,7 @@ test('fetch completions retain the original last-completion ordering', async () 
   assert.equal(app.state.notes[0].id, 'second');
   releases[0]({ ok: true, json: async () => ({ notes: [{ id: 'first' }] }) });
   await first;
-  assert.equal(app.state.notes[0].id, 'first');
+  assert.equal(app.state.notes[0].id, 'second');
 });
 
 test('writes built from views store raw data, not read-only views', () => {

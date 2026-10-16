@@ -151,3 +151,14 @@ The PR #40 canonical baseline and its exact justification are documented in
 [`pr40-validation.md`](pr40-validation.md). All 122 properties and 676 inventory
 elements remain covered; only one element/property opts into line-relative
 measurement.
+
+## Novum Xenium integration baseline
+
+The October 16 upstream sync intentionally retains Novum's purple palette,
+login font, native button semantics, larger touch targets, wrapped menu actions,
+viewport-clamped menus and model picker, and mobile composer spacing. The
+upstream reference capture matched its original digest before comparison.
+The merged baseline records those fork differences across the full inventory;
+functional browser checks cover keyboard model/provider selection, menu bounds
+at phone and short landscape sizes, document switching and workspace recovery.
+This is headless browser evidence, not physical-device validation.

@@ -214,8 +214,12 @@ class RequestAuthority:
 
     def restrict(self, policy=None, disabled_tools=()):
         policy = policy or ToolPolicy()
-        return replace(self, denied=self.denied | frozenset(
-            canonical_tool(n) for n in set(disabled_tools or ()) | policy.all_disabled_names()),
+        policy_disabled = policy.all_disabled_names() if hasattr(policy, "all_disabled_names") else ()
+        denied_names = set(self.denied)
+        denied_names.update(disabled_tools or ())
+        denied_names.update(policy_disabled or ())
+        return replace(self, denied=frozenset(
+            canonical_tool(n) for n in denied_names),
             block_all=self.block_all or policy.block_all_tool_calls,
             disable_mcp=self.disable_mcp or policy.disable_mcp)
 

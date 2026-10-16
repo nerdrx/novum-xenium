@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, event, insert
 from sqlalchemy.orm import sessionmaker
 
 import core.database as database
+import core.session_manager as session_manager_module
+from core.session_manager import SessionManager
 import src.database as legacy_database
 import routes.cleanup.cleanup_routes as routes
 
@@ -19,11 +21,16 @@ def cleanup_api(tmp_path, monkeypatch):
         f"sqlite:///{(tmp_path / 'cleanup.db').as_posix()}",
         connect_args={"check_same_thread": False},
     )
+    def enable_foreign_keys(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    event.listen(engine, "connect", enable_foreign_keys)
     database.Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False)
     monkeypatch.setattr(legacy_database, "SessionLocal", factory)
+    monkeypatch.setattr(session_manager_module, "SessionLocal", factory)
     monkeypatch.setattr(routes, "get_current_user", lambda request: "alice")
-    manager = SimpleNamespace(sessions={})
+    manager = SessionManager()
     app = FastAPI()
     app.include_router(routes.setup_cleanup_routes(manager))
     with TestClient(app) as client:
@@ -79,6 +86,34 @@ def test_cleanup_still_removes_genuinely_short_old_chat(cleanup_api):
     with factory() as db:
         assert db.get(database.Session, "old-chat") is None
         assert db.query(database.ChatMessage).filter_by(session_id="old-chat").count() == 0
+
+
+def test_guarded_cleanup_preserves_owner_library_items_with_foreign_keys(cleanup_api):
+    client, factory, manager = cleanup_api
+    seed(factory, manager, 3, 3)
+    with factory() as db:
+        assert db.connection().exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+        db.add(database.Document(
+            id="library-doc", session_id="old-chat", title="Saved document",
+            current_content="Keep this", owner="alice",
+        ))
+        db.add(database.GalleryImage(
+            id="library-image", session_id="old-chat", filename="saved.png",
+            prompt="Generated image", owner="alice", is_active=True,
+        ))
+        db.commit()
+
+    response = client.post("/api/cleanup")
+    assert response.json()["deleted_count"] == 1
+    with factory() as db:
+        document = db.get(database.Document, "library-doc")
+        image = db.get(database.GalleryImage, "library-image")
+        assert document is not None and document.session_id is None
+        assert document.owner == "alice" and document.current_content == "Keep this"
+        assert image is not None and image.session_id is None
+        assert image.owner == "alice" and image.is_active is True
+        assert db.query(database.ChatMessage).filter_by(session_id="old-chat").count() == 0
+    assert "old-chat" not in manager.sessions
 
 
 def test_new_archive_is_not_deleted_in_same_cleanup(cleanup_api):
@@ -157,6 +192,46 @@ def test_cleanup_rechecks_messages_at_the_delete_boundary(cleanup_api):
     with factory() as db:
         assert db.get(database.Session, "old-chat") is not None
         assert db.query(database.ChatMessage).filter_by(session_id="old-chat").count() == 23
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owner", "bob"),
+    ("archived", False),
+    ("is_important", True),
+    ("last_accessed", datetime.now(timezone.utc).replace(tzinfo=None)),
+    ("name", "Remember this"),
+    ("created_at", datetime.now(timezone.utc).replace(tzinfo=None)),
+])
+def test_cleanup_rechecks_all_protections_in_atomic_delete(cleanup_api, field, value):
+    """Changes after selection must be enforced by the conditional DELETE."""
+    client, factory, manager = cleanup_api
+    seed(factory, manager, 3, 3)
+    engine = factory.kw["bind"]
+    injected = False
+
+    def protect_candidate(connection, cursor, statement, parameters, context, executemany):
+        nonlocal injected
+        if not injected and statement.lstrip().startswith("DELETE FROM sessions"):
+            injected = True
+            connection.execute(
+                database.Session.__table__.update()
+                .where(database.Session.id == "old-chat")
+                .values({field: value})
+            )
+
+    event.listen(engine, "before_cursor_execute", protect_candidate)
+    try:
+        response = client.post("/api/cleanup")
+    finally:
+        event.remove(engine, "before_cursor_execute", protect_candidate)
+
+    assert injected
+    assert response.json()["deleted_count"] == 0
+    assert "old-chat" in manager.sessions
+    with factory() as db:
+        row = db.get(database.Session, "old-chat")
+        assert row is not None
+        assert db.query(database.ChatMessage).filter_by(session_id="old-chat").count() == 3
 
 
 def test_cleanup_space_freed_ignores_concurrently_deleted_session(cleanup_api):

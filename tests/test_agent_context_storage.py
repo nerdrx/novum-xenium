@@ -81,7 +81,7 @@ def test_large_result_that_exceeds_remaining_input_budget_is_archived(monkeypatc
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(
         loop, "get_setting",
-        lambda key, default=None: 1400 if key == "agent_input_token_budget" else default,
+        lambda key, default=None: 10000 if key == "agent_input_token_budget" else default,
     )
     monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
     monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
@@ -91,7 +91,7 @@ def test_large_result_that_exceeds_remaining_input_budget_is_archived(monkeypatc
     requests = []
     needle = "EXACT_DETAIL_BURIED_IN_RESULT"
     padding = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega "
-    raw = padding * 40 + needle + padding * 3
+    raw = padding * 400 + needle + padding * 3
 
     async def execute(block, **kwargs):
         if block.tool_type == "web_fetch":
@@ -130,7 +130,7 @@ def test_large_result_that_exceeds_remaining_input_budget_is_archived(monkeypatc
     async def run():
         return [event async for event in loop.stream_agent_loop(
             "https://local.test/v1", "gpt-6-luna",
-            [{"role": "user", "content": "Find the exact detail."}],
+            [{"role": "user", "content": "Fetch https://example.test and find the exact detail."}],
             owner="alice", session_id="chat-small-budget", relevant_tools={"web_fetch"},
             max_tokens=512, max_rounds=3, _is_teacher_run=True,
         )]
@@ -269,7 +269,7 @@ def test_oversized_read_file_archives_when_actual_context_is_full_below_configur
     async def run():
         return [event async for event in loop.stream_agent_loop(
             "https://local.test/v1", "gpt-6-luna",
-            [{"role": "user", "content": "Inspect the main source and find its marker."}],
+            [{"role": "user", "content": "Read src/main.js and find its marker."}],
             owner="alice", session_id="chat-context-already-full", relevant_tools={"read_file"},
             max_tokens=512, max_rounds=3, _is_teacher_run=True,
         )]
@@ -331,7 +331,7 @@ def test_source_archive_preserves_literal_newlines_and_quotes_for_exact_chunks(m
 
     async def run():
         return [event async for event in loop.stream_agent_loop(
-            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Inspect the source."}],
+            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Read app.js and recover its exact source text."}],
             owner="alice", session_id="chat-source-exact", relevant_tools={"read_file"},
             max_tokens=512, max_rounds=4, _is_teacher_run=True,
         )]
@@ -344,7 +344,7 @@ def test_subprocess_failure_archive_keeps_error_and_both_streams(monkeypatch, tm
     import src.tool_result_store as store
 
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: 1400 if key == "agent_input_token_budget" else default)
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: 20000 if key == "agent_input_token_budget" else False if key in {"agent_coding_grounding", "agent_milestone_workflow"} else default)
     monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
     monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
     monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
@@ -405,8 +405,8 @@ def test_subprocess_failure_archive_keeps_error_and_both_streams(monkeypatch, tm
 
     async def run():
         return [event async for event in loop.stream_agent_loop(
-            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Inspect the timed out run."}],
-            owner="alice", session_id="chat-python-failure", relevant_tools={"python"},
+            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Run Python code print(1) in the workspace and inspect its failure output."}],
+            owner="alice", workspace=str(tmp_path), session_id="chat-python-failure", relevant_tools={"python"},
             max_tokens=512, max_rounds=6, _is_teacher_run=True,
         )]
 
@@ -420,7 +420,7 @@ def test_requested_text_keeps_middle_when_fits_and_archives_when_budget_low(monk
     import src.tool_result_store as store
 
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: (3000 if low_budget else default) if key == "agent_input_token_budget" else default)
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: (4500 if low_budget else default) if key == "agent_input_token_budget" else default)
     monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
     monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
     monkeypatch.setattr(loop, "_agent_route_tool_mode", lambda *args, **kwargs: (True, False, False))
@@ -460,7 +460,7 @@ def test_requested_text_keeps_middle_when_fits_and_archives_when_budget_low(monk
 
     async def run():
         return [event async for event in loop.stream_agent_loop(
-            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Read the UI design procedure."}],
+            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Read the UI design procedure and find its middle marker."}],
             owner="alice", session_id=f"chat-requested-text-{tool_name}-{low_budget}", relevant_tools={tool_name},
             max_tokens=512, max_rounds=2, _is_teacher_run=True,
         )]
@@ -475,7 +475,7 @@ def test_same_round_tool_results_share_remaining_archive_budget(monkeypatch, tmp
     monkeypatch.setattr(store, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(
         loop, "get_setting",
-        lambda key, default=None: 1400 if key == "agent_input_token_budget" else default,
+        lambda key, default=None: 3500 if key == "agent_input_token_budget" else default,
     )
     monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
     monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
@@ -524,7 +524,7 @@ def test_same_round_tool_results_share_remaining_archive_budget(monkeypatch, tmp
 
     async def run():
         return [event async for event in loop.stream_agent_loop(
-            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Find both details."}],
+            "https://local.test/v1", "gpt-6-luna", [{"role": "user", "content": "Read first.txt and second.txt and find both details."}],
             owner="alice", session_id="chat-multi-results", relevant_tools={"read_file"},
             max_tokens=512, max_rounds=3, _is_teacher_run=True,
         )]

@@ -1802,6 +1802,17 @@ def test_candidate_schema_changes_cannot_mutate_contract():
         contract.offered = frozenset()
 
 
+def test_duplicate_tool_schema_keeps_first_canonical_definition():
+    original = deepcopy(next(s for s in FUNCTION_TOOL_SCHEMAS
+                             if s["function"]["name"] == "generate_image"))
+    compatibility = deepcopy(original)
+    compatibility["function"]["parameters"]["properties"].pop("attachment_id", None)
+    contract = resolve({"image_generation"}, schemas=[original, compatibility])
+    selected = next(schema for schema in contract.schemas()
+                    if schema["function"]["name"] == "generate_image")
+    assert selected == original
+
+
 @pytest.mark.asyncio
 async def test_dispatcher_enforces_bound_contract_without_external_mutations(monkeypatch):
     from src import tool_execution, tool_implementations

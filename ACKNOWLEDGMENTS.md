@@ -186,3 +186,5 @@ Planet positions use the documented equations and Table 1 orbital elements from 
 ## Thanks to
 
 - Friends, for helping me debug.
+
+- The native-tool Docker seccomp profile derives from [Moby profiles](https://github.com/moby/profiles), licensed under Apache-2.0; its pinned source and limited namespace changes are recorded in `docker/seccomp-bubblewrap.NOTICE`.

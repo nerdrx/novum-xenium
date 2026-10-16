@@ -475,7 +475,7 @@ async def test_last_dispatch_validation_refuses_replacement_and_resets_context(t
     implementation = AsyncMock()
     monkeypatch.setattr(execution, "_execute_tool_block_impl", implementation)
     security = ToolRunSecurityContext()
-    def decision(*args):
+    def decision(*args, **kwargs):
         target.rename(tmp_path / "old-a")
         target.write_text("new")
         return SimpleNamespace(allowed=True)

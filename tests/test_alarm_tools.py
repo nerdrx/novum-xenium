@@ -189,13 +189,21 @@ def test_alarm_is_registered_as_a_tool_and_plan_mode_mutator():
 @pytest.mark.asyncio
 async def test_non_admin_cannot_control_shared_host_audio(monkeypatch, tmp_path):
     from src import tool_execution
+    from src.agent_runtime.authority import OperationGrant, RequestAuthority
     from src.agent_tools import ToolBlock
 
     monkeypatch.setattr(tool_execution, "_owner_is_admin", lambda _owner: False)
+    authority = RequestAuthority(
+        "alarm-test", "ordinary-user", "alarm-session", "",
+        (OperationGrant("manage_alarms"),),
+    )
     _, result = await tool_execution.execute_tool_block(
         ToolBlock("manage_alarms", '{"action":"create","at":"15:00"}'),
         owner="ordinary-user",
+        session_id="alarm-session",
+        workspace="",
         security_context=tool_execution.NO_TOOL_SECURITY_CONTEXT,
+        request_authority=authority,
     )
     assert result["exit_code"] == 1
     assert "admin" in result["error"].lower()

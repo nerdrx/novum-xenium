@@ -54,6 +54,7 @@ def test_model_context_queries_models_for_v1_base(monkeypatch):
     assert model_context._query_context_length("http://127.0.0.1:8080/v1", "qwen3") == (32768, True)
     assert seen == [
         "http://127.0.0.1:8080/slots",
+        "http://127.0.0.1:8080/props",
         "http://127.0.0.1:8080/v1/models",
     ]
 
@@ -84,6 +85,7 @@ def test_model_context_reads_llama_router_preset_context_without_loading(monkeyp
     ) == (32768, True)
     assert seen == [
         "http://127.0.0.1:8097/slots",
+        "http://127.0.0.1:8097/props",
         "http://127.0.0.1:8097/v1/models",
     ]
 

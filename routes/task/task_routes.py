@@ -663,7 +663,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             from routes.email_pollers import ensure_notification_email_poller
             ensure_notification_email_poller()
         notifications, cursor = read_notification_page(user, after=after, limit=limit)
-        return {"notifications": notifications, "cursor": cursor}
+        return {"notifications": notifications, "cursor": cursor, "owner": user}
 
     @router.get("/notification-feed/{event_id}")
     async def get_notification_feed_item(request: Request, event_id: int):

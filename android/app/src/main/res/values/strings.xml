@@ -45,11 +45,8 @@
     <string name="share_failed">Could not read the shared content. Try sharing it again.</string>
     <string name="share_too_large">Shared files exceed the 50 MB limit.</string>
     <string name="too_many_shares">Finish adding or discard pending shares before sharing more.</string>
-    <string name="enable_notifications">New email and task alerts</string>
-    <string name="notification_privacy">Alerts use generic text and do not include email details.</string>
-    <string name="notification_server_checking">Checking alert availability…</string>
-    <string name="notification_server_pending">Server setup pending</string>
-    <string name="notification_server_sign_in">Sign in to check alert availability</string>
-    <string name="notification_server_ready">Server ready for alerts</string>
+    <string name="enable_notifications">Email, task, and chat alerts</string>
+    <string name="notification_privacy">Keeps this private connection active and checks your signed-in server for updates. Alerts show generic text only.</string>
+    <string name="notification_local_explanation">Background checks run while this option is on. Android may stop them if you force-stop Novum or restart the phone.</string>
     <string name="notification_permission_denied">Allow notifications in Android settings to receive alerts.</string>
 </resources>

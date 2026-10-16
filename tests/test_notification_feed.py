@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -136,7 +137,15 @@ def test_authenticated_feed_client_cursor_owner_and_server_identity(monkeypatch)
         "bob", "chat", "Bob event", source="chat_run", source_id="bob-1"
     )
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        task = email_pollers._notification_email_task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    app = FastAPI(lifespan=lifespan)
 
     @app.middleware("http")
     async def test_identity(request, call_next):
@@ -146,34 +155,33 @@ def test_authenticated_feed_client_cursor_owner_and_server_identity(monkeypatch)
         return await call_next(request)
 
     app.include_router(task_routes.setup_task_routes(task_scheduler=object()))
-    client = TestClient(app)
-    client.__enter__()  # Keep one event loop alive across the feed/status requests.
+    with TestClient(app) as client:
+        initial = client.get("/api/tasks/notification-feed", headers={"x-test-owner": "alice"})
+        assert initial.status_code == 200
+        assert initial.json() == {"notifications": [], "cursor": 1, "owner": "alice"}
+        alice = client.get(
+            "/api/tasks/notification-feed?after=0&limit=50&email=true",
+            headers={"x-test-owner": "alice"},
+        )
+        assert alice.status_code == 200
+        assert alice.json()["owner"] == "alice"
+        assert [row["title"] for row in alice.json()["notifications"]] == ["Alice event"]
+        bob = client.get(
+            "/api/tasks/notification-feed?after=0",
+            headers={"x-test-owner": "bob"},
+        )
+        assert [row["title"] for row in bob.json()["notifications"]] == ["Bob event"]
+        assert bob.json()["owner"] == "bob"
+        assert client.get("/api/tasks/notification-feed?after=0").status_code == 401
 
-    initial = client.get("/api/tasks/notification-feed", headers={"x-test-owner": "alice"})
-    assert initial.status_code == 200
-    assert initial.json() == {"notifications": [], "cursor": 1}
-    alice = client.get(
-        "/api/tasks/notification-feed?after=0&limit=50&email=true",
-        headers={"x-test-owner": "alice"},
-    )
-    assert alice.status_code == 200
-    assert [row["title"] for row in alice.json()["notifications"]] == ["Alice event"]
-    bob = client.get(
-        "/api/tasks/notification-feed?after=0",
-        headers={"x-test-owner": "bob"},
-    )
-    assert [row["title"] for row in bob.json()["notifications"]] == ["Bob event"]
-    assert client.get("/api/tasks/notification-feed?after=0").status_code == 401
+        status_path = "/api/tasks/notification-status"
+        status1 = client.get(status_path, headers={"x-test-owner": "alice"})
+        status2 = client.get(status_path, headers={"x-test-owner": "alice"})
+        assert status1.status_code == status2.status_code == 200
+        assert status1.json()["server_id"] == status2.json()["server_id"]
+        assert status1.json()["self_hosted"] and status1.json()["feed_ready"]
+        assert status1.json()["worker_enabled"] and status1.json()["worker_running"]
+        assert status1.json()["email_scan_running"]
+        assert client.get(status_path).status_code == 401
 
-    status_path = "/api/tasks/notification-status"
-    status1 = client.get(status_path, headers={"x-test-owner": "alice"})
-    status2 = client.get(status_path, headers={"x-test-owner": "alice"})
-    assert status1.status_code == status2.status_code == 200
-    assert status1.json()["server_id"] == status2.json()["server_id"]
-    assert status1.json()["self_hosted"] and status1.json()["feed_ready"]
-    assert status1.json()["worker_enabled"] and status1.json()["worker_running"]
-    assert status1.json()["email_scan_running"]
-    assert client.get(status_path).status_code == 401
-
-    client.close()
     engine.dispose()

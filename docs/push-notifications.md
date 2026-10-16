@@ -1,35 +1,11 @@
-# Android push notifications
+# Android notifications
 
-The backend sends FCM HTTP v1 messages only after an authenticated client opts
-in and registers its device. The payload contains a generic notification and an
-opaque feed event ID and per-install `server_id`; clients resolve details through the authenticated
-`GET /api/tasks/notification-feed/{event_id}` endpoint. Email subjects, senders,
-message bodies, and routes are never sent through FCM.
+Android notifications use the Novum server's authenticated notification feed. The app does not use Firebase, FCM, or a third-party push provider.
 
-To enable delivery, configure Firebase Cloud Messaging for the Android app and
-place a service-account JSON file on the server. Install the optional
-`google-auth` dependency and set `NX_FCM_SERVICE_ACCOUNT_FILE` to the mounted
-server-side file path. Keep that file out of the repository, client builds,
-logs, and backups exposed to clients. `GET /api/tasks/notification-status`
-reports dependency, credential, and in-process worker readiness;
-it never returns the path or credential data. Registration and status both
-return the stable opaque `server_id`, which clients should scope to the canonical
-server origin and validate on notification taps.
+When the user opts in, Android runs a foreground service and shows a persistent notification that the background connection is active. While Android permits network access, the service polls `GET /api/tasks/notification-feed?after=<cursor>&limit=50&email=true` about once per minute. This is an approximate cadence: deep Doze can defer network access until a maintenance window. The service uses Android's `specialUse` foreground-service type for this explicitly user-enabled, persistent connection to the self-hosted workspace; that declaration does not bypass Android background or power restrictions. The first request establishes the current cursor without replaying older events. The cursor is stored on-device for the configured server; the server scopes feed results to the authenticated owner.
 
-The app must request OS notification permission before registering with
-`POST /api/tasks/notification-devices` using `{token, platform, opt_in: true}`.
-It may set `email_enabled`, `task_enabled`, and `chat_enabled` per device. Limit is ten devices
-per owner. Re-registering the same FCM token under another authenticated owner
-transfers it and revokes its former owner association. On logout, call
-`DELETE /api/tasks/notification-devices/{device_id}` before clearing the
-session. Feed cursors remain local to each device.
+Task, email, and chat event details stay on the server. Native event notifications use generic text and carry only an opaque event ID. Tapping one opens `#notification-<id>` in the workspace, which resolves the event through the authenticated owner-scoped detail endpoint before routing to the task, chat, or email.
 
-Background email discovery runs every two minutes while in-process pollers are
-enabled. It checks at most five opted-in owners' enabled mail accounts per
-tick, reads at most 50 new message headers per account, and never fetches
-email bodies or invokes a model. The first scan records a UIDNEXT baseline
-without notifying for existing mail; UIDVALIDITY changes establish a fresh
-baseline. Task, email, and chat events use generic push
-text. Delivery retries are bounded to five
-attempts per event and device; only FCM's explicit `UNREGISTERED` response
-removes a device token.
+Email discovery is bounded and server-side. The Android poller's `email=true` query refreshes a short-lived watcher while enabled; the server checks configured mail accounts in the background and advances each account's UID cursor without fetching message bodies or invoking a model. Feed reads do not download email contents.
+
+Android notification permission is required. Deep Doze may delay polling until Android permits network access. Force-stopping the app, rebooting the device, or the OS stopping its process can stop polling until the app is reopened and the connection is enabled again. Connectivity and server availability also determine whether new events can be discovered; older events are not replayed when notifications are first enabled.

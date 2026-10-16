@@ -2,9 +2,9 @@ package com.novumxenium.app
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Intent
+import android.content.ComponentName
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.ConnectivityManager
@@ -48,7 +48,6 @@ class MainActivity : Activity() {
         const val EXTRA_NOTIFICATION_SERVER_ID = "notification_server_id"
         const val ACTION_OPEN_NOTIFICATION = "com.novumxenium.app.OPEN_NOTIFICATION"
         private const val NOTIFICATION_PERMISSION_REQUEST = 412
-        private const val NOTIFICATION_CHANNEL_ID = "novum_updates"
         private const val MAX_SHARED_FILE_BYTES = 50L * 1024 * 1024
     }
 
@@ -70,8 +69,31 @@ class MainActivity : Activity() {
     private var pendingNotificationServerId: String? = null
     private var pushBridgeOrigin: String? = null
     private var notificationStatusInfo: TextView? = null
-    private var lastPushSyncAt = 0L
-    private val pushSyncing = AtomicBoolean(false)
+    @Volatile private var notificationService: NotificationConnectionService? = null
+    private var notificationServiceBound = false
+    private var notificationServiceBindRequested = false
+    private val notificationServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: android.os.IBinder?) {
+            if (closed) {
+                runCatching { unbindService(this) }
+                notificationServiceBindRequested = false
+                return
+            }
+            notificationService = (service as? NotificationConnectionService.LocalBinder)?.service()
+            notificationServiceBound = notificationService != null
+            if (pushPrefs.getBoolean("enabled", false)) notificationService?.enable()
+            val saved = prefs.getString("server", "").orEmpty()
+            val active = notificationService?.connectionState()
+            if (active != null && saved.isNotBlank() && runCatching {
+                    canonicalOrigin(active.target) == canonicalOrigin(ServerAddress.parse(saved))
+                }.getOrDefault(false)) attachExistingConnection(active)
+            else if (saved.isNotBlank()) connect(saved) else configure()
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            notificationService = null
+            notificationServiceBound = false
+        }
+    }
     private lateinit var header: LinearLayout
     private var pageReady = false
     private var pageFailed = false
@@ -94,21 +116,7 @@ class MainActivity : Activity() {
     private data class Download(val url: String, val cookie: String?, val userAgent: String)
     private var download: Download? = null
     private val prefs by lazy { getSharedPreferences("connection", MODE_PRIVATE) }
-    private val pushPrefs by lazy { getSharedPreferences("push", MODE_PRIVATE) }
-    private val networkChanges = object : ConnectivityManager.NetworkCallback() {
-        override fun onLinkPropertiesChanged(network: android.net.Network, properties: android.net.LinkProperties) {
-            val client = bridge ?: return
-            if (closed) return
-            work.execute {
-                runCatching {
-                    val configuration = networkConfiguration()
-                    client.setInterfacesJSON(configuration.first)
-                    client.setDNSJSON(configuration.second)
-                }
-            }
-        }
-    }
-
+    private val pushPrefs by lazy { getSharedPreferences("local_notifications", MODE_PRIVATE) }
     private val poll = object : Runnable {
         override fun run() {
             if (closed) return
@@ -124,14 +132,12 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            syncPushRegistrationIfDue()
             handler.postDelayed(this, 2000)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        pushPrefs.edit().putBoolean("foreground", false).apply()
         val saved = prefs.getString("server", "") ?: ""
         if (saved.isNotBlank()) startupPeekUntil = SystemClock.uptimeMillis() + 2000
         val root = LinearLayout(this).apply {
@@ -217,9 +223,10 @@ class MainActivity : Activity() {
             } else receiveSharedContent(intent)
         } else receiveSharedContent(intent)
         receiveNotificationIntent(intent)
-        getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkChanges)
+        notificationServiceBindRequested = bindService(
+            Intent(this, NotificationConnectionService::class.java), notificationServiceConnection, BIND_AUTO_CREATE,
+        )
         handler.post(poll)
-        if (saved.isNotBlank()) connect(saved) else configure()
     }
 
     override fun onResume() {
@@ -240,10 +247,9 @@ class MainActivity : Activity() {
     }
 
     private fun updatePushForeground() {
-        if (!BuildConfig.FCM_ENABLED || !::web.isInitialized) return
-        pushPrefs.edit().putBoolean(
-            "foreground", activityResumed && connected && pageReady && web.hasWindowFocus() && foregroundFeedReady,
-        ).apply()
+        notificationService?.setAppForeground(
+            activityResumed && connected && pageReady && web.hasWindowFocus() && foregroundFeedReady,
+        )
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -257,7 +263,7 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != NOTIFICATION_PERMISSION_REQUEST) return
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            refreshFcmToken()
+            setNotificationsEnabled(true)
         } else {
             pushPrefs.edit().putBoolean("enabled", false).apply()
             Toast.makeText(this, R.string.notification_permission_denied, Toast.LENGTH_LONG).show()
@@ -457,20 +463,20 @@ class MainActivity : Activity() {
             setText(prefs.getString("server", ""))
             setPadding(dp(24), dp(16), dp(24), dp(16))
         }
-        val notifications = if (BuildConfig.FCM_ENABLED) CheckBox(this).apply {
+        val notifications = CheckBox(this).apply {
             text = getString(R.string.enable_notifications)
             isChecked = pushPrefs.getBoolean("enabled", false)
-        } else null
-        notificationStatusInfo = if (notifications != null) TextView(this).apply {
-            text = getString(R.string.notification_server_checking)
+        }
+        notificationStatusInfo = TextView(this).apply {
+            text = getString(R.string.notification_local_explanation)
             setTextColor(Color.LTGRAY)
             setPadding(dp(24), 0, dp(24), dp(8))
             visibility = if (notifications.isChecked) View.VISIBLE else View.GONE
-        } else null
-        notifications?.setOnCheckedChangeListener { _, checked ->
+        }
+        notifications.setOnCheckedChangeListener { _, checked ->
             notificationStatusInfo?.visibility = if (checked) View.VISIBLE else View.GONE
         }
-        val dialogContent = if (notifications != null) LinearLayout(this).apply {
+        val dialogContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(input)
             addView(notifications)
@@ -480,7 +486,7 @@ class MainActivity : Activity() {
                 setTextColor(Color.LTGRAY)
                 setPadding(dp(24), 0, dp(24), dp(8))
             })
-        } else input
+        }
         val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.server_title))
             .setMessage(getString(R.string.server_explanation))
             .setView(dialogContent).setNegativeButton(getString(R.string.cancel), null).setPositiveButton(getString(R.string.connect), null).create()
@@ -488,10 +494,10 @@ class MainActivity : Activity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
                     ServerAddress.parse(input.text.toString())
-                    val enableNotifications = notifications?.isChecked == true
+                    val enableNotifications = notifications.isChecked
                     dialog.dismiss()
                     connect(input.text.toString())
-                    if (notifications != null) setNotificationsEnabled(enableNotifications)
+                    setNotificationsEnabled(enableNotifications)
                 }
                 catch (e: Exception) { input.error = e.message ?: getString(R.string.invalid_server) }
             }
@@ -510,8 +516,7 @@ class MainActivity : Activity() {
     private fun openPendingNotification() {
         val route = NotificationTap.route(pendingNotificationEventId) ?: return
         val target = server ?: return
-        val expectedServerId = pushPrefs.getString("server_id", null)
-        if (pendingNotificationServerId.isNullOrBlank() || pendingNotificationServerId != expectedServerId) {
+        if (pendingNotificationServerId.isNullOrBlank() || pendingNotificationServerId != canonicalOrigin(target)) {
             pendingNotificationEventId = null
             pendingNotificationServerId = null
             return
@@ -522,7 +527,7 @@ class MainActivity : Activity() {
     }
 
     private fun installPushBridge(target: URI) {
-        if (!BuildConfig.FCM_ENABLED || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
         val origin = "${target.scheme}://${target.rawAuthority}"
         if (pushBridgeOrigin == origin) return
         if (pushBridgeOrigin != null) WebViewCompat.removeWebMessageListener(web, "NovumPushBridge")
@@ -541,45 +546,24 @@ class MainActivity : Activity() {
     private fun handlePushBridgeMessage(target: URI, message: WebMessageCompat, reply: JavaScriptReplyProxy) {
         val request = runCatching { JSONObject(message.data ?: "") }.getOrNull() ?: return
         val requestId = request.optString("request_id")
-        if (request.optString("method") == "feed-ready") {
+        when (request.optString("method")) {
+            "feed-ready" -> {
             foregroundFeedReady = request.optBoolean("ready", false)
+            val owner = request.optString("owner").takeIf {
+                it.isNotEmpty() && it.length <= 512 && it.none(Char::isISOControl)
+            }.orEmpty()
+            notificationService?.setFeedReady(foregroundFeedReady, owner)
             updatePushForeground()
             if (requestId.matches(Regex("[A-Za-z0-9_-]{1,64}"))) {
                 reply.postMessage(JSONObject().put("request_id", requestId).put("ok", true).toString())
             }
             return
-        }
-        if (!requestId.matches(Regex("[A-Za-z0-9_-]{1,64}"))) return
-        if (request.optString("method") != "unregister") {
-            reply.postMessage(JSONObject().put("request_id", requestId).put("ok", false).toString())
-            return
-        }
-        val deviceId = pushPrefs.getString("device_id", null)
-        val registeredOrigin = pushPrefs.getString("registered_origin", null)
-        val targetOrigin = canonicalOrigin(target)
-        if (registeredOrigin != targetOrigin) {
-            reply.postMessage(JSONObject().put("request_id", requestId).put("ok", false).toString())
-            return
-        }
-        if (deviceId.isNullOrBlank()) {
-            pushPrefs.edit().putBoolean("enabled", false).apply()
-            callFcm("deleteToken")
-            reply.postMessage(JSONObject().put("request_id", requestId).put("ok", true).toString())
-            return
-        }
-        if (!deviceId.matches(Regex("[A-Za-z0-9_-]{1,128}"))) {
-            reply.postMessage(JSONObject().put("request_id", requestId).put("ok", false).toString())
-            return
-        }
-        work.execute {
-            val response = notificationRequest(target, "DELETE", "/api/tasks/notification-devices/$deviceId")
-            val status = response?.first
-            val ok = status != null && (status in 200..299 || status == 404)
-            pushPrefs.edit().putBoolean("enabled", false).apply()
-            callFcm("deleteToken")
-            if (ok) pushPrefs.edit().remove("device_id").remove("server_id").apply()
-            handler.post {
-                runCatching { reply.postMessage(JSONObject().put("request_id", requestId).put("ok", ok).toString()) }
+            }
+            "unregister" -> {
+                notificationService?.setFeedReady(false, "")
+                if (requestId.matches(Regex("[A-Za-z0-9_-]{1,64}"))) {
+                    reply.postMessage(JSONObject().put("request_id", requestId).put("ok", true).toString())
+                }
             }
         }
     }
@@ -587,107 +571,15 @@ class MainActivity : Activity() {
     private fun setNotificationsEnabled(enabled: Boolean) {
         pushPrefs.edit().putBoolean("enabled", enabled).apply()
         if (!enabled) {
-            syncPushRegistrationIfDue(force = true)
-            callFcm("deleteToken")
+            notificationService?.disable()
             return
         }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
         } else {
-            refreshFcmToken()
+            notificationService?.enable()
         }
     }
-
-    private fun refreshFcmToken() {
-        ensureNotificationChannel()
-        callFcm("refreshToken")
-    }
-
-    private fun callFcm(method: String) {
-        if (!BuildConfig.FCM_ENABLED) return
-        runCatching {
-            val type = Class.forName("com.novumxenium.app.FcmIntegration")
-            when (method) {
-                "refreshToken" -> type.getMethod(method, Activity::class.java).invoke(null, this)
-                "deleteToken" -> type.getMethod(method, android.content.Context::class.java).invoke(null, this)
-            }
-        }
-    }
-
-    private fun ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(NOTIFICATION_CHANNEL_ID, "Novum updates", NotificationManager.IMPORTANCE_DEFAULT)
-                .apply { description = "New email and task updates" },
-        )
-    }
-
-    /** Register only after Android permission and the Novum session are both available. */
-    private fun syncPushRegistrationIfDue(force: Boolean = false) {
-        if (!BuildConfig.FCM_ENABLED || !pageReady || !connected || !pushSyncing.compareAndSet(false, true)) return
-        val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastPushSyncAt < 30_000) {
-            pushSyncing.set(false)
-            return
-        }
-        lastPushSyncAt = now
-        val target = server
-        val token = pushPrefs.getString("token", null)
-        val enabled = pushPrefs.getBoolean("enabled", false) && notificationsAllowed()
-        work.execute {
-            try {
-                if (target == null) return@execute
-                val oldDeviceId = pushPrefs.getString("device_id", null)
-                val oldOrigin = pushPrefs.getString("registered_origin", null)
-                val currentOrigin = canonicalOrigin(target)
-                val setupResponse = notificationRequest(target, "GET", "/api/tasks/notification-status")
-                val setup = setupResponse?.second
-                val serverReady = setup?.optBoolean("push_configured", false) == true && setup?.optBoolean("worker_enabled", false) == true
-                handler.post {
-                    val message = when {
-                        setupResponse?.first !in 200..299 -> R.string.notification_server_sign_in
-                        serverReady -> R.string.notification_server_ready
-                        else -> R.string.notification_server_pending
-                    }
-                    notificationStatusInfo?.text = getString(message)
-                }
-                if (!enabled) {
-                    val registeredOrigin = pushPrefs.getString("registered_origin", null)
-                    if (!oldDeviceId.isNullOrBlank() && registeredOrigin == currentOrigin) {
-                        val response = notificationRequest(target, "DELETE", "/api/tasks/notification-devices/${oldDeviceId}")
-                        val status = response?.first
-                        if (status != null && (status in 200..299 || status == 404)) {
-                            pushPrefs.edit().remove("device_id").remove("server_id").apply()
-                        }
-                    }
-                    return@execute
-                }
-                if (token.isNullOrBlank()) return@execute
-                val body = JSONObject()
-                    .put("token", token)
-                    .put("platform", "android")
-                    .put("opt_in", true)
-                    .put("email_enabled", true)
-                    .put("task_enabled", true)
-                    .put("chat_enabled", true)
-                val response = notificationRequest(target, "POST", "/api/tasks/notification-devices", body)
-                if (response?.first?.let { it !in 200..299 } != false) return@execute
-                val deviceId = response.second?.optString("device_id")?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,128}")) } ?: return@execute
-                val serverId = response.second?.optString("server_id")?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,128}")) } ?: return@execute
-                pushPrefs.edit().putString("device_id", deviceId)
-                    .putString("registered_origin", currentOrigin).putString("server_id", serverId).apply()
-                if (!oldDeviceId.isNullOrBlank() && oldDeviceId != deviceId && oldOrigin == currentOrigin) {
-                    notificationRequest(target, "DELETE", "/api/tasks/notification-devices/$oldDeviceId")
-                }
-            } finally {
-                pushSyncing.set(false)
-            }
-        }
-    }
-
-    private fun notificationsAllowed(): Boolean =
-        (Build.VERSION.SDK_INT < 33 || checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
-            getSystemService(NotificationManager::class.java).areNotificationsEnabled()
 
     private fun canonicalOrigin(target: URI): String {
         val scheme = target.scheme.lowercase()
@@ -696,35 +588,6 @@ class MainActivity : Activity() {
         val hostPart = if (host.contains(':')) "[$host]" else host
         return "$scheme://$hostPart" + if (target.port == -1 || target.port == defaultPort) "" else ":${target.port}"
     }
-
-    private fun notificationRequest(target: URI, method: String, path: String, body: JSONObject? = null): Pair<Int, JSONObject?>? = runCatching {
-        val cookie = CookieManager.getInstance().getCookie(target.toString())?.takeIf { it.isNotBlank() } ?: return null
-        val proxy = proxyAddress.substringAfterLast(':').toIntOrNull() ?: return null
-        val address = URI(target.toString().trimEnd('/') + path)
-        val connection = address.toURL().openConnection(
-            Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxy)),
-        ) as HttpURLConnection
-        connection.instanceFollowRedirects = false
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 10_000
-        connection.requestMethod = method
-        connection.setRequestProperty("Cookie", cookie)
-        connection.setRequestProperty("Accept", "application/json")
-        if (body != null) {
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-        }
-        try {
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val result = stream?.bufferedReader()?.use { it.readText() }?.takeIf { it.isNotBlank() }
-                ?.let { runCatching { JSONObject(it) }.getOrNull() }
-            status to result
-        } finally {
-            connection.disconnect()
-        }
-    }.getOrNull()
 
     // Feature availability is checked before any asynchronous bridge work starts.
     @android.annotation.SuppressLint("RequiresFeature")
@@ -736,10 +599,7 @@ class MainActivity : Activity() {
         }
         val target = ServerAddress.parse(address)
         val token = ++generation
-        val targetOrigin = canonicalOrigin(target)
-        if (pushPrefs.getString("registered_origin", null) != targetOrigin) {
-            pushPrefs.edit().remove("server_id").apply()
-        }
+        notificationService?.pauseFeed()
         starting = true; retry.isEnabled = false
         pageReady = false; pageFailed = false; showConnectionControls()
         connected = false; proxyReady = false; loginUrl = ""; signIn.visibility = View.GONE
@@ -748,11 +608,11 @@ class MainActivity : Activity() {
         installPushBridge(target)
         web.visibility = View.GONE; welcome.visibility = View.VISIBLE
         status.text = getString(R.string.connection_starting)
-        val previous = bridge; bridge = null
+        bridge = null
         work.execute {
             var started: Client? = null
             try {
-                previous?.stop()
+                notificationService?.prepareConnectionReplacement()
                 val client = Bridge.newClient()
                 started = client
                 val network = networkConfiguration()
@@ -765,6 +625,7 @@ class MainActivity : Activity() {
                     if (closed || token != generation) { work.execute { client.stop() }; return@runOnUiThread }
                     starting = false; retry.isEnabled = true
                     bridge = client; server = target; proxyAddress = addressOfProxy
+                    notificationService?.adopt(client, target, addressOfProxy)
                     prefs.edit().putString("server", target.toString()).apply()
                     val reverseBypassSupported = WebViewFeature.isFeatureSupported(
                         WebViewFeature.PROXY_OVERRIDE_REVERSE_BYPASS,
@@ -783,6 +644,24 @@ class MainActivity : Activity() {
         }
     }
 
+    @android.annotation.SuppressLint("RequiresFeature")
+    private fun attachExistingConnection(connection: NotificationConnectionService.ConnectionState) {
+        if (!::web.isInitialized || closed) return
+        val target = connection.target
+        val client = connection.client
+        bridge = client; server = target; proxyAddress = connection.proxy
+        starting = false; retry.isEnabled = true; proxyReady = false; connected = false
+        installPushBridge(target)
+        web.visibility = View.GONE; welcome.visibility = View.VISIBLE
+        status.text = getString(R.string.connection_starting)
+        val config = WebViewProxyRouting.build(
+            connection.proxy, target, WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE_REVERSE_BYPASS),
+        )
+        ProxyController.getInstance().setProxyOverride(config, java.util.concurrent.Executor { handler.post(it) }) {
+            if (!closed) runCatching { proxyReady = true; showState(JSONObject(client.statusJSON())) }
+        }
+    }
+
     private fun showState(state: JSONObject) {
         loginUrl = state.optString("loginUrl")
         val phase = state.optString("state")
@@ -796,6 +675,7 @@ class MainActivity : Activity() {
         }
         if (phase != "Running") {
             connected = false
+            notificationService?.pauseFeed()
             updatePushForeground()
             pageReady = false
             showConnectionControls()
@@ -805,6 +685,7 @@ class MainActivity : Activity() {
             updatePushForeground()
             welcome.visibility = View.GONE; web.visibility = View.VISIBLE
             web.loadUrl(server.toString())
+            openPendingNotification()
         }
     }
 
@@ -836,6 +717,7 @@ class MainActivity : Activity() {
             }
             override fun onPageStarted(view: WebView, address: String, icon: android.graphics.Bitmap?) {
                 foregroundFeedReady = false
+                if (server?.let { ServerAddress.sameOrigin(it, address) } == true) notificationService?.pauseFeed()
                 updatePushForeground()
                 activeShareTransfer?.let { id ->
                     server?.let { view.evaluateJavascript(SharedContent.clearFileTransferScript(it.toString(), id), null) }
@@ -977,11 +859,13 @@ class MainActivity : Activity() {
     }
     override fun onDestroy() {
         closed = true; generation++; handler.removeCallbacks(poll); handler.removeCallbacks(hideHeader)
-        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkChanges) }
         chooser?.onReceiveValue(null); chooser = null
         web.stopLoading(); web.destroy()
-        val client = bridge; bridge = null
-        work.execute { runCatching { client?.stop() }; work.shutdown() }
+        bridge = null
+        if (notificationServiceBindRequested) runCatching { unbindService(notificationServiceConnection) }
+        notificationService = null; notificationServiceBound = false
+        notificationServiceBindRequested = false
+        work.shutdown()
         super.onDestroy()
     }
 }

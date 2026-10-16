@@ -140,4 +140,3 @@ dist-desktop/
 
 # Android distribution output
 dist-android/
-android/app/google-services.json

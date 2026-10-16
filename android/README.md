@@ -34,23 +34,9 @@ docker run --rm --cpus=4 --memory=8g -e GOMAXPROCS=4 -v "$PWD:/workspace" novum-
 
 The Go bridge pins Tailscale and its module checksums. The toolchain checks downloaded archives, and the Gradle wrapper checks its distribution checksum. Build output is unsigned until `tools/sign-apk.sh` runs with a dedicated release keystore. Keep that keystore backed up: future updates must use the same signing key.
 
-## Optional push alerts (maintainer setup)
+## Notifications
 
-The normal Android build works without Firebase configuration:
-
-```sh
-./gradlew --no-daemon :app:assembleRelease
-```
-
-To build the push-enabled variant, register the Android package `com.novumxenium.app` in the maintainer-owned Firebase project, place its `google-services.json` at `android/app/google-services.json`, then build with `-Pandroid.fcm=true`:
-
-```sh
-./gradlew --no-daemon -Pandroid.fcm=true :app:assembleRelease
-```
-
-The Firebase config file is ignored by Git. FCM sending credentials belong on the Novum server and are not included in the APK or repository. Real delivery requires both that server configuration and the Firebase Android app configuration. The Android app asks for notification permission only after the user enables **New email and task alerts** in Connection settings. Alerts use generic text; tapping one opens the authenticated event in the workspace.
-
-To compile-check the optional FCM sources and Firebase dependencies without a project config, run `./gradlew --no-daemon -Pandroid.fcmCompileOnly=true :app:compileFcmDebugKotlin`. This is a source validation mode only; it does not produce an installable push-enabled APK.
+When enabled, Android checks the authenticated Novum notification feed from a foreground service about once per minute while Android permits network access; deep Doze can defer checks until a maintenance window. Its `specialUse` service type describes this explicitly user-enabled, persistent self-hosted workspace connection and does not bypass Android power restrictions. The persistent Android notification describes the connection; event notifications use generic text and open through the authenticated workspace. The first feed request establishes a cursor without replaying older events. Android notification permission is required. Force-stopping the app, rebooting the device, or the OS stopping its process can stop polling until the app is reopened and the connection is enabled again. No Firebase project or Google messaging configuration is required. See [the notification architecture](../docs/push-notifications.md) for server and device behavior.
 
 The Android workflow tests and builds pull requests without release credentials. Tag builds use `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` repository secrets, verify the signed APK, and publish it with a SHA-256 sidecar. No signing key belongs in this repository.
 

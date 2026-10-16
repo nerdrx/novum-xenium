@@ -8,7 +8,7 @@
 import Storage from './storage.js';
 import uiModule from './ui.js';
 import sessionModule from './sessions.js';
-import chatRenderer, { modelOutputFallbackHtml } from './chatRenderer.js?v=20261016pagemedia1';
+import chatRenderer, { modelOutputFallbackHtml } from './chatRenderer.js?v=20261007toolstatus1';
 import { modelOutputFallback } from './modelOutputFallback.js';
 import chatStream from './chatStream.js?v=20261007approvalfix2';
 import { addAITTSButton } from './tts-ai.js';

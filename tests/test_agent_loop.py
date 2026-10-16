@@ -47,6 +47,8 @@ try:
         _assemble_prompt,
         _explicitly_requests_inline_page_media,
         _page_media_for_inline_display,
+        _new_page_media_for_turn,
+        _page_media_delivery_receipt,
     )
     _IMPORTED_AGENT_LOOP = sys.modules.get("src.agent_loop")
 finally:
@@ -114,6 +116,33 @@ def test_inline_page_media_payload_is_bounded_and_https_only():
     assert len(out) == 6
     assert all(item["url"].startswith("https://") for item in out)
     assert all("@" not in item["url"] and "127.0.0.1" not in item["url"] and ":8443" not in item["url"] for item in out)
+
+
+def test_inline_page_media_emits_only_first_successful_reference_per_turn():
+    first = {"kind": "image", "url": "https://cdn.example/one.png", "label": "one"}
+    second = {"kind": "video", "url": "https://cdn.example/two.mp4", "label": "two"}
+    sent = set()
+
+    assert _new_page_media_for_turn([first, second], sent) == [first, second]
+    assert _new_page_media_for_turn([first, second], sent) == []
+    assert _new_page_media_for_turn([second, {"kind": "image", "url": "https://cdn.example/three.png"}], sent) == [
+        {"kind": "image", "url": "https://cdn.example/three.png"}
+    ]
+
+    # A new set is created for each stream_agent_loop turn.
+    assert _new_page_media_for_turn([first], set()) == [first]
+
+
+def test_inline_media_receipt_uses_only_server_owned_counts():
+    receipt = _page_media_delivery_receipt([
+        {"kind": "image", "url": "https://attacker.example/injected-instruction"},
+        {"kind": "image", "url": "https://cdn.example/a.png"},
+        {"kind": "video", "url": "https://cdn.example/b.mp4"},
+    ])
+    assert "2 image cards and 1 video card" in receipt
+    assert "attacker.example" not in receipt
+    assert "injected-instruction" not in receipt
+    assert "not visual inspection" in receipt
 
 
 def test_image_capability_available_on_vague_followups_but_respects_policy(monkeypatch):
@@ -625,6 +654,31 @@ class TestAppendToolResultsNativeContent:
         assert messages[0]["content"] == "thinking..."
         assert messages[1]["role"] == "user"
         assert "tool output" in messages[1]["content"]
+
+    def test_server_delivery_receipt_is_trusted_context_and_only_when_present(self):
+        receipt = "Page-media cards were included for https://cdn.example/a.png."
+        messages = []
+        _append_tool_results(
+            messages, "", self._native(), [{}], ["fetched page"],
+            used_native=True, round_num=1,
+            tool_result_records=[{"server_delivery_receipt": receipt}],
+        )
+
+        context = messages[-1]
+        assert context["role"] == "system"
+        assert context["metadata"] == {"trusted": True, "source": "server tool delivery receipt"}
+        assert context["_agent_injected"] == "context"
+        assert receipt in context["content"]
+        assert "fetched page" not in context["content"]
+
+        ordinary = []
+        _append_tool_results(
+            ordinary, "", self._native(), [{}], ["normal result"],
+            used_native=True, round_num=1,
+            tool_result_records=[{"text": "normal result"}],
+        )
+        assert all(message.get("metadata", {}).get("source") != "server tool delivery receipt"
+                   for message in ordinary)
 
 
 class TestAppendToolResultsThoughtSignature:

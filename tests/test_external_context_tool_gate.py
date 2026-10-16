@@ -1,6 +1,7 @@
 """Regression coverage for indirect prompt-injection tool gating."""
 
 import asyncio
+import copy
 import json
 import re
 from collections import namedtuple
@@ -1140,6 +1141,75 @@ def test_search_then_model_controlled_fetch_same_batch_is_blocked(monkeypatch):
         and event.get("ask_user", {}).get("kind") == "tool_approval"
         for event in events
     )
+
+
+def test_repeated_page_media_fetch_emits_and_persists_refs_once(monkeypatch):
+    import src.agent_loop as agent_loop
+    import src.teacher_escalation as teacher_escalation
+
+    url = "https://docs.example/page"
+    media = [
+        {"kind": "image", "url": "https://cdn.example/page.png", "label": "Page image"},
+        {"kind": "video", "url": "https://cdn.example/page.mp4", "label": "Page video"},
+    ]
+    round_inputs = []
+    responses = iter([
+        f"```web_fetch\n{url}\n```",
+        f"```web_fetch\n{url}\n```",
+        "Done.",
+    ])
+
+    async def fake_stream(*args, **kwargs):
+        round_inputs.append(copy.deepcopy(args[1]))
+        yield "data: " + json.dumps({"delta": next(responses)}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    async def fake_execute(block, *args, **kwargs):
+        assert block.tool_type == "web_fetch"
+        return "web_fetch: OK", {
+            "output": "Example page body",
+            "media": media,
+            "exit_code": 0,
+        }
+
+    persisted_events = []
+
+    async def capture_teacher(**kwargs):
+        persisted_events.extend(copy.deepcopy(kwargs["student_tool_events"]))
+        if False:
+            yield ""
+
+    monkeypatch.setattr(agent_loop, "get_setting", lambda key, default=None: default, raising=False)
+    monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
+    monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(agent_loop, "blocked_tools_for_owner", lambda owner: set(), raising=False)
+    monkeypatch.setattr(agent_loop, "stream_llm_with_fallback", fake_stream)
+    monkeypatch.setattr(agent_loop, "execute_tool_block", fake_execute)
+    monkeypatch.setattr(teacher_escalation, "run_teacher_inline", capture_teacher)
+
+    events = _collect_agent_events(agent_loop.stream_agent_loop(
+        "http://local.test/v1",
+        "small-local-model",
+        [{"role": "user", "content": "Open the page and show its images and video directly in this chat."}],
+        max_rounds=3,
+        relevant_tools={"web_fetch"},
+        public_read_sources=[{"url": url}],
+    ))
+
+    outputs = [event for event in events if event.get("type") == "tool_output" and event.get("tool") == "web_fetch"]
+    assert len(outputs) == 2
+    assert outputs[0]["inline_media"] == media
+    assert "inline_media" not in outputs[1]
+    assert [event.get("inline_media") for event in persisted_events] == [media, None]
+    assert len(round_inputs) >= 2
+    receipt = " ".join(
+        str(message.get("content", ""))
+        for message in round_inputs[1]
+        if message.get("metadata", {}).get("source") == "server tool delivery receipt"
+    )
+    assert "1 image card and 1 video card" in receipt
+    assert "cdn.example" not in receipt
+    assert "not visual inspection" in receipt
 
 
 def test_search_then_document_same_batch_has_no_editor_side_effect(monkeypatch):

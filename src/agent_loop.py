@@ -1198,6 +1198,30 @@ def _page_media_for_inline_display(media: Any) -> List[Dict[str, str]]:
     return result
 
 
+def _new_page_media_for_turn(media: List[Dict[str, str]], sent_urls: set) -> List[Dict[str, str]]:
+    """Return only new references, while preserving first-seen order per run."""
+    fresh = []
+    for item in media:
+        url = item["url"]
+        if url not in sent_urls:
+            sent_urls.add(url)
+            fresh.append(item)
+    return fresh
+
+
+def _page_media_delivery_receipt(media: List[Dict[str, str]]) -> str:
+    """Describe server-side card delivery without promoting page URLs to trust."""
+    counts = {kind: sum(item.get("kind") == kind for item in media) for kind in ("image", "video")}
+    parts = [f"{counts[kind]} {kind} card{'' if counts[kind] == 1 else 's'}"
+             for kind in ("image", "video") if counts[kind]]
+    return (
+        "The chat stream included " + " and ".join(parts) + " from this successful page fetch. "
+        "This confirms reference delivery, not visual inspection of the media. "
+        "Do not repeat a fetch solely to display these same references. "
+        "If the cards satisfy the requested media display, finish; continue only for other requested work."
+    )
+
+
 def _user_turn_count(messages: List[Dict]) -> int:
     """Count real user turns in the message list."""
     count = 0
@@ -3759,6 +3783,16 @@ def _append_tool_results(
                 arm_tool_gate=arm_tool_gate,
             )
         )
+    receipts = [record.get("server_delivery_receipt") for record in tool_result_records
+                if isinstance(record.get("server_delivery_receipt"), str)
+                and record["server_delivery_receipt"].strip()]
+    if receipts:
+        messages.append({
+            "role": "system",
+            "_agent_injected": "context",
+            "metadata": {"trusted": True, "source": "server tool delivery receipt"},
+            "content": "Server-owned tool delivery facts (not page content):\n" + "\n".join(receipts),
+        })
 
 
 def _trim_with_required_skill_references(messages, context_length, reserve_tokens=512):
@@ -6354,6 +6388,7 @@ async def stream_agent_loop(
     time_to_first_token = None
     first_token_received = False
     tool_events = []   # Persist tool executions for history reload
+    _inline_page_media_urls = set()
     round_texts = []   # Cleaned text per round for history reload
     round_models = []  # Actual model for each corresponding round
     round_endpoint_ids = []
@@ -8870,7 +8905,10 @@ async def stream_agent_loop(
             # Emit tool_output (include ui_event data if present)
             tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}
             _inline_page_media = (
-                _page_media_for_inline_display(result.get("media"))
+                _new_page_media_for_turn(
+                    _page_media_for_inline_display(result.get("media")),
+                    _inline_page_media_urls,
+                )
                 if block.tool_type == "web_fetch"
                 and result.get("exit_code") == 0
                 and _explicitly_requests_inline_page_media(messages)
@@ -9142,6 +9180,9 @@ async def stream_agent_loop(
                 round_reasoning=round_reasoning,
                 tool_content=block.content,
             )
+            server_delivery_receipt = None
+            if _inline_page_media:
+                server_delivery_receipt = _page_media_delivery_receipt(_inline_page_media)
             tool_results.append(formatted)
             tool_result_texts.append(formatted)
             tool_result_records.append(
@@ -9150,6 +9191,8 @@ async def stream_agent_loop(
                     "content": block.content,
                     "result": result,
                     "text": formatted,
+                    **({"server_delivery_receipt": server_delivery_receipt}
+                       if server_delivery_receipt else {}),
                 }
             )
             if (

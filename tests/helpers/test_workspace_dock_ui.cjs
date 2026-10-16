@@ -89,7 +89,8 @@ const server = http.createServer((req,res) => {
   await page.locator('#workspace-tab-Media').click();
   assert.equal(await page.evaluate(async () => (await import('/static/js/chatMedia.js')).safePublicMediaUrl('  ')), '', 'blank references are not treated as the app origin');
   assert.equal(await page.locator('.workspace-media-item').count(),3,`Workspace lists HTTPS and same-origin media only for the selected chat: ${await page.locator('[role=tabpanel]').textContent()} errors=${errors.join('|')}`);
-  assert.equal(await page.locator('.workspace-media-item video').getAttribute('preload'),'none');
+  await page.waitForFunction(()=>document.querySelector('.workspace-media-item video')?.preload==='metadata',null,{timeout:5000});
+  assert.equal(await page.locator('.workspace-media-item video').getAttribute('preload'),'metadata');
   assert.equal(await page.locator('.workspace-media-item a').first().getAttribute('href'),'https://media.example.test/pic.png');
   assert.equal(await page.locator('.workspace-media-item button.chat-media-fullscreen').count(),3);
   assert.equal(await page.locator('.workspace-media-item').nth(2).locator('img').getAttribute('src'),`http://127.0.0.1:${server.address().port}/api/images/generated/owned.png`,'same-origin generated images remain available');

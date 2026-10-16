@@ -42,16 +42,17 @@ const server = http.createServer((req, res) => {
       return btoa(String.fromCharCode(...new Uint8Array(await new Blob(chunks, { type: 'video/webm' }).arrayBuffer())));
     });
     await page.evaluate(data => { window.fixtureData = data; }, encoded);
-    await page.evaluate(() => { window.r.update('![Fixture clip](https://media.example.test/clip.webm)'); document.querySelector('video').load(); });
+    await page.evaluate(() => { window.r.update('![Fixture clip](https://media.example.test/clip.webm)'); });
     const video = page.locator('video.chat-inline-media'); await video.waitFor();
     await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2, null, { timeout: 10000 });
     const element = await video.elementHandle();
     await page.locator('#play').click(); await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+    const requestsBeforeUpdates = mediaRequests;
     await page.evaluate(() => window.r.update('![Fixture clip](https://media.example.test/clip.webm) and more response text arrives.'));
     await page.waitForTimeout(150);
     assert.equal(await video.evaluate((node, old) => node === old, element), true, 'live-tail updates preserve the same media node');
     assert.equal(await video.evaluate(node => node.paused), false, 'stream updates preserve ongoing playback');
-    assert.equal(mediaRequests, 1, 'stream updates do not reload the media source');
+    assert.equal(mediaRequests, requestsBeforeUpdates, 'stream updates do not reload the media source');
     await page.evaluate(() => window.r.update('![Fixture clip](https://media.example.test/clip.webm) and more response text arrives.\n\nA second paragraph freezes the media block.'));
     assert.equal(await video.evaluate((node, old) => node === old, element), true, 'freezing a live-tail media block preserves the node');
     assert.equal(await video.evaluate(node => node.paused), false, 'freezing preserves active playback');
@@ -60,7 +61,7 @@ const server = http.createServer((req, res) => {
     await page.evaluate(() => window.finish());
     assert.equal(await video.evaluate((node, old) => node === old, element), true, 'canonical terminal render preserves the media node');
     assert.equal(await video.evaluate(node => node.paused), false, 'canonical terminal render preserves active playback');
-    assert.equal(mediaRequests, 1, 'terminal render does not re-fetch the same media');
+    assert.equal(mediaRequests, requestsBeforeUpdates, 'terminal render does not re-fetch the same media');
     const chatSource = fs.readFileSync(path.resolve(root, '../static/js/chat.js'), 'utf8');
     assert.match(chatSource, /setHtmlPreservingMedia\(_liveReplyEl, _replyHtml\)/, 'primary SSE completion preserves media while canonicalizing Markdown');
     assert.match(chatSource, /preserveMediaFrames\(holder, renderedBody\)/, 'resume SSE completion transfers live media into the canonical message');

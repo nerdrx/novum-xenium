@@ -122,3 +122,24 @@ def test_done_return_closes_nested_stream_generators_before_loop_shutdown(monkey
 
     assert result == "finished"
     assert closed == ["inner"]
+
+
+def test_real_done_sse_closes_http_stream_before_loop_shutdown(monkeypatch):
+    captured = {}
+    sse = (
+        'event: response.output_text.delta\n'
+        'data: {"type":"response.output_text.delta","delta":"finished"}\n\n'
+        'event: response.completed\n'
+        'data: {"type":"response.completed","response":{}}\n\n'
+    )
+    monkeypatch.setattr(
+        llm_core, "_get_http_client",
+        lambda: _client_for(httpx.Response(200, text=sse), captured),
+    )
+
+    result = asyncio.run(llm_core.llm_call_async(
+        _URL, "vision-model", [{"role": "user", "content": "real close test"}],
+    ))
+
+    assert result == "finished"
+    assert len(captured["requests"]) == 1

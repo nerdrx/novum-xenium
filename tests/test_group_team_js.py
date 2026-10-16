@@ -13,7 +13,7 @@ def test_group_team_controller(scenario):
     if not shutil.which("node"):
         pytest.skip("node is not installed")
     result = subprocess.run(
-        ["node", "--experimental-default-type=module", "tests/helpers/test_group_team.js", scenario],
+        ["node", "tests/helpers/test_group_team.js", scenario],
         text=True, capture_output=True, cwd=ROOT, timeout=15,
     )
     assert result.returncode == 0, result.stderr

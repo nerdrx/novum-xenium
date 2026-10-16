@@ -2301,9 +2301,7 @@ body.bg-pattern-sparkles {
     }
     .msg .body {
       width: 100%;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      white-space: normal;
       word-break: break-word;
       overflow-wrap: anywhere;
       line-height: 1.5;
@@ -6375,7 +6373,9 @@ body.bg-pattern-sparkles {
       font-family: inherit;
       font-size: 14px;
       line-height: 1.35;
-      white-space: normal;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     #group-participants .group-participant-model { order: 1; }
     #group-participants .group-participant-character { order: 2; }

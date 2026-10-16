@@ -5,8 +5,8 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({
 
 export function newTeamBoard(models = []) {
   const people = models.map((model, i) => ({
-    id: String(model.mid),
-    display: model._groupName || model.display || model.mid,
+    id: String(model.key || JSON.stringify([String(model.endpointId || model.url || ''), String(model.mid)])),
+    display: `${model._groupName || model.display || model.mid} · ${model.providerName || model.endpointId || model.url || 'Provider'}`,
     role: i === 0 ? 'builder' : 'reviewer',
   }));
   return { plan: '', participants: people, tasks: [] };

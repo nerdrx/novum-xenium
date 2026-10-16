@@ -28,6 +28,38 @@ let _waitingForUser = 0;
 let _teamModule = null;
 const GROUP_STATE_KEY = 'odysseus-group-state';
 
+export function groupModelKey(model) {
+  return JSON.stringify([String(model.endpointId || model.url || ''), String(model.mid || '')]);
+}
+
+export function buildGroupModelItems(items) {
+  const result = [];
+  const seen = new Set();
+  for (const item of items || []) {
+    if (!item || item.offline) continue;
+    const type = String(item.model_type || '').toLowerCase().replaceAll('_', '-');
+    if (['image', 'image-generation', 'image-only'].includes(type)) continue;
+    const endpointId = item.endpoint_id == null ? '' : String(item.endpoint_id);
+    const url = item.url || '';
+    const providerName = item.endpoint_name || endpointId || (() => {
+      try { return new URL(url).host; } catch { return 'Provider'; }
+    })();
+    for (const [models, displays] of [
+      [item.models || [], item.models_display || []],
+      [item.models_extra || [], item.models_extra_display || []],
+    ]) {
+      models.forEach((mid, i) => {
+        const model = { mid, display: String(displays[i] || mid).split('/').pop(), url, endpointId, providerName };
+        model.key = groupModelKey(model);
+        if (seen.has(model.key)) return;
+        seen.add(model.key);
+        result.push(model);
+      });
+    }
+  }
+  return sortModelObjects(result);
+}
+
 async function loadGroupModelItems(fetcher, apiBase) {
   const res = await fetcher(apiBase + '/api/models', { credentials: 'same-origin' });
   if (!res.ok) throw new Error(`Model request failed (${res.status})`);
@@ -49,7 +81,15 @@ export function init(apiBase) {
     getParentSessionId: () => _parentSessionId,
     getModels: () => _models,
     getRequestContext: board => _requestContext([board.plan, ...board.tasks.map(task => task.title)].join('\n')),
-    getParticipantSessions: () => Object.fromEntries(_models.map((model, i) => [String(model.mid), _participantSessions[i]])),
+    getParticipantSessions: () => {
+      const sessions = Object.fromEntries(_models.map((model, i) => [groupModelKey(model), _participantSessions[i]]));
+      const counts = new Map();
+      _models.forEach(model => counts.set(String(model.mid), (counts.get(String(model.mid)) || 0) + 1));
+      _models.forEach((model, i) => {
+        if (counts.get(String(model.mid)) === 1) sessions[String(model.mid)] = _participantSessions[i];
+      });
+      return sessions;
+    },
   });
   // Initialize Group tab inside Characters modal
   _initGroupTab();
@@ -71,18 +111,7 @@ function _initGroupTab() {
     if (!items || items.length === 0) {
       items = await loadGroupModelItems(fetch, API_BASE);
     }
-    const result = [];
-    const seen = new Set();
-    items.forEach(item => {
-      if (item.offline) return;
-      (item.models || []).concat(item.models_extra || []).forEach((mid, i) => {
-        if (seen.has(mid)) return;
-        seen.add(mid);
-        const display = ((item.models_display || []).concat(item.models_extra_display || []))[i] || mid;
-        result.push({ mid, display: display.split('/').pop(), url: item.url, endpointId: item.endpoint_id });
-      });
-    });
-    const sorted = sortModelObjects(result);
+    const sorted = buildGroupModelItems(items);
     _modelsCache = sorted.length ? sorted : null;
     return sorted;
   }
@@ -91,13 +120,15 @@ function _initGroupTab() {
     participantsEl.innerHTML = '';
     _groupParticipants.forEach((p, idx) => {
       const row = document.createElement('div');
+      row.className = 'group-participant-entry';
       row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 6px;background:color-mix(in srgb, var(--fg) 3%, transparent);border-radius:6px;';
       const label = p.character ? p.character.name : (p.model ? p.model.display : '?');
-      const sublabel = p.model ? p.model.display : '';
+      const provider = p.model?.providerName || p.model?.endpointId || '';
+      const sublabel = p.model ? `${p.character ? `${p.model.display} · ` : ''}${provider}` : '';
       row.innerHTML = `
-        <span style="flex:1;min-width:0;">
-          <span style="font-size:12px;font-weight:500;">${uiModule.esc(label)}</span>
-          ${sublabel && sublabel !== label ? '<span style="font-size:10px;opacity:0.35;margin-left:4px;">' + uiModule.esc(sublabel) + '</span>' : ''}
+        <span class="group-participant-copy">
+          <span class="group-participant-title">${uiModule.esc(label)}</span>
+          ${sublabel && sublabel !== label ? '<span class="group-participant-provider">' + uiModule.esc(sublabel) + '</span>' : ''}
         </span>
         <button style="background:none;border:none;color:var(--fg);opacity:0.5;cursor:pointer;font-size:16px;padding:0 4px;line-height:1;position:relative;top:-4px;" data-idx="${idx}" title="Remove">&times;</button>
       `;
@@ -134,30 +165,28 @@ function _initGroupTab() {
       setPickerStatus('');
 
       const picker = document.createElement('div');
-      picker.style.cssText = 'display:flex;gap:4px;align-items:center;';
+      picker.className = 'group-participant-picker';
 
       const charSel = document.createElement('select');
-      charSel.className = 'preset-input';
+      charSel.className = 'preset-input group-participant-character';
       charSel.dataset.selectionType = 'character';
       charSel.setAttribute('aria-label', 'Participant character');
-      charSel.style.cssText = 'font-size:11px;flex:1;height:26px;';
       charSel.innerHTML = '<option value="">No character</option>' +
         characters.map(c => '<option value="' + c.id + '">' + uiModule.esc(c.name) + '</option>').join('');
 
       const modelSel = document.createElement('select');
-      modelSel.className = 'preset-input';
+      modelSel.className = 'preset-input group-participant-model';
       modelSel.dataset.selectionType = 'model';
       modelSel.setAttribute('aria-label', 'Participant model');
-      modelSel.style.cssText = 'font-size:11px;flex:1;height:26px;';
       modelSel.innerHTML = '<option value="">Model…</option>' +
-        models.map(m => '<option value="' + m.mid + '">' + uiModule.esc(m.display) + '</option>').join('');
+        models.map(m => '<option value="' + uiModule.esc(m.key) + '">' + uiModule.esc(m.display + ' · ' + m.providerName) + '</option>').join('');
 
       // Auto-add when model is selected
       modelSel.addEventListener('change', () => {
         if (!modelSel.value) return;
         if (_groupParticipants.length >= 8) { uiModule.showToast('Max 8'); return; }
         const entry = { character: null, model: null };
-        entry.model = models.find(m => m.mid === modelSel.value) || null;
+        entry.model = models.find(m => m.key === modelSel.value) || null;
         if (charSel.value) entry.character = characters.find(c => c.id === charSel.value) || null;
         _groupParticipants.push(entry);
         picker.remove();
@@ -235,6 +264,8 @@ function _initGroupTab() {
         mode: _mode,
         participants: picked.map(p => ({
           modelId: p.mid,
+          endpointId: p.endpointId || null,
+          modelKey: groupModelKey(p),
           modelDisplay: p.display,
           characterId: p.character?.characterId || null,
           characterName: p.character?.characterName || null,
@@ -244,8 +275,8 @@ function _initGroupTab() {
         const existing = await fetch(API_BASE + '/api/presets/groups', { credentials: 'same-origin' }).then(r => r.json());
         const groups = existing.groups || [];
         // Don't duplicate if same participants
-        const sig = presetData.participants.map(p => p.modelId + ':' + (p.characterId || '')).sort().join(',');
-        const exists = groups.some(g => (g.participants || []).map(p => p.modelId + ':' + (p.characterId || '')).sort().join(',') === sig);
+        const sig = presetData.participants.map(p => p.modelKey + ':' + (p.characterId || '')).sort().join(',');
+        const exists = groups.some(g => (g.participants || []).map(p => (p.modelKey || p.modelId) + ':' + (p.characterId || '')).sort().join(',') === sig);
         if (!exists) {
           groups.push(presetData);
           await fetch(API_BASE + '/api/presets/groups', {
@@ -311,10 +342,10 @@ function _initGroupTab() {
       modelSelections.forEach((modelSelection) => {
         const chosenModel = modelSelection.value;
         const isChosenModelExisting = chosenModel !== EMPTY
-          && models.findIndex((model) => model.mid === chosenModel) !== -1;
+          && models.findIndex((model) => model.key === chosenModel) !== -1;
 
         modelSelection.innerHTML = '<option value="">Model…</option>' +
-          models.map(m => '<option value="' + m.mid + '">' + uiModule.esc(m.display) + '</option>').join('');
+          models.map(m => '<option value="' + uiModule.esc(m.key) + '">' + uiModule.esc(m.display + ' · ' + m.providerName) + '</option>').join('');
         if (isChosenModelExisting) {
           modelSelection.value = chosenModel;
         }
@@ -364,7 +395,10 @@ function _initGroupTab() {
           const [models, chars] = await Promise.all([_getModels(), _getCharacterList()]);
           _groupParticipants.length = 0;
           (g.participants || []).forEach(p => {
-            const model = models.find(m => m.mid === p.modelId) || models[0];
+            const keyed = p.modelKey && models.find(m => m.key === p.modelKey);
+            const endpointMatch = p.endpointId && models.find(m => m.endpointId === String(p.endpointId) && m.mid === p.modelId);
+            const legacyMatches = models.filter(m => m.mid === p.modelId);
+            const model = keyed || endpointMatch || (legacyMatches.length === 1 ? legacyMatches[0] : null);
             const entry = { model: model || null, character: null };
             if (p.characterId) {
               entry.character = chars.find(c => c.id === p.characterId) || null;
@@ -444,7 +478,11 @@ export function isRunning() { return _running; }
 
 export async function runTeamAssignment(participantId, prompt, readOnly = false) {
   if (!_active || _running || !prompt) return null;
-  const modelIdx = _models.findIndex(m => String(m.mid) === String(participantId));
+  let modelIdx = _models.findIndex(m => groupModelKey(m) === String(participantId));
+  if (modelIdx < 0) {
+    const matches = _models.map((model, i) => String(model.mid) === String(participantId) ? i : -1).filter(i => i >= 0);
+    if (matches.length === 1) modelIdx = matches[0];
+  }
   const sessionId = _participantSessions[modelIdx];
   const box = document.getElementById('chat-history');
   if (modelIdx < 0 || !sessionId || !box) return null;
@@ -655,18 +693,7 @@ export async function showModelPicker() {
           items = data.items || [];
         } catch (e) { console.warn('[group] Failed to fetch models:', e); }
       }
-      const result = [];
-      const seen = new Set();
-      items.forEach(item => {
-        if (item.offline) return;
-        (item.models || []).concat(item.models_extra || []).forEach((mid, i) => {
-          if (seen.has(mid)) return;
-          seen.add(mid);
-          const display = ((item.models_display || []).concat(item.models_extra_display || []))[i] || mid;
-          result.push({ mid, display: display.split('/').pop(), url: item.url, endpointId: item.endpoint_id, epName: item.endpoint_name || '' });
-        });
-      });
-      _cachedModels = sortModelObjects(result);
+      _cachedModels = buildGroupModelItems(items);
       return _cachedModels;
     }
 
@@ -675,16 +702,16 @@ export async function showModelPicker() {
       const all = await getAllModels();
       const q = (filter || '').toLowerCase();
       all.forEach(m => {
-        if (q && !m.mid.toLowerCase().includes(q) && !m.display.toLowerCase().includes(q) && !m.epName.toLowerCase().includes(q)) return;
+        if (q && !m.mid.toLowerCase().includes(q) && !m.display.toLowerCase().includes(q) && !m.providerName.toLowerCase().includes(q)) return;
         const row = document.createElement('div');
         row.className = 'memory-item';
-        row.style.cssText = 'padding:6px 8px;cursor:pointer;' + (selected.has(m.mid) ? 'background:color-mix(in srgb, var(--accent, var(--red)) 12%, transparent);' : '');
+        row.style.cssText = 'padding:6px 8px;cursor:pointer;' + (selected.has(m.key) ? 'background:color-mix(in srgb, var(--accent, var(--red)) 12%, transparent);' : '');
         const logo = providerLogo(m.mid);
         row.innerHTML = `
-          <input type="checkbox" ${selected.has(m.mid) ? 'checked' : ''} style="margin-right:6px;">
+          <input type="checkbox" ${selected.has(m.key) ? 'checked' : ''} style="margin-right:6px;">
           ${logo ? '<span style="opacity:0.5;margin-right:4px;">' + logo + '</span>' : ''}
           <span style="flex:1;font-size:12px;">${uiModule.esc(m.display)}</span>
-          <span style="font-size:10px;opacity:0.3;">${uiModule.esc(m.epName)}</span>
+          <span style="font-size:10px;opacity:0.6;">${uiModule.esc(m.providerName)}</span>
         `;
         row.addEventListener('click', (e) => {
           if (e.target.tagName === 'INPUT') return;
@@ -695,13 +722,13 @@ export async function showModelPicker() {
         row.querySelector('input').addEventListener('change', (e) => {
           if (e.target.checked) {
             if (selected.size >= 8) { e.target.checked = false; uiModule.showToast('Max 8 models'); return; }
-            selected.add(m.mid);
+            selected.add(m.key);
           } else {
-            selected.delete(m.mid);
+            selected.delete(m.key);
           }
           document.getElementById('group-selected-count').textContent = selected.size + ' selected';
           document.getElementById('group-start-btn').disabled = selected.size < 2;
-          row.style.background = selected.has(m.mid) ? 'color-mix(in srgb, var(--accent, var(--red)) 12%, transparent)' : '';
+          row.style.background = selected.has(m.key) ? 'color-mix(in srgb, var(--accent, var(--red)) 12%, transparent)' : '';
         });
         list.appendChild(row);
       });
@@ -718,7 +745,7 @@ export async function showModelPicker() {
     // Start button
     document.getElementById('group-start-btn').addEventListener('click', async () => {
       const all = await getAllModels();
-      const picked = all.filter(m => selected.has(m.mid));
+      const picked = all.filter(m => selected.has(m.key));
 
       // Step 2: Character assignment
       body.innerHTML = '';
@@ -729,7 +756,7 @@ export async function showModelPicker() {
 
       // Build character options
       const characters = await _getCharacterList();
-      const assignments = {}; // mid -> {characterId, characterName, characterPrompt}
+      const assignments = {}; // endpoint+model key -> character assignment
 
       for (const m of picked) {
         const row = document.createElement('div');
@@ -749,9 +776,9 @@ export async function showModelPicker() {
         sel.addEventListener('change', () => {
           if (sel.value) {
             const ch = characters.find(c => c.id === sel.value);
-            assignments[m.mid] = { characterId: ch.id, characterName: ch.name, characterPrompt: ch.prompt };
+            assignments[m.key] = { characterId: ch.id, characterName: ch.name, characterPrompt: ch.prompt };
           } else {
-            delete assignments[m.mid];
+            delete assignments[m.key];
           }
         });
         row.appendChild(sel);
@@ -766,8 +793,8 @@ export async function showModelPicker() {
       goBtn.addEventListener('click', () => {
         // Attach character info to picked models
         picked.forEach(m => {
-          if (assignments[m.mid]) {
-            m.character = assignments[m.mid];
+          if (assignments[m.key]) {
+            m.character = assignments[m.key];
           }
         });
         overlay.remove();

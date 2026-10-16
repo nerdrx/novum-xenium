@@ -149,7 +149,7 @@ const server = http.createServer((req, res) => {
     await page.evaluate(() => {
       const controller = window.resumeFixtures.get('resume-format-fixture').controller;
       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'agent_step' })}\n\n`));
-      const delta = 'Native reasoning must stay hidden until this round ends.';
+      const delta = 'Native reasoning stays separate from the reply until this round ends.';
       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta, thinking: true })}\n\n`));
     });
     await page.waitForFunction(() => {
@@ -158,8 +158,16 @@ const server = http.createServer((req, res) => {
       return rounds.length >= 2 && next?.querySelector('.thinking-section') &&
         next.textContent.includes('Thinking');
     }, null, { timeout: 10000 });
-    const pendingNative = await page.locator('#chat-history .stream-content').last().textContent();
-    assert.doesNotMatch(pendingNative, /Native reasoning must stay hidden/);
+    const pendingNative = await page.locator('#chat-history .stream-content').last().evaluate(node => ({
+      text: node.querySelector('.resume-thinking-content')?.textContent || '',
+      reply: node.querySelector('.live-reply-content')?.textContent || '',
+      expanded: node.querySelector('.thinking-content')?.classList.contains('expanded'),
+      headerExpanded: node.querySelector('.thinking-header')?.getAttribute('aria-expanded'),
+    }));
+    assert.match(pendingNative.text, /Native reasoning stays separate/);
+    assert.doesNotMatch(pendingNative.reply, /Native reasoning stays separate/);
+    assert.equal(pendingNative.expanded, true, 'reopened active reasoning is visible like the primary stream');
+    assert.equal(pendingNative.headerExpanded, 'true');
 
     // A round boundary must close one native reasoning stream and reset its
     // state before the next round starts a fresh native reasoning stream.
@@ -185,7 +193,7 @@ const server = http.createServer((req, res) => {
         reply: node.querySelector('.live-reply-content')?.textContent || '',
       })));
     assert.match(resumedRounds[0].text, /print\("still live"\)/);
-    assert.match(resumedRounds[1].thoughts.join(' '), /Native reasoning must stay hidden/);
+    assert.match(resumedRounds[1].thoughts.join(' '), /Native reasoning stays separate/);
     assert.match(resumedRounds[2].thoughts.join(' '), /Second-round private reasoning/);
     assert.equal(resumedRounds[2].reply.trim(), 'Second-round visible answer.');
 
@@ -207,13 +215,121 @@ const server = http.createServer((req, res) => {
       const content = [...document.querySelectorAll('#chat-history .stream-content')].at(-1);
       return content?.querySelector('.thinking-section') && content.textContent.includes('Thinking');
     });
-    const pendingThought = await page.locator('#chat-history .stream-content').last().textContent();
-    assert.doesNotMatch(pendingThought, /Working through private reasoning/);
+    const pendingThought = await page.locator('#chat-history .stream-content').last().evaluate(node => ({
+      thought: node.querySelector('.resume-thinking-content')?.textContent || '',
+      reply: node.querySelector('.live-reply-content')?.textContent || '',
+    }));
+    assert.match(pendingThought.thought, /Working through private reasoning/);
+    assert.doesNotMatch(pendingThought.reply, /Working through private reasoning/);
     assert.equal(await page.evaluate(() => window.resumeFixtures.get('resume-pending-think-fixture').settled), false);
     await page.evaluate(async () => {
       const fixture = window.resumeFixtures.get('resume-pending-think-fixture');
       fixture.controller.close();
       await window.resumeResults.get('resume-pending-think-fixture');
+    });
+
+    // Leaving and reopening an active session must rebuild the same live
+    // reasoning panel from the replay buffer, not just the generic spinner.
+    await page.evaluate(() => {
+      const sessionId = 'resume-navigation-reopen-fixture';
+      window.startResumeFixture(sessionId);
+      const controller = window.resumeFixtures.get(sessionId).controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: 'Reasoning already streamed before navigation.', thinking: true })}\n\n`));
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content')].at(-1)
+      ?.querySelector('.resume-thinking-content')?.textContent.includes('before navigation'));
+    await page.evaluate(async () => {
+      const sessionId = 'resume-navigation-reopen-fixture';
+      window.testModules.sessions.setCurrentSessionId('other-session');
+      window.testModules.chat.detachCurrentStream(sessionId);
+      await window.resumeResults.get(sessionId);
+      document.getElementById('chat-history').replaceChildren();
+      window.testModules.sessions.setCurrentSessionId(sessionId);
+      window.startResumeFixture(sessionId);
+    });
+    await page.waitForFunction(() => document.querySelector('#chat-history .stream-content'));
+    await page.evaluate(() => {
+      const controller = window.resumeFixtures.get('resume-navigation-reopen-fixture').controller;
+      const media = document.createElement('video');
+      media.dataset.fixture = 'preserve-identity';
+      document.querySelector('#chat-history .stream-content').appendChild(media);
+      window.resumeFixtureMedia = media;
+
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: 'Reasoning already streamed before navigation.', thinking: true })}\n\n`));
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: ' Current reasoning after reopen.', thinking: true })}\n\n`));
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content')].at(-1)
+      ?.querySelector('.resume-thinking-content')?.textContent.includes('after reopen'));
+    const reopenedReasoning = await page.locator('#chat-history .stream-content').last().evaluate(node => ({
+      thought: node.querySelector('.resume-thinking-content')?.textContent || '',
+      reply: node.querySelector('.live-reply-content')?.textContent || '',
+      expanded: node.querySelector('.thinking-content')?.classList.contains('expanded'),
+    }));
+    assert.match(reopenedReasoning.thought, /before navigation/);
+    assert.match(reopenedReasoning.thought, /after reopen/);
+    assert.doesNotMatch(reopenedReasoning.reply, /Reasoning already streamed/);
+    assert.equal(reopenedReasoning.expanded, true);
+    assert.equal(await page.evaluate(() => window.resumeFixtureMedia.isConnected), true,
+      'live reasoning updates retain existing media nodes in the resumed round');
+    const liveHeader = page.locator('#chat-history .stream-content').last().locator('.thinking-header');
+    await liveHeader.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => ![...document.querySelectorAll('#chat-history .stream-content')].at(-1)
+      ?.querySelector('.thinking-content')?.classList.contains('expanded'));
+    await page.evaluate(() => {
+      const controller = window.resumeFixtures.get('resume-navigation-reopen-fixture').controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: ' One more hidden reasoning update.', thinking: true })}\n\n`));
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content')].at(-1)
+      ?.querySelector('.resume-thinking-content')?.textContent.includes('One more hidden reasoning update'));
+    assert.equal(await page.locator('#chat-history .stream-content').last().locator('.thinking-content').evaluate(el => el.classList.contains('expanded')), false,
+      'a collapsed thinking panel stays collapsed as replay updates arrive');
+    assert.equal(await page.evaluate(() => window.resumeFixtureMedia.isConnected), true);
+    await liveHeader.click();
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content')].at(-1)
+      ?.querySelector('.thinking-content')?.classList.contains('expanded'));
+    await page.evaluate(() => {
+      const controller = window.resumeFixtures.get('resume-navigation-reopen-fixture').controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: 'A separate user-facing answer.', thinking: false })}\n\n`));
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-history .stream-content')].at(-1)
+      ?.querySelector('.live-reply-content')?.textContent.includes('user-facing answer'));
+    const answerAfterThinking = await page.locator('#chat-history .stream-content').last().evaluate(node => ({
+      thought: node.querySelector('.thinking-content-inner')?.textContent || '',
+      reply: node.querySelector('.live-reply-content')?.textContent || '',
+      thoughtSections: node.querySelectorAll('.thinking-section').length,
+    }));
+    assert.match(answerAfterThinking.thought, /One more hidden reasoning update/);
+    assert.equal(answerAfterThinking.reply.trim(), 'A separate user-facing answer.');
+    assert.equal(answerAfterThinking.thoughtSections, 1, 'closing reasoning updates the existing panel rather than duplicating it');
+    await page.evaluate(async () => {
+      const fixture = window.resumeFixtures.get('resume-navigation-reopen-fixture');
+      fixture.controller.close();
+      await window.resumeResults.get('resume-navigation-reopen-fixture');
+    });
+
+    await page.evaluate(() => {
+      document.body.classList.add('hide-thinking');
+      const sessionId = 'resume-hidden-thinking-pref';
+      window.startResumeFixture(sessionId);
+      const controller = window.resumeFixtures.get(sessionId).controller;
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ delta: '<think>Respect the saved hidden-thinking preference' })}\n\n`));
+    });
+    await page.waitForFunction(() => {
+      const content = [...document.querySelectorAll('#chat-history .stream-content')].at(-1);
+      return content?.querySelector('.resume-thinking-content')?.textContent.includes('Respect the saved');
+    });
+    const hiddenPreference = await page.locator('#chat-history .stream-content').last().evaluate(node => ({
+      expanded: node.querySelector('.thinking-content')?.classList.contains('expanded'),
+      hidden: document.body.classList.contains('hide-thinking'),
+    }));
+    assert.equal(hiddenPreference.expanded, false);
+    assert.equal(hiddenPreference.hidden, true);
+    await page.evaluate(async () => {
+      const fixture = window.resumeFixtures.get('resume-hidden-thinking-pref');
+      fixture.controller.close();
+      await window.resumeResults.get('resume-hidden-thinking-pref');
+      document.body.classList.remove('hide-thinking');
     });
 
     await page.evaluate(() => {
@@ -228,8 +344,12 @@ const server = http.createServer((req, res) => {
       return content?.querySelector('.thinking-section') && content.textContent.includes('Thinking');
     });
     const terminalFixture = await page.evaluate(() => [...window.resumeFixtures.entries()].at(-1)?.[0]);
-    const terminalPending = await page.locator('#chat-history .stream-content').last().textContent();
-    assert.doesNotMatch(terminalPending, /Terminal native reasoning/);
+    const terminalPending = await page.locator('#chat-history .stream-content').last().evaluate(node => ({
+      thought: node.querySelector('.resume-thinking-content')?.textContent || '',
+      reply: node.querySelector('.live-reply-content')?.textContent || '',
+    }));
+    assert.match(terminalPending.thought, /Terminal native reasoning/);
+    assert.doesNotMatch(terminalPending.reply, /Terminal native reasoning/);
     await page.evaluate(async id => {
       const fixture = window.resumeFixtures.get(id);
       fixture.controller.close();

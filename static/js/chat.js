@@ -5373,6 +5373,7 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
     let buffer = '';
     let roundText = '';
     let resumeThinkOpen = false;
+    let resumeThinkingSection = null;
     let docFenceOpened = false;
     let gotDelta = false;
     let leftSession = false;
@@ -5394,8 +5395,29 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
       if (docFenceOpened && !dt.trim()) {
         _showDocumentWritingStatus(contentDiv);
       } else if (markdownModule.hasUnclosedThinkTag?.(dt)) {
-        // A second viewer must not expose in-flight reasoning as reply prose.
-        contentDiv.innerHTML = '<div class="thinking-section"><div class="thinking-header"><div class="thinking-header-left">Thinking</div></div></div>';
+        // Recreate the primary stream's expanded live-thinking panel while
+        // replaying a detached run. Keep reasoning in its own safe text node,
+        // separate from any reply, and update it in place during reconnects.
+        const start = dt.search(/<(?:think(?:ing)?|thought)(?:\s+[^>]*)?>|<\|channel>thought\s*/i);
+        const source = (start >= 0 ? dt.slice(start) : dt)
+          .replace(/^<(?:think(?:ing)?|thought)(?:\s+[^>]*)?>|^<\|channel>thought\s*/i, '')
+          .replace(/<\|channel>response\s*/gi, '')
+          .replace(/<channel\|>|<\/(?:think(?:ing)?|thought)>/gi, '')
+          .trim();
+        if (!resumeThinkingSection || !resumeThinkingSection.isConnected) {
+          const section = document.createElement('div');
+          section.className = 'resume-thinking';
+          const id = `resume-think-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const expanded = !document.body.classList.contains('hide-thinking');
+          section.innerHTML = `<div class="thinking-section"><div class="thinking-header" data-thinking-id="${id}" role="button" tabindex="0" aria-controls="${id}" aria-expanded="${expanded}"><div class="thinking-header-left"><span data-label="thinking process">Thinking…</span></div><span class="thinking-toggle${expanded ? ' expanded' : ''}" id="${id}-toggle"></span></div><div class="thinking-content${expanded ? ' expanded' : ''}" id="${id}"><div class="thinking-content-inner resume-thinking-content"></div></div></div>`;
+          contentDiv.prepend(section);
+          resumeThinkingSection = section;
+          const reply = document.createElement('div');
+          reply.className = 'live-reply-content';
+          contentDiv.appendChild(reply);
+        }
+        const inner = resumeThinkingSection.querySelector('.resume-thinking-content');
+        if (inner && inner.textContent !== source) inner.textContent = source;
       } else {
         // Share the originating viewer's renderer, including open code fences
         // and collapsed reasoning, before the terminal history reload arrives.
@@ -5405,7 +5427,7 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
         if (thinkingBlocks.length) {
           // Keep reasoning outside the incremental reply: its generated IDs
           // change on each render and prevent safe Markdown block freezing.
-          let thinking = contentDiv.querySelector('.resume-thinking');
+          let thinking = resumeThinkingSection || contentDiv.querySelector('.resume-thinking');
           if (!thinking) {
             contentDiv.textContent = '';
             thinking = document.createElement('div');
@@ -5414,6 +5436,7 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
             target.className = 'live-reply-content';
             contentDiv.appendChild(thinking);
             contentDiv.appendChild(target);
+            resumeThinkingSection = thinking;
           } else {
             target = contentDiv.querySelector('.live-reply-content');
           }
@@ -5603,6 +5626,7 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
               contentDiv = document.createElement('div');
               contentDiv.className = 'stream-content';
               holder.querySelector('.body').appendChild(contentDiv);
+              resumeThinkingSection = null;
             }
             roundText = '';
             docFenceOpened = false;

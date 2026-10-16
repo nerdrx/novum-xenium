@@ -306,10 +306,31 @@ def build_responses_input(messages: list[dict]) -> list[dict]:
         if role == "tool":
             role = "user"
         content = msg.get("content")
+        content_items = []
         if isinstance(content, list):
-            text = "\n".join(str(part.get("text") or part.get("content") or "") for part in content if isinstance(part, dict))
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") != "image_url":
+                    text = part.get("text") or part.get("content")
+                    if isinstance(text, str) and text:
+                        content_items.append({
+                            "type": "output_text" if role == "assistant" else "input_text",
+                            "text": text,
+                        })
+                elif part.get("type") == "image_url" and role != "assistant":
+                    image = part.get("image_url")
+                    image_url = image.get("url") if isinstance(image, dict) else None
+                    if (isinstance(image_url, str)
+                            and (image_url.startswith("data:image/") or image_url.startswith("https://"))):
+                        image_item = {"type": "input_image", "image_url": image_url}
+                        detail = image.get("detail") if isinstance(image, dict) else None
+                        if detail in {"auto", "low", "high"}:
+                            image_item["detail"] = detail
+                        content_items.append(image_item)
         else:
             text = "" if content is None else str(content)
-        input_type = "output_text" if role == "assistant" else "input_text"
-        input_items.append({"role": role, "content": [{"type": input_type, "text": text}]})
+            input_type = "output_text" if role == "assistant" else "input_text"
+            content_items.append({"type": input_type, "text": text})
+        input_items.append({"role": role, "content": content_items})
     return input_items

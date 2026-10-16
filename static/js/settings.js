@@ -324,7 +324,7 @@ function _bindFallbackWidget(opts) {
   function fillModels(selectEl, epId, selected) {
     while (selectEl.options.length) selectEl.remove(0);
     var ep = (endpointsRef() || []).find(function(e) { return e.id === epId; });
-    if (ep && ep.models) {
+    if (ep && ep.is_enabled && ep.models) {
       sortModelIds(ep.models).forEach(function(m) {
         if (!modelsFilter(m, ep)) return;
         var o = document.createElement('option');
@@ -333,7 +333,15 @@ function _bindFallbackWidget(opts) {
         selectEl.appendChild(o);
       });
     }
+    if (selected && !Array.from(selectEl.options).some(function(o) { return o.value === selected; })) {
+      var unavailable = document.createElement('option');
+      unavailable.value = selected;
+      unavailable.textContent = selected + ' (unavailable)';
+      unavailable.disabled = true;
+      selectEl.appendChild(unavailable);
+    }
     if (selected) selectEl.value = selected;
+    selectEl.disabled = !ep || !ep.is_enabled;
   }
 
   async function save() {
@@ -363,15 +371,22 @@ function _bindFallbackWidget(opts) {
         o.textContent = ep.name + (ep.online ? '' : ' (offline)');
         epS.appendChild(o);
       });
+      var savedEp = (endpointsRef() || []).find(function(ep) { return ep.id === fb.endpoint_id; });
+      if (fb.endpoint_id && !Array.from(epS.options).some(function(o) { return o.value === fb.endpoint_id; })) {
+        var unavailable = document.createElement('option');
+        unavailable.value = fb.endpoint_id;
+        unavailable.textContent = savedEp
+          ? savedEp.name + ' (disabled)'
+          : 'Unavailable endpoint (' + fb.endpoint_id + ')';
+        unavailable.disabled = true;
+        epS.appendChild(unavailable);
+      }
       var first = enabledEps()[0];
       epS.value = fb.endpoint_id || (first ? first.id : '');
 
       var mS = document.createElement('select');
       mS.className = 'settings-select';
       fillModels(mS, epS.value, fb.model);
-
-      fb.endpoint_id = epS.value;
-      fb.model = mS.value;
 
       epS.addEventListener('change', function() {
         fb.endpoint_id = epS.value;
@@ -402,7 +417,13 @@ function _bindFallbackWidget(opts) {
 
   addBtn.addEventListener('click', function() {
     var first = enabledEps()[0];
-    current.push({ endpoint_id: first ? first.id : '', model: '' });
+    var model = '';
+    if (first) {
+      var modelSelect = document.createElement('select');
+      fillModels(modelSelect, first.id, '');
+      model = modelSelect.value;
+    }
+    current.push({ endpoint_id: first ? first.id : '', model: model });
     render();
     save();
   });

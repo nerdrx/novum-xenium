@@ -92,10 +92,52 @@ def test_request_vision_call_sites_pass_owner():
     gallery_source = (ROOT / "routes" / "gallery" / "gallery_routes.py").read_text()
     memory_source = (ROOT / "routes" / "memory" / "memory_routes.py").read_text()
 
-    assert 'analyze_image_with_vl_result(file_info["path"], owner=owner)' in chat_source
-    assert "analyze_image_with_vl(path, owner=current_user)" in upload_source
+    assert 'asyncio.to_thread(analyze_image_with_vl_result, file_info["path"], owner=owner)' in chat_source
+    assert "asyncio.to_thread(analyze_image_with_vl, path, owner=current_user)" in upload_source
     assert "_process_pdf(path, owner=owner)" in processor_source
     assert "_process_pdf(pdf_path, owner=user)" in document_source
     assert "_resolve_vl_model(vl_model, owner=user)" in document_source
     assert "_resolve_vl_model(configured, owner=user)" in gallery_source
     assert "_process_pdf(tmp_path, owner=_owner(request))" in memory_source
+
+
+def test_vision_fallback_runs_without_resolvable_primary(monkeypatch, tmp_path):
+    from src import endpoint_resolver
+    seen = []
+    primary = ("http://vision.test/chat/completions", "fallback-vision", {})
+    final = ("http://other.test/chat/completions", "second-vision", {})
+
+    def missing_primary(configured, owner=None):
+        assert owner == "alice"
+        raise ValueError("primary unavailable")
+
+    def fallbacks(owner=None):
+        assert owner == "alice"
+        return [primary, primary, final]
+
+    def describe(url, model, messages, headers=None, timeout=None):
+        seen.append(model)
+        assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+        if model == "fallback-vision":
+            raise RuntimeError("endpoint unavailable")
+        return "A red square."
+
+    monkeypatch.setattr(dp, "_load_vl_settings", lambda: {"vision_enabled": True, "vision_model": ""})
+    monkeypatch.setattr(dp, "_resolve_vl_model", missing_primary)
+    monkeypatch.setattr(endpoint_resolver, "resolve_vision_fallback_candidates", fallbacks)
+    monkeypatch.setattr(dp, "llm_call", describe)
+    image = tmp_path / "image.png"
+    image.write_bytes(b"test image payload")
+    assert dp.analyze_image_with_vl_result(str(image), owner="alice") == {
+        "text": "A red square.", "model": "second-vision",
+    }
+    assert seen == ["fallback-vision", "second-vision"]
+
+
+def test_disabled_vision_never_resolves_or_sends_images(monkeypatch):
+    monkeypatch.setattr(dp, "_load_vl_settings", lambda: {"vision_enabled": False})
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disabled vision must not resolve or call a provider")
+    monkeypatch.setattr(dp, "_resolve_vl_model", forbidden)
+    monkeypatch.setattr(dp, "llm_call", forbidden)
+    assert "disabled" in dp.analyze_image_with_vl_result("missing.png", owner="alice")["text"]

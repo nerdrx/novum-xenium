@@ -1,6 +1,7 @@
 # src/llm_core.py
 import httpx
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import copy
 import time
 import json
@@ -591,9 +592,15 @@ def _clear_host_dead(url: str) -> None:
 # 100-500ms TCP+TLS handshake. Lazy init so we bind to the running event loop.
 _http_client: Optional[httpx.AsyncClient] = None
 _http_limits = httpx.Limits(max_connections=100, max_keepalive_connections=30, keepalive_expiry=30.0)
+_sync_llm_http = threading.local()
 
 def _get_http_client() -> httpx.AsyncClient:
     """Return process-wide AsyncClient. Per-request timeout is passed at call time."""
+    # Synchronous callers that bridge into asyncio own a client on their loop;
+    # never share the process client's pool across the temporary loop.
+    sync_client = getattr(_sync_llm_http, "client", None)
+    if sync_client is not None and not sync_client.is_closed:
+        return sync_client
     global _http_client
     if _http_client is None or _http_client.is_closed:
         from src.tls_overrides import llm_verify
@@ -601,6 +608,33 @@ def _get_http_client() -> httpx.AsyncClient:
             limits=_http_limits, http2=False, verify=llm_verify(),
         )
     return _http_client
+
+
+def _new_sync_llm_http_client() -> httpx.AsyncClient:
+    from src.tls_overrides import llm_verify
+    return httpx.AsyncClient(
+        limits=_http_limits, http2=False, verify=llm_verify(),
+    )
+
+
+def _llm_call_async_from_sync(**kwargs):
+    """Run the async provider implementation from a synchronous call site."""
+    async def invoke():
+        async with _new_sync_llm_http_client() as client:
+            _sync_llm_http.client = client
+            try:
+                return await llm_call_async(**kwargs)
+            finally:
+                del _sync_llm_http.client
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(invoke())
+    # The caller's loop cannot advance while this synchronous API waits. Use a
+    # private loop and client in a worker thread instead of deadlocking it.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, invoke()).result()
 
 def _get_cached_response(cache_key: str) -> Optional[str]:
     """Get cached response if it exists."""
@@ -2220,6 +2254,18 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
     if cached_response:
         logger.debug(f"Returning cached response for key: {cache_key}")
         return cached_response
+
+    if provider == "chatgpt-subscription":
+        return _llm_call_async_from_sync(
+            url=url,
+            model=model,
+            messages=messages_copy,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            headers=headers,
+            timeout=timeout,
+            prompt_type=prompt_type,
+        )
 
     if provider == "anthropic":
         target_url = _normalize_anthropic_url(url)

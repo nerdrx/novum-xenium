@@ -339,10 +339,23 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
             return {"text": "[Vision is disabled — enable it in Settings → Vision]", "model": ""}
         vl_model = settings.get("vision_model", "")
 
+        # A missing primary must not prevent an explicitly configured fallback.
+        _vl_candidates = []
         try:
-            url, model_id, headers = _resolve_vl_model(vl_model, owner=owner)
+            _vl_candidates.append(_resolve_vl_model(vl_model, owner=owner))
         except ValueError:
-            return {"text": "[No vision model configured — set one in Settings → Vision]", "model": vl_model or ""}
+            pass
+        try:
+            from src.endpoint_resolver import resolve_vision_fallback_candidates
+            _vl_candidates.extend(resolve_vision_fallback_candidates(owner=owner))
+        except Exception:
+            logger.warning("Could not resolve vision fallback models")
+        candidates = []
+        for candidate in _vl_candidates:
+            if candidate and candidate[0] and candidate[1] and candidate not in candidates:
+                candidates.append(candidate)
+        if not candidates:
+            return {"text": "[No vision model available — choose an enabled model in Settings → Vision]", "model": vl_model or ""}
 
         with open(image_path, "rb") as f:
             img_data = base64.b64encode(f.read()).decode("utf-8")
@@ -360,17 +373,8 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
                 ],
             }
         ]
-        # Vision-specific fallback chain (Settings → Vision → Fallbacks). A
-        # downed vision endpoint can fall through to the next configured model
-        # — same shape as task/chat but its own list (`vision_model_fallbacks`).
-        try:
-            from src.endpoint_resolver import resolve_vision_fallback_candidates
-            _vl_candidates = [(url, model_id, headers)] + resolve_vision_fallback_candidates(owner=owner)
-        except Exception:
-            _vl_candidates = [(url, model_id, headers)]
-
         last_err = None
-        for i, (_url, _model, _headers) in enumerate([c for c in _vl_candidates if c and c[0] and c[1]]):
+        for i, (_url, _model, _headers) in enumerate(candidates):
             try:
                 description = llm_call(_url, _model, vl_messages, headers=_headers, timeout=120)
                 logger.info("VL analysis complete with model %s", _model)

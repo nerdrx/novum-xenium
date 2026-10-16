@@ -63,6 +63,65 @@ export function safeDisplayImageSrc(raw) {
   return '';
 }
 
+export function buildPageMediaCard(media = []) {
+  if (!Array.isArray(media)) return null;
+  const items = [];
+  const seen = new Set();
+  for (const entry of media) {
+    if (!entry || !['image', 'video'].includes(entry.kind)) continue;
+    const raw = String(entry.url || '').trim();
+    if (!raw || raw.length > 4096 || seen.has(raw)) continue;
+    let url;
+    try {
+      url = new URL(raw);
+      if (url.protocol !== 'https:' || url.username || url.password) continue;
+    } catch (_) { continue; }
+    seen.add(raw);
+    items.push({ kind: entry.kind, url: url.href, label: String(entry.label || '').slice(0, 160) });
+    if (items.length >= 6) break;
+  }
+  if (!items.length) return null;
+
+  const details = document.createElement('details');
+  details.className = 'agent-tool-output agent-page-media';
+  details.open = true;
+  const summary = document.createElement('summary');
+  summary.textContent = 'Page media';
+  details.appendChild(summary);
+  const list = document.createElement('div');
+  list.className = 'agent-page-media-list';
+  for (const item of items) {
+    const figure = document.createElement('figure');
+    figure.className = 'agent-page-media-item';
+    figure.setAttribute('style', 'margin:8px 0;max-width:100%;');
+    const caption = document.createElement('figcaption');
+    caption.textContent = item.label || (item.kind === 'video' ? 'Page video' : 'Page image');
+    if (item.kind === 'video') {
+      const video = document.createElement('video');
+      video.src = item.url;
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = 'none';
+      video.referrerPolicy = 'no-referrer';
+      video.setAttribute('aria-label', caption.textContent);
+      video.setAttribute('style', 'display:block;width:100%;max-height:70vh;');
+      figure.append(video, caption);
+    } else {
+      const image = document.createElement('img');
+      image.src = item.url;
+      image.alt = caption.textContent;
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      image.referrerPolicy = 'no-referrer';
+      image.setAttribute('style', 'display:block;max-width:100%;max-height:70vh;height:auto;');
+      figure.append(image, caption);
+    }
+    list.appendChild(figure);
+  }
+  details.appendChild(list);
+  return details;
+}
+
 export function toolEventStatus(event = {}) {
   const approval = event.ask_user;
   if (approval?.kind === 'tool_approval' && approval.resolved) {
@@ -2793,6 +2852,7 @@ export function addMessage(role, content, modelName, metadata) {
             if (screenshotSrc) {
               outHtml += `<details class="agent-tool-output"><summary>Screenshot</summary><img src="${esc(screenshotSrc)}" style="max-width:100%;border-radius:6px;margin-top:6px;border:1px solid var(--border)" /></details>`;
             }
+            const pageMedia = ev.tool === 'web_fetch' ? buildPageMediaCard(ev.inline_media) : null;
             // File-write/edit diff (persisted in the tool event) \u2014 re-render it
             // so it survives reload, matching the live stream.
             let evDiffHtml = '';
@@ -2821,6 +2881,7 @@ export function addMessage(role, content, modelName, metadata) {
             // Hide the raw JSON command when a diff says it better (same as live).
             const evCmdHtml = (ev.command && !(ev.diff && ev.diff.text)) ? `<pre class="agent-thread-cmd">${esc(ev.command)}</pre>` : '';
             node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${toolStatus.icon}</span><span class="agent-thread-tool">${esc(ev.tool)}</span><span class="agent-thread-status">${toolStatus.label}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${evCmdHtml}${outHtml}${evDiffHtml}</div>`;
+            if (pageMedia) node.appendChild(pageMedia);
             // Click handling is delegated globally \u2014 see chat.js init.
             threadWrap.appendChild(node);
             if (ev.subagent) appendSubagentCard(threadWrap, ev.subagent);
@@ -3232,6 +3293,7 @@ const chatRenderer = {
   copyMessageText,
   safeToolScreenshotSrc,
   safeDisplayImageSrc,
+  buildPageMediaCard,
   toolEventStatus,
   resolveToolApprovalNode,
   findPendingApprovalNode,

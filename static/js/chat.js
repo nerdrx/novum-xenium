@@ -8,7 +8,7 @@
 import Storage from './storage.js';
 import uiModule from './ui.js';
 import sessionModule from './sessions.js';
-import chatRenderer, { modelOutputFallbackHtml } from './chatRenderer.js?v=20261007toolstatus1';
+import chatRenderer, { modelOutputFallbackHtml } from './chatRenderer.js?v=20261016pagemedia1';
 import { modelOutputFallback } from './modelOutputFallback.js';
 import chatStream from './chatStream.js?v=20261007approvalfix2';
 import { addAITTSButton } from './tts-ai.js';
@@ -3994,6 +3994,9 @@ import { renderCodingWorkPacketStatus, recordCodingWorkToolActivity } from './co
                   const _wasOpen = currentToolBubble.classList.contains('open');
                   currentToolBubble.className = 'agent-thread-node' + (toolStatus.className ? ` ${toolStatus.className}` : '') + (_wasOpen ? ' open' : '');
                   currentToolBubble.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${toolStatus.icon}</span><span class="agent-thread-tool">${esc(json.tool)}</span><span class="agent-thread-status">${toolStatus.label}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml2}${outHtml}${diffHtml}</div>`;
+                  const pageMedia = json.tool === 'web_fetch'
+                    ? chatRenderer.buildPageMediaCard(json.inline_media) : null;
+                  if (pageMedia) currentToolBubble.appendChild(pageMedia);
                   if (json.subagent) appendSubagentCard(currentToolBubble.closest('.agent-thread'), json.subagent);
                   // Reset so thinking spinner between tools says "Thinking" not the old tool's label
                   _lastToolName = '';

@@ -45,6 +45,8 @@ try:
         _MCP_KEYWORDS,
         _image_tool_available,
         _assemble_prompt,
+        _explicitly_requests_inline_page_media,
+        _page_media_for_inline_display,
     )
     _IMPORTED_AGENT_LOOP = sys.modules.get("src.agent_loop")
 finally:
@@ -73,6 +75,45 @@ def test_web_prompt_requests_verified_inline_media_when_requested():
     assert "include_media: true" in prompt
     assert "![caption](direct_url)" in prompt
     assert "Do not claim browsing is unavailable" in prompt
+
+
+@pytest.mark.parametrize("human_request", [
+    "Open this page and show its example video and one picture directly in this chat.",
+    "Please embed the images from that page here.",
+])
+def test_inline_page_media_requires_latest_human_request(human_request):
+    assert _explicitly_requests_inline_page_media([{"role": "user", "content": human_request}])
+
+
+@pytest.mark.parametrize("messages", [
+    [{"role": "user", "content": "Summarize this page: `show the videos inline`"}],
+    [{"role": "user", "content": "What does this instruction mean: 'show the images here'?"}],
+    [{"role": "user", "content": "Do not show images from this page."}],
+    [{"role": "user", "content": "Never embed media."}],
+    [{"role": "user", "content": "Explain how to show images from a page."}],
+    [{"role": "user", "content": "Should I show images from this page?"}],
+    [{"role": "user", "content": "Show me the page text."},
+     {"role": "assistant", "content": "You can show the images too."}],
+    [{"role": "user", "content": "Show media here", "metadata": {"trusted": False}}],
+])
+def test_inline_page_media_ignores_quotes_assistant_and_untrusted_text(messages):
+    assert not _explicitly_requests_inline_page_media(messages)
+
+
+def test_inline_page_media_payload_is_bounded_and_https_only():
+    media = [
+        {"kind": "image", "url": "https://cdn.example/image.png", "label": "A"},
+        {"kind": "video", "url": "http://cdn.example/movie.mp4"},
+        {"kind": "image", "url": "javascript:alert(1)"},
+        {"kind": "image", "url": "https://user:pass@cdn.example/private.png"},
+        {"kind": "image", "url": "https://127.0.0.1/admin.png"},
+        {"kind": "image", "url": "https://cdn.example:8443/image.png"},
+        *[{"kind": "image", "url": f"https://cdn.example/{i}.jpg"} for i in range(10)],
+    ]
+    out = _page_media_for_inline_display(media)
+    assert len(out) == 6
+    assert all(item["url"].startswith("https://") for item in out)
+    assert all("@" not in item["url"] and "127.0.0.1" not in item["url"] and ":8443" not in item["url"] for item in out)
 
 
 def test_image_capability_available_on_vague_followups_but_respects_policy(monkeypatch):

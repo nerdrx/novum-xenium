@@ -71,6 +71,7 @@ from src.tool_capabilities import (
     tool_result_is_successful,
     tool_result_should_arm_gate,
     web_fetch_preflight_error,
+    _public_read_url,
 )
 from src.tool_approvals import (
     ExactToolApproval,
@@ -1131,6 +1132,70 @@ def _extract_last_user_message(messages: List[Dict]) -> str:
                 content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
             return content
     return ""
+
+
+def _explicitly_requests_inline_page_media(messages: List[Dict]) -> bool:
+    """Trust only latest human-authored request; quoted text is not intent."""
+    message = next((item for item in reversed(messages or [])
+                    if isinstance(item, dict) and item.get("role") == "user"
+                    and item.get("_agent_injected") != "task_anchor"
+                    and (not isinstance(item.get("metadata"), dict)
+                         or item["metadata"].get("trusted") is not False)), None)
+    if not message:
+        return False
+    content = message.get("content", "")
+    if isinstance(content, list):
+        content = " ".join(block.get("text", "") for block in content
+                           if isinstance(block, dict) and isinstance(block.get("text"), str))
+    if not isinstance(content, str):
+        return False
+    # Exclude quoted/code material so fetched or discussed instructions cannot
+    # authorize external media loads.
+    text = re.sub(r"(?m)^\s*>.*$", " ", content)
+    text = re.sub(r"```[\s\S]*?```|`[^`]*`", " ", text)
+    text = re.sub(r"\"[^\"]*\"|'[^']*'|“[^”]*”|‘[^’]*’", " ", text)
+    media = r"(?:images?|pictures?|photos?|gifs?|videos?|clips?|media)"
+    for clause in re.split(r"[.!?;\n]+", text):
+        clause = clause.strip()
+        if not clause:
+            continue
+        if re.search(r"\b(?:do not|don't|never|should not|shouldn't|avoid)\s+"
+                     r"(?:show|display|embed|render|inline|put)\b", clause, re.I):
+            continue
+        if re.search(r"\b(?:show|display|embed|render|inline|put)\b.{0,30}"
+                     r"\b(?:no|not|never|without)\b.{0,30}\b" + media + r"\b", clause, re.I | re.S):
+            continue
+        if re.search(r"\b(?:explain|describe|define|translate|meaning of|how to|how do i|"
+                     r"should i|whether to|do you mean|"
+                     r"what does .{1,40} mean)\b.{0,80}"
+                     r"\b(?:show|display|embed|render|inline|put)\b", clause, re.I | re.S):
+            continue
+        if re.search(r"\b(?:show|display|embed|render|inline|put)\b.{0,100}\b" + media + r"\b"
+                     r"|\b" + media + r"\b.{0,100}\b(?:inline|in this chat|here)\b",
+                     clause, re.I | re.S):
+            return True
+    return False
+
+
+def _page_media_for_inline_display(media: Any) -> List[Dict[str, str]]:
+    """Keep a tiny typed subset of extractor URLs for the explicitly requested UI."""
+    if not isinstance(media, list):
+        return []
+    result = []
+    seen = set()
+    for item in media:
+        if not isinstance(item, dict) or item.get("kind") not in {"image", "video"}:
+            continue
+        url = item.get("url")
+        safe_url = _public_read_url(url)
+        if not safe_url or safe_url in seen:
+            continue
+        seen.add(safe_url)
+        result.append({"kind": item["kind"], "url": safe_url,
+                       "label": str(item.get("label") or "")[:160]})
+        if len(result) >= 6:
+            break
+    return result
 
 
 def _user_turn_count(messages: List[Dict]) -> int:
@@ -8804,6 +8869,13 @@ async def stream_agent_loop(
 
             # Emit tool_output (include ui_event data if present)
             tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}
+            _inline_page_media = (
+                _page_media_for_inline_display(result.get("media"))
+                if block.tool_type == "web_fetch"
+                and result.get("exit_code") == 0
+                and _explicitly_requests_inline_page_media(messages)
+                else []
+            )
             tool_output_data.update(native_tool_fields)
             if isinstance(result.get("browser_preview"), dict):
                 tool_output_data["browser_preview"] = result["browser_preview"]
@@ -8845,6 +8917,8 @@ async def stream_agent_loop(
             for k in ("image_url", "image_id", "image_prompt", "image_model", "image_size", "image_quality"):
                 if k in result:
                     tool_output_data[k] = result[k]
+            if _inline_page_media:
+                tool_output_data["inline_media"] = _inline_page_media
             # Forward screenshots from browser tools (base64 images)
             if result.get("images"):
                 img = result["images"][0]
@@ -9012,6 +9086,8 @@ async def stream_agent_loop(
                 "exit_code": result.get("exit_code"),
             }
             tool_event.update(native_tool_fields)
+            if _inline_page_media:
+                tool_event["inline_media"] = _inline_page_media
             if requested_tool:
                 tool_event["requested_tool"] = requested_tool
             if skill_reference_message is not None or skill_reference_duplicate:

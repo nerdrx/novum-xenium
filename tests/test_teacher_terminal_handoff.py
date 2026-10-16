@@ -57,3 +57,62 @@ def test_teacher_exception_after_takeover_does_not_restore_student_success(monke
     terminals = [item for item in payloads if item.get("type") == "agent_terminal"]
     assert [item.get("status") for item in terminals] == ["failed"]
     assert terminals[0]["reason"] == "teacher_takeover_failed"
+
+
+@pytest.mark.parametrize("teacher_events, expected_statuses", [
+    ([], ["failed"]),
+    ([
+        {"type": "teacher_takeover"},
+        {"type": "agent_terminal", "status": "completed", "reason": "teacher_verified"},
+    ], ["completed"]),
+])
+def test_failed_student_terminal_is_released_only_without_teacher_takeover(
+    monkeypatch, teacher_events, expected_statuses,
+):
+    async def teacher(**_kwargs):
+        for payload in teacher_events:
+            yield _event(payload)
+
+    monkeypatch.setattr(te, "run_teacher_inline", teacher)
+
+    @te.with_teacher_takeover
+    async def parent():
+        te.request_teacher_takeover(student_reply="needs review")
+        yield _event({
+            "type": "agent_terminal",
+            "status": "failed",
+            "reason": "completion_unverified",
+        })
+        yield "data: [DONE]\n\n"
+
+    chunks = asyncio.run(_collect(parent()))
+    payloads = [json.loads(chunk[6:]) for chunk in chunks
+                if chunk.startswith("data: ") and chunk != "data: [DONE]\n\n"]
+    terminals = [item for item in payloads if item.get("type") == "agent_terminal"]
+    assert [item.get("status") for item in terminals] == expected_statuses
+    if teacher_events:
+        assert terminals[0]["reason"] == "teacher_verified"
+    else:
+        assert terminals[0]["reason"] == "completion_unverified"
+
+
+def test_provider_error_keeps_student_terminal_before_error_event(monkeypatch):
+    async def unexpected_teacher(**_kwargs):
+        raise AssertionError("teacher must not run without a queued takeover")
+        yield ""
+
+    monkeypatch.setattr(te, "run_teacher_inline", unexpected_teacher)
+
+    @te.with_teacher_takeover
+    async def parent():
+        yield _event({
+            "type": "agent_terminal",
+            "status": "failed",
+            "reason": "provider_failure",
+        })
+        yield "event: error\ndata: {\"error\": \"provider failed\"}\n\n"
+
+    chunks = asyncio.run(_collect(parent()))
+    terminal_index = next(i for i, chunk in enumerate(chunks) if "agent_terminal" in chunk)
+    error_index = next(i for i, chunk in enumerate(chunks) if chunk.startswith("event: error"))
+    assert terminal_index < error_index

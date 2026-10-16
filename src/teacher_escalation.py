@@ -57,13 +57,21 @@ def with_teacher_takeover(func):
         token = _TAKEOVER.set(request)
         done = False
         failed = False
-        completed_terminals = []
+        student_terminals = []
+        teacher_terminal_seen = False
         try:
             async with aclosing(func(*args, **kwargs)) as stream:
                 async for chunk in stream:
                     if chunk.strip() == 'data: [DONE]':
                         done = True
                         continue
+                    if chunk.startswith('event: error') and student_terminals:
+                        # An error closes the student's stream and prevents a
+                        # queued takeover from running. Preserve terminal-before-
+                        # error ordering so clients can persist its diagnostics.
+                        for terminal in student_terminals:
+                            yield terminal
+                        student_terminals.clear()
                     failed |= chunk.startswith('event: error')
                     if chunk.startswith('data: '):
                         try:
@@ -72,12 +80,12 @@ def with_teacher_takeover(func):
                             payload = None
                         if (isinstance(payload, dict)
                                 and payload.get('type') == 'agent_terminal'
-                                and payload.get('status') == 'completed'):
-                            # The student can only queue a takeover here; the
-                            # teacher's gate runs after its completion wrapper
-                            # has closed. Hold success until we know whether an
-                            # actual teacher_takeover event was emitted.
-                            completed_terminals.append(chunk)
+                                and request):
+                            # A queued takeover may follow any student terminal,
+                            # including a failed/unverified one. Hold all of
+                            # them until the gate reports whether takeover
+                            # actually began, so parent status stays singular.
+                            student_terminals.append(chunk)
                             continue
                     yield chunk
             # The parent generator and gate have both unwound. Child control
@@ -97,32 +105,35 @@ def with_teacher_takeover(func):
                                     payload = None
                                 if isinstance(payload, dict) and payload.get('type') == 'teacher_takeover':
                                     took_over = True
+                                if isinstance(payload, dict) and payload.get('type') == 'agent_terminal':
+                                    teacher_terminal_seen = True
                             yield chunk
                     if not took_over:
-                        for terminal in completed_terminals:
+                        for terminal in student_terminals:
                             yield terminal
-                    completed_terminals.clear()
+                    student_terminals.clear()
                 except Exception as exc:
                     logger.warning('teacher escalation hook failed: %s', exc, exc_info=True)
                     if not failed:
                         yield 'data: ' + json.dumps({'type': 'escalation_failed', 'reason': str(exc),
                                                     'teacher': True}) + '\n\n'
                     if took_over:
-                        # Once takeover was announced, the student's held
-                        # success is no longer authoritative. Surface a failed
-                        # terminal if the teacher stream aborts before its own.
-                        yield 'data: ' + json.dumps({
-                            'type': 'agent_terminal',
-                            'status': 'failed',
-                            'reason': 'teacher_takeover_failed',
-                            'message': 'The teacher handoff started but did not complete.',
-                        }) + '\n\n'
+                        if not teacher_terminal_seen:
+                            # Once takeover was announced, student status is
+                            # no longer authoritative. Surface failure only
+                            # when the teacher did not provide its own terminal.
+                            yield 'data: ' + json.dumps({
+                                'type': 'agent_terminal',
+                                'status': 'failed',
+                                'reason': 'teacher_takeover_failed',
+                                'message': 'The teacher handoff started but did not complete.',
+                            }) + '\n\n'
                     else:
-                        for terminal in completed_terminals:
+                        for terminal in student_terminals:
                             yield terminal
-                    completed_terminals.clear()
+                    student_terminals.clear()
             else:
-                for terminal in completed_terminals:
+                for terminal in student_terminals:
                     yield terminal
             if done and not failed:
                 yield 'data: [DONE]\n\n'

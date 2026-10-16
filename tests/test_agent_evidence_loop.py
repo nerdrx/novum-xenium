@@ -610,7 +610,7 @@ def test_uninspected_artifact_still_fails_on_provider_error(monkeypatch):
     assert terminal is not None, events
     assert terminal["data"]["failed"] is True
     assert terminal["data"]["failure"]["status"] == 504
-    assert '[Agent stopped: Model request failed (HTTP 504)]' in terminal['data']['round_texts'][-1]
+    assert '[Agent stopped: Provider service failed (HTTP 504). Check service health and retry.]' in terminal['data']['round_texts'][-1]
 
 
 def test_verified_artifact_gets_only_one_finish_nudge(monkeypatch):

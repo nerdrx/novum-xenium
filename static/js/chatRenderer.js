@@ -2181,7 +2181,21 @@ export function displayMetrics(messageElement, metrics) {
   const responseTime = metrics.response_time;
   const inputTokens = metrics.input_tokens || 0;
   const outputTokens = metrics.output_tokens || 0;
-  const tps = metrics.tokens_per_second;
+  const suppliedTps = metrics.tokens_per_second ?? metrics.gen_tps ?? metrics.tps;
+  const suppliedTpsNumber = Number(suppliedTps);
+  const suppliedTpsText = String(suppliedTps ?? '').trim().toLowerCase();
+  const hasSuppliedTps = suppliedTps != null && suppliedTpsText !== '' && suppliedTpsText !== 'undefined'
+    && Number.isFinite(suppliedTpsNumber) && suppliedTpsNumber >= 0;
+  const outputCount = Number(outputTokens);
+  const elapsedSeconds = Number(responseTime);
+  const averageTps = !hasSuppliedTps && outputCount > 0 && elapsedSeconds > 0
+    && Number.isFinite(outputCount) && Number.isFinite(elapsedSeconds)
+    ? Math.round((outputCount / elapsedSeconds) * 100) / 100
+    : null;
+  const tps = hasSuppliedTps ? suppliedTps : averageTps;
+  const approximateTps = averageTps != null
+    || metrics.tps_source === 'computed'
+    || metrics.tps_source === 'estimated';
   const isReal = metrics.usage_source === 'real';
   const ctxPct = metrics.context_percent;
   const model = metrics.model || 'Unknown';
@@ -2203,7 +2217,7 @@ export function displayMetrics(messageElement, metrics) {
   const costStr0 = cost !== null ? `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}` : null;
   const hasTps = tps != null && tps !== 'undefined';
   const metricsLabel = hasTps
-    ? `${tps} tok/s`
+    ? `${approximateTps ? '~' : ''}${tps} tok/s`
     : costStr0
       ? costStr0
       : responseTime != null
@@ -2224,7 +2238,9 @@ export function displayMetrics(messageElement, metrics) {
 
     const costStr = cost !== null ? `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}` : '';
     const costRows = costStr ? `<div><span class="ctx-label">Cost</span> ${costStr}</div>` : '';
-    const speedStr = tps != null && tps !== 'undefined' ? `${tps} tok/s` : 'n/a';
+    const speedStr = hasTps
+      ? `${approximateTps ? '~' : ''}${tps} tok/s${approximateTps ? ' avg (includes response time)' : ''}`
+      : 'n/a';
     const totalTok = inputTokens + outputTokens;
     const ctxColor = ctxPct >= 85 ? 'var(--red, #e06c75)' : ctxPct >= 70 ? '#ff9900' : 'var(--color-muted-alt, #6b7280)';
     const prepTime = metrics.agent_prep_time;

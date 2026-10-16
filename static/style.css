@@ -10666,6 +10666,7 @@ details a:hover {
 #cancel-custom-preset {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
 }
 #save-custom-preset::before,
@@ -10969,7 +10970,7 @@ details a:hover {
 }
 .char-expand-btn {
   position: absolute;
-  bottom: 14px;
+  bottom: 10px;
   right: 6px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -10981,6 +10982,10 @@ details a:hover {
   transition: all 0.15s;
   margin: 0;
   z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
 }
 .char-expand-btn:hover {
   color: var(--red);
@@ -11105,6 +11110,10 @@ details a:hover {
      name input the same width, since both fields flex:1 into the leftover. */
   min-width: 64px;
   text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
 }
 .char-action-btn:hover {
   color: var(--fg);
@@ -11113,6 +11122,45 @@ details a:hover {
 #char-delete-template-btn:hover {
   color: var(--color-error);
   border-color: var(--color-error);
+}
+
+/* Keep the persona picker/name rows on the same trailing button column and
+   center icon/label contents. Touch controls match Group's 44px targets. */
+#custom-preset-modal .char-name-combo {
+  align-items: stretch;
+  gap: 6px;
+}
+#custom-preset-modal .char-name-combo > .char-template-select,
+#custom-preset-modal .char-name-combo > input[type="text"] {
+  box-sizing: border-box;
+  min-width: 0;
+}
+#custom-preset-modal .char-name-combo > .char-template-select,
+#custom-preset-modal .char-name-combo > .char-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+}
+#custom-preset-modal .char-name-combo > .char-action-btn {
+  width: 68px;
+  min-width: 68px;
+}
+#custom-preset-modal .char-name-combo > input[type="text"] {
+  line-height: 1.2;
+}
+@media (max-width: 768px) {
+  #custom-preset-modal .char-name-combo > .char-template-select,
+  #custom-preset-modal .char-name-combo > input[type="text"],
+  #custom-preset-modal .char-name-combo > .char-action-btn,
+  #custom-preset-modal .modal-footer button {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  #custom-preset-modal .char-name-combo > .char-template-select,
+  #custom-preset-modal .char-name-combo > input[type="text"] {
+    padding: 8px 10px;
+  }
 }
 
 /* Character toggle row in preset modal */

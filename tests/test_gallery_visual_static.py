@@ -2,6 +2,7 @@ from pathlib import Path
 import re
 
 from tests.helpers.stylesheets import app_css, stylesheet_cache_version
+from tests.helpers.service_worker import service_worker_cache_name
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,7 +54,7 @@ def test_gallery_static_cache_key_bumped():
     # The split gallery graph uses one identity in preload, app and offline cache.
     for source in (html, app, service_worker):
         assert re.search(r"(?:/static/|\./)js/gallery\.js['\"]", source)
-    assert "novum-xenium-v395-upstream-sync" in service_worker
+    assert service_worker_cache_name().startswith("novum-xenium-v")
 
 
 

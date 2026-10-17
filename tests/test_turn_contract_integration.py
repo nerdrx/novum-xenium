@@ -70,21 +70,29 @@ async def test_actual_generator_reports_unavailable_before_inference(
         forced_tools={"web_search"}, relevant_tools={"web_search"},
         fallbacks=[("https://fallback.invalid", "unused-fallback", {})],
     )]
-    assert len(chunks) == 4
-    assert json.loads(chunks[0].removeprefix("data: ")) == {
+    assert chunks[-1] == "data: [DONE]\n\n"
+    payloads = [
+        json.loads(chunk.removeprefix("data: "))
+        for chunk in chunks[:-1]
+    ]
+    assert payloads[0] == {
         "type": "turn_contract", **selected.audit(),
     }
-    decision = json.loads(chunks[1].removeprefix("data: "))
+    decision = next(payload for payload in payloads
+                    if payload.get("type") == "completion_decision")
     assert decision["type"] == "completion_decision"
     assert decision["data"]["status"] == "unverified"
     assert decision["data"]["evidence_ids"] == []
-    failure = json.loads(chunks[2].removeprefix("data: "))
-    assert set(failure) == {"delta"}
-    assert "can’t perform" in failure["delta"]
-    assert "unavailable" in failure["delta"]
-    assert missing in failure["delta"]
-    assert "haven’t substituted another tool" in failure["delta"]
-    assert chunks[3] == "data: [DONE]\n\n"
+    # Safe-prefix streaming may split this refusal around the completion
+    # decision. Validate the delivered text, not the number of SSE frames.
+    assert all(set(payload) == {"delta"} or payload is payloads[0]
+               or payload is decision for payload in payloads)
+    refusal = "".join(payload["delta"] for payload in payloads
+                      if set(payload) == {"delta"})
+    assert "can’t perform" in refusal
+    assert "unavailable" in refusal
+    assert missing in refusal
+    assert "haven’t substituted another tool" in refusal
 
 
 def test_unknown_contract_reaches_model_instead_of_forced_clarification():

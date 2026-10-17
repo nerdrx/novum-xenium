@@ -213,9 +213,6 @@ def _normalize_request_lead(value: str) -> str:
     text = re.sub(r"^quick(?:ly)?\s+(?=(?:search|list|show|check|find|read|open)\b)", "", text, flags=re.I)
     text = re.sub(r"^((?:can|could|would|will)\s+)u\b", r"\1you", text, flags=re.I)
     text = re.sub(r"\boffical\b", "official", text, flags=re.I)
-    # Expand only the colloquial request lead, not quoted content or tool args.
-    text = re.sub(r"^(" + _REQUEST_PREFIX + r")gimme\b",
-                  r"\1give me", text, flags=re.I)
     return text
 
 
@@ -4241,7 +4238,7 @@ def _clause_capabilities(text: str) -> set[str]:
         # note title or condition must not add UI/calendar authority.
         return {"notes"}
     if (
-        re.match(r"^\s*" + _REQUEST_PREFIX + r"(?:give\s+me|fetch|grab)\b", text, re.I)
+        re.match(r"^\s*" + _REQUEST_PREFIX + r"(?:give\s+me|gimme|fetch|grab)\b", text, re.I)
         and re.search(r"\b(?:videos?|vids?|images?|pictures?|photos?|media|articles?|posts?|pages?|links?)\b", text, re.I)
         and re.search(r"\b(?:from|on|at)\s+(?:the\s+)?(?:https?://[^\s]+|(?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|jp|dev|edu|gov)\b)", text, re.I)
         and not re.search(r"\b(?:explain|explanation|how\s+to|script|code|tutorial)\b", text, re.I)

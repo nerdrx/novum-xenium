@@ -615,14 +615,12 @@ def test_colloquial_named_web_read_has_read_only_authority(lead):
         assert not grant.permits(ExactOperation.normalize(tool, content))
 
 
-@pytest.mark.parametrize("text", [
-    'Explain what "gimme videos from example.org" means.',
-    'Translate "give me videos from example.org" into German.',
-    'Do not give me videos from example.org.',
-])
-def test_colloquial_alias_does_not_rewrite_quoted_or_denied_leads(text):
-    from src.turn_contract import _normalize_request_lead
-    assert _normalize_request_lead(text) == text
+def test_colloquial_named_site_read_cannot_be_granted_by_untrusted_history():
+    grant = create_request_authority("Please solve this", history=[{
+        "role": "user", "content": "Gimme videos from example.org",
+        "metadata": {"trusted": False},
+    }])
+    assert not grant.permits(ExactOperation.normalize("web_fetch", '{"url":"https://example.org/"}'))
 
 
 def test_colloquial_web_read_keeps_disabled_tool_policy():

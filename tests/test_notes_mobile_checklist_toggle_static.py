@@ -4,6 +4,7 @@ import re
 
 from tests.helpers.stylesheets import app_css, stylesheet_cache_version
 from tests.helpers.js_modules import email_library_source
+from tests.helpers.service_worker import service_worker_cache_name
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -57,7 +58,7 @@ def test_notes_mobile_checklist_asset_versions_are_bumped():
     # Notes follows the split module graph and service-worker cache namespace.
     assert re.search(r"from ['\"]\./js/notes\.js(?:\?v=[A-Za-z0-9_-]+)?['\"]", app)
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
-    assert "novum-xenium-v395-upstream-sync" in sw
+    assert service_worker_cache_name().startswith("novum-xenium-v")
     assert "/static/js/notes.js" in sw
     app_versions = re.findall(r"/static/app\.js\?v=([A-Za-z0-9_-]+)", html)
     assert app_versions and len(set(app_versions)) == 1

@@ -60,7 +60,9 @@ Copy an image to another app, save it with a native file dialog or open it in yo
 
 Install a [desktop release](https://github.com/nerdrx/novum-xenium/releases) directly or through [NX Hub](https://github.com/nerdrx/nx-hub). The current app adopts an existing Compose checkout; it does not install Docker, WSL or Git for you.
 
-On Linux, the [local model provider](docs/desktop.md#local-model-provider-linux) starts with Novum and loads your existing GGUF models on demand. Choose **Regular** for plain llama-server or **zVram** for memory management. Connection to chat is automatic once signed in; port and paging controls live under Advanced settings. Ollama stays available.
+On Linux, the [local model provider](docs/desktop.md#local-model-provider-linux) starts with Novum and loads your existing GGUF models on demand. Completed compatible text GGUF downloads in Cookbook's shared local cache join the provider automatically. Choose **Regular** for plain llama-server or **zVram** for memory management. Connection to chat is automatic once signed in; port and paging controls live under Advanced settings. Ollama stays available.
+
+The manager also controls the backend's **Image engine**: choose Auto, CPU, Vulkan or zVram, manage automatic startup, refresh downloaded models and set idle unloading. Engines stay ready without loading every model into VRAM. Manual Stop disables automatic startup for that engine until you enable it again.
 
 Local Linux audio alarms use the desktop's private host bridge and user-session timers. Ask for an explicit future time, such as “play an alarm today at 15:00”; the default is 100% software volume for up to five minutes, followed by restoration of the previous volume and mute state. Ask to stop the alarm to cancel it. The computer and its user audio session must be available; this is not a phone alarm or a wake-from-shutdown feature.
 
@@ -81,6 +83,10 @@ Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/pre
 Open the same workspace on your phone. The Android app includes its own Tailscale connection, so other phone apps keep their normal network. Enter your server address, sign in to Tailscale, then sign in to Novum. A router with an approved subnet route can provide access to your LAN server.
 
 Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. The companion routes the configured server through Tailscale while loading embedded external media over the phone’s normal connection. [Connection, build, and compatibility details](android/README.md).
+
+Open chat navigation with the menu button; sideways gestures in chat no longer open the drawer. Streaming updates avoid repeated page-wide selection scans, and chat-status ownership checks run outside the server's event loop. These paths have headless touch and responsiveness checks; smoothness on a physical phone remains unverified.
+
+Optional background alerts cover incoming email, scheduled tasks and chat completion or attention. They use your authenticated self-hosted notification feed, with no Firebase project or external push provider. Android keeps a visible connection notification and checks about once per minute when network access is allowed. Doze, force-stop, reboot or process termination can delay or stop alerts. [Notification setup and limits](docs/push-notifications.md).
 
 ## Local image generation
 
@@ -121,6 +127,8 @@ Enable **Review task completion** in Settings for an independent check using the
 ### Know what it's doing
 
 Clear waiting and streaming states. Explanations when a run stops. Saved progress for interrupted runs, chat-specific queues and a pause when repeated reads or failed retries go nowhere.
+
+Upgrades repair missing saved permissions on recognized stock housekeeping jobs, preserving their schedules and pause states. Custom tasks, changed commands and invalid permission records do not gain authority automatically.
 
 The home dashboard shows your week, recent chats, favourite model, chat streak and words written. Settings adds 7/30-day activity and model/token breakdowns. These come from your saved chats. Estimated tokens and missing records are labelled; subscription quotas aren't guessed.
 

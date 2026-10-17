@@ -18,11 +18,13 @@ def test_stream_status_owner_lookup_does_not_block_event_loop(monkeypatch):
 
     entered = threading.Event()
     release = threading.Event()
+    owner_returned = threading.Event()
     app = _app(chat_routes)
 
     def slow_owner_check(_request, _session_id):
         entered.set()
         release.wait(5)
+        owner_returned.set()
 
     monkeypatch.setattr(chat_routes, "_verify_session_owner", slow_owner_check)
 
@@ -34,6 +36,7 @@ def test_stream_status_owner_lookup_does_not_block_event_loop(monkeypatch):
                 assert await asyncio.to_thread(entered.wait, 1), "owner lookup did not start"
                 heartbeat = await client.get("/heartbeat")
                 assert heartbeat.status_code == 200
+                assert not owner_returned.is_set(), "heartbeat must finish while the ownership lookup remains blocked"
             finally:
                 release.set()
             response = await status_task

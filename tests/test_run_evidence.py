@@ -51,3 +51,50 @@ def test_stream_end_does_not_claim_task_completion(tmp_path, monkeypatch, event,
     assert "SECRET" not in json.dumps(result) and "PRIVATE" not in json.dumps(result)
     evidence.finish("run", "stopped")
     assert evidence.list_runs("chat", "alice")[0]["status"] == "stopped"
+
+
+def test_loop_breaker_is_diagnostic_when_synthesis_completes(tmp_path, monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_RUN_EVIDENCE_DB", str(tmp_path / "evidence.db"))
+    evidence.begin("run", "chat", "alice")
+    evidence.record("run", 'data: {"type":"loop_breaker_triggered","reason":"fixture"}\n\n')
+    evidence.record("run", 'data: {"delta":"A concise synthesis."}\n\n')
+    evidence.record("run", 'data: {"type":"agent_terminal","status":"completed"}\n\n')
+    evidence.finish("run", "done")
+
+    result = evidence.list_runs("chat", "alice")[0]
+    assert result["status"] == "done"
+    assert [event["type"] for event in result["events"]] == ["pause_candidate", "terminal"]
+
+
+def test_raw_done_does_not_clear_unresolved_pause_candidate(tmp_path, monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_RUN_EVIDENCE_DB", str(tmp_path / "evidence.db"))
+    evidence.begin("run", "chat", "alice")
+    evidence.record("run", 'data: {"type":"loop_breaker_triggered","reason":"fixture"}\n\n')
+    evidence.finish("run", "done")
+    assert evidence.list_runs("chat", "alice")[0]["status"] == "paused"
+
+
+@pytest.mark.parametrize(("event", "expected"), [
+    ({"type": "agent_terminal", "status": "paused"}, "paused"),
+    ({"type": "agent_terminal", "status": "failed"}, "error"),
+    ({"type": "agent_terminal", "status": "awaiting_input"}, "awaiting_input"),
+    ({"type": "agent_terminal", "status": "awaiting_approval"}, "awaiting_approval"),
+    ({"type": "chat_terminal", "data": {"status": "failed"}}, "error"),
+])
+def test_explicit_terminal_status_is_recorded(tmp_path, monkeypatch, event, expected):
+    monkeypatch.setenv("ODYSSEUS_RUN_EVIDENCE_DB", str(tmp_path / "evidence.db"))
+    evidence.begin("run", "chat", "alice")
+    evidence.record("run", 'data: ' + json.dumps(event) + '\n\n')
+    evidence.finish("run", "done")
+    result = evidence.list_runs("chat", "alice")[0]
+    assert result["status"] == expected
+    assert not any(key in json.dumps(result) for key in ("message", "reason", "PRIVATE"))
+
+
+def test_later_explicit_terminal_outcome_wins_by_chronology(tmp_path, monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_RUN_EVIDENCE_DB", str(tmp_path / "evidence.db"))
+    evidence.begin("run", "chat", "alice")
+    evidence.record("run", 'data: {"type":"agent_terminal","status":"paused"}\n\n')
+    evidence.record("run", 'data: {"type":"agent_terminal","status":"completed"}\n\n')
+    evidence.finish("run", "done")
+    assert evidence.list_runs("chat", "alice")[0]["status"] == "done"

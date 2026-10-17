@@ -1,8 +1,15 @@
 # Novum Xenium and NX Odysseus changes
 
-Modified by nerdrx through October 16, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `dev` at `0590edd4f2e9a9eeb294d67864bdc8d9699876ac`.
+Modified by nerdrx through October 17, 2026. Upstream: [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus), `dev` at `0590edd4f2e9a9eeb294d67864bdc8d9699876ac`.
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
+
+## Streaming and mobile recovery (October 17, 2026)
+
+- Ordinary replies can release complete prose prefixes after the existing claim checks; declared execution/artifact work retains completion gating. Streaming keeps statement context, avoids token-by-token rescanning, and reports the actual first visible answer time.
+- Colloquial named-site read requests such as "gimme videos from example.org" receive the same read-only web scope as equivalent retrieval requests. Tool disablement, URL validation, browser interaction limits, and request ownership remain enforced.
+- Active tool timers show whole seconds and update less frequently, reducing unnecessary mobile DOM work. This was checked with a synthetic mobile viewport, not measured on a physical phone.
+- Run evidence distinguishes an intermediate loop breaker from a later explicit terminal outcome and recognizes failed terminal statuses. Historical run records remain unchanged.
 
 ## Mainline base sync (October 16, 2026)
 

@@ -1,4 +1,4 @@
-// static/js/chat.js?v=20261007approvalfix2
+// static/js/chat.js?v=20261017mobiletimers1
 
 /**
  * Main chat functionality - message handling and streaming
@@ -1275,7 +1275,7 @@ import { invalidateSettings } from './appConfig.js';
         node._waveInterval = setInterval(() => {
           waveIdx = (waveIdx + 1) % waveFrames.length;
           waveEl.textContent = waveFrames[waveIdx];
-        }, 100);
+        }, 400);
       }
       node._startTime = Date.now();
       node._elapsedTicker = setInterval(() => {
@@ -1290,8 +1290,8 @@ import { invalidateSettings } from './appConfig.js';
           else hdr.appendChild(el);
         }
         const s = (Date.now() - node._startTime) / 1000;
-        el.textContent = s < 60 ? `${s.toFixed(2)}s` : `${Math.floor(s / 60)}m ${(s % 60).toFixed(2).padStart(5, '0')}s`;
-      }, 50);
+        el.textContent = s < 60 ? `${Math.floor(s)}s` : `${Math.floor(s / 60)}m ${String(Math.floor(s % 60)).padStart(2, '0')}s`;
+      }, 1000);
     }
     msg.style.display = 'none';
   }
@@ -5079,11 +5079,10 @@ import { invalidateSettings } from './appConfig.js';
                   node._waveInterval = setInterval(() => {
                     waveIdx = (waveIdx + 1) % waveFrames.length;
                     waveEl.textContent = waveFrames[waveIdx];
-                  }, 100);
+                  }, 400);
                 }
-                // Smooth per-second "cooking" timer — ticks every second (not
-                // just on the 2s backend heartbeat) so a long-running tool
-                // always shows visible motion and never reads as frozen.
+                // Keep the elapsed label useful without waking the mobile UI
+                // twenty times per second for hundredths that are hard to read.
                 node._startTime = Date.now();
                 node._elapsedTicker = setInterval(() => {
                   const hdr2 = node.querySelector('.agent-thread-header');
@@ -5098,9 +5097,8 @@ import { invalidateSettings } from './appConfig.js';
                     else hdr2.appendChild(el2);
                   }
                   const s = (Date.now() - node._startTime) / 1000;
-                  // Hundredths so it visibly counts sub-second (1.00, 1.05, …).
-                  el2.textContent = s < 60 ? `${s.toFixed(2)}s` : `${Math.floor(s / 60)}m ${(s % 60).toFixed(2).padStart(5, '0')}s`;
-                }, 50);
+                  el2.textContent = s < 60 ? `${Math.floor(s)}s` : `${Math.floor(s / 60)}m ${String(Math.floor(s % 60)).padStart(2, '0')}s`;
+                }, 1000);
                 uiModule.scrollHistory();
 
               } else if (json.type === 'editor_progress') {

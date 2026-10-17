@@ -455,3 +455,236 @@ async def test_slice2_quoted_example_does_not_hide_an_unsupported_report():
     assert 'The docs say "5 passed".' in final
     assert 'I ran pytest' not in final
     assert 'The task is incomplete' not in final
+
+
+@pytest.mark.asyncio
+async def test_ordinary_safe_sentence_streams_before_provider_finishes_without_replay():
+    release_provider = asyncio.Event()
+    provider_finished = asyncio.Event()
+
+    @with_completion_gate
+    async def stream(messages):
+        yield _event({'delta': 'The parser reads the header first. '})
+        await release_provider.wait()
+        yield _event({'delta': 'Then it validates the payload.'})
+        yield _event({'type': 'metrics', 'data': {}})
+        provider_finished.set()
+        yield DONE
+
+    wrapped = stream([{'role': 'user', 'content': 'Explain the parser.'}])
+    queue = asyncio.Queue()
+
+    async def collect():
+        async for item in wrapped:
+            await queue.put(item)
+
+    collector = asyncio.create_task(collect())
+    try:
+        chunk = await asyncio.wait_for(queue.get(), timeout=1)
+        assert json.loads(chunk[6:])['delta'] == 'The parser reads the header first.'
+        assert not provider_finished.is_set()
+        await asyncio.sleep(0.08)
+    finally:
+        release_provider.set()
+    await collector
+    all_chunks = [chunk]
+    while not queue.empty():
+        all_chunks.append(queue.get_nowait())
+    answer_deltas = [data.get('delta', '') for _, data in _frames(all_chunks)
+                     if isinstance(data, dict) and 'delta' in data]
+    assert ''.join(answer_deltas) == 'The parser reads the header first. Then it validates the payload.'
+    assert sum('The parser reads the header first.' in item for item in answer_deltas) == 1
+    metrics = next(data['data'] for _, data in _frames(all_chunks)
+                   if isinstance(data, dict) and data.get('type') == 'metrics')
+    assert metrics['completion_gate']['buffer_seconds'] < 0.08
+    assert metrics['completion_gate']['first_visible_answer_seconds'] < 0.08
+
+
+@pytest.mark.asyncio
+async def test_unsupported_execution_sentence_is_held_until_gate_rewrites_it():
+    release_provider = asyncio.Event()
+    provider_finished = asyncio.Event()
+
+    @with_completion_gate
+    async def stream(messages):
+        yield _event({'delta': 'I ran pytest and all tests passed. '})
+        await release_provider.wait()
+        provider_finished.set()
+        yield DONE
+
+    wrapped = stream([{'role': 'user', 'content': 'Explain this result.'}])
+    queue = asyncio.Queue()
+
+    async def collect():
+        async for item in wrapped:
+            await queue.put(item)
+
+    collector = asyncio.create_task(collect())
+    try:
+        await asyncio.sleep(0)
+        assert queue.empty()
+        assert not provider_finished.is_set()
+    finally:
+        release_provider.set()
+    await collector
+    chunks = []
+    while not queue.empty():
+        chunks.append(queue.get_nowait())
+    assert provider_finished.is_set()
+    assert _labels(chunks) == ['completion_decision', 'final_response', 'done']
+    final = next(data['content'] for event, data in _frames(chunks)
+                 if event == 'message' and isinstance(data, dict)
+                 and data.get('type') == 'final_response')
+    assert 'I ran pytest' not in final
+    assert 'tests passed' not in final
+
+
+@pytest.mark.asyncio
+async def test_execution_contract_keeps_even_safe_prefix_buffered():
+    release_provider = asyncio.Event()
+    provider_finished = asyncio.Event()
+
+    @with_completion_gate
+    async def stream(messages):
+        yield _event({'delta': 'The parser reads the header first. '})
+        await release_provider.wait()
+        provider_finished.set()
+        yield DONE
+
+    wrapped = stream([{'role': 'user', 'content': 'Run the tests.'}])
+    queue = asyncio.Queue()
+
+    async def collect():
+        async for item in wrapped:
+            await queue.put(item)
+
+    collector = asyncio.create_task(collect())
+    try:
+        await asyncio.sleep(0)
+        assert queue.empty()
+        assert not provider_finished.is_set()
+    finally:
+        release_provider.set()
+    await collector
+    chunks = []
+    while not queue.empty():
+        chunks.append(queue.get_nowait())
+    assert provider_finished.is_set()
+    assert _labels(chunks) == ['completion_decision', 'final_response', 'done']
+
+
+@pytest.mark.asyncio
+async def test_prefix_filter_only_runs_for_new_complete_statements(monkeypatch):
+    import src.agent_runtime.completion as completion_module
+
+    calls = []
+    original = completion_module.completion_answer
+
+    def counted(text, ledger, decision):
+        calls.append(text)
+        return original(text, ledger, decision)
+
+    monkeypatch.setattr(completion_module, 'completion_answer', counted)
+    complete_safe_sentence = asyncio.Event()
+    finish_provider = asyncio.Event()
+    paused_after_tokens = asyncio.Event()
+    paused_after_claim = asyncio.Event()
+
+    @with_completion_gate
+    async def stream(messages):
+        for char in 'The parser reads the header':
+            yield _event({'delta': char})
+        paused_after_tokens.set()
+        await complete_safe_sentence.wait()
+        yield _event({'delta': '. '})
+        for char in 'I ran pytest and all tests passed. ':
+            yield _event({'delta': char})
+        paused_after_claim.set()
+        await finish_provider.wait()
+        yield DONE
+
+    wrapped = stream([{'role': 'user', 'content': 'Explain this parser.'}])
+    queue = asyncio.Queue()
+
+    async def collect():
+        async for item in wrapped:
+            await queue.put(item)
+
+    collector = asyncio.create_task(collect())
+    try:
+        await asyncio.wait_for(paused_after_tokens.wait(), timeout=1)
+        assert calls == []
+        assert queue.empty()
+        complete_safe_sentence.set()
+        streamed = await asyncio.wait_for(queue.get(), timeout=1)
+        assert json.loads(streamed[6:])['delta'] == 'The parser reads the header.'
+        await asyncio.wait_for(paused_after_claim.wait(), timeout=1)
+        assert len(calls) == 1
+        assert calls[0] == 'The parser reads the header.'
+    finally:
+        complete_safe_sentence.set()
+        finish_provider.set()
+    await collector
+    chunks = [streamed]
+    while not queue.empty():
+        chunks.append(queue.get_nowait())
+    assert len(calls) == 3  # one safe statement plus two terminal whole-answer checks
+    assert _labels(chunks) == ['delta', 'completion_decision', 'final_response', 'done']
+    final = next(data['content'] for event, data in _frames(chunks)
+                 if event == 'message' and isinstance(data, dict)
+                 and data.get('type') == 'final_response')
+    assert 'I ran pytest' not in final
+
+
+@pytest.mark.asyncio
+async def test_multiline_execution_claim_stays_withheld_and_is_removed():
+    release_provider = asyncio.Event()
+
+    @with_completion_gate
+    async def stream(messages):
+        yield _event({'delta': 'I\n'})
+        await release_provider.wait()
+        yield _event({'delta': 'ran tests. '})
+        yield DONE
+
+    wrapped = stream([{'role': 'user', 'content': 'Explain this output.'}])
+    queue = asyncio.Queue()
+
+    async def collect():
+        async for item in wrapped:
+            await queue.put(item)
+
+    collector = asyncio.create_task(collect())
+    try:
+        first = await asyncio.wait_for(queue.get(), timeout=1)
+        assert json.loads(first[6:])['delta'] == 'I\n'
+        release_provider.set()
+    finally:
+        release_provider.set()
+    await collector
+    chunks = [first]
+    while not queue.empty():
+        chunks.append(queue.get_nowait())
+    live_text = ''.join(data.get('delta', '') for _, data in _frames(chunks)
+                        if isinstance(data, dict) and 'delta' in data)
+    assert 'ran tests' not in live_text
+    final = next(data['content'] for _, data in _frames(chunks)
+                 if isinstance(data, dict) and data.get('type') == 'final_response')
+    assert 'ran tests' not in final
+
+
+@pytest.mark.asyncio
+async def test_code_fence_execution_example_is_not_misclassified():
+    example = '```text\nI ran tests.\n```'
+
+    @with_completion_gate
+    async def stream(messages):
+        yield _event({'delta': example})
+        yield DONE
+
+    chunks = [chunk async for chunk in stream([{'role': 'user', 'content': 'Explain this example.'}])]
+    deltas = ''.join(data.get('delta', '') for _, data in _frames(chunks)
+                     if isinstance(data, dict) and 'delta' in data)
+    assert deltas == example
+    assert not any(isinstance(data, dict) and data.get('type') == 'final_response'
+                   for _, data in _frames(chunks))

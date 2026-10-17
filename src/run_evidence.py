@@ -56,19 +56,40 @@ def record(run_id, event):
         if not isinstance(item, dict):
             return
         kind = item.get("type")
-        if item.get("error") or (kind in {"agent_terminal", "chat_terminal"}
-                                 and isinstance(item.get("data"), dict) and item["data"].get("failed")):
-            kind = "error"
+        status = None
+        payload = item.get("data") if isinstance(item.get("data"), dict) else {}
+        if item.get("error") or (kind in {"agent_terminal", "chat_terminal"} and payload.get("failed")):
+            kind, status = "terminal", "error"
+        elif kind in {"agent_terminal", "chat_terminal"}:
+            terminal_status = item.get("status") or payload.get("status")
+            status = {
+                "completed": "done", "done": "done", "success": "done",
+                "failed": "error", "error": "error", "paused": "paused",
+                "awaiting_approval": "awaiting_approval",
+                "awaiting_input": "awaiting_input",
+            }.get(terminal_status)
+            if status:
+                kind = "terminal"
         elif kind == "ask_user":
             ask = item.get("ask_user") or {}
-            kind = "awaiting_approval" if isinstance(ask, dict) and ask.get("kind") == "tool_approval" else "awaiting_input"
-        elif kind in {"budget_exceeded", "rounds_exhausted", "loop_breaker_triggered", "intent_nudge_exhausted"}:
+            kind = "terminal"
+            status = "awaiting_approval" if isinstance(ask, dict) and ask.get("kind") == "tool_approval" else "awaiting_input"
+        elif kind == "loop_breaker_triggered":
+            # A loop breaker can precede a successful synthesis terminal. Keep
+            # it as an unresolved pause candidate until a later terminal event
+            # confirms whether the run completed or remained paused.
+            kind = "pause_candidate"
+        elif kind in {"budget_exceeded", "rounds_exhausted", "intent_nudge_exhausted"}:
             kind = "paused"
-        if kind not in {"tool_start", "tool_output", "error", "verification", "awaiting_approval", "awaiting_input", "paused"}:
+        if kind not in {"tool_start", "tool_output", "error", "verification", "awaiting_approval", "awaiting_input", "paused", "pause_candidate", "terminal"}:
             return
         entry = {"type": kind, "at": time.time()}
+        if status:
+            entry["status"] = status
         # No command/output/error text: it can contain credentials and private files.
         for key in ("tool", "exit_code", "status", "passed"):
+            if kind == "terminal" and key == "status":
+                continue
             value = item.get(key)
             if isinstance(value, (str, int, bool)):
                 entry[key] = value[:100] if isinstance(value, str) else value
@@ -87,10 +108,15 @@ def finish(run_id, status):
             if status == "done":
                 row = db.execute("SELECT events FROM runs WHERE id=?", (run_id,)).fetchone()
                 events = json.loads(row["events"]) if row else []
-                terminal = next((item for item in reversed(events)
-                                 if item.get("type") in {"error", "awaiting_approval", "awaiting_input", "paused"}), None)
-                if terminal:
-                    status = "error" if terminal["type"] == "error" else terminal["type"]
+                outcome = next((item for item in reversed(events)
+                                if item.get("type") in {"terminal", "pause_candidate", "error", "awaiting_approval", "awaiting_input", "paused"}), None)
+                if outcome:
+                    if outcome.get("type") == "terminal":
+                        status = outcome.get("status", status)
+                    elif outcome.get("type") == "pause_candidate":
+                        status = "paused"
+                    else:
+                        status = "error" if outcome["type"] == "error" else outcome["type"]
                 elif any(item.get("type") == "verification" and item.get("passed") is False for item in events):
                     status = "unverified"
             db.execute("UPDATE runs SET status=?,finished=COALESCE(finished,?) WHERE id=?",

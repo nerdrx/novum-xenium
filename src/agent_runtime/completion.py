@@ -111,9 +111,16 @@ def _supported_prose(text: str, ledger: EvidenceLedger, decision: CompletionDeci
     terminal_claims = execution_required or bool(ledger.unverified_external_effects())
     kept = []
     removed = ''
+    claim_context = ''
     for statement, scoped in _unquoted_statements(text):
         why = ''
-        for claim, scope in _current_run_claims(scoped, execution_required=terminal_claims):
+        claims = _current_run_claims(scoped, execution_required=terminal_claims)
+        if claim_context and not claims:
+            prior = _current_run_claims(claim_context, execution_required=terminal_claims)
+            combined = _current_run_claims(claim_context + '\n' + scoped,
+                                           execution_required=terminal_claims)
+            claims.extend(item for item in combined if item not in prior and item not in claims)
+        for claim, scope in claims:
             paths = tuple(match.group().rstrip('.') for match in _CLAIM_PATH.finditer(scope))
             if claim == 'metric':
                 why = 'test counts, coverage or exhaustive correctness were not established by execution evidence'
@@ -136,6 +143,7 @@ def _supported_prose(text: str, ledger: EvidenceLedger, decision: CompletionDeci
             removed = removed or why
         else:
             kept.append(statement)
+        claim_context = '' if claims else (claim_context + '\n' + scoped)[-512:]
     prose = ''.join(kept).strip() if removed else text
     return prose, removed
 
@@ -203,6 +211,9 @@ def _event(data: dict) -> str:
     return 'data: ' + json.dumps(data) + '\n\n'
 
 
+_ANSWER_BOUNDARY = re.compile(r'(?<=[.!?;])(?=\s)|(?<=\n)')
+
+
 def with_completion_gate(func):
     call_signature = signature(func)
 
@@ -234,6 +245,12 @@ def with_completion_gate(func):
         answer_events: list[dict] = []
         metrics_events: list[dict] = []
         answer = ''
+        streamed_prefix = ''
+        stream_statement_start = 0
+        stream_search_from = 0
+        stream_parser_context = ''
+        prefix_streaming_enabled = not _execution_obligation(requirements)
+        first_visible_answer_at = None
         has_final = False
         done = False
         awaiting = False
@@ -271,6 +288,8 @@ def with_completion_gate(func):
                         if isinstance(declared, dict):
                             requirements = requirements_from_runtime_context({'completion_requirements': declared})
                             requirements = replace(requirements, workspace_root=trusted_workspace or '')
+                            if _execution_obligation(requirements):
+                                prefix_streaming_enabled = False
                             # New obligations affect future receipts only. Never
                             # backfill historical versions with present bytes.
                             journal.observed_artifacts = tuple(dict.fromkeys(
@@ -288,6 +307,7 @@ def with_completion_gate(func):
                     if kind == 'final_response':
                         if first_answer_at is None:
                             first_answer_at = perf_counter()
+                        prefix_streaming_enabled = False
                         answer = str(data.get('content') or '')
                         has_final = True
                         answer_events.append(data)
@@ -307,8 +327,52 @@ def with_completion_gate(func):
                             if has_final:
                                 answer = ''
                                 has_final = False
+                                prefix_streaming_enabled = False
                             answer += str(data.get('delta') or '')
                         answer_events.append(data)
+                        if (prefix_streaming_enabled and data.get('thinking') is not True
+                                and not isinstance(data.get('thinking'), str)
+                                and 'delta' in data and not journal.effect_entries()):
+                            boundaries = list(_ANSWER_BOUNDARY.finditer(answer, stream_search_from))
+                            safe_end = len(streamed_prefix)
+                            if boundaries:
+                                current = _ledger(journal, requirements)
+                                current_decision = current.evaluate()
+                                for boundary in boundaries:
+                                    end = boundary.start()
+                                    statement = answer[stream_statement_start:end]
+                                    if statement.strip():
+                                        combined = stream_parser_context + statement
+                                        scoped = '\n'.join(
+                                            part for _, part in _unquoted_statements(combined))
+                                        if _current_run_claims(
+                                                scoped, execution_required=False):
+                                            prefix_streaming_enabled = False
+                                            break
+                                        checked, reason = completion_answer(
+                                            statement, current, current_decision)
+                                        if reason or checked != statement:
+                                            prefix_streaming_enabled = False
+                                            break
+                                        stream_parser_context = (combined + '\n')[-512:]
+                                    safe_end = end
+                                    stream_statement_start = boundary.end()
+                                    stream_search_from = boundary.end() + 1
+                                stream_search_from = max(stream_search_from, len(answer) - 1)
+                            else:
+                                # Only revisit the previous final character so
+                                # punctuation split across provider chunks is
+                                # recognized. Incomplete statements are not
+                                # repeatedly rescanned or filtered.
+                                stream_search_from = max(stream_search_from, len(answer) - 1)
+                            if safe_end > len(streamed_prefix):
+                                safe = answer[len(streamed_prefix):safe_end]
+                                streamed = dict(data)
+                                streamed['delta'] = safe
+                                if first_visible_answer_at is None:
+                                    first_visible_answer_at = perf_counter()
+                                yield _event(streamed)
+                                streamed_prefix = answer[:safe_end]
                         continue
                     yield chunk
             if provider_error and not answer_events and not metrics_events:
@@ -352,6 +416,7 @@ def with_completion_gate(func):
                 decision = CompletionDecision(CompletionStatus.UNVERIFIED, False, reason,
                                               decision.evidence_ids, decision.missing_artifacts)
             released_at = perf_counter()
+            visible_at = first_visible_answer_at or released_at
             if not provider_error:
                 yield _event({'type': 'completion_decision', 'data': decision.to_dict()})
             # When the only change is the server's effect disclosure, the
@@ -372,8 +437,20 @@ def with_completion_gate(func):
                         yield _event(event)
                 yield _event({'type': 'final_response', 'content': safe_answer})
             else:
+                to_skip = len(streamed_prefix)
                 for event in answer_events:
-                    yield _event(event)
+                    if event.get('thinking') is True:
+                        yield _event(event)
+                    elif 'delta' in event:
+                        delta = str(event.get('delta') or '')
+                        skipped = min(to_skip, len(delta))
+                        to_skip -= skipped
+                        if skipped < len(delta):
+                            remainder = dict(event)
+                            remainder['delta'] = delta[skipped:]
+                            yield _event(remainder)
+                    else:
+                        yield _event(event)
                 if disclosure_only:
                     yield _event({'delta': disclosure})
             if provider_error:
@@ -386,8 +463,8 @@ def with_completion_gate(func):
                 if ledger.effects:
                     metadata['effect_assessments'] = [entry['assessment'].to_dict() for entry in ledger.effects]
                 metadata['completion_gate'] = {
-                    'buffer_seconds': released_at - first_answer_at if first_answer_at is not None else 0,
-                    'first_visible_answer_seconds': released_at - started,
+                    'buffer_seconds': visible_at - first_answer_at if first_answer_at is not None else 0,
+                    'first_visible_answer_seconds': visible_at - started,
                     'additional_provider_calls': 0,
                     'answer_replaced': replaced_answer,
                 }

@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'novum-xenium-v395-upstream-sync';
+const CACHE_NAME = 'novum-xenium-v396-mobile-streaming';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -74,7 +74,7 @@ const PRECACHE = [
   '/static/js/modelDisplay.js',
   '/static/js/modules.js',
   '/static/js/browserPreview.js',
-  '/static/app.js?v=20261008overnight1',
+  '/static/app.js?v=20261017streamfix1',
   '/static/js/storage.js',
   '/static/js/appConfig.js',
   '/static/js/ui.js?v=20260916largetoolscroll1',
@@ -99,7 +99,7 @@ const PRECACHE = [
   '/static/js/chatRenderer.js?v=20261007toolstatus1',
   '/static/js/codeRunner.js',
   '/static/js/chatStream.js?v=20261007approvalfix2',
-  '/static/js/chat.js?v=20261007approvalfix2',
+  '/static/js/chat.js?v=20261017mobiletimers1',
   '/static/js/cookbook.js',
   '/static/js/search-chat.js',
   '/static/js/compare/index.js?v=20261016compareshuffle1',

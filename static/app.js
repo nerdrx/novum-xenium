@@ -12,7 +12,7 @@ import modelsModule from './js/models.js';
 import ragModule from './js/rag.js';
 import presetsModule from './js/presets.js?v=20260908personaname1';
 import searchModule from './js/search.js';
-import chatModule from './js/chat.js?v=20261007approvalfix2';
+import chatModule from './js/chat.js?v=20261017mobiletimers1';
 import compareModule from './js/compare/index.js?v=20261016compareshuffle1';
 import documentModule from './js/document.js?v=20261016approvalflow1';
 import searchChatModule from './js/search-chat.js';

@@ -600,3 +600,48 @@ async def test_authority_denial_cannot_create_completion_receipt(monkeypatch):
     assert journal.actions[0].execution_id is None
     assert journal.actions[0].outcome["authoritative"] is False
     assert journal.actions[0].outcome["blocked"] is True
+
+
+@pytest.mark.parametrize("lead", ["Gimme", "Give me", "Please gimme", "Could you give me"])
+def test_colloquial_named_web_read_has_read_only_authority(lead):
+    grant = create_request_authority(
+        lead + " several videos from the example.org boards. Keep going until I stop.",
+        owner="alice", session_id="web-read",
+    )
+    assert grant.permits(ExactOperation.normalize("web_fetch", '{"url":"https://example.org/"}'))
+    assert grant.permits(ExactOperation.normalize("private_browser", '{"action":"open","url":"https://example.org/"}'))
+    for tool, content in [("bash", "echo unrelated"), ("write_file", "file.txt\nchanged"),
+                          ("private_browser", '{"action":"fill","value":"unrelated"}')]:
+        assert not grant.permits(ExactOperation.normalize(tool, content))
+
+
+@pytest.mark.parametrize("text", [
+    'Explain what "gimme videos from example.org" means.',
+    'Translate "give me videos from example.org" into German.',
+    'Do not give me videos from example.org.',
+])
+def test_colloquial_alias_does_not_rewrite_quoted_or_denied_leads(text):
+    from src.turn_contract import _normalize_request_lead
+    assert _normalize_request_lead(text) == text
+
+
+def test_colloquial_web_read_keeps_disabled_tool_policy():
+    grant = create_request_authority("Gimme videos from example.org",
+        policy=ToolPolicy(disabled_tools=frozenset({"web_fetch", "private_browser"})))
+    assert not grant.permits(ExactOperation.normalize("web_fetch", '{"url":"https://example.org/"}'))
+    assert not grant.permits(ExactOperation.normalize("private_browser", '{"action":"open","url":"https://example.org/"}'))
+
+
+@pytest.mark.asyncio
+async def test_colloquial_named_site_read_reaches_native_dispatch(monkeypatch):
+    from src import tool_execution as execution
+    implementation = AsyncMock(return_value=("web_fetch", {"exit_code": 0, "output": "public fixture"}))
+    monkeypatch.setattr(execution, "_execute_tool_block_impl", implementation)
+    grant = create_request_authority("Gimme videos from example.org", owner="alice", session_id="read")
+    _, result = await execution.execute_tool_block(
+        ToolBlock("web_fetch", "https://example.org/"), owner="alice", session_id="read",
+        security_context=execution.NO_TOOL_SECURITY_CONTEXT, request_authority=grant,
+    )
+    assert result["exit_code"] == 0
+    assert not result.get("blocked")
+    implementation.assert_awaited_once()

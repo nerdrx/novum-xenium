@@ -14,7 +14,12 @@ from tests.test_foreground_model_routing import _RouteRequest, _chat_stream_endp
 
 
 @pytest.fixture
-def registered_mcp_manager():
+def registered_mcp_manager(monkeypatch):
+    # This route test exercises real MCP schema registration, but the global
+    # disabled-tool preference query belongs to a separate DB integration
+    # boundary. Keep shard order from changing the schema inventory setup.
+    from src import agent_loop
+    monkeypatch.setattr(agent_loop, "_load_mcp_disabled_map", lambda: {})
     from src.mcp_manager import McpManager
     from src.tool_utils import get_mcp_manager, set_mcp_manager
 

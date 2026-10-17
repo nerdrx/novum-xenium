@@ -107,6 +107,7 @@ async def test_mcp_auto_detect_forwards_bridge_auth_and_quality(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", Client)
     result = await image_gen_server.call_tool("generate_image", {
         "prompt": "a cat", "size": "512x512", "quality": "high",
+        "_odysseus_owner": "alice",
     })
     assert "Fixture rejection" in result[0].text
     assert calls == [("http://127.0.0.1:8111/v1/images/generations",

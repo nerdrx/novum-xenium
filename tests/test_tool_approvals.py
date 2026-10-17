@@ -299,8 +299,20 @@ async def test_dispatcher_uses_sealed_document_target(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_rejects_approved_document_action_without_target(monkeypatch):
+async def test_dispatcher_rejects_approved_document_action_without_target(monkeypatch, request):
     import src.tool_execution as tool_execution
+    import core.database as database
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    # The targetless operation resolves "latest" against an empty document
+    # collection. Give it an isolated, correctly-shaped DB rather than relying
+    # on whichever partial schema another test left on the shared memory DB.
+    engine = create_engine("sqlite:///:memory:")
+    database.Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(database, "SessionLocal", factory)
+    request.addfinalizer(engine.dispose)
 
     store = ToolApprovalStore()
     content = "replacement"

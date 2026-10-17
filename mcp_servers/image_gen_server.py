@@ -115,9 +115,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 raise
             url, model_id, headers = await asyncio.to_thread(_resolve_model, model_spec, owner=owner)
 
-        from src.image_model_ids import is_gpt_image_model, model_id_leaf
+        from src.image_model_ids import is_gpt_image_model, is_sd_cpp_image_model, model_id_leaf
         is_gpt_image = is_gpt_image_model(model_id)
-        if model_id_leaf(model_id) == "sd-cpp-local" and not arguments.get("size"):
+        if is_sd_cpp_image_model(model_id) and not arguments.get("size"):
             size = "512x512"
         base_url = url.replace("/chat/completions", "").replace("/v1/messages", "").rstrip("/")
         images_url = base_url + "/images/generations"

@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'novum-xenium-v396-mobile-streaming';
+const CACHE_NAME = 'novum-xenium-v397-managed-engines-mobile';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -189,7 +189,7 @@ const PRECACHE = [
   '/static/js/calendar/reminders.js',
   '/static/js/group.js?v=20261007usability1',
   '/static/js/keyboard-shortcuts.js?v=20260829chatstyle12',
-  '/static/js/sidebar-layout.js?v=20260910sidebarbounce1',
+  '/static/js/sidebar-layout.js?v=20261017mobilework1',
   '/static/js/tileManager.js?v=20260910responsivebounds1',
   '/static/js/section-management.js',
   '/static/lib/highlight.min.js',

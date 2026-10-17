@@ -74,8 +74,15 @@ function _bind(card) {
 
 function bindCards(root = document) {
   if (!_mobileSelectEnabled()) return;
+  if (root !== document && root.matches?.(CARD_SELECTORS)) _bind(root);
   root.querySelectorAll?.(CARD_SELECTORS).forEach(_bind);
 }
 
 bindCards();
-new MutationObserver(() => bindCards()).observe(document.documentElement, { childList: true, subtree: true });
+new MutationObserver((records) => {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (node.nodeType === 1) bindCards(node);
+    }
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });

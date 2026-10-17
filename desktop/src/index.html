@@ -172,6 +172,40 @@
               <div id="zvram-legacy-list"><p class="panel-description">No legacy profiles.</p></div>
             </details>
           </section>
+
+          <section class="panel image-engine-panel" id="image-engine-panel" aria-labelledby="image-engine-heading">
+            <div class="zvram-summary">
+              <span><span class="eyebrow">Local AI</span><strong id="image-engine-heading">Image engine</strong></span>
+              <span class="zvram-summary-note">Weights load when an image request needs them</span>
+            </div>
+            <p class="panel-description">Manage the local image-generation service. The engine can start with Novum; image weights stay unloaded until needed.</p>
+            <p id="image-engine-error" class="zvram-error" role="alert" hidden></p>
+            <p id="image-engine-status" class="zvram-status" role="status" aria-live="polite">Checking local image engine…</p>
+            <div class="image-engine-settings">
+              <label class="field"><span>Engine mode</span>
+                <select id="image-engine-mode">
+                  <option value="auto">Automatic</option>
+                  <option value="cpu">CPU</option>
+                  <option value="vulkan">Vulkan</option>
+                  <option value="zvram">zVram</option>
+                </select>
+              </label>
+              <label class="field"><span>Idle unload (seconds)</span><input id="image-engine-idle" type="number" min="30" max="3600" step="10" value="300"></label>
+            </div>
+            <label class="zvram-optin"><input id="image-engine-auto-start" type="checkbox" checked><span>Start the image engine when Novum opens</span></label>
+            <div class="image-engine-activity" aria-live="polite">
+              <span id="image-engine-loaded">No image model loaded</span>
+              <span id="image-engine-generation">No generation active</span>
+            </div>
+            <p id="image-engine-models" class="panel-description">No local image models discovered.</p>
+            <p id="image-engine-pending" class="panel-description" hidden></p>
+            <div class="zvram-provider-actions">
+              <button class="button button-secondary" type="button" id="image-engine-configure" disabled>Save settings</button>
+              <button class="button button-primary" type="button" id="image-engine-start" disabled>Start engine</button>
+              <button class="button button-secondary" type="button" id="image-engine-stop" disabled>Stop engine</button>
+              <button class="button button-quiet button-small" type="button" id="image-engine-refresh" disabled>Refresh</button>
+            </div>
+          </section>
         </div>
         <p class="privacy-note">This manager runs locally. It does not store credentials.</p>
       </main>

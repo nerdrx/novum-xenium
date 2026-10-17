@@ -17,12 +17,19 @@ _IMAGE_MODEL_PREFIXES = (
     "sdxl",
     "boogu",
     "krea-2",
+    "sd-cpp-local",
 )
 
 
 def model_id_leaf(model_id: str) -> str:
     """Return the provider-stripped model id leaf in lowercase."""
     return str(model_id or "").strip().split("/")[-1].lower()
+
+
+def is_sd_cpp_image_model(model_id: str) -> bool:
+    """Legacy single-model and managed local sd.cpp model identities."""
+    leaf = model_id_leaf(model_id)
+    return leaf == "sd-cpp-local" or leaf.startswith("sd-cpp-local:")
 
 
 def image_edit_size(model_id: str, width: int, height: int) -> str:

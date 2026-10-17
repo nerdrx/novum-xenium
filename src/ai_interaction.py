@@ -86,7 +86,7 @@ def _image_dimensions(image_bytes: bytes) -> Optional[str]:
 
 from src.endpoint_resolver import (build_chat_url, build_headers, build_models_url,
                                    model_ids_from_response, resolve_endpoint_runtime)
-from src.image_model_ids import is_gpt_image_model, looks_like_image_generation_model, model_id_leaf
+from src.image_model_ids import is_gpt_image_model, is_sd_cpp_image_model, looks_like_image_generation_model, model_id_leaf
 
 
 def _resolve_model(spec: str, owner: Optional[str] = None, model_type: Optional[str] = None) -> Tuple[str, str, Dict]:
@@ -1298,7 +1298,7 @@ async def do_generate_image(content: str | Dict, session_id: Optional[str] = Non
 
     # Detect if this is a GPT image model vs DALL-E vs local diffusion
     _model_leaf = model_id_leaf(model_id)
-    if _model_leaf == "sd-cpp-local" and not size_was_provided:
+    if is_sd_cpp_image_model(model_id) and not size_was_provided:
         size = "512x512"
     is_gpt_image = is_gpt_image_model(_model_leaf)
     is_dalle = _model_leaf.startswith("dall-e")

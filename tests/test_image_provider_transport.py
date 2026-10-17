@@ -70,9 +70,9 @@ def image_transport(monkeypatch, tmp_path):
     original_client = httpx.AsyncClient
     requests = []
 
-    def configure(base, status=200, body=None):
+    def configure(base, status=200, body=None, model_id='openai/gpt-5-image'):
         monkeypatch.setattr(ai_interaction, '_resolve_model', lambda *args, **kwargs: (
-            base + '/chat/completions', 'openai/gpt-5-image', {'Authorization': 'Bearer test'},
+            base + '/chat/completions', model_id, {'Authorization': 'Bearer test'},
         ))
 
         def handle(request):
@@ -86,6 +86,21 @@ def image_transport(monkeypatch, tmp_path):
         ))
 
     return configure, source, requests, rows
+
+
+def test_managed_sd_cpp_model_defaults_to_512_and_respects_explicit_size(image_transport):
+    configure, _source, requests, _rows = image_transport
+    configure('http://127.0.0.1:18124/v1', model_id='sd-cpp-local:org--repo:checkpoint')
+
+    default_result = asyncio.run(ai_interaction.do_generate_image(
+        json.dumps({'prompt': 'A small neutral test image'}), owner='alice', session_id='local-default'))
+    explicit_result = asyncio.run(ai_interaction.do_generate_image(
+        json.dumps({'prompt': 'A small neutral test image', 'size': '768x512'}),
+        owner='alice', session_id='local-explicit'))
+
+    assert 'error' not in default_result and 'error' not in explicit_result
+    posts = [request for request in requests if request.method == 'POST']
+    assert [json.loads(request.content)['size'] for request in posts] == ['512x512', '768x512']
 
 
 @pytest.mark.parametrize('editing', [True, False])

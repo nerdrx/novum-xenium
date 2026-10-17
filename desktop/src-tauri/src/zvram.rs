@@ -12,6 +12,7 @@ use super::{config_path, ensure_not_quitting, load_config_at, require_main, Nati
 
 const BRIDGE: &str = include_str!("zvram_bridge.py");
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+const CACHED_ROUTER_TIMEOUT: Duration = Duration::from_secs(45);
 const MODEL_SYNC_SERVICE: &str = "novum-local-model-sync.service";
 
 #[cfg(target_os = "linux")]
@@ -310,19 +311,31 @@ fn run_bridge(
         .map_err(|e| format!("Cannot resolve desktop session cookie storage: {e}"))?;
     let request_json = serde_json::to_string(request)
         .map_err(|_| "Cannot serialize the zVram request.".to_string())?;
-    let args = vec![
+    let mut args = vec![
         "-I".to_string(),
         "-c".to_string(),
         BRIDGE.to_string(),
         installation.to_string_lossy().into_owned(),
-        backend.checkout,
+        backend.checkout.clone(),
         cookie_path.to_string_lossy().into_owned(),
         backend.port.to_string(),
         request_json,
     ];
+    let cache_root = if request_needs_cached_models(request) {
+        super::alarms::hf_cache_source(&backend).ok()
+    } else {
+        None
+    };
+    if let Some(cache_root) = cache_root {
+        args.push(cache_root.to_string_lossy().into_owned());
+    }
     let env = bridge_environment();
-    let output =
-        super::run_command_env("python3", &args, Some(installation), COMMAND_TIMEOUT, &env)?;
+    let timeout = if request_needs_cached_models(request) {
+        CACHED_ROUTER_TIMEOUT
+    } else {
+        COMMAND_TIMEOUT
+    };
+    let output = super::run_command_env("python3", &args, Some(installation), timeout, &env)?;
     if output.truncated {
         return Err("The zVram bridge response exceeded its output limit.".into());
     }
@@ -337,6 +350,13 @@ fn run_bridge(
         return Err(error.to_string());
     }
     Ok(result)
+}
+
+fn request_needs_cached_models(request: &ZvramRequest) -> bool {
+    matches!(
+        request.action,
+        ZvramAction::RouterStart | ZvramAction::RouterConfigure
+    )
 }
 
 pub(super) fn filtered_library_path(appdir: Option<&Path>, value: &OsStr) -> OsString {
@@ -458,8 +478,9 @@ pub(super) async fn zvram_action(
 
 pub(super) fn monitor_autostart(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut start_attempts = 0u8;
         let mut start_succeeded = false;
+        let mut start_retry_ticks = 0u8;
+        let mut start_retry_delay = 1u8;
         let mut registered = false;
         let mut registration_ticks = 0u8;
         let mut last_mode: Option<String> = None;
@@ -509,8 +530,9 @@ pub(super) fn monitor_autostart(app: AppHandle) {
             if last_mode.as_deref().is_some_and(|previous| previous != mode) {
                 registered = false;
                 registration_ticks = 0;
-                start_attempts = 0;
                 start_succeeded = false;
+                start_retry_ticks = 0;
+                start_retry_delay = 1;
             }
             last_mode = Some(mode.clone());
             let router_running = router["running"] == true;
@@ -519,11 +541,18 @@ pub(super) fn monitor_autostart(app: AppHandle) {
                 registration_ticks = 0;
             }
             let router_state = router["state"].as_str().unwrap_or("stopped");
+            if router_running {
+                start_succeeded = true;
+                start_retry_ticks = 0;
+                start_retry_delay = 1;
+            } else if !matches!(router_state, "starting" | "running") {
+                start_succeeded = false;
+            }
             if router["auto_start"] != false
                 && !router_running
                 && !matches!(router_state, "starting" | "running")
                 && !start_succeeded
-                && start_attempts < 6
+                && start_retry_ticks == 0
             {
                 let start = ZvramRequest {
                     action: ZvramAction::RouterStart,
@@ -532,7 +561,14 @@ pub(super) fn monitor_autostart(app: AppHandle) {
                     ..ZvramRequest::status()
                 };
                 start_succeeded = run_bridge(&app, &installation, &start).is_ok();
-                start_attempts += 1;
+                if start_succeeded {
+                    start_retry_delay = 1;
+                } else {
+                    start_retry_ticks = start_retry_delay;
+                    start_retry_delay = start_retry_delay.saturating_mul(2).min(6);
+                }
+            } else if start_retry_ticks > 0 {
+                start_retry_ticks -= 1;
             }
             if router_running && registered {
                 registration_ticks = registration_ticks.saturating_add(1);
@@ -696,6 +732,23 @@ mod tests {
             "auto_start": "yes"
         }))
         .is_err());
+    }
+
+    #[test]
+    fn cached_inventory_is_forwarded_only_for_router_rebuilds() {
+        for action in [ZvramAction::RouterStart, ZvramAction::RouterConfigure] {
+            let request = ZvramRequest {
+                action,
+                ..ZvramRequest::status()
+            };
+            assert!(request_needs_cached_models(&request));
+        }
+        assert!(!request_needs_cached_models(&ZvramRequest::status()));
+        let request = ZvramRequest {
+            action: ZvramAction::RouterStop,
+            ..ZvramRequest::status()
+        };
+        assert!(!request_needs_cached_models(&request));
     }
 
     #[cfg(target_os = "linux")]

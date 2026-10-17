@@ -383,6 +383,12 @@ if AUTH_ENABLED:
                 return await call_next(request)
             if _is_auth_exempt(path):
                 return await call_next(request)
+            # The native manager carries its own private local capability. Keep
+            # ordinary browser requests on the normal session/admin path.
+            if path == "/api/local-engines/image":
+                from routes.local_engine_routes import native_authorized
+                if native_authorized(request, getattr(app.state, "local_image_engine", None)):
+                    return await call_next(request)
             # In-process internal-tool token bypass. Used by the agent
             # tool layer when it HTTP-loopbacks to admin-gated routes
             # (no admin cookie available in that context). Restricted to
@@ -851,6 +857,8 @@ app.include_router(setup_shell_routes())
 # Cookbook (model download/serve/cache, cookbook state sync)
 from routes.cookbook_routes import setup_cookbook_routes
 app.include_router(setup_cookbook_routes())
+from routes.local_engine_routes import setup_local_engine_routes
+app.include_router(setup_local_engine_routes())
 
 from routes.workspace_routes import setup_workspace_routes
 app.include_router(setup_workspace_routes())
@@ -1162,6 +1170,12 @@ app.router.lifespan_context = _lifespan
 async def _startup_event():
     global upload_cleanup_task, preview_history_cleanup_task
     logger.info("Application starting up...")
+    try:
+        from src.local_image_engine import LocalImageEngine
+        app.state.local_image_engine = LocalImageEngine()
+        app.state.local_image_engine.run()
+    except Exception as exc:
+        logger.warning("Local image engine manager unavailable: %s", type(exc).__name__)
     webhook_manager.set_loop(asyncio.get_running_loop())
     # Wipe any leftover incognito sessions from previous process — they're
     # ephemeral by design and must not survive a restart.
@@ -1424,6 +1438,9 @@ async def _startup_event():
 
 async def _shutdown_event():
     logger.info("Application shutting down...")
+    local_images = getattr(app.state, "local_image_engine", None)
+    if local_images is not None:
+        await asyncio.to_thread(local_images.close)
     # Detached agent drains outlive their SSE clients. Mark them recoverable
     # before event-loop teardown cancels them; ordinary user Stop remains a
     # terminal, non-recoverable status.

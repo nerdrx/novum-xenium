@@ -84,7 +84,7 @@ Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases)
 
 ## Local image generation
 
-The Docker backend includes stable-diffusion.cpp with CPU and optional Vulkan builds. Download a compatible Stable Diffusion checkpoint or launch FLUX.2 Klein 4B/Base 4B with its three component files in Cookbook. Missing FLUX companions can be downloaded individually. Linux x86_64 images also include optional zVram local recovery and paging for Vulkan launches; paging into system memory can be slow. Choose the built-in engine and launch it. Cookbook registers the image provider for chat and Gallery. Model weights are downloaded separately, under their own licenses.
+The Docker backend includes stable-diffusion.cpp with CPU, Vulkan and Linux x86_64 zVram modes. Its image engine starts automatically without loading weights. Completed compatible Cookbook downloads appear in **Local images**; FLUX.2 Klein 4B downloads include the encoder and VAE it needs. The desktop manager controls the engine, startup preference and idle unloading. The selected model loads on its first request. Model weights are downloaded separately, under their own licenses; paging into system memory can be slow.
 
 [Local image setup and GPU support](docs/local-images.md). The Android companion uses this same server-side engine.
 

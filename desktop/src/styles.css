@@ -29,7 +29,7 @@
 html { scrollbar-color: var(--violet) var(--surface); scrollbar-width: thin; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--ground); }
 body::before { content: ""; position: fixed; inset: 0; background: url('./assets/orbits.svg') center / cover no-repeat; pointer-events: none; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, a:focus-visible, pre:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; }
 [hidden] { display: none !important; }
@@ -85,6 +85,7 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
 .notice-info { color: var(--ink); border-color: var(--line); background: var(--surface-raised); }
 .privacy-note { margin: 19px 2px 0; color: var(--faint); font-size: 11px; }
 .zvram-panel { grid-column: 1 / -1; overflow: hidden; }
+.image-engine-panel { grid-column: 1 / -1; overflow: hidden; }
 .zvram-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 12px; }
 .zvram-summary .eyebrow { display: block; margin-bottom: 4px; }
 .zvram-summary strong { font-size: 15px; }
@@ -130,6 +131,11 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
 .zvram-profile-actions { justify-content: flex-start; flex-wrap: wrap; }
 .zvram-profile-actions .button { flex: 1 1 auto; }
 .zvram-provider-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.image-engine-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-width: 640px; }
+.image-engine-settings .field { min-width: 0; display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+.image-engine-settings input, .image-engine-settings select { width: 100%; min-width: 0; min-height: 41px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--ground); padding: 0 11px; font-size: 13px; }
+.image-engine-settings select { color-scheme: dark; }
+.image-engine-activity { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 14px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .zvram-router-state { display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 6px; padding: 11px; margin-top: 14px; }
 .zvram-router-state span, .zvram-model-library .panel-description { color: var(--muted); font-size: 12px; }
 .zvram-model-library { border-top: 1px solid var(--line); padding-top: 15px; margin-top: 18px; }
@@ -156,5 +162,6 @@ h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
   .zvram-summary { padding-bottom: 12px; }
   .zvram-summary-note { display: none; }
   .zvram-form-grid, .zvram-hardware, .zvram-mode { grid-template-columns: minmax(0, 1fr); }
+  .image-engine-settings { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; } }

@@ -529,6 +529,15 @@ export async function _runModelDownload(panel, model, backend, hostOverride) {
     : (ggufSource?.repo || model.quant_repo || model.name);
   const include = backend === 'llamacpp' ? _ggufIncludePattern(model, ggufSource) : (model.download_include || null);
 
+  // A runnable Klein model includes its encoder and VAE. Explicit file picks
+  // remain exact; bundle components carry their own includes, so do not recur.
+  if (backend === 'stable-diffusion.cpp' && !include) {
+    const klein = String(repo || '').toLowerCase();
+    if (klein === 'black-forest-labs/flux.2-klein-base-4b' || klein === 'black-forest-labs/flux.2-klein-4b') {
+      return downloadFlux2KleinBundle(panel, klein.includes('-base-') ? 'base4b' : 'klein4b', hostOverride);
+    }
+  }
+
   _syncEnvFromPanel(panel);
 
   // The host is whatever the caller resolved from the dropdown the user picked

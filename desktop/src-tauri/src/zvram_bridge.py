@@ -220,7 +220,7 @@ def _integer(request, key, default, minimum=1, maximum=1048576):
     return value
 
 
-def _model_rows(model_helper, backend_checkout):
+def _model_rows(model_helper, backend_checkout, cached_models=()):
     rows = []
     for item in model_helper.discover_models(backend_checkout)[:_MODEL_LIMIT]:
         try:
@@ -258,20 +258,56 @@ def _model_rows(model_helper, backend_checkout):
             if not root.is_dir():
                 continue
             for candidate in sorted(root.rglob("*.gguf")):
-                path = candidate.resolve(strict=True)
-                if not path.is_file():
+                split = re.fullmatch(r'(.+)-(\d+)-of-(\d+)\.gguf', candidate.name, re.IGNORECASE)
+                if split and int(split.group(2)) != 1:
                     continue
-                with path.open("rb") as stream:
-                    if stream.read(4) != b"GGUF":
+                path = candidate.resolve(strict=True)
+                if not path.is_file() or not _text_gguf_architecture(path):
+                    continue
+                if split:
+                    parts = int(split.group(3))
+                    if parts < 2 or parts > 10000:
+                        continue
+                    complete = True
+                    for part_number in range(2, parts + 1):
+                        sibling = candidate.with_name(
+                            f'{split.group(1)}-{part_number:0{len(split.group(2))}d}'
+                            f'-of-{parts:0{len(split.group(3))}d}.gguf'
+                        )
+                        try:
+                            part_path = sibling.resolve(strict=True)
+                            if not part_path.is_file():
+                                complete = False
+                                break
+                            with part_path.open('rb') as stream:
+                                if stream.read(4) != b'GGUF':
+                                    complete = False
+                                    break
+                        except OSError:
+                            complete = False
+                            break
+                    if not complete:
                         continue
                 repository = next((part.removeprefix("models--").replace("--", "/")
                                    for part in candidate.parts if part.startswith("models--")), None)
-                name = f"{repository}:{candidate.stem}" if repository else f"{root.name}:{candidate.stem}"
+                stem = split.group(1) if split else candidate.stem
+                name = f"{repository}:{stem}" if repository else f"{root.name}:{stem}"
                 if name in seen or not _ALIAS_RE.fullmatch(name):
                     continue
                 rows.append({"name": name, "path": str(path), "size": path.stat().st_size})
                 seen.add(name)
         except (OSError, ValueError):
+            continue
+    for item in cached_models:
+        try:
+            name = item['name']
+            path = Path(item['path']).expanduser().resolve(strict=True)
+            if (name in seen or not isinstance(name, str) or not _ALIAS_RE.fullmatch(name)
+                    or not path.is_file() or not _text_gguf_architecture(path)):
+                continue
+            rows.append({'name': name, 'path': str(path), 'size': path.stat().st_size})
+            seen.add(name)
+        except (KeyError, OSError, TypeError, ValueError):
             continue
     return rows
 
@@ -308,8 +344,9 @@ def _profile_name(request, alias, model_name):
     return name
 
 
-def _parameters(request, model_helper, backend_checkout, ignore_swap_guard_default=False):
-    models = _model_rows(model_helper, backend_checkout)
+def _parameters(request, model_helper, backend_checkout, ignore_swap_guard_default=False,
+                cached_models=()):
+    models = _model_rows(model_helper, backend_checkout, cached_models)
     model_value = request.get("model")
     if not isinstance(model_value, str):
         raise ValueError("model must be a discovered GGUF path")
@@ -538,7 +575,8 @@ def _text_gguf_architecture(path):
             if key == 'general.architecture':
                 return (kind == 8 and isinstance(item, str)
                         and bool(re.fullmatch(r'[a-z0-9_-]+', item))
-                        and item not in {'clip', 'whisper', 't5', 't5encoder', 'flux', 'sd1', 'sd2', 'sdxl', 'stable-diffusion'})
+                        and item not in {'clip', 'whisper', 't5', 't5encoder', 'flux', 'flux2',
+                                         'sd1', 'sd2', 'sdxl', 'stable-diffusion'})
     except (OSError, ValueError, KeyError, struct.error, UnicodeError):
         pass
     return False
@@ -1085,15 +1123,23 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
                 running = _owned_profile_running(manager_helper, manager, _ROUTER_NAME, previous)
                 if action == 'router_start' and manager_helper.owned_worker(manager_helper.read_json(manager.job_path(_ROUTER_NAME), {})):
                     raise ValueError('The model router is already running')
-                models = _model_rows(model_helper, backend_checkout)
+                cached_models = []
+                if cache_root is not None:
+                    cached_models = _ready_cached_gguf_rows(
+                        model_helper, cookie_path, backend_port, cache_root,
+                    )
+                models = _model_rows(model_helper, backend_checkout, cached_models)
                 if not models:
                     raise ValueError('No local GGUF models were discovered')
                 merged = {**previous, **request}
                 if 'mode' not in request:
                     merged['mode'] = previous.get('mode', 'zvram' if previous.get('router') else 'regular')
                 merged.update(action='router_start', model=models[0]['path'], alias='local-router')
-                params = _parameters(merged, model_helper, backend_checkout,
-                                     ignore_swap_guard_default=_supports_ignore_swap_guard(root))
+                params = _parameters(
+                    merged, model_helper, backend_checkout,
+                    ignore_swap_guard_default=_supports_ignore_swap_guard(root),
+                    cached_models=cached_models,
+                )
                 params.update(router=True, model_ids=[model['name'] for model in models],
                               auto_start=(request.get('auto_start', True) if action == 'router_start'
                                           else request.get('auto_start', previous.get('auto_start', True))))
@@ -1252,16 +1298,18 @@ def main(argv=None):
         except (OSError, ValueError, TypeError, ImportError, AttributeError, RuntimeError) as exc:
             print(json.dumps({'error': _clean_text(exc, 180)}, separators=(',', ':')))
             return 1
-    if len(argv) != 5:
-        print(json.dumps({"error": "Expected ROOT BACKEND_CHECKOUT COOKIE_PATH BACKEND_PORT REQUEST_JSON"}))
+    if len(argv) not in (5, 6):
+        print(json.dumps({"error": "Expected ROOT BACKEND_CHECKOUT COOKIE_PATH BACKEND_PORT REQUEST_JSON [CACHE_ROOT]"}))
         return 1
     root, backend_checkout, cookie_path, backend_port, request_json = argv
+    cache_root = argv[5] if len(argv) == 6 else None
     if len(request_json) > 32768:
         print(json.dumps({"error": "Request is too large"}))
         return 1
     try:
         request = json.loads(request_json)
-        result = dispatch(root, backend_checkout, cookie_path, backend_port, request)
+        result = dispatch(root, backend_checkout, cookie_path, backend_port, request,
+                          cache_root=cache_root)
         print(json.dumps(result, separators=(",", ":")))
         return 0
     except (OSError, ValueError, KeyError, TypeError, ImportError, AttributeError, RuntimeError) as exc:

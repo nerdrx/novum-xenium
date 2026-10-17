@@ -84,6 +84,11 @@ test('manager uses native IPC safely and browser preview remains inert', async (
       if (command === 'read_logs') return { text: '<img src=x onerror=alert(1)>\nservice ready', truncated: true };
       if (command === 'check_update') return window.__updateCheck || { supported: false, message: 'Updates are not supported by this installation yet.' };
       if (command === 'update_backend') return { updated: true, from: 'old', to: 'new', backupPath: '/tmp/nx-backup', detail: 'Updated successfully.' };
+      if (command === 'image_engine_status' || command === 'image_engine_action') return {
+        available: true, running: false, healthy: false, state: 'stopped', mode: 'auto',
+        effective_mode: null, auto_start: true, idle_seconds: 300, loaded_model: null,
+        generation_active: false, models: [], pending: [],
+      };
       throw new Error(`unexpected command: ${command}`);
     } } };
   });

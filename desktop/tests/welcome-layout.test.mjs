@@ -5,7 +5,11 @@ import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
-const style = await fs.readFile(new URL('../../static/style.css', import.meta.url), 'utf8');
+const index = await fs.readFile(new URL('../../static/index.html', import.meta.url), 'utf8');
+// Follow the shipped stylesheet order after the upstream CSS split.
+const stylesheets = [...index.matchAll(/<link\b[^>]*rel="stylesheet"[^>]*href="(\/static\/[^"?]+\.css)(?:\?[^" ]*)?"/g)]
+  .map(match => match[1]).filter(href => href !== '/static/usage.css');
+const style = (await Promise.all(stylesheets.map(href => fs.readFile(new URL(`../..${href}`, import.meta.url), 'utf8')))).join('\n');
 const usage = await fs.readFile(new URL('../../static/usage.css', import.meta.url), 'utf8');
 
 test('restoring the regular home dashboard keeps its first visible frame centered', async t => {

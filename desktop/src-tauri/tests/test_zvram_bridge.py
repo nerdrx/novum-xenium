@@ -114,10 +114,12 @@ class BridgeTests(unittest.TestCase):
             repo.mkdir(parents=True)
             target = home / "hub/blobs/model-blob"
             target.parent.mkdir(parents=True)
-            target.write_bytes(b"GGUFfixture")
+            target.write_bytes(self.text_gguf())
             model = repo / "Dolphin.F16.gguf"
             model.symlink_to(target)
             (repo / "ignore.gguf").write_bytes(b"not GGUF")
+            (repo / "Projector.gguf").write_bytes(self.text_gguf('clip'))
+            (repo / "Split-00002-of-00002.gguf").write_bytes(self.text_gguf())
             config = home / ".config/dev.novum.xenium/config.json"
             config.parent.mkdir(parents=True)
             config.write_text(json.dumps({"checkout": str(checkout), "model_roots": [str(repo.parent.parent)]}))
@@ -129,7 +131,7 @@ class BridgeTests(unittest.TestCase):
             with mock.patch.object(bridge.Path, "home", return_value=home):
                 rows = bridge._model_rows(EmptyModels(), checkout)
             self.assertEqual(rows, [{"name": "owner/Dolphin:Dolphin.F16",
-                                     "path": str(target.resolve()), "size": 11}])
+                                     "path": str(target.resolve()), "size": len(self.text_gguf())}])
 
     @staticmethod
     def text_gguf(architecture='llama'):
@@ -141,7 +143,8 @@ class BridgeTests(unittest.TestCase):
     def test_diffusion_or_missing_architecture_is_not_a_text_model(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'model.gguf'
-            for contents in (b'GGUFdata', self.text_gguf('clip'), self.text_gguf('sd1'), self.text_gguf('flux')):
+            for contents in (b'GGUFdata', self.text_gguf('clip'), self.text_gguf('sd1'),
+                             self.text_gguf('flux'), self.text_gguf('flux2')):
                 path.write_bytes(contents)
                 self.assertFalse(bridge._text_gguf_architecture(path))
             path.write_bytes(self.text_gguf())
@@ -312,6 +315,36 @@ class BridgeTests(unittest.TestCase):
         preset = self.home / 'router-models.ini'
         self.assertEqual(preset.stat().st_mode & 0o777, 0o600)
         self.assertIn(f'[nx-model-0]\nalias = tiny\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
+
+    def test_router_start_includes_completed_cached_text_models_but_not_image_gguf(self):
+        cache = self.base / 'hf-cache'
+        repo = cache / 'hub/models--org--cookbook/snapshots/revision'
+        repo.mkdir(parents=True)
+        text_model = repo / 'Text-Q4_K_M.gguf'
+        image_model = repo / 'Image-Projector.gguf'
+        text_model.write_bytes(self.text_gguf())
+        image_model.write_bytes(self.text_gguf('clip'))
+        cache_row = {
+            'repo_id': 'org/cookbook', 'path': '/app/.cache/huggingface/hub',
+            'has_incomplete': False, 'is_gguf': True, 'is_diffusion': False,
+            'is_video': False, 'is_adapter': False,
+            'gguf_files': [
+                {'name': text_model.name, 'rel_path': f'revision/{text_model.name}', 'role': 'model'},
+                {'name': image_model.name, 'rel_path': f'revision/{image_model.name}', 'role': 'model'},
+            ],
+        }
+        with (mock.patch.object(self.model_helper, 'session_cookie', return_value='session', create=True),
+              mock.patch.object(self.model_helper, '_request', return_value={'models': [cache_row]}, create=True),
+              mock.patch.object(bridge, '_router_supported', return_value=True),
+              mock.patch.object(bridge, '_port_is_free', return_value=True),
+              mock.patch.object(bridge, '_supports_live_control', return_value=True)):
+            result = self.dispatch({'action': 'router_start', 'mode': 'regular'}, cache_root=cache)
+        self.assertTrue(result['started'])
+        saved = bridge._read_state(self.manager)['nx-zvram-router']
+        self.assertEqual(saved['model_ids'], ['tiny', 'org/cookbook:Text-Q4_K_M'])
+        preset = bridge._router_preset_path(self.manager).read_text()
+        self.assertIn('alias = org/cookbook:Text-Q4_K_M', preset)
+        self.assertNotIn('Image-Projector', preset)
 
     def test_router_preset_keeps_projector_bound_to_its_ollama_model(self):
         blobs = self.checkout / 'data/ollama/models/blobs'

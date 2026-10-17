@@ -30,6 +30,7 @@ use tauri::{
     path::BaseDirectory, AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 mod zvram;
+mod engines;
 
 const DEFAULT_PROJECT: &str = "odysseus-local";
 const COMMAND_OUTPUT_LIMIT: usize = 128 * 1024;
@@ -2611,7 +2612,9 @@ fn app_startup() -> tauri::Builder<tauri::Wry> {
             update_backend,
             zvram::zvram_status,
             zvram::zvram_choose_installation,
-            zvram::zvram_action
+            zvram::zvram_action,
+            engines::image_engine_status,
+            engines::image_engine_action
         ])
 }
 

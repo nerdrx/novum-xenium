@@ -36,6 +36,13 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.addInitScript(() => {
     window.__calls = [];
     window.__failAction = '';
+    window.__imageEngine = {
+      available: true, running: false, healthy: false, state: 'stopped', mode: 'auto',
+      effective_mode: null, auto_start: true, idle_seconds: 300, loaded_model: null,
+      generation_active: false,
+      models: [{ id: 'sd-cpp-local', name: 'SD CPP', size_bytes: 4096 }],
+      pending: [{ name: 'FLUX', reason: 'missing components' }],
+    };
     window.__zvram = {
       available: true, installation: '/opt/zvram', router_supported: true,
       ignore_swap_guard_supported: true,
@@ -49,6 +56,14 @@ test('local provider offers Regular and zVram modes and registers after health',
       window.__calls.push({ command, args });
       if (command === 'mount_manager_chrome') return;
       if (command === 'get_status') return { config: { checkout: '/tmp/nx', project: 'Test', port: 7300 }, backend: { state: 'stopped' } };
+      if (command === 'image_engine_status') return structuredClone(window.__imageEngine);
+      if (command === 'image_engine_action') {
+        const request = args.action;
+        if (request.action === 'configure') Object.assign(window.__imageEngine, request);
+        if (request.action === 'start') Object.assign(window.__imageEngine, { running: true, healthy: true, state: 'ready' });
+        if (request.action === 'stop') Object.assign(window.__imageEngine, { running: false, healthy: false, state: 'stopped' });
+        return structuredClone(window.__imageEngine);
+      }
       if (command === 'zvram_choose_installation') return '/opt/zvram';
       if (command === 'zvram_status') return structuredClone(window.__zvram);
       if (command === 'zvram_action') {
@@ -69,6 +84,37 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_status'));
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  await page.waitForFunction(() => document.getElementById('image-engine-status').textContent.includes('stopped'));
+  assert.match(await page.locator('#image-engine-models').textContent(), /SD CPP/);
+  assert.match(await page.locator('#image-engine-pending').textContent(), /FLUX: missing components/);
+  assert.equal(await page.locator('#image-engine-loaded').textContent(), 'No image model loaded');
+  await page.setViewportSize({ width: 360, height: 800 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'image controls fit narrow desktop windows');
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.locator('#image-engine-mode').selectOption('vulkan');
+  assert.equal(await page.locator('#image-engine-idle').getAttribute('min'), '30');
+  await page.locator('#image-engine-idle').fill('29');
+  await page.locator('#image-engine-configure').click();
+  await page.waitForFunction(() => document.getElementById('image-engine-error').textContent.includes('30 and 3600'));
+  assert.equal(await page.evaluate(() => window.__calls.some(call => call.command === 'image_engine_action' && call.args.action.action === 'configure')), false);
+  await page.locator('#image-engine-idle').fill('600');
+  await page.locator('#image-engine-configure').click();
+  await page.waitForFunction(() => window.__calls.some(call => call.command === 'image_engine_action' && call.args.action.action === 'configure'));
+  const imageConfiguration = await page.evaluate(() => window.__calls.find(call => call.command === 'image_engine_action' && call.args.action.action === 'configure').args.action);
+  assert.deepEqual(imageConfiguration, { action: 'configure', mode: 'vulkan', auto_start: true, idle_seconds: 600 });
+  await page.locator('#image-engine-start').click();
+  await page.waitForFunction(() => document.getElementById('image-engine-status').textContent.toLowerCase().includes('ready'));
+  assert.equal(await page.locator('#image-engine-status').textContent(), 'Ready · Vulkan');
+  await page.locator('#image-engine-stop').click();
+  await page.waitForFunction(() => document.getElementById('image-engine-status').textContent.includes('stopped'));
+  await page.locator('#image-engine-refresh').click();
+  await page.waitForFunction(() => window.__calls.some(call => call.command === 'image_engine_action' && call.args.action.action === 'refresh'));
+  await page.evaluate(() => { window.__imageEngine.available = false; });
+  await page.locator('#image-engine-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('image-engine-refresh').disabled);
+  assert.equal(await page.locator('#image-engine-configure').isEnabled(), true, 'settings remain available when the image binary is missing');
+  await page.locator('#image-engine-configure').click();
+  await page.waitForFunction(() => window.__calls.filter(call => call.command === 'image_engine_action' && call.args.action.action === 'configure').length === 3);
   assert.equal(await page.locator('#zvram-advanced').evaluate(element => element.open), false);
   assert.equal(await page.locator('#zvram-installation').textContent(), '/opt/zvram');
   assert.equal(await page.locator('#zvram-live-control').isChecked(), true, 'live management is opt-out by default');

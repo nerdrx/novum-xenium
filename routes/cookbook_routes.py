@@ -1234,6 +1234,12 @@ def setup_cookbook_routes() -> APIRouter:
         _validate_token(req.hf_token)
         if req.remote_host and not req.env_prefix:
             req.env_prefix = _server_env_prefix_for_download(req.remote_host)
+        # Local downloads belong to the managed cache catalogue by default.
+        # Registration waits for complete, compatible artifacts; SSH caches
+        # never become local engine paths.
+        image_manager = getattr(getattr(getattr(request, "app", None), "state", None), "local_image_engine", None)
+        if image_manager is not None and not req.remote_host:
+            image_manager.add_cache_root(req.local_dir)
         TMUX_LOG_DIR.mkdir(parents=True, exist_ok=True)
         session_id = f"cookbook-{uuid.uuid4().hex[:8]}"
         wrapper_script = TMUX_LOG_DIR / f"{session_id}.sh"

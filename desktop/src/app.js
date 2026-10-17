@@ -1,4 +1,5 @@
 import { initZvram } from './zvram.js';
+import { initImageEngine } from './engines.js';
 
 const invoke = window.__TAURI__?.core?.invoke;
 const $ = (selector) => document.querySelector(selector);
@@ -282,5 +283,6 @@ if (!invoke) {
 }
 
 initZvram(invoke);
+initImageEngine(invoke);
 
 export { applyConfig, refreshStatus, renderUpdateState };

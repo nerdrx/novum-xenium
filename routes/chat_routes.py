@@ -16,6 +16,7 @@ from typing import Dict, Any, AsyncGenerator, List, Optional
 from fastapi import APIRouter, Request, HTTPException, Form, Query, Depends
 from fastapi.responses import Response, StreamingResponse
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from core.models import ChatMessage
 from src.request_models import ChatRequest
@@ -5828,7 +5829,7 @@ def setup_chat_routes(
     # ------------------------------------------------------------------ #
     @router.get("/api/chat/stream_status/{session_id}")
     async def chat_stream_status(request: Request, session_id: str) -> Dict[str, Any]:
-        _verify_session_owner(request, session_id)
+        await run_in_threadpool(_verify_session_owner, request, session_id)
         # A detached run can still be going even if _active_streams was popped;
         # report it as active so the client knows to reconnect via /resume.
         # Read once via .get() to avoid a KeyError race between the membership

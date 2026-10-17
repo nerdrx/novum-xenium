@@ -66,3 +66,77 @@ assert(badKind, 'unknown component kinds should fail closed');
     )
     result = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+def test_bfl_download_defaults_to_bundle_but_preserves_explicit_include_and_host():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is unavailable")
+    source = DOWNLOAD.read_text(encoding="utf-8")
+    helpers = re.search(r"const FLUX2_KLEIN_SHARED_COMPONENTS = \[.*?\n\];", source, re.S)
+    recipe = re.search(r"export function flux2KleinDownloadRecipe\(variant\) \{.*?\n\}", source, re.S)
+    bundle = re.search(r"export async function downloadFlux2KleinBundle\(.*?\n\}", source, re.S)
+    run = re.search(
+        r"export async function _runModelDownload\(.*?(?=\n// ── Init ──)", source, re.S
+    )
+    assert helpers and recipe and bundle and run
+    declarations = "\n".join((
+        helpers.group(0),
+        recipe.group(0).replace("export function", "function", 1),
+        bundle.group(0).replace("export async function", "async function", 1),
+        run.group(0).replace("export async function", "async function", 1),
+    ))
+    script = r"""
+const requests = [];
+let _envState = {env:'none', envPath:'', hfToken:'', servers:[]};
+const _downloadStartsInFlight = new Set();
+const uiModule = {showToast() {}};
+const window = {cookbookModule:{_serverKey:()=> 'gpu-key'}};
+const document = {getElementById:()=>null};
+const _getPanelFields = () => ({});
+const _syncEnvFromPanel = () => {};
+const _ggufDownloadSource = () => null;
+const _downloadTaskName = name => name;
+const _serverByVal = key => key === 'gpu.example'
+  ? {host:'gpu.example', name:'GPU', port:2222, platform:'linux'} : null;
+const _getPort = () => 22;
+const _isWindows = () => false;
+const _buildEnvPrefix = () => '';
+const _loadTasks = () => [];
+const _saveTasks = () => {};
+const _renderRunningTab = () => {};
+const _addTask = () => {};
+const _fetchDownloadControlWithTimeout = async (_url, init) => {
+  requests.push(JSON.parse(init.body));
+  return {ok:true, json:async()=>({ok:true,session_id:'fixture'})};
+};
+__FUNCTIONS__
+const panel = {querySelectorAll:()=>[]};
+await _runModelDownload(panel, {name:'black-forest-labs/FLUX.2-klein-4B'}, 'stable-diffusion.cpp', 'gpu.example');
+if (requests.length !== 3) throw new Error(`Expected three default downloads, got ${requests.length}`);
+const expected = [
+  ['black-forest-labs/FLUX.2-klein-4B', 'flux-2-klein-4b.safetensors'],
+  ['Comfy-Org/vae-text-encorder-for-flux-klein-4b', 'split_files/text_encoders/qwen_3_4b.safetensors'],
+  ['Comfy-Org/vae-text-encorder-for-flux-klein-4b', 'split_files/vae/flux2-vae.safetensors'],
+];
+for (const request of requests) {
+  if (!request.remote_host || request.remote_host !== 'gpu.example') throw new Error(`Bundle lost selected remote host: ${JSON.stringify(request)}`);
+  const index = expected.findIndex(([repo, include]) => repo === request.repo_id && include === request.include);
+  if (index < 0) throw new Error(`Unexpected bundle component: ${request.repo_id} ${request.include}`);
+  expected.splice(index, 1);
+}
+if (expected.length) throw new Error('Default bundle omitted a component');
+requests.length = 0;
+await _runModelDownload(panel, {
+  name:'black-forest-labs/FLUX.2-klein-4B',
+  download_include:'custom/explicit-file.safetensors',
+}, 'stable-diffusion.cpp', 'gpu.example');
+if (requests.length !== 1) throw new Error('Explicit file selection must bypass default bundle');
+if (requests[0].repo_id !== 'black-forest-labs/FLUX.2-klein-4B'
+    || requests[0].include !== 'custom/explicit-file.safetensors'
+    || requests[0].remote_host !== 'gpu.example') throw new Error('Explicit include or remote host was changed');
+""".replace("__FUNCTIONS__", declarations)
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=20
+    )
+    assert result.returncode == 0, result.stderr

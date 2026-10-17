@@ -43,7 +43,7 @@ import { initModules } from './js/modules.js';
 import './js/modalManager.js';
 import { startBackgroundToolJobs } from './js/backgroundToolJobs.js';
 import './js/chipScroll.js?v=20260903calendarchips1';
-import './js/mobileBulkSelect.js?v=20260910selecthold1';
+import './js/mobileBulkSelect.js?v=20261017mobilework1';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
 import './js/tileManager.js?v=20260910responsivebounds1';
 import themeModule from './js/theme.js?v=20260911organsrain1';
@@ -59,7 +59,7 @@ import ttsModule from './js/tts-ai.js';
 import spinnerModule from './js/spinner.js';
 import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js?v=20260829chatstyle12';
 import { getSettings } from './js/appConfig.js';
-import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js?v=20260910sidebarbounce1';
+import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js?v=20261017mobilework1';
 import { initSectionCollapse, initSectionDrag } from './js/section-management.js';
 import approvalModeModule from './js/approvalMode.js';
 import { bindMenuDismiss } from './js/escMenuStack.js';

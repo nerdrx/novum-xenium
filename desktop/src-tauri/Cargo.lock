@@ -2152,6 +2152,7 @@ dependencies = [
  "libloading",
  "notify-rust",
  "open",
+ "reqwest",
  "rfd",
  "serde",
  "serde_json",

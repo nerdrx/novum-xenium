@@ -658,11 +658,8 @@ function _wireChipDrag(chip, dock) {
     if (activePointerId !== null) return;
     startX = e.clientX; startY = e.clientY; dragging = false;
     activePointerId = e.pointerId;
-    // Flag global "a chip is being touched" so other touch handlers (e.g.
-    // the chat container's edge-swipe-to-open-sidebar) know to stand down.
-    // Set on pointerdown rather than waiting for the drag threshold so the
-    // chat container's touchstart, which fires roughly simultaneously, sees
-    // it during its own decision pass.
+    // Mark chip interaction before crossing the drag threshold so other
+    // touch and dock handlers can avoid claiming the same gesture.
     window._chipDragging = true;
 
     const cr = chip.getBoundingClientRect();
@@ -931,8 +928,7 @@ function _wireChipDrag(chip, dock) {
     chip.removeEventListener('pointermove', onPointerMove);
     activePointerId = null;
     cancelLongPress();
-    // Clear the global drag flag so the chat container's edge-swipe handler
-    // can resume opening the sidebar on plain swipes.
+    // Release the shared touch/dock interaction flag after pointerup settles.
     setTimeout(() => { window._chipDragging = false; }, 0);
     // Desktop snap-on-drop: released over a snap zone → restore the window and
     // snap it there (instead of the normal chip reorder/dock drop).

@@ -3,8 +3,8 @@
 Every Docker backend image includes `stable-diffusion.cpp` `sd-server`, built
 from pinned commit [`1d0a58a35050d285b1d6fb1bc68a92924d35825e`](https://github.com/leejet/stable-diffusion.cpp/commit/1d0a58a35050d285b1d6fb1bc68a92924d35825e).
 The default `/usr/local/bin/sd-server` is the CPU-capable build. The optional
-`/usr/local/bin/sd-server-vulkan` build is selected explicitly, so software
-Vulkan is never chosen implicitly. Both use the same upstream server API and
+`/usr/local/bin/sd-server-vulkan` build is selected when a usable render device
+is exposed, or explicitly in the manager. Both use the same upstream server API and
 accept model weights as runtime arguments. The upstream MIT license is at
 `/usr/share/licenses/stable-diffusion.cpp/LICENSE` in the image.
 
@@ -18,14 +18,42 @@ The zVram MIT license is at `/usr/share/licenses/zvram/LICENSE`. Other image
 architectures keep the normal Vulkan server and report that the bundled zVram
 layer is unavailable if its wrapper is selected.
 
+## Automatic engine management
+
+The backend starts an authenticated local image gateway with no weights loaded.
+The desktop manager's **Image engine** card controls CPU/Vulkan/zVram mode,
+automatic startup, refresh, and idle unloading (five minutes by default).
+Auto mode prefers zVram when a render device and the bundled wrapper are available,
+then Vulkan, otherwise CPU. A manually stopped engine stays stopped until started
+again or automatic startup is enabled.
+
+Completed compatible Cookbook downloads are registered within about 30 seconds.
+The image model list contains a separate identity for each checkpoint under
+**Local images**. Select it in **Settings → AI → Image Generation**; an unset
+selection is filled automatically. Explicit cloud/manual choices and the image
+generation enable toggle are preserved. A stopped legacy local Cookbook image
+selection is migrated to the managed provider; its old endpoint is retained.
+Only the requested model loads, one image worker at a time. Switching models or
+reaching the idle timeout releases that worker. Startup and cache scans do not
+generate images or load all models into VRAM.
+
+The managed catalogue currently supports standalone SD 1.x/2.x/XL checkpoints
+and the FLUX.2 Klein 4B recipes below. Incomplete downloads, adapters, projectors,
+and unsupported pipelines are not advertised as usable models. Remote SSH caches
+stay on their remote host. Existing manual launches remain available in Cookbook.
+The gateway exposes the OpenAI-compatible generation/edit routes, not the native
+sd.cpp WebUI routes. Its bearer credential and native manager control token are
+separate private files in `data/engine-manager`; they are not UI settings.
+
 Model files are not in the container image. In **Cookbook → Download**, download
 a supported single-checkpoint Stable Diffusion 1.x/2.x/XL model into the
-persistent model cache. For FLUX.2 Klein 4B or Klein Base 4B, open the cached
+persistent model cache. New FLUX.2 Klein 4B or Klein Base 4B default downloads
+target the three required files automatically. For an existing partial download, open the cached
 model under **Launch** and use **Download missing FLUX.2 Klein components**.
 This targets only missing diffusion weights, the recommended Qwen3-4B encoder,
 and the shared Klein VAE from the public Comfy-Org component repository. These are the component files expected by stable-diffusion.cpp,
 not a duplicate full Hugging Face repository. Use CFG 1 and 4 steps for
-distilled Klein 4B, or CFG 4 and 20 steps for Klein Base 4B. Select
+distilled Klein 4B, or CFG 4 and 20 steps for Klein Base 4B. For an advanced manual launch, select
 **stable-diffusion.cpp** under **Launch**, choose CPU or Vulkan, then start the
 model. When its status is **Ready**, choose the image model under
 **Settings → AI → Image Generation**; it can then be selected for image requests
@@ -50,12 +78,12 @@ Metal GPU, and this bundled build does not include Metal. Vulkan passthrough is
 for Linux Docker Engine only; install
 the host Vulkan driver, ensure the Docker user can access `/dev/dri`, then add
 `docker/gpu.vulkan.yml` to `COMPOSE_FILE` and set `RENDER_GID` to the host
-render group ID. The Vulkan binary must be requested explicitly. Native Linux/macOS
+render group ID. Auto mode can then select the Vulkan/zVram binary. Native Linux/macOS
 installs need a separately built runtime; the helper below builds the CPU or
 Vulkan variant for the current host. Windows native installs must follow
 upstream's Windows build instructions.
 
-For Vulkan launches, zVram is an opt-in memory-management path for ordinary
+For Vulkan launches, zVram is a memory-management path for ordinary
 Stable Diffusion checkpoints and FLUX.2 Klein. It uses `--auto-fit off` because
 the Vulkan layer can report a virtual heap that overstates immediately
 available VRAM. FLUX.2 Klein also keeps its text encoder and VAE on CPU.

@@ -4,6 +4,12 @@ Modified by nerdrx through October 17, 2026. Upstream: [odysseus-dev/odysseus](h
 
 This derivative remains AGPL-3.0-or-later, with the upstream [LICENSE](LICENSE), [acknowledgments](ACKNOWLEDGMENTS.md), and third-party notices retained. The app links to this fork's public source. If you distribute or deploy a further modified version, offer the source matching that version to its users.
 
+## Approval mode consistency (October 17, 2026)
+
+- Full Access now preauthorizes the server's known tool capability classes for a new interactive turn. Task wording guides selection without becoming an additional approval gate. Account restrictions, explicitly disabled tools, workspace containment, plan/compare limits, and inherited continuation scopes remain enforced.
+- Auto/Ask web continuations recover only the immediately preceding trusted human's read intent for subjectless continue/retry requests. Model prose and tool output cannot establish that authority; browser interaction rights are not inherited.
+- The saved human mode cannot be borrowed by API tokens, internal requests, background runs, or subagents, and an existing approval/recovery continuation cannot silently widen when the preference changes.
+
 ## Streaming and mobile recovery (October 17, 2026)
 
 - Ordinary replies can release complete prose prefixes after the existing claim checks; declared execution/artifact work retains completion gating. Streaming keeps statement context, avoids token-by-token rescanning, and reports the actual first visible answer time.

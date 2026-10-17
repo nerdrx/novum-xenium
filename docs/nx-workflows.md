@@ -48,7 +48,7 @@ The shield button beside Agent/Chat selects approval behavior for your account's
 
 - **Ask for approval**: approve each agent write, shell command, or internet call. Reads in the workspace remain available. Automatic URL/transcript and web-search prefetch are deferred to agent tools.
 - **Approve for me** (default): automatically read canonical public YouTube/GitHub/DeviantArt profiles, exact HTTPS links supplied by you or returned by search, and app endpoint metadata. When untrusted content makes another action require review, the bounded tool-free review considers up to four recent trusted user requests plus the proposed action; newer requests can narrow or cancel earlier work. An explicit `allow` authorizes only that exact action for the current run; `ask`, invalid output, or timeout shows an approval card. Public-address checks, DNS pinning, and redirect checks remain enforced by the fetcher.
-- **Full access**: skip automatic tool approval prompts within the current workspace/container.
+- **Full access**: pre-authorize enabled tool operations within your account and the current workspace/container. The task classifier may guide tool selection, but cannot deny an enabled tool merely because it did not recognize the wording. This mode skips automatic approval prompts.
 
 These modes do not add host-folder access or override disabled tools, account privileges, plan mode, or filesystem restrictions. Running turns keep their original mode. Only an interactive user can save a mode; API tokens and internal tool calls cannot grant themselves full access. Other user interactions, such as a tool asking for missing information, still appear in Full access.
 

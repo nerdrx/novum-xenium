@@ -365,12 +365,87 @@ def interpret_request(request_text, *, history=(), workspace=None, active_docume
     return SemanticIntent(families, selected, required_read_operation_for_request(request_text, history))
 
 
+_PUBLIC_WEB_CONTINUATION = re.compile(
+    r"(?:please\s+)?(?:continue|try\s+again|retry)[.!?]*", re.I,
+)
+
+
+def _preceding_public_web_read(history, current_request):
+    """Return the prior trusted public-web read, skipping only the current row."""
+    rows = tuple(history or ())
+    # The route persists the current human message before constructing
+    # authority. Ignore it only when the final row is trusted and exactly
+    # matches this request; any mismatch or untrusted row remains a boundary.
+    if rows:
+        row = rows[-1]
+        get = row.get if isinstance(row, dict) else lambda key, default=None: getattr(row, key, default)
+        metadata = get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (TypeError, ValueError):
+                metadata = {}
+        if (get("role") == "user" and get("content") == current_request
+                and isinstance(metadata, dict) and metadata.get("trusted") is not False
+                and not metadata.get("tool_gate_untrusted")):
+            rows = rows[:-1]
+    for row in reversed(rows):
+        get = row.get if isinstance(row, dict) else lambda key, default=None: getattr(row, key, default)
+        if get("role") != "user":
+            continue
+        metadata = get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (TypeError, ValueError):
+                metadata = {}
+        if (not isinstance(metadata, dict) or metadata.get("trusted") is False
+                or metadata.get("tool_gate_untrusted")):
+            return None
+        content = get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            return None
+        prior = interpret_request(content, history=())
+        return content if prior.capabilities == frozenset({"search_browser"}) else None
+    return None
+
+
 def create_request_authority(request_text, *, owner=None, session_id=None, workspace=None,
                              history=(), policy=None, active_document=False,
-                             image_attachment=False, capabilities=None, client_runtime_context=None):
+                             image_attachment=False, capabilities=None, client_runtime_context=None,
+                             approval_mode="auto"):
     """Deterministic server policy over semantic facts, never schema inventory."""
     if not isinstance(request_text, str):
         raise TypeError("Authority requires trusted request text")
+    if approval_mode == "full":
+        # This is server-owned human preauthorization, not permission inferred
+        # from model prose or an offered schema. Resource sealing and policy
+        # restriction below remain identical to ordinary request admission.
+        from src.tool_capabilities import KNOWN_CAPABILITY_TOOLS
+        tools = {canonical_tool(name) for name in KNOWN_CAPABILITY_TOOLS}
+        authority = RequestAuthority(uuid4().hex, _owner(owner), str(session_id or ""),
+            str(workspace or ""), tuple(OperationGrant(name) for name in sorted(tools)))
+        if client_runtime_context is not None:
+            from src.agent_runtime.remote_resources import seal_backends
+            authority = replace(authority, backend_resources=seal_backends(
+                tools, context=client_runtime_context, owner=authority.owner))
+        return authority.restrict(policy or build_effective_tool_policy(last_user_message=request_text))
+    if _PUBLIC_WEB_CONTINUATION.fullmatch(request_text.strip()):
+        preceding_read = _preceding_public_web_read(history, request_text)
+        if preceding_read is not None:
+            resumed = create_request_authority(
+                preceding_read, owner=owner, session_id=session_id,
+                workspace=workspace, policy=policy, client_runtime_context=client_runtime_context,
+            )
+            # A continuation can recover read access only. Preserve the prior
+            # request's exact input limits and current policy, while never
+            # carrying browser click/type/evaluate authority into a retry.
+            return replace(resumed, grants=tuple(
+                replace(grant, actions=(grant.actions & _BROWSER_READ_ACTIONS))
+                if grant.tool == "private_browser" and grant.actions is not None
+                else grant
+                for grant in resumed.grants
+            ))
     intent = interpret_request(request_text, history=history, active_document=active_document,
                                workspace=workspace, image_attachment=image_attachment)
     families = intent.capabilities
@@ -436,7 +511,12 @@ def request_authority_for_http(request, request_text, **context):
     if is_internal_tool_request(request):
         return RequestAuthority.empty(owner=context.get("owner"),
             session_id=context.get("session_id"), workspace=context.get("workspace")).restrict(context.get("policy"))
-    return create_request_authority(request_text, **context)
+    # A form field or tool payload can never upgrade the saved human mode.
+    requested_mode = context.pop("approval_mode", "auto")
+    from routes.prefs_routes import resolve_tool_approval_mode
+    mode = "full" if (requested_mode == "full"
+                      and resolve_tool_approval_mode(request) == "full") else "auto"
+    return create_request_authority(request_text, approval_mode=mode, **context)
 
 
 @contextmanager
@@ -495,7 +575,10 @@ def with_request_authority(func):
                     workspace=parameters.get("workspace"),
                     history=getattr(parameters.get("history_session"), "history", ()) or (),
                     active_document=bool(parameters.get("active_document")),
-                    client_runtime_context=parameters.get("client_runtime_context"))
+                    client_runtime_context=parameters.get("client_runtime_context"),
+                    approval_mode=("full" if parameters.get("approval_mode") == "full"
+                        and not parameters.get("delegated_credential")
+                        and not parameters.get("plan_mode") else "auto"))
         if not isinstance(authority, RequestAuthority):
             raise TypeError("Missing or malformed server request authority")
         if parent is None and parameters.get("exact_approval") is not None:

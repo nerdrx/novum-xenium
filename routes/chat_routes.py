@@ -3732,7 +3732,16 @@ def setup_chat_routes(
                 )
             )
         )
-        _use_turn_contract = _turn_contract_enabled(
+        # Full access is an interactive, server-saved preauthorization. Tool
+        # routing must not reintroduce a lexical approval gate for that mode.
+        _full_tool_access = (
+            _approval_mode == "full"
+            and not (plan_mode or compare_mode or is_delegated_credential(request)
+                     or _subagent_chat or is_internal_tool_request(request)
+                     or exact_tool_approval or tool_approval_id or recovery_run_id
+                     or task_question_continuation)
+        )
+        _use_turn_contract = not _full_tool_access and _turn_contract_enabled(
             exact_tool_approval=exact_tool_approval,
             runtime_surface=_runtime_surface,
             native_workspace_contract=_native_workspace_contract,
@@ -3877,7 +3886,7 @@ def setup_chat_routes(
             # A pasted URL grants only the exact-target reader. Keep broad
             # search and interactive browsing behind their normal toggles.
             disabled_tools.discard("web_fetch")
-        if (
+        if not _full_tool_access and (
             _is_pure_web_intent(message, workspace, _explicit_web_intent)
             or (
                 _explicit_web_intent
@@ -3984,7 +3993,8 @@ def setup_chat_routes(
         # the heavy "do things on the computer" tools — otherwise the model
         # tries to shell out for a request that never needed it, then fails
         # (and looks broken when the shell is disabled).
-        if auto_escalated and not _workspace_agent_intent and not _use_turn_contract:
+        if (auto_escalated and not _full_tool_access
+                and not _workspace_agent_intent and not _use_turn_contract):
             disabled_tools.update({
                 "bash", "python", "read_file", "write_file",
             })
@@ -4063,6 +4073,7 @@ def setup_chat_routes(
         _request_authority = request_authority_for_http(
             request, message, owner=_user, session_id=session, workspace=workspace,
             history=_turn_history, policy=tool_policy,
+            approval_mode="full" if _full_tool_access else "auto",
             client_runtime_context=client_runtime_context,
             active_document=bool(active_doc),
             image_attachment=any(str(a.get('mime') or '').startswith('image/')

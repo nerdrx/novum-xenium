@@ -465,7 +465,10 @@ def test_workspace_auto_escalation_keeps_shell_tools():
     assert '_native_workspace_contract = bool(' in source
     assert "allow_bash = \"true\"" in source
     assert '_forced_tools.update({"bash", "ls", "manage_bg_jobs"})' in source
-    assert "if auto_escalated and not _workspace_agent_intent and not _use_turn_contract:" in source
+    # Auto-escalated turns retain full tool access; only light typed-tool
+    # escalation clamps shell tools.
+    assert "if (auto_escalated and not _full_tool_access" in source
+    assert "and not _workspace_agent_intent and not _use_turn_contract):" in source
 
 
 def test_native_declared_input_files_establish_workspace_intent():

@@ -941,35 +941,39 @@ def test_calendar_open_panel_inherits_recent_list_range() -> None:
     assert result["target_date"] == "2026-09-01"
 
 
-def test_manage_calendar_list_events_includes_reminder_metadata() -> None:
+def test_manage_calendar_list_events_includes_reminder_metadata(tmp_path, monkeypatch) -> None:
     import asyncio
     import json
     import uuid
 
+    import routes.calendar_routes as calendar_routes
     from src.tools.calendar import do_manage_calendar
+    from tests.helpers.database import isolated_session_database
 
-    owner = f"calendar-reminder-fixture-{uuid.uuid4()}"
-    title = f"Reminder Fixture {uuid.uuid4()}"
-    created = asyncio.run(do_manage_calendar(json.dumps({
-        "action": "create_event",
-        "summary": title,
-        "dtstart": "2035-01-02T10:00:00",
-        "dtend": "2035-01-02T10:30:00",
-        "reminder_minutes": 15,
-    }), owner=owner))
-    assert created.get("exit_code") == 0, created
+    with isolated_session_database(tmp_path) as (_session_manager, database):
+        monkeypatch.setattr(calendar_routes, "SessionLocal", database.SessionLocal)
+        owner = f"calendar-reminder-fixture-{uuid.uuid4()}"
+        title = f"Reminder Fixture {uuid.uuid4()}"
+        created = asyncio.run(do_manage_calendar(json.dumps({
+            "action": "create_event",
+            "summary": title,
+            "dtstart": "2035-01-02T10:00:00",
+            "dtend": "2035-01-02T10:30:00",
+            "reminder_minutes": 15,
+        }), owner=owner))
+        assert created.get("exit_code") == 0, created
 
-    listed = asyncio.run(do_manage_calendar(json.dumps({
-        "action": "list_events",
-        "start": "2035-01-02T00:00:00",
-        "end": "2035-01-03T00:00:00",
-    }), owner=owner))
+        listed = asyncio.run(do_manage_calendar(json.dumps({
+            "action": "list_events",
+            "start": "2035-01-02T00:00:00",
+            "end": "2035-01-03T00:00:00",
+        }), owner=owner))
 
-    assert listed.get("exit_code") == 0, listed
-    event = next(ev for ev in listed["events"] if ev["summary"] == title)
-    assert event["has_reminder"] is True
-    assert event["reminder_minutes"] == 15
-    assert event["reminder_note_id"]
+        assert listed.get("exit_code") == 0, listed
+        event = next(ev for ev in listed["events"] if ev["summary"] == title)
+        assert event["has_reminder"] is True
+        assert event["reminder_minutes"] == 15
+        assert event["reminder_note_id"]
 
 
 def test_late_tool_summary_fallback_preserves_synthesized_answers() -> None:

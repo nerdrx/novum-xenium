@@ -347,7 +347,7 @@ def test_native_tokens_are_owned_private_files(tmp_path):
         raise AssertionError("permissive native token file was accepted")
 
 
-def test_empty_gateway_starts_and_stops_without_loading_a_model(tmp_path, monkeypatch):
+def test_empty_gateway_starts_stops_and_restarts_without_loading_a_model(tmp_path, monkeypatch):
     engine = LocalImageEngine(tmp_path, scanner=lambda: [])
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -367,5 +367,7 @@ def test_empty_gateway_starts_and_stops_without_loading_a_model(tmp_path, monkey
         assert engine.process.poll() is None
         engine.stop()
         assert engine.process is None
+        engine.start()
+        assert engine.health()["loaded_model"] is None
     finally:
         engine.close()

@@ -403,6 +403,9 @@ class LocalImageEngine:
             # Never adopt or kill a listener merely because it owns this port.
             import socket
             with socket.socket() as sock:
+                # Match HTTPServer's address reuse after an owned Stop. Without
+                # it, TIME_WAIT sockets can block an immediate Start for a minute.
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind(("127.0.0.1", self.port))
             if not (self.home / "image-models.json").exists():
                 if not self.refresh():

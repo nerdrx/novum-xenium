@@ -26,6 +26,20 @@ def _is_sft_fixture_owner(owner: str | None) -> bool:
     return str(owner or "").strip().lower().startswith("sft_")
 
 
+def _default_authority_owner_exists(owner: str | None) -> bool:
+    """Legacy default grants belong only to an existing real/local account."""
+    from src.owner_identity import auth_disabled, DEFAULT_LOCAL_OWNER
+    if not owner or owner in REQUEST_SENTINEL_OWNERS or _is_sft_fixture_owner(owner):
+        return False
+    if auth_disabled():
+        return owner == DEFAULT_LOCAL_OWNER
+    try:
+        from core.auth import AuthManager
+        return owner in AuthManager().users
+    except Exception:
+        return False
+
+
 def _background_owner_filter(column):
     """SQL predicate matching real/ownerless accounts, excluding SFT fixtures."""
     from sqlalchemy import or_
@@ -2638,6 +2652,7 @@ class TaskScheduler:
     async def ensure_defaults(self, owner: str):
         """Create default housekeeping tasks for this owner (idempotent per action)."""
         from core.database import SessionLocal, ScheduledTask
+        from src.agent_runtime.authority import seal_task_authority
         try:
             from routes.prefs_routes import _load_for_user
             _prefs = _load_for_user(owner) or {}
@@ -2645,6 +2660,7 @@ class TaskScheduler:
             _prefs = {}
         tasks_enabled = bool(_prefs.get("tasks_enabled"))
         tasks_opened = bool(_prefs.get("tasks_opened"))
+        repair_default_authority = _default_authority_owner_exists(owner)
 
         db = SessionLocal()
         try:
@@ -2708,6 +2724,7 @@ class TaskScheduler:
             for task in builtin_tasks:
                 by_action.setdefault(task.action, []).append(task)
             removed_dupes = []
+            authority_repaired = []
             kept_ids = set()
             for action, tasks in by_action.items():
                 defs = HOUSEKEEPING_DEFAULTS.get(action)
@@ -2744,6 +2761,17 @@ class TaskScheduler:
                 if (task.name or "") in legacy_names:
                     task.name = defs["name"]
                     renamed.append(task.action)
+                # The authority column was added after these server-declared
+                # defaults shipped. Recover only their exact empty-input form.
+                # Arbitrary legacy tasks, changed inputs and existing (including
+                # denied/malformed) snapshots must never acquire a fresh grant.
+                if (repair_default_authority and task.owner == owner
+                        and task.name == defs["name"]
+                        and task.prompt in (None, "")
+                        and task.request_authority_json is None):
+                    task.request_authority_json = seal_task_authority(
+                        task.prompt, "action", task.action, owner=owner)
+                    authority_repaired.append(task.action)
                 normalized = False
                 desired_trigger = defs.get("trigger_type", "schedule")
                 if task.action == "check_email_urgency":
@@ -2824,7 +2852,6 @@ class TaskScheduler:
                 if (task.output_target or "session") == "session":
                     task.output_target = defs.get("output_target", "none")
             seeded = []
-            from src.agent_runtime.authority import seal_task_authority
             for action, defs in HOUSEKEEPING_DEFAULTS.items():
                 if action in existing_actions:
                     continue
@@ -2860,10 +2887,11 @@ class TaskScheduler:
                 )
                 db.add(task)
                 seeded.append(action)
-            if seeded or renamed or removed_dupes or retired_count:
+            if seeded or renamed or removed_dupes or retired_count or authority_repaired:
                 logger.info(
-                    "Housekeeping defaults for %s: seeded=%s renamed=%s deduped=%s retired=%s",
+                    "Housekeeping defaults for %s: seeded=%s renamed=%s deduped=%s retired=%s authority_repaired=%s",
                     owner, seeded, sorted(set(renamed)), sorted(set(removed_dupes)), retired_count,
+                    authority_repaired,
                 )
             # Always commit — the orphan-run sweep above may have produced
             # pending deletes even when no defaults changed.

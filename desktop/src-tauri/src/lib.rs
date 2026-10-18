@@ -405,6 +405,80 @@ fn run_compose(
     )
 }
 
+fn build_source_stamp(config: &DesktopConfig) -> String {
+    let output = match run_compose(
+        config,
+        &["config", "--format", "json"],
+        Duration::from_secs(10),
+    ) {
+        Ok(output) if output.code == Some(0) && !output.truncated => output,
+        _ => return "unknown".into(),
+    };
+    let normalized: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(value) => value,
+        Err(_) => return "unknown".into(),
+    };
+    let Some(context) = normalized
+        .pointer("/services/odysseus/build/context")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return "unknown".into();
+    };
+    let context = PathBuf::from(context);
+    let context = if context.is_absolute() {
+        context
+    } else {
+        Path::new(&config.checkout).join(context)
+    };
+    let Ok(context) = fs::canonicalize(context) else {
+        return "unknown".into();
+    };
+    if !context.is_dir() {
+        return "unknown".into();
+    }
+    git_source_stamp(&context)
+}
+
+fn git_source_stamp(context: &Path) -> String {
+    let head = match run_command(
+        "git",
+        &["rev-parse".into(), "--verify".into(), "HEAD".into()],
+        Some(&context),
+        Duration::from_secs(5),
+    ) {
+        Ok(output) if output.code == Some(0) && !output.truncated => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        _ => return "unknown".into(),
+    };
+    if !matches!(head.len(), 40 | 64) || !head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return "unknown".into();
+    }
+    let status = match run_command(
+        "git",
+        &["status".into(), "--porcelain=v1".into(), "-uall".into()],
+        Some(&context),
+        Duration::from_secs(5),
+    ) {
+        Ok(output) if output.code == Some(0) => output,
+        _ => return "unknown".into(),
+    };
+    if status.truncated || !status.stdout.is_empty() {
+        format!("{head}-dirty")
+    } else {
+        head
+    }
+}
+
+fn build_backend(config: &DesktopConfig, timeout: Duration) -> Result<CommandOutput, String> {
+    let source_commit = format!("SOURCE_COMMIT={}", build_source_stamp(config));
+    run_compose(
+        config,
+        &["build", "--build-arg", &source_commit, "odysseus"],
+        timeout,
+    )
+}
+
 fn command_ok(output: &CommandOutput, operation: &str) -> Result<(), String> {
     if output.code == Some(0) {
         Ok(())
@@ -715,7 +789,9 @@ async fn start_backend(
         let _guard = lock.lock().map_err(|_| "Native operation lock is unavailable.")?;
         ensure_not_quitting(&quit_pending)?;
         let config = load_config_at(&path)?.ok_or("Save a trusted checkout before starting the backend.")?;
-        let output = run_compose(&config, &["up", "-d", "--build"], Duration::from_secs(1200))?;
+        let build = build_backend(&config, Duration::from_secs(1200))?;
+        command_ok(&build, "Backend build")?;
+        let output = run_compose(&config, &["up", "-d"], Duration::from_secs(1200))?;
         command_ok(&output, "Backend start")?;
         if !probe_health(&config) {
             return Err("Compose started, but the local health endpoint did not become ready within three minutes.".into());
@@ -1961,7 +2037,7 @@ fn update_inner_with_health_timeout(
         let _ = run_compose(config, &["start"], Duration::from_secs(120));
         return Err(format!("The update changes or invalidates persistent Compose mounts; no update was applied. Backup: {}.", backup_dir.display()));
     }
-    let build = run_compose(config, &["build", "odysseus"], Duration::from_secs(1800));
+    let build = build_backend(config, Duration::from_secs(1800));
     if let Err(error) = build.and_then(|output| command_ok(&output, "Build updated backend")) {
         let _ = restore_image_tag(&old_image, &image_tag);
         let _ = switch_to_branch(config, &branch_ref);
@@ -2850,6 +2926,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("docker-compose.yml"), "services: {}\n").unwrap();
         dir
+    }
+
+    #[test]
+    fn build_source_stamp_is_unknown_for_zip_contexts_without_git() {
+        let context = tempfile::tempdir().unwrap();
+        assert_eq!(git_source_stamp(context.path()), "unknown");
     }
 
     #[test]

@@ -168,6 +168,7 @@ fn fixture_update(fail_updated_health: bool) {
     git(&real_git, Some(&seed), &["commit", "-m", "updated version"]);
     git(&real_git, Some(&seed), &["push", "origin", "main"]);
     let target = git(&real_git, Some(&seed), &["rev-parse", "HEAD"]);
+    fs::write(seed.join("local-build-change.txt"), "dirty build context\n").unwrap();
 
     let fake_docker = bin.join("docker");
     executable(
@@ -183,7 +184,7 @@ def compose_args():
 if args and args[0] == "compose":
     sub = compose_args()
     if "config" in sub:
-        print(json.dumps({"services":{"odysseus":{"volumes":[{"type":"bind","source":os.environ["NX_UPDATE_DATA"],"target":"/app/data"}]}},"volumes":{}}))
+        print(json.dumps({"services":{"odysseus":{"build":{"context":os.environ["NX_UPDATE_BUILD_CONTEXT"]},"volumes":[{"type":"bind","source":os.environ["NX_UPDATE_DATA"],"target":"/app/data"}]}},"volumes":{}}))
     elif "images" in sub:
         print("sha256:old-image")
     elif "port" in sub:
@@ -288,6 +289,7 @@ else:
         ("PATH", path_value),
         ("NX_REAL_GIT", real_git.clone().into_os_string()),
         ("NX_UPDATE_TRACE", trace.clone().into_os_string()),
+        ("NX_UPDATE_BUILD_CONTEXT", seed.clone().into_os_string()),
         ("NX_UPDATE_DATA", data.clone().into_os_string()),
         ("NX_UPDATE_UP_COUNT", up_count.clone().into_os_string()),
         (
@@ -324,6 +326,13 @@ else:
     );
     let data_after = fs::read_to_string(data.join("customer.txt")).unwrap();
     let log = fs::read_to_string(&trace).unwrap();
+    assert!(
+        log.lines().any(|line| line.contains("compose ")
+            && line.contains(" build --build-arg SOURCE_COMMIT=")
+            && line.contains(&format!("{target}-dirty"))
+            && line.ends_with(" odysseus")),
+        "native build must stamp the normalized external dirty context: {log}"
+    );
     let lines = log.lines().collect::<Vec<_>>();
     let stop_position = lines
         .iter()

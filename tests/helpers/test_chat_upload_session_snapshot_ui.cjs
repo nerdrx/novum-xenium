@@ -228,6 +228,80 @@ const server = http.createServer((req, res) => {
     assert.equal(sameChat.messageBody, 'Same-chat prompt');
     assert.equal(sameChat.pending, 0);
 
+    // A second same-chat draft and file added while the switch is held belong
+    // to the next send, not to the already captured message.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(async () => {
+      const { sessions, files, chat } = window.testModules;
+      sessions.setCurrentSessionId('chat-A');
+      files.clearPending();
+      await files.addFiles([new File(['first snapshot'], 'first-snapshot.txt', { type: 'text/plain' })], { skipCrop: true });
+      const input = document.getElementById('message');
+      input.value = 'Prompt captured before waiting';
+      input.focus();
+      window.uploadAttempts = 0;
+      window.uploadSessions = [];
+      window.uploadFiles = [];
+      window.messageSessions = [];
+      window.messageBodies = [];
+      window.holdStreamSession = 'chat-A';
+      window.bStreamStarted = false;
+      window.modelSwitchWaiting = false;
+      window.__odysseusModelSwitchPromise = {
+        sessionId: 'chat-A',
+        then(resolve) { window.modelSwitchWaiting = true; window.resolveSnapshotSwitch = resolve; },
+      };
+      window.snapshotSendSettled = false;
+      window.snapshotSend = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.snapshotSendSettled = true; });
+    });
+    await page.waitForFunction(() => window.modelSwitchWaiting === true);
+    await page.evaluate(async () => {
+      const input = document.getElementById('message');
+      input.value = 'Newer draft stays in composer';
+      await window.testModules.files.addFiles([
+        new File(['second snapshot'], 'second-snapshot.txt', { type: 'text/plain' }),
+      ], { skipCrop: true });
+      input.focus();
+      window.newDraftFocusedBeforeResolve = document.activeElement === input;
+      window.resolveSnapshotSwitch();
+    });
+    await page.waitForFunction(() => window.bStreamStarted === true);
+    const draftWhileStreaming = await page.evaluate(() => ({
+      text: document.getElementById('message').value,
+      focused: document.activeElement === document.getElementById('message'),
+      pendingNames: window.testModules.files.getPendingInfo().map(file => file.name),
+      uploaded: window.uploadFiles[0],
+      message: window.messageBodies[0],
+    }));
+    assert.deepEqual(draftWhileStreaming.uploaded, ['first-snapshot.txt'], 'only captured files reach upload');
+    assert.equal(draftWhileStreaming.message, 'Prompt captured before waiting');
+    assert.equal(draftWhileStreaming.text, 'Newer draft stays in composer');
+    assert.equal(draftWhileStreaming.focused, true, 'the newer mobile draft keeps focus while the send streams');
+    assert.deepEqual(draftWhileStreaming.pendingNames, ['second-snapshot.txt'], 'new file stays for the next send');
+    await page.evaluate(() => {
+      window.streamController.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+      window.streamController.close();
+    });
+    await page.waitForFunction(() => window.snapshotSendSettled === true);
+    const sameChatEdit = await page.evaluate(() => ({
+      uploaded: window.uploadFiles[0],
+      message: window.messageBodies[0],
+      draft: document.getElementById('message').value,
+      draftFocused: document.activeElement === document.getElementById('message'),
+      pendingNames: window.testModules.files.getPendingInfo().map(file => file.name),
+    }));
+    assert.deepEqual(sameChatEdit.uploaded, ['first-snapshot.txt'], 'only files captured for this send are uploaded');
+    assert.equal(sameChatEdit.message, 'Prompt captured before waiting');
+    assert.equal(sameChatEdit.draft, 'Newer draft stays in composer');
+    assert.equal(sameChatEdit.draftFocused, false, 'normal stream completion may dismiss mobile focus');
+    assert.deepEqual(sameChatEdit.pendingNames, ['second-snapshot.txt'], 'new file remains for the next send');
+    await page.evaluate(() => {
+      window.testModules.files.clearPending();
+      window.holdStreamSession = null;
+      window.__odysseusModelSwitchPromise = null;
+    });
+    await page.setViewportSize({ width: 1280, height: 800 });
+
     // One-shot bubble state and regen file IDs belong to the send that
     // captured them, even if that send waits on another chat's switch.
     await page.evaluate(() => {
@@ -415,8 +489,25 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(retry.uploadSessions, ['chat-A', 'chat-A']);
     assert.deepEqual(retry.messageSessions, ['chat-A']);
     assert.equal(retry.pending, 0);
+
+    // A mixed stale cache must stop before clearing user state if the older
+    // file-handler module cannot provide per-send snapshots.
+    await page.evaluate(async () => {
+      const { sessions, files, chat } = window.testModules;
+      sessions.setCurrentSessionId('chat-A');
+      const input = document.getElementById('message');
+      input.value = 'Keep this draft until reload';
+      window.messageSessions = [];
+      window.originalSnapshotGetter = files.getPendingSnapshot;
+      files.getPendingSnapshot = undefined;
+      await chat.handleChatSubmit({ preventDefault() {} });
+    });
+    assert.equal(await page.locator('#message').inputValue(), 'Keep this draft until reload');
+    assert.deepEqual(await page.evaluate(() => window.messageSessions), [], 'missing snapshot support prevents POST');
+    assert.match(await page.locator('#toast').textContent(), /Reload before sending/);
+    await page.evaluate(() => { window.testModules.files.getPendingSnapshot = window.originalSnapshotGetter; });
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ pass: true, mode: 'session-owned-model-switch', switched, pendingBAfterACancel, sameChat, isolatedOneShots, sameChatRegen, routeAfterSwitch, retry, pageErrors: errors }, null, 2));
+    console.log(JSON.stringify({ pass: true, mode: 'session-owned-model-switch', switched, pendingBAfterACancel, sameChat, sameChatEdit, isolatedOneShots, sameChatRegen, routeAfterSwitch, retry, pageErrors: errors }, null, 2));
   } finally {
     await browser.close();
     await new Promise(resolve => server.close(resolve));

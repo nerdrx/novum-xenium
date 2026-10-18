@@ -8,7 +8,7 @@
 import Storage from './storage.js';
 import uiModule from './ui.js?v=20260916largetoolscroll1';
 import sessionModule from './sessions.js';
-import { getPendingModelSwitch } from './modelPicker.js?v=20260909routeidentity1';
+import * as modelPickerModule from './modelPicker.js?v=20260909routeidentity1';
 import chatRenderer, { modelOutputFallbackHtml, renderToolIcon } from './chatRenderer.js?v=20261007toolstatus1';
 import { modelOutputFallback } from './modelOutputFallback.js';
 import chatStream from './chatStream.js?v=20261007approvalfix2';
@@ -2199,6 +2199,10 @@ import { invalidateSettings } from './appConfig.js';
 
     // --- Send-path entry: block re-clicks between submit and stream start ---
     if (_sendInFlight) return;
+    if (!_pendingToolApproval && typeof fileHandlerModule.getPendingSnapshot !== 'function') {
+      uiModule.showError('This page was updated. Reload before sending so newer drafts and attachments stay with the right message.');
+      return;
+    }
     const _sendPerf = _createChatSendPerf();
     const _ttftStartedAt = performance.now();
     _sendInFlight = true;
@@ -2243,6 +2247,9 @@ import { invalidateSettings } from './appConfig.js';
 
     const el = uiModule.el;
     const msg = approvalForSend ? '' : el('message').value;
+    const pendingAttachmentSnapshotForSend = !approvalForSend
+      ? fileHandlerModule.getPendingSnapshot()
+      : null;
     // Allow empty text when a regen carries over the original message's
     // attachment ids — a photo-only message still has something to send.
     if (!msg.trim() && !approvalForSend && !fileHandlerModule.getPendingCount() && !(_pendingRegenAttachments && _pendingRegenAttachments.length)) { _releaseSendFlag(); return; }
@@ -2424,7 +2431,8 @@ import { invalidateSettings } from './appConfig.js';
 
     let modelSwitchResolved = false;
     try {
-      const pendingSwitch = getPendingModelSwitch(streamSessionId) || window.__odysseusModelSwitchPromise;
+      const pendingSwitch = modelPickerModule.getPendingModelSwitch?.(streamSessionId)
+        || window.__odysseusModelSwitchPromise;
       if (pendingSwitch && typeof pendingSwitch.then === 'function') {
         const hasOwner = Object.prototype.hasOwnProperty.call(pendingSwitch, 'sessionId');
         const sameOwner = (pendingSwitch.sessionId ?? null) === (streamSessionId ?? null);
@@ -2604,14 +2612,14 @@ import { invalidateSettings } from './appConfig.js';
       // stuck flag can't silently eat the next turn's recovery budget.
       if (!skipBubble) { _autoNudges = 0; _autoContinuePending = false; }
       else if (_autoContinuePending) { _autoContinuePending = false; }
-      const _pendingAttachInfo = !approvalForSend && fileHandlerModule.getPendingCount()
-        ? fileHandlerModule.getPendingInfo()
+      const _pendingAttachInfo = pendingAttachmentSnapshotForSend?.info.length
+        ? pendingAttachmentSnapshotForSend.info
         : null;
       // Pre-read importable file contents before upload clears pending files
       const IMPORTABLE_EXT = /\.(txt|py|js|ts|html|htm|css|md|json|csv|yml|yaml|sh|sql|rs|go|java|c|cpp|h|rb|php|xml|jsx|tsx|log|toml|ini|conf|env|vue|svelte|scss|sass|less)$/i;
       const _importableFiles = [];
       if (_pendingAttachInfo && documentModule) {
-        const rawFiles = fileHandlerModule.getPendingRaw ? fileHandlerModule.getPendingRaw() : [];
+        const rawFiles = pendingAttachmentSnapshotForSend.files;
         for (let i = 0; i < _pendingAttachInfo.length; i++) {
           const att = _pendingAttachInfo[i];
           if (IMPORTABLE_EXT.test(att.name) && rawFiles[i]) {
@@ -2632,8 +2640,10 @@ import { invalidateSettings } from './appConfig.js';
         _userMsgEl = addMessage('user', userDisplay, null, _bubbleMeta);
       }
       _sendPerf.mark('user_bubble_visible');
-      messageInput.value = approvalForSend ? (approvalForSend.draft || '') : '';
-      messageInput.style.height = '';
+      const preserveNewerDraft = !approvalForSend && messageInput.value !== msg;
+      if (approvalForSend) messageInput.value = approvalForSend.draft || '';
+      else if (!preserveNewerDraft) messageInput.value = '';
+      if (!preserveNewerDraft) messageInput.style.height = '';
       messageInput.dispatchEvent(new Event('input'));
       // Mobile: dismiss the on-screen keyboard after sending. iOS in
       // particular ignores a bare blur() in some cases (or some other
@@ -2641,7 +2651,7 @@ import { invalidateSettings } from './appConfig.js';
       // input readonly which forces the keyboard to retract, then blur,
       // then drop the readonly attribute after the keyboard is gone so
       // typing still works for the next message.
-      if (window.innerWidth <= 768) {
+      if (window.innerWidth <= 768 && !preserveNewerDraft) {
         try {
           messageInput.setAttribute('readonly', 'readonly');
           messageInput.blur();
@@ -2669,7 +2679,7 @@ import { invalidateSettings } from './appConfig.js';
       if (!approvalForSend) {
         try {
           _sendPerf.mark('upload_begin');
-          ids = await fileHandlerModule.uploadPending({ sessionId: streamSessionId });
+          ids = await fileHandlerModule.uploadPending({ sessionId: streamSessionId, snapshot: pendingAttachmentSnapshotForSend });
           _sendPerf.mark('upload_done');
         } catch(e) {
           console.error('upload failed', e);

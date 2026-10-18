@@ -313,10 +313,11 @@ export function removePending(idx) {
  * Upload all pending files to server
  */
 export async function uploadPending(opts = {}) {
-  if (pendingFiles.length === 0) return [];
+  const snapshot = opts.snapshot || getPendingSnapshot();
+  const submittedFiles = snapshot.files.slice();
+  const submittedIds = snapshot.ids.slice();
+  if (submittedFiles.length === 0) return [];
   _lastUploadCancelled = false;
-  const submittedFiles = pendingFiles.slice();
-  const submittedIds = pendingFileIds.slice();
 
   // The message bubble is shown immediately, but the upload can take a moment —
   // dim the chips and overlay a whirlpool so it's clear the files are still
@@ -491,6 +492,15 @@ export function getPendingInfo() {
   });
 }
 
+/** Capture the current files and stable entry IDs for one send. */
+export function getPendingSnapshot() {
+  return {
+    files: pendingFiles.slice(),
+    ids: pendingFileIds.slice(),
+    info: getPendingInfo(),
+  };
+}
+
 /**
  * Clear all pending files
  */
@@ -534,6 +544,7 @@ const fileHandlerModule = {
   cropForMobileUpload,
   getPendingCount,
   getPendingInfo,
+  getPendingSnapshot,
   getPendingRaw,
   clearPending,
   getLastUploadedMeta,

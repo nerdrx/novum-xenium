@@ -57,7 +57,6 @@ export function initSectionCollapse(Storage) {
         // either stalls with a dead pause (when the selector matches nothing,
         // as it did for #models-section) or guesses the wrong length. Force a
         // reflow first so the keyframes restart from the top.
-        // eslint-disable-next-line no-unused-expressions
         section.offsetHeight;
         section.classList.add('section-just-collapsing');
 
@@ -81,7 +80,6 @@ export function initSectionCollapse(Storage) {
       } else {
         // Expand path — remove .collapsed and replay the inbound domino.
         section.classList.remove('collapsed');
-        // eslint-disable-next-line no-unused-expressions
         section.offsetHeight;
         section.classList.add('section-just-expanded');
         setTimeout(() => {

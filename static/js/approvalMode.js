@@ -1,7 +1,7 @@
 const MODES = [
-  { key: 'ask', label: 'Ask for approval', detail: 'Ask before agent writes, shell commands, and internet calls.' },
-  { key: 'auto', label: 'Approve for me', detail: 'Allow public profiles and exact user/search links. Ask before risky actions.' },
-  { key: 'full', label: 'Full access', detail: 'Skip approval prompts within current workspace/container.' },
+  { key: 'ask', label: 'Ask for approval', shortLabel: 'Ask', detail: 'Ask before agent writes, shell commands, and internet calls.' },
+  { key: 'auto', label: 'Approve for me', shortLabel: 'Auto', detail: 'Allow public profiles and exact user/search links. Ask before risky actions.' },
+  { key: 'full', label: 'Full access', shortLabel: 'Full', detail: 'Skip approval prompts within current workspace/container.' },
 ];
 
 const SCOPE = 'Applies to new agent turns in all chats on this account. Running turns keep their current mode. Folder access, disabled tools, account rules and plan mode still apply.';
@@ -61,8 +61,10 @@ export function init() {
       });
       options.append(button);
     });
-    const modeLabel = MODES.find(mode => mode.key === selected)?.label;
+    const mode = MODES.find(mode => mode.key === selected);
+    const modeLabel = mode?.label;
     label.textContent = busy ? (selected === null ? 'Loading…' : 'Saving…') : modeLabel || 'Approval unavailable';
+    trigger.dataset.shortLabel = busy ? '…' : mode?.shortLabel || 'Retry';
     trigger.setAttribute('aria-label', `Tool approval mode: ${modeLabel || 'unavailable'}`);
     trigger.title = modeLabel ? `Tool approval: ${modeLabel}` : 'Retry loading tool approval mode';
     panel.setAttribute('aria-busy', String(busy));

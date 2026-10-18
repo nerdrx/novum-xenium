@@ -63,7 +63,6 @@ async function _maybeFire(modal) {
       // If firing fails we don't unmark — re-attempting on every modal open
       // would be more annoying than a missed tour. User can run `/tour-x`
       // manually from the chat input.
-      // eslint-disable-next-line no-console
       console.warn(`Tour autoplay failed for ${id}:`, e);
     }
   }, 400);

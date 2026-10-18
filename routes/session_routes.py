@@ -405,22 +405,25 @@ def setup_session_routes(
             first_request = {}
             if title_ids:
                 from core.database import ChatMessage as _TitleMessage
-                from sqlalchemy import func
-                first_user_rows = (
-                    db.query(
-                        _TitleMessage.session_id.label("session_id"),
-                        _TitleMessage.content.label("content"),
-                        func.row_number().over(
-                            partition_by=_TitleMessage.session_id,
-                            order_by=(_TitleMessage.timestamp, _TitleMessage.id),
-                        ).label("row_num"),
+                from sqlalchemy import select
+                first_user_content = (
+                    select(_TitleMessage.content)
+                    .where(
+                        _TitleMessage.session_id == DbSession.id,
+                        _TitleMessage.role == "user",
                     )
-                    .filter(_TitleMessage.session_id.in_(title_ids), _TitleMessage.role == "user")
-                    .subquery()
+                    .order_by(_TitleMessage.timestamp, _TitleMessage.id)
+                    .limit(1)
+                    .correlate(DbSession)
+                    .scalar_subquery()
                 )
-                for title_row in db.query(first_user_rows.c.session_id, first_user_rows.c.content).filter(
-                    first_user_rows.c.row_num == 1
+                for title_row in db.query(
+                    DbSession.id.label("session_id"), first_user_content.label("content")
+                ).filter(
+                    DbSession.id.in_(title_ids)
                 ).all():
+                    if title_row.content is None:
+                        continue
                     first_request[title_row.session_id] = first_user_message([
                         {"role": "user", "content": title_row.content}
                     ])

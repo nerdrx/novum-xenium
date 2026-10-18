@@ -1264,8 +1264,9 @@
 .approval-mode-error { color: var(--red); opacity: 1; }
 
 @media (max-width: 480px) {
-  .approval-mode-trigger { width: 30px; justify-content: center; padding: 0; }
+  .approval-mode-trigger { width: auto; justify-content: center; padding: 0 6px; }
   .approval-mode-trigger span { display: none; }
+  .approval-mode-trigger::after { content: attr(data-short-label); }
   .approval-mode-panel {
     position: fixed;
     left: 12px;

@@ -9,6 +9,7 @@ const repo = path.resolve(__dirname, '../..');
 let failRenameOnce = true;
 let nextRenameDelay = 0;
 const html = `<!doctype html><meta charset="utf-8"><body>
+<button id="outside">Outside</button>
 <div id="toast"></div><section id="sessions-section"><div id="session-list"></div></section>
 <div id="chat-history"></div><div id="current-meta"></div>
 <script type="module">import * as sessions from '/static/js/sessions.js';
@@ -97,6 +98,27 @@ const server = http.createServer(async (req, res) => {
       'Escape should return focus to the menu trigger');
     assert.equal(await menuButton.getAttribute('aria-expanded'), 'false');
 
+    // Click-away closes the menu but leaves focus with the clicked control.
+    await menuButton.click();
+    await page.locator('#outside').click();
+    assert.equal(await page.locator('.session-dropdown').evaluate(el => el.style.display), 'none');
+    assert.equal(await menuButton.getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'outside',
+      'click-away should not steal focus back to the menu trigger');
+
+    // Escape from the folder submenu closes both layers and restores focus.
+    await menuButton.click();
+    await page.locator('.session-dropdown .dropdown-item-compact').filter({ hasText: 'Move to folder' }).click();
+    const folderSubmenu = page.locator('.session-folder-submenu');
+    await page.waitForFunction(() => document.querySelector('.session-folder-submenu')?.style.display === 'block');
+    await folderSubmenu.locator('.dropdown-item-compact').first().focus();
+    await page.keyboard.press('Escape');
+    assert.equal(await folderSubmenu.evaluate(el => el.style.display), 'none');
+    assert.equal(await page.locator('.session-dropdown').evaluate(el => el.style.display), 'none');
+    assert.equal(await menuButton.getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('session-menu-btn')), true,
+      'Escape from a submenu should return focus to the session trigger');
+
     // Pointer flow still opens the dropdown and its Rename action still enters
     // inline editing; Escape cancels without sending a PATCH.
     await menuButton.click();
@@ -158,6 +180,21 @@ const server = http.createServer(async (req, res) => {
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => document.querySelector('.list-item[data-session-id="one"] .grow')?.textContent === 'Saved before Escape · model');
     assert.equal(await page.locator('.session-rename-input').count(), 0, 'late completion must not reopen an editor dismissed with Escape');
+
+    // Mobile long-press has no visible menu button to receive focus. Escape
+    // must still update its expanded state without focusing that hidden button.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await menuButton.evaluate(button => { button.style.display = 'none'; });
+    await page.locator('.list-item').dispatchEvent('touchstart', {
+      touches: [{ identifier: 1, clientX: 12, clientY: 12 }],
+    });
+    await page.waitForFunction(() => document.querySelector('.session-dropdown')?.style.display === 'block');
+    await page.locator('.session-dropdown .dropdown-item-compact').first().focus();
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.session-dropdown').evaluate(el => el.style.display), 'none');
+    assert.equal(await menuButton.getAttribute('aria-expanded'), 'false');
+    assert.equal(await menuButton.evaluate(button => document.activeElement === button), false,
+      'mobile Escape should not focus the hidden menu trigger');
     assert.deepEqual(errors, []);
     assert.equal(await page.evaluate(() => window.sessionModule.getCurrentSessionId()), null,
       'activating session actions must not select the row chat');

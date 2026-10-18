@@ -101,18 +101,25 @@ export async function vetAndSetWorkspace(path) {
 
 export async function loadDefaultWorkspace() {
   if (_defaultWorkspaceLoad) return _defaultWorkspaceLoad;
-  _defaultWorkspaceLoad = fetch(`${API_BASE}/api/workspace/default`, { credentials: 'same-origin' })
+  if (Storage.get(KEYS.WORKSPACE, null) !== null) return { ok: false, path: null };
+  let loaded = false;
+  const load = fetch(`${API_BASE}/api/workspace/default`, { credentials: 'same-origin' })
     .then(async (res) => {
       if (!res.ok) return { ok: false, path: null };
       const data = await res.json();
-      if (data.ok && data.path && !getWorkspace()) {
+      if (data.ok && data.path) loaded = true;
+      if (data.ok && data.path && Storage.get(KEYS.WORKSPACE, null) === null) {
         setWorkspace(data.path);
         return { ok: true, path: data.path };
       }
       return { ok: false, path: null };
     })
     .catch(() => ({ ok: false, path: null }));
-  return _defaultWorkspaceLoad;
+  _defaultWorkspaceLoad = load;
+  load.then(() => {
+    if (!loaded && _defaultWorkspaceLoad === load) _defaultWorkspaceLoad = null;
+  });
+  return load;
 }
 
 export function clearWorkspace() {

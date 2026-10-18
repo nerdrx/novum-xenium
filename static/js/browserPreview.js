@@ -58,7 +58,7 @@ function buildCard(sessionId, state) {
     card.className = 'browser-preview-card';
     card.dataset.sessionId = sessionId;
     card.setAttribute('aria-label', 'Watch browser activity');
-    card.addEventListener('click', () => openBrowserPreview(sessionId));
+    card.addEventListener('click', () => openBrowserPreview(sessionId, true));
     history.prepend(card);
   }
   card.replaceChildren();
@@ -78,7 +78,7 @@ function buildCard(sessionId, state) {
   return card;
 }
 
-function openBrowserPreview(sessionId) {
+function openBrowserPreview(sessionId, focusClose = false) {
   const state = previews.get(sessionId);
   if (!state) return false;
   const oldPanel = document.getElementById('browser-preview-panel');
@@ -140,7 +140,8 @@ function openBrowserPreview(sessionId) {
     panel.appendChild(link);
   }
   document.body.appendChild(panel);
-  if (oldFocusClass) {
+  if (focusClose) close.focus({ preventScroll: true });
+  else if (oldFocusClass) {
     [...panel.querySelectorAll('button, a')].find(element => element.className === oldFocusClass)?.focus({ preventScroll: true });
   }
   return true;

@@ -467,6 +467,15 @@ function _hideSessionDropdown(dropdown) {
   dropdown._sessionTrigger?.setAttribute('aria-expanded', 'false');
 }
 
+function _dismissSessionDropdownFromEscape(dropdown, trigger = dropdown?._sessionTrigger) {
+  if (!dropdown) return;
+  const restoreFocus = dropdown.contains(document.activeElement);
+  _hideSessionDropdown(dropdown);
+  _hideSessionDropdown(dropdown._sessionParent);
+  if (restoreFocus && trigger?.isConnected && trigger.getClientRects().length > 0 &&
+      getComputedStyle(trigger).visibility !== 'hidden') trigger.focus();
+}
+
 function _wireSessionDropdownKeys(dropdown, trigger) {
   dropdown.querySelectorAll('.dropdown-item-compact').forEach((item) => {
     item.setAttribute('role', 'button');
@@ -477,9 +486,7 @@ function _wireSessionDropdownKeys(dropdown, trigger) {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
-      _hideSessionDropdown(dropdown);
-      _hideSessionDropdown(dropdown._sessionParent);
-      if (trigger?.isConnected) trigger.focus();
+      _dismissSessionDropdownFromEscape(dropdown, trigger);
     } else if (action && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
       action.click();
@@ -686,7 +693,7 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
     } else {
       sub._escapeUnregister?.();
       sub._escapeUnregister = registerEscapeLayer(
-        () => { sub.style.display = 'none'; },
+        () => _dismissSessionDropdownFromEscape(sub),
         () => sub.isConnected && sub.style.display === 'block',
       );
       const rect = moveItem.getBoundingClientRect();
@@ -951,7 +958,7 @@ function createSessionItem(s) {
         dd.style.zIndex = '1000';
         dd._escapeUnregister?.();
         dd._escapeUnregister = registerEscapeLayer(
-          () => { dd.style.display = 'none'; },
+          () => _dismissSessionDropdownFromEscape(dd),
           () => dd.isConnected && dd.style.display === 'block',
         );
         // Clamp to viewport
@@ -1279,7 +1286,7 @@ function createSessionItem(s) {
   const registerDropdownEscape = () => {
     dropdown._escapeUnregister?.();
     dropdown._escapeUnregister = registerEscapeLayer(
-      () => { dropdown.style.display = 'none'; },
+      () => _dismissSessionDropdownFromEscape(dropdown, menuBtn),
       () => dropdown.isConnected && dropdown.style.display === 'block',
     );
   };

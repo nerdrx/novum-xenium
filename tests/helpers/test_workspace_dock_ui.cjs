@@ -19,6 +19,11 @@ const server = http.createServer((req,res) => {
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.route('**/static/js/workspace.js', route => route.fulfill({ contentType: 'text/javascript', body: 'export async function openWorkspaceBrowser() { window.projectToolsOpened = true; }' }));
   await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>window.dock);
+  await page.evaluate(()=>Object.defineProperty(localStorage,'getItem',{configurable:true,value(){throw new Error('storage blocked')}}));
+  await page.locator('.workspace-dock-toggle').click();
+  assert.equal(await page.locator('.workspace-dock').evaluate(el=>Math.round(el.getBoundingClientRect().width)),420,'blocked saved-width reads use the default width');
+  await page.locator('.workspace-dock-toggle').click();
+  await page.evaluate(()=>delete localStorage.getItem);
   const mediaFixture = await page.evaluate(async()=>{
     if(!MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) throw new Error('WebM fixture encoding unavailable');
     const canvas=document.createElement('canvas');canvas.width=160;canvas.height=90;const ctx=canvas.getContext('2d');

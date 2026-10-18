@@ -10,7 +10,7 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -131,7 +131,7 @@ def test_list_sessions_derives_only_owned_legacy_placeholder_titles(monkeypatch)
     _stub_multipart_if_missing(monkeypatch)
     monkeypatch.setattr(sr, "SessionLocal", _TS)
     monkeypatch.setattr(sr, "effective_user", lambda request: "alice")
-    alice_id, bob_id, manual_id = [str(uuid.uuid4()) for _ in range(3)]
+    alice_id, bob_id, manual_id, empty_id, no_user_id = [str(uuid.uuid4()) for _ in range(5)]
     db = _TS()
     try:
         db.query(DbMessage).delete()
@@ -140,6 +140,8 @@ def test_list_sessions_derives_only_owned_legacy_placeholder_titles(monkeypatch)
             (alice_id, "alice", "gpt-4", None),
             (bob_id, "bob", "gpt-4", None),
             (manual_id, "alice", "gpt-4", True),
+            (empty_id, "alice", "gpt-4", None),
+            (no_user_id, "alice", "gpt-4", None),
         ):
             db.add(DbSession(id=sid, owner=owner, name=name, endpoint_url="http://localhost",
                              model="gpt-4", archived=False, name_is_custom=custom))
@@ -149,6 +151,7 @@ def test_list_sessions_derives_only_owned_legacy_placeholder_titles(monkeypatch)
             ("a-first", alice_id, "Fix my workspace snapshot", tie_time),
             ("bob-first", bob_id, "Secret bob request", tie_time),
             ("manual-first", manual_id, "Keep model as my chosen title", tie_time),
+            ("empty-first", empty_id, "", tie_time),
         ):
             db.add(DbMessage(id=msg_id, session_id=sid,
                              role="user", content=text, timestamp=timestamp))
@@ -164,15 +167,32 @@ def test_list_sessions_derives_only_owned_legacy_placeholder_titles(monkeypatch)
     sm = MagicMock()
     sm.get_sessions_for_user.return_value = {
         alice_id: cached(alice_id), manual_id: cached(manual_id, True),
+        empty_id: cached(empty_id), no_user_id: cached(no_user_id),
     }
     router = sr.setup_session_routes(sm, {})
     endpoint = [r.endpoint for r in router.routes
                 if getattr(r, "path", "") == "/api/sessions"
                 and "GET" in getattr(r, "methods", set())][-1]
-    result = {row["id"]: row["name"] for row in endpoint(request=MagicMock())}
+    sql = []
+
+    def capture_sql(conn, cursor, statement, parameters, context, executemany):
+        sql.append(statement)
+
+    event.listen(_ENGINE, "before_cursor_execute", capture_sql)
+    try:
+        result = {row["id"]: row["name"] for row in endpoint(request=MagicMock())}
+    finally:
+        event.remove(_ENGINE, "before_cursor_execute", capture_sql)
+
     assert result.get(alice_id) == "Chat: Fix my workspace snapshot", result
     assert result[manual_id] == "gpt-4"
+    assert result[empty_id] == "gpt-4"
+    assert result[no_user_id] == "gpt-4"
     assert bob_id not in result
+    title_queries = [statement.lower() for statement in sql if "from chat_messages" in statement.lower()]
+    assert len(title_queries) == 1
+    assert "row_number" not in title_queries[0]
+    assert "limit" in title_queries[0]
 
 
 def test_auto_sort_skip_llm_cleans_owner_stamped_sessions_when_auth_disabled(monkeypatch):

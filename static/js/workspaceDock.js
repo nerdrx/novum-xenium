@@ -282,7 +282,8 @@ function open() {
   if (panel) { close(); return; }
   panel = el('aside', '', 'workspace-dock'); panel.id = 'workspace-dock';
   panel.setAttribute('aria-label', 'Workspace activity');
-  const savedWidth = Number(localStorage.getItem(dockWidthKey)) || defaultDockWidth;
+  let savedWidth = defaultDockWidth;
+  try { savedWidth = Number(localStorage.getItem(dockWidthKey)) || defaultDockWidth; } catch {}
   const separator = el('div', '', 'workspace-dock-resize');
   separator.setAttribute('role', 'separator'); separator.setAttribute('aria-orientation', 'vertical');
   separator.setAttribute('aria-label', 'Resize Workspace panel'); separator.tabIndex = 0;

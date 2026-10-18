@@ -16,6 +16,15 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
   if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); return res.end(html); }
   if (url.pathname === '/api/prefs/tool_approval_mode') {
+    if (req.method === 'PUT') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ value: JSON.parse(body).value }));
+      });
+      return;
+    }
     res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({ value: 'auto' }));
   }
   if (url.pathname.startsWith('/api/')) { res.writeHead(404); return res.end(); }
@@ -83,6 +92,7 @@ const server = http.createServer((req, res) => {
           approval: bounds('.approval-mode-trigger'),
           approvalLabel: bounds('.approval-mode-trigger span'),
           approvalLabelDisplay: getComputedStyle(document.querySelector('.approval-mode-trigger span')).display,
+          approvalCompactText: getComputedStyle(document.querySelector('.approval-mode-trigger'), '::after').content,
           overflowButton: bounds('#overflow-plus-btn'),
           overflowIcon: bounds('#overflow-plus-btn svg'),
           sendButton: bounds('.send-btn'),
@@ -94,6 +104,10 @@ const server = http.createServer((req, res) => {
       assert.match(metrics.font, /^system-ui/, `${width}px fixture uses product theme font`);
       assert.ok(metrics.toggle.height >= metrics.agent.height,
         `${width}px mode toggle must contain touch-height child: ${JSON.stringify(metrics)}`);
+      assert.ok(metrics.approval.x + metrics.approval.width <= metrics.toggle.x + 0.5,
+        `${width}px approval mode must not overlap Agent/Chat controls`);
+      assert.ok(metrics.toggle.x + metrics.toggle.width <= metrics.sendButton.x + 0.5,
+        `${width}px Agent/Chat controls must not overlap Send`);
       for (const control of ['agent', 'chat']) {
         const item = metrics[control];
         assert.ok(Math.abs(item.textCenter - item.center) <= 2,
@@ -105,7 +119,8 @@ const server = http.createServer((req, res) => {
           `${width}px approval label stays centered`);
       } else {
         const icon = await page.locator('.approval-mode-trigger svg').boundingBox();
-        assert.equal(metrics.approvalLabelDisplay, 'none', 'approval label intentionally collapses to icon on narrow phones');
+        assert.equal(metrics.approvalLabelDisplay, 'none', 'long approval label collapses on narrow phones');
+        assert.equal(metrics.approvalCompactText, '"Auto"', 'saved approval mode remains visible on narrow phones');
         assert.ok(Math.abs(icon.y + icon.height / 2 - metrics.approval.center) <= 2,
           `${width}px compact approval icon stays centered`);
       }
@@ -116,6 +131,19 @@ const server = http.createServer((req, res) => {
       for (const [button, icon] of [['overflowButton', 'overflowIcon'], ['sendButton', 'sendIcon']]) {
         assert.ok(Math.abs(metrics[icon].center - metrics[button].center) <= 1,
           `${width}px ${button} SVG stays centered`);
+      }
+      for (const [label, shortLabel] of [['Ask for approval', 'Ask'], ['Full access', 'Full'], ['Approve for me', 'Auto']]) {
+        await page.locator('.approval-mode-trigger').click();
+        await page.getByRole('radio', { name: new RegExp(`^${label}`) }).click();
+        await page.waitForFunction(short => {
+          const trigger = document.querySelector('.approval-mode-trigger');
+          return !trigger.disabled && trigger.dataset.shortLabel === short;
+        }, shortLabel);
+        assert.equal(await page.locator('.approval-mode-trigger').getAttribute('aria-label'), `Tool approval mode: ${label}`);
+        if (width <= 480) {
+          const compact = await page.locator('.approval-mode-trigger').evaluate(node => getComputedStyle(node, '::after').content);
+          assert.equal(compact, JSON.stringify(shortLabel), `${width}px ${label} has a visible compact label`);
+        }
       }
       assert.deepEqual(errors, [], `${width}px no page errors`);
       await page.screenshot({ path: `/tmp/nx-composer-alignment-${width}x${viewport.height}.png`, fullPage: true });

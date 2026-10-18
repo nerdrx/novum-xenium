@@ -6,16 +6,16 @@ const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
 const server = http.createServer((req, res) => {
-  if (req.url === '/browserPreview.js') {
-    res.setHeader('Content-Type', 'text/javascript');
-    res.end(fs.readFileSync(path.join(repo, 'static/js/browserPreview.js')));
-  } else if (req.url === '/browser-preview.css') {
-    res.setHeader('Content-Type', 'text/css');
-    res.end(fs.readFileSync(path.join(repo, 'static/browser-preview.css')));
-  } else {
-    res.setHeader('Content-Type', 'text/html');
-    res.end('<meta charset="utf-8"><link rel="stylesheet" href="/browser-preview.css"><main id="chat-history"></main><script>window.sessionModule={getCurrentSessionId:()=>window.activeSession};window.activeSession="chat-1";</script><script type="module">import {updateBrowserPreview,resetBrowserPreview} from "/browserPreview.js";window.preview={updateBrowserPreview,resetBrowserPreview};</script>');
+  const file = path.resolve(repo, `.${new URL(req.url, 'http://localhost').pathname}`);
+  if (file.startsWith(path.join(repo, 'static') + path.sep) && fs.existsSync(file)) {
+    res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/css');
+    return res.end(fs.readFileSync(file));
   }
+  if (req.url === '/') {
+    res.setHeader('Content-Type', 'text/html');
+    return res.end('<meta charset="utf-8"><link rel="stylesheet" href="/static/browser-preview.css"><main id="chat-history"></main><button id="typing">Type here</button><script>window.sessionModule={getCurrentSessionId:()=>window.activeSession};window.activeSession="chat-1";</script><script type="module">import {updateBrowserPreview,resetBrowserPreview} from "/static/js/browserPreview.js";window.preview={updateBrowserPreview,resetBrowserPreview};</script>');
+  }
+  res.writeHead(404).end();
 });
 
 (async () => {
@@ -27,6 +27,7 @@ const server = http.createServer((req, res) => {
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(() => !!window.preview);
+    await page.locator('#typing').focus();
     const screenshot = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=';
     const result = await page.evaluate(screenshot => {
       const startAccepted = window.preview.updateBrowserPreview({ type: 'tool_start', tool: 'mcp__builtin_browser__browser_navigate', command: 'Navigating' }, 'chat-1');
@@ -39,6 +40,7 @@ const server = http.createServer((req, res) => {
       const first = {
         startAccepted, outputAccepted, cardText: startCard.textContent,
         autoOpened: !!panel,
+        autoPreservedFocus: document.activeElement.id === 'typing',
         title: panel.querySelector('.browser-preview-title').textContent,
         imageSrc: panel.querySelector('img').getAttribute('src'),
         external: panel.querySelector('a')?.href,
@@ -56,8 +58,10 @@ const server = http.createServer((req, res) => {
         browser_preview: { state: 'updated', screenshot, title: 'Updated title', url: 'javascript:alert(1)', action: 'Click button' },
       }, 'chat-1');
       const stayedClosed = !document.querySelector('#browser-preview-panel');
+      document.querySelector('.browser-preview-card').focus();
       document.querySelector('.browser-preview-card').click();
       const reopened = !!document.querySelector('#browser-preview-panel');
+      const manualFocus = document.activeElement.classList.contains('browser-preview-close');
       const safeUrlPreserved = document.querySelector('#browser-preview-panel .browser-preview-url')?.href === 'https://example.test/second';
       document.querySelector('#browser-preview-panel .browser-preview-close').focus();
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -84,7 +88,7 @@ const server = http.createServer((req, res) => {
       }, 'chat-2');
       document.querySelector('.browser-preview-card')?.click();
       return {
-        first, stayedClosed, reopened, safeUrlPreserved, escapeClosed, focusRestored, secretOmitted,
+        first, stayedClosed, reopened, manualFocus, safeUrlPreserved, escapeClosed, focusRestored, secretOmitted,
         failedStatus, staleLabel, sessionReset, sameSessionCardRestored, fullyCleared, invalid,
         cardCount: document.querySelectorAll('.browser-preview-card').length,
         remoteImageRejected: !document.querySelector('#browser-preview-panel img'),
@@ -95,6 +99,7 @@ const server = http.createServer((req, res) => {
     assert.equal(result.first.outputAccepted, true);
     assert.match(result.first.cardText, /Watch browser/);
     assert.equal(result.first.autoOpened, true);
+    assert.equal(result.first.autoPreservedFocus, true, 'automatic open must preserve current typing focus');
     assert.equal(result.first.title, '<img src=x onerror=alert(1)>');
     assert.equal(result.first.injected, false);
     assert.match(result.first.imageSrc, /^data:image\/png;base64,/);
@@ -103,6 +108,7 @@ const server = http.createServer((req, res) => {
     assert.match(result.first.status, /Updates after each browser action/);
     assert.equal(result.stayedClosed, true);
     assert.equal(result.reopened, true);
+    assert.equal(result.manualFocus, true, 'manual open focuses the close button');
     assert.equal(result.safeUrlPreserved, true);
     assert.equal(result.escapeClosed, true);
     assert.equal(result.focusRestored, true);

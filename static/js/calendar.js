@@ -15,7 +15,7 @@ import {
   _trashIcon, _moreIcon, _bellIcon,
   _isCalBgImage, _calBgImageUrl, _calBgCss, _cssUrlEscape,
   _calReadableTextColor,
-  _ds, _addDays, _shiftDT, _tzOffset, _localDateOf,
+  _ds, _addDays, _shiftDT, _localDateOf,
 } from './calendar/utils.js';
 
 const API_BASE = window.location.origin;
@@ -201,7 +201,7 @@ async function _fetchEvents(start, end, force) {
       _events = _filterPool(start, end);
       if (typeof _saveCache === 'function') _saveCache();
       // Re-render in background when new data arrives (if calendar still open)
-      if (_open && hasCache) _render();
+      if (_open && hasCache && !document.querySelector('#cal-body .cal-form')) _render();
     })
     .catch(e => { console.error('Calendar: failed to fetch events', e); });
   // If we have cache, don't block on fetch — return immediately so render is instant
@@ -318,7 +318,7 @@ function _optimisticEvent(data, uid) {
 // resolved the promise and the optimistic state got promoted to truth.
 // All three flows now inspect `r.ok` and roll back the optimistic
 // state + surface a toast on the failure path.
-async function _createEvent(data) {
+async function _createEvent(data, { render = true } = {}) {
   const tempUid = 'temp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
   _allEvents[tempUid] = _optimisticEvent(data, tempUid);
   try {
@@ -332,19 +332,19 @@ async function _createEvent(data) {
       delete _allEvents[tempUid];
       _allEvents[d.uid] = d.event || _optimisticEvent(data, d.uid);
       _saveCache && _saveCache();
-      if (_open) _render();
+      if (_open && render) _render();
       return { uid: d.uid, event: _allEvents[d.uid], reminder: d.reminder };
     }
   } catch (e) {
     delete _allEvents[tempUid];
-    if (_open) _render();
+    if (_open && render) _render();
     if (window.uiModule) window.uiModule.showError('Failed to create event: ' + (e?.message || 'unknown'));
     throw e;
   }
   return { uid: tempUid };
 }
 
-async function _updateEvent(uid, data) {
+async function _updateEvent(uid, data, { renderOnError = true } = {}) {
   const merged = { ...(_allEvents[uid] || {}), ...data };
   const _preMergeBackup = _allEvents[uid];
   _allEvents[uid] = _optimisticEvent(merged, uid);
@@ -371,7 +371,7 @@ async function _updateEvent(uid, data) {
   } catch (e) {
     if (_preMergeBackup) _allEvents[uid] = _preMergeBackup;
     else delete _allEvents[uid];
-    if (_open) _render();
+    if (_open && renderOnError) _render();
     if (window.uiModule) window.uiModule.showError('Failed to update event: ' + (e?.message || 'unknown'));
     throw e;
   }
@@ -431,7 +431,7 @@ async function _deleteEvent(uid, { scope = 'series' } = {}) {
 }
 
 // ── Date helpers ──
-// _ds, _addDays, _shiftDT, _localDateOf, _tzOffset live in ./calendar/utils.js
+// _ds, _addDays, _shiftDT, _localDateOf live in ./calendar/utils.js
 // _monthRange / _weekRange / _today depend on _ds so they stay here.
 
 function _today() { return _ds(new Date()); }
@@ -985,6 +985,8 @@ function _zoomView(direction) {
 // a newer render has already started. Stops fast prev/next/today clicks
 // from letting a slow fetch clobber the latest layout.
 let _renderToken = 0;
+let _eventFormState = null;
+let _pendingEventFormFocus = null;
 function _isStaleRender(t) { return t !== _renderToken; }
 
 function _render() {
@@ -994,6 +996,7 @@ function _render() {
   // Empty state: no calendars configured or connection failed
   if (!_calendars.length) {
     _renderEmpty();
+    _settleEventFormFocus(_renderToken);
     return;
   }
   _renderToken++;
@@ -1004,13 +1007,55 @@ function _render() {
   if (_searchQuery && (_view === 'month' || _view === 'week') && !_selectedDay) {
     _selectedDay = _today();
   }
-  if (_view === 'agenda') _renderAgenda();
-  else if (_view === 'year') _renderYear();
-  else if (_view === 'week') _renderWeek();
-  else _renderMonth();
+  let renderPromise;
+  if (_view === 'agenda') renderPromise = _renderAgenda();
+  else if (_view === 'year') renderPromise = _renderYear();
+  else if (_view === 'week') renderPromise = _renderWeek();
+  else renderPromise = _renderMonth();
+  const renderToken = _renderToken;
+  Promise.resolve(renderPromise).then(
+    () => _settleEventFormFocus(renderToken),
+    () => { if (renderToken === _renderToken) _pendingEventFormFocus = null; },
+  );
   // Prefetch adjacent in background after a short delay
   setTimeout(() => _prefetchAdjacent(), 200);
   _updateToolbarClock();
+  return renderPromise;
+}
+
+function _eventFormViewSnapshot() {
+  return { view: _view, date: _currentDate.getTime(), selectedDay: _selectedDay, searchQuery: _searchQuery };
+}
+
+function _settleEventFormFocus(renderToken) {
+  const intent = _pendingEventFormFocus;
+  if (!intent || renderToken !== _renderToken) return;
+  const snapshot = _eventFormViewSnapshot();
+  if (!_open || _eventFormState || snapshot.view !== intent.snapshot.view || snapshot.date !== intent.snapshot.date || snapshot.selectedDay !== intent.snapshot.selectedDay || snapshot.searchQuery !== intent.snapshot.searchQuery) {
+    _pendingEventFormFocus = null;
+    return;
+  }
+  if (document.activeElement !== document.body && document.activeElement !== document.getElementById('cal-body')) {
+    _pendingEventFormFocus = null;
+    return;
+  }
+  const opener = intent.state?.opener;
+  const currentOpener = intent.state?.openerUid
+    ? [...document.querySelectorAll('.cal-agenda-open')].find(el => el.dataset.uid === intent.state.openerUid)
+    : null;
+  const visible = el => el && el !== document.body && el !== document.documentElement && el.isConnected && !el.disabled && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  const target = visible(currentOpener) ? currentOpener : visible(opener) ? opener : [document.getElementById('cal-add'), document.getElementById('tool-calendar-btn'), document.getElementById('cal-close')].find(visible);
+  _pendingEventFormFocus = null;
+  target?.focus({ preventScroll: true });
+}
+
+function _closeEventForm() {
+  const state = _eventFormState;
+  const form = document.querySelector('#cal-body .cal-form');
+  const returnFocus = !!(form && form.contains(document.activeElement));
+  _eventFormState = null;
+  _pendingEventFormFocus = returnFocus ? { state, snapshot: _eventFormViewSnapshot() } : null;
+  _render();
 }
 
 function _renderEmpty() {
@@ -2275,7 +2320,7 @@ async function _renderAgenda() {
         h += `<div class="cal-agenda-event" data-uid="${_e(ev.uid)}">
           <div class="cal-event-dot" style="background:${_calColor(ev)}"></div>
           <div class="cal-event-info">
-            <div class="cal-event-name">${_impMark}${_e(ev.summary)}${_eventReminderHtml(ev)}${_eventSourceHtml(ev)} ${_typeTag}</div>
+            <div class="cal-event-name"><button type="button" class="cal-agenda-open" data-uid="${_e(ev.uid)}" aria-label="Open event: ${_e(ev.summary)}">${_impMark}${_e(ev.summary)}</button>${_eventReminderHtml(ev)}${_eventSourceHtml(ev)} ${_typeTag}</div>
             <div class="cal-event-time">${t}${ev.location ? ' · ' + _locHTML(ev.location, ev.description) : ''}</div>
           </div>
           <button class="cal-event-more" data-uid="${_e(ev.uid)}" title="More">${_moreIcon}</button>
@@ -2294,7 +2339,7 @@ async function _renderAgenda() {
   body.querySelectorAll('.cal-agenda-event').forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('.cal-event-more, .cal-event-source')) return;
     const ev = _events.find(e => e.uid === el.dataset.uid);
-    if (ev) _showEventForm(ev);
+    if (ev) _showEventForm(ev, undefined, undefined, { opener: e.target.closest('.cal-agenda-open') });
   }));
   // Empty-state links: Settings › Integrations + Create event.
   body.querySelector('[data-cal-open-settings]')?.addEventListener('click', (e) => {
@@ -2342,7 +2387,7 @@ async function _renderSearch() {
       h += `<div class="cal-agenda-event" data-uid="${_e(ev.uid)}">
         <div class="cal-event-dot" style="background:${_calColor(ev)}"></div>
         <div class="cal-event-info">
-          <div class="cal-event-name">${_e(ev.summary)}${_eventReminderHtml(ev)}${_eventSourceHtml(ev)}</div>
+          <div class="cal-event-name"><button type="button" class="cal-agenda-open" data-uid="${_e(ev.uid)}" aria-label="Open event: ${_e(ev.summary)}">${_e(ev.summary)}</button>${_eventReminderHtml(ev)}${_eventSourceHtml(ev)}</div>
           <div class="cal-event-time">${_fmtDate(evDate)} · ${t}${ev.location ? ' · ' + _locHTML(ev.location, ev.description) : ''}</div>
         </div>
         <button class="cal-event-more" data-uid="${_e(ev.uid)}" title="More">${_moreIcon}</button>
@@ -2359,7 +2404,7 @@ async function _renderSearch() {
   body.querySelectorAll('.cal-agenda-event').forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('.cal-event-more, .cal-event-source')) return;
     const ev = _allEvents[el.dataset.uid];
-    if (ev) _showEventForm(ev);
+    if (ev) _showEventForm(ev, undefined, undefined, { opener: e.target.closest('.cal-agenda-open') });
   }));
   // Focus search input after re-render
   const searchInput = document.getElementById('cal-search');
@@ -3488,9 +3533,17 @@ function _parseTitleTime(text) {
   return null;
 }
 
-function _showEventForm(existing, defaultDate, defaultEndDate) {
+function _showEventForm(existing, defaultDate, defaultEndDate, options = {}) {
   const body = document.getElementById('cal-body');
   if (!body) return;
+  const formState = options.formState || {
+    opener: options.opener || (document.querySelector('#cal-body .cal-form') ? _eventFormState?.opener : document.activeElement),
+    openerUid: options.opener?.classList.contains('cal-agenda-open') ? options.opener.dataset.uid : undefined,
+  };
+  _eventFormState = formState;
+  _pendingEventFormFocus = null;
+  // Invalidate an in-flight view renderer before it can replace the new form.
+  _renderToken++;
   _selectedWeekSlot = null;
   _modal?.classList.add('cal-navigation-hidden');
   const isEdit = !!existing;
@@ -3498,9 +3551,12 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
     const uid = existing.uid;
     _fetchEventByUid(uid, { force: true }).then(fresh => {
       if (!fresh || fresh === existing) return;
+      const activeForm = body.querySelector('.cal-form');
+      const active = document.activeElement;
+      if (_eventFormState !== formState || !activeForm || !activeForm.contains(active)) return;
       fresh.__detailFresh = true;
-      if (document.querySelector('.cal-form') && document.getElementById('cal-f-sum')?.value === (existing.summary || '')) {
-        _showEventForm(fresh, defaultDate, defaultEndDate);
+      if (document.getElementById('cal-f-sum')?.value === (existing.summary || '')) {
+        _showEventForm(fresh, defaultDate, defaultEndDate, { formState, focusId: active.id });
       }
     }).catch(() => {});
   }
@@ -3556,27 +3612,29 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
     </div>
 
     <div class="cal-title-wrap">
+      <label class="cal-visually-hidden" for="cal-f-sum">Event title</label>
       <input type="text" id="cal-f-sum" placeholder=" " value="${_e(existing?.summary || '')}" class="cal-input cal-hero-title" autocomplete="off" />
       <span class="cal-title-hint" aria-hidden="true">${isEdit ? 'Event title' : 'What’s happening?'}<svg class="cal-title-enter-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></span>
     </div>
 
     <div class="cal-form-details" id="cal-form-details" aria-hidden="${_expandedAtStart ? 'false' : 'true'}">
-      <div class="cal-form-row">
-        <input type="date" id="cal-f-date" value="${ds}" class="cal-input" />
-        <span style="opacity:0.3">to</span>
-        <input type="date" id="cal-f-date-end" value="${de}" class="cal-input" />
+      <div class="cal-form-row cal-form-date-row">
+        <label class="cal-form-field" for="cal-f-date">Start date<input type="date" id="cal-f-date" value="${ds}" class="cal-input" /></label>
+        <span class="cal-form-date-separator" aria-hidden="true">to</span>
+        <label class="cal-form-field" for="cal-f-date-end">End date<input type="date" id="cal-f-date-end" value="${de}" class="cal-input" /></label>
         <div class="cal-allday-ctrl">
-          <span class="cal-allday-label">All day</span>
+          <label class="cal-allday-label" for="cal-f-allday">All day</label>
           <label class="admin-switch cal-allday-switch"><input type="checkbox" id="cal-f-allday" ${ad ? 'checked' : ''} /><span class="admin-slider"></span></label>
         </div>
       </div>
-      <div class="cal-form-row" id="cal-time-row" style="${ad ? 'display:none' : ''}">
-        <input type="time" id="cal-f-start" value="${st}" class="cal-input cal-input-time" />
-        <span style="opacity:0.3">–</span>
-        <input type="time" id="cal-f-end" value="${et}" class="cal-input cal-input-time" />
+      <div class="cal-form-row cal-form-time-row" id="cal-time-row" style="${ad ? 'display:none' : ''}">
+        <label class="cal-form-field" for="cal-f-start">Start time<input type="time" id="cal-f-start" value="${st}" class="cal-input cal-input-time" /></label>
+        <span class="cal-form-time-separator" aria-hidden="true">–</span>
+        <label class="cal-form-field" for="cal-f-end">End time<input type="time" id="cal-f-end" value="${et}" class="cal-input cal-input-time" /></label>
       </div>
       <div class="cal-loc-row">
         <div class="cal-loc-input-wrap">
+          <label class="cal-visually-hidden" for="cal-f-loc">Location</label>
           <input type="text" id="cal-f-loc" placeholder=" " value="${_e(existing?.location || '')}" class="cal-input" />
           <span class="cal-loc-hint" aria-hidden="true">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
@@ -3587,6 +3645,7 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
         </a>
       </div>
+      <label class="cal-visually-hidden" for="cal-f-rrule">Repeat</label>
       <select id="cal-f-rrule" class="cal-input">
         <option value="" ${!existing?.rrule ? 'selected' : ''}>Does not repeat</option>
         <option value="FREQ=DAILY" ${existing?.rrule === 'FREQ=DAILY' ? 'selected' : ''}>Daily</option>
@@ -3595,6 +3654,7 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
         <option value="FREQ=MONTHLY" ${existing?.rrule === 'FREQ=MONTHLY' ? 'selected' : ''}>Monthly</option>
         <option value="FREQ=YEARLY" ${existing?.rrule === 'FREQ=YEARLY' ? 'selected' : ''}>Yearly</option>
       </select>
+      <label class="cal-visually-hidden" for="cal-f-desc">Description</label>
       <textarea id="cal-f-desc" placeholder="Description" class="cal-input" rows="2">${_e(existing?.description || '')}</textarea>
       ${(() => {
         // Cookbook-task back-link. When the description carries a
@@ -3618,8 +3678,8 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
           <span style="font-size:11px;opacity:0.5;">Linked to a Cookbook scheduled task</span>
         </div>`;
       })()}
-	      <div class="cal-form-row" style="align-items:center;gap:8px;">
-	        <label style="font-size:11px;display:flex;align-items:center;gap:4px;"><svg class="cal-remind-bell" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--accent, var(--red))" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span style="opacity:0.5;">Reminder</span></label>
+	        <div class="cal-form-row" style="align-items:center;gap:8px;">
+	        <label for="cal-f-remind" style="font-size:11px;display:flex;align-items:center;gap:4px;"><svg class="cal-remind-bell" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--accent, var(--red))" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span style="opacity:0.5;">Reminder</span></label>
 	        <select id="cal-f-remind" class="cal-input" style="flex:1;">
           <option value="" ${isEdit && existingReminderMinutes == null ? 'selected' : ''}>No reminder</option>
           <option value="0" ${_reminderSelected(0)}>At event time</option>
@@ -3632,10 +3692,11 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
           <option value="1440" ${_reminderSelected(1440)}>1 day before</option>
           <option value="custom">Exact time...</option>
 	        </select>
+	        <label class="cal-visually-hidden" for="cal-f-remind-custom">Exact reminder time</label>
 	        <input type="datetime-local" id="cal-f-remind-custom" class="cal-input" style="flex:1;display:none;" />
 	      </div>
 	      <div class="cal-form-row cal-form-tag-row" style="align-items:center;gap:8px;">
-	        <label style="font-size:11px;opacity:0.5;">Tag</label>
+	        <label for="cal-f-type" style="font-size:11px;opacity:0.5;">Tag</label>
 	        <select id="cal-f-type" class="cal-input cal-f-type-select" style="flex:1;">
 	          ${_eventTypeOptions}
 	        </select>
@@ -3874,10 +3935,14 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
       setTimeout(() => _bell.classList.remove('jingling'), 700);
     }
   });
-  const _cancelEventForm = () => _render();
+  const _cancelEventForm = () => _closeEventForm();
   document.getElementById('cal-f-cancel')?.addEventListener('click', _cancelEventForm);
   document.getElementById('cal-form-mobile-cancel')?.addEventListener('click', _cancelEventForm);
-  document.getElementById('cal-f-save')?.addEventListener('click', async () => {
+  const saveButton = document.getElementById('cal-f-save');
+  let savePending = false;
+  saveButton?.addEventListener('click', async () => {
+    if (savePending) return;
+    const submittedForm = body.querySelector('.cal-form');
     const summary = document.getElementById('cal-f-sum').value.trim();
     if (!summary) { uiModule.showToast('Title required'); return; }
     const dv = document.getElementById('cal-f-date').value;
@@ -3902,18 +3967,19 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
     }
     const activeDot = document.querySelector('#cal-f-colors .note-color-dot.active');
     const colorVal = activeDot?.dataset.color || '';
-    // Append the user's current UTC offset so the backend stores events as
-    // proper UTC instants (is_utc=True). Without this, naive "10:00" gets
-    // re-interpreted as local elsewhere — the timezone-misfire bug.
-    const _tz = _tzOffset();
+    let startDt, endDt;
     
     if (!isAD) {
       const startVal = document.getElementById('cal-f-start').value;
       const endVal = document.getElementById('cal-f-end').value;
 
-      const startDt = new Date(`${dv}T${startVal}:00`);
-      const endDt = new Date(`${dvEnd}T${endVal}:00`);
+      startDt = new Date(`${dv}T${startVal}:00`);
+      endDt = new Date(`${dvEnd}T${endVal}:00`);
 
+      if (!Number.isFinite(startDt.getTime()) || !Number.isFinite(endDt.getTime())) {
+        uiModule.showToast('Enter a valid date and time');
+        return;
+      }
       if (endDt <= startDt) {
         uiModule.showToast('End time must be after start time');
         return;
@@ -3922,8 +3988,8 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
 
     const payload = {
       summary,
-      dtstart: isAD ? dv : `${dv}T${document.getElementById('cal-f-start').value}:00${_tz}`,
-      dtend: isAD ? dvEnd : `${dvEnd}T${document.getElementById('cal-f-end').value}:00${_tz}`,
+      dtstart: isAD ? dv : startDt.toISOString(),
+      dtend: isAD ? dvEnd : endDt.toISOString(),
       all_day: isAD,
       description: document.getElementById('cal-f-desc').value,
       location: document.getElementById('cal-f-loc').value,
@@ -3933,27 +3999,37 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
 	      event_type: document.getElementById('cal-f-type')?.value || '',
 	    };
     const remindVal = document.getElementById('cal-f-remind')?.value;
+    const customReminderValue = document.getElementById('cal-f-remind-custom')?.value || '';
     if (remindVal && remindVal !== 'custom') {
       payload.reminder_minutes = parseInt(remindVal, 10);
     } else if (isEdit && !remindVal && existing?.has_reminder) {
       payload.reminder_minutes = null;
     }
+    savePending = true;
+    saveButton.disabled = true;
     try {
-      const saved = isEdit ? await _updateEvent(existing.uid, payload) : await _createEvent(payload);
+      const saved = isEdit
+        ? await _updateEvent(existing.uid, payload, { renderOnError: false })
+        : await _createEvent(payload, { render: false });
       // Custom exact-time reminders are still note-backed because they do not
       // map to a stable "N minutes before" value.
       if (remindVal === 'custom') {
         let remindAt;
-        const customVal = document.getElementById('cal-f-remind-custom')?.value;
-        remindAt = customVal ? new Date(customVal) : null;
+        remindAt = customReminderValue ? new Date(customReminderValue) : null;
         if (remindAt && remindAt > new Date()) {
           const savedUid = saved?.uid && !String(saved.uid).startsWith('temp-') ? saved.uid : existing?.uid;
           const savedEvent = savedUid ? (_allEvents[savedUid] || { ...payload, uid: savedUid }) : { ...payload };
           await _createEventReminder({ ...savedEvent, summary, dtstart: payload.dtstart, all_day: isAD, location: payload.location }, remindAt);
         }
       }
-      _selectedDay = dv; _render();
+      if (_open && submittedForm?.isConnected && body.querySelector('.cal-form') === submittedForm) {
+        _selectedDay = dv; _render();
+      }
     } catch (e) { uiModule.showToast('Failed to save'); }
+    finally {
+      savePending = false;
+      if (saveButton.isConnected) saveButton.disabled = false;
+    }
   });
   document.getElementById('cal-f-del')?.addEventListener('click', async () => {
     await _confirmAndDeleteEvent(existing);
@@ -4084,7 +4160,9 @@ function _showEventForm(existing, defaultDate, defaultEndDate) {
   // New events: expand the details up front (don't rely on the title's focus
   // event — programmatic .focus() is often a no-op on mobile, which would leave
   // the form showing only the title + buttons), then focus the title.
-  if (!isEdit) { setExpanded(true); titleInput?.focus(); }
+  if (!isEdit) setExpanded(true);
+  const focusTarget = options.focusId ? document.getElementById(options.focusId) : titleInput;
+  focusTarget?.focus();
 
   // Live "Today is …" tick. Updates every 30s; auto-stops the moment the
   // header element disappears (any _render() call swaps #cal-body's HTML).
@@ -4376,7 +4454,7 @@ function openCalendar(options = {}) {
       if (document.querySelector('.cal-form')) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        _render();
+        _closeEventForm();
         return;
       }
       closeCalendar();
@@ -4503,6 +4581,9 @@ function _scrollSelectedDayIntoView(body, behavior = 'smooth') {
 
 function _doCloseCalendar() {
   _open = false;
+  _eventFormState = null;
+  _pendingEventFormFocus = null;
+  _renderToken++;
   _restoreSidebar();
   if (_modal) {
     _modal.style.display = 'none';
@@ -4619,7 +4700,7 @@ window.addEventListener('calendar-refresh', () => {
     ? [`${_currentDate.getFullYear()}-01-01`, `${_currentDate.getFullYear() + 1}-01-01`]
     : (_view === 'week') ? _weekRange(_currentDate) : _monthRange(_currentDate);
   _fetchEvents(range[0], range[1], /*force*/ true)
-    .then(() => { if (_open) _render(); _updateBadge(); })
+    .then(() => { if (_open && !document.querySelector('#cal-body .cal-form')) _render(); _updateBadge(); })
     .catch(() => {});
 });
 

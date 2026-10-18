@@ -149,12 +149,24 @@ def test_cancel_keeps_event_loop_responsive_during_database_lock(tmp_path, monke
     async def drive():
         scheduler = TaskScheduler(None)
         scheduler._executing.add('locked-task')
+        tracked_handle = None
         pending = None
         if mode.startswith('queued'):
             await scheduler._run_semaphore.acquire()
             pending = asyncio.create_task(scheduler._execute_task('locked-task'))
             await asyncio.sleep(0)
             assert 'locked-task' in scheduler._task_handles
+        else:
+            async def hold_run():
+                await asyncio.Future()
+
+            # Model an in-process run whose durable row already exists, so
+            # cancellation captures the same handle-to-run identity as runtime.
+            tracked_handle = asyncio.create_task(hold_run())
+            scheduler._task_handles['locked-task'] = tracked_handle
+            scheduler._all_task_handles['locked-task'] = {tracked_handle}
+            scheduler._execution_handles['locked-task'] = tracked_handle
+            scheduler._run_ids_by_handle[tracked_handle] = 'locked-run'
         holder.execute(f'BEGIN {lock_mode}')
         asyncio.get_running_loop().call_later(0.02, heartbeat.set)
         repeated_stops = []
@@ -170,6 +182,8 @@ def test_cancel_keeps_event_loop_responsive_during_database_lock(tmp_path, monke
             with pytest.raises(asyncio.CancelledError):
                 await pending
             scheduler._run_semaphore.release()
+        if tracked_handle:
+            await asyncio.gather(tracked_handle, return_exceptions=True)
         if repeated_stops:
             await asyncio.gather(*repeated_stops)
 

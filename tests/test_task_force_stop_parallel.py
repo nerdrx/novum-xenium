@@ -63,23 +63,34 @@ def test_stop_cancels_captured_force_runs_but_not_replacement(
         scheduler._pending_notifications = []
         scheduler._last_run_model = None
         scheduler._task_needs_model_slot = lambda _task_id: False
+        abort_worker_started = threading.Event()
+        release_abort_worker = threading.Event()
         abort_persisted = threading.Event()
         mark_run_aborted = scheduler._mark_run_aborted
 
-        def mark_run_aborted_and_signal(*args, **kwargs):
+        def gate_abort_worker(*args, **kwargs):
+            if kwargs.get("run_ids") is not None:
+                abort_worker_started.set()
+                assert release_abort_worker.wait(2)
             result = mark_run_aborted(*args, **kwargs)
-            abort_persisted.set()
+            if kwargs.get("run_ids") is not None:
+                abort_persisted.set()
             return result
 
-        scheduler._mark_run_aborted = mark_run_aborted_and_signal
+        scheduler._mark_run_aborted = gate_abort_worker
         started = []
         effects = []
         release_original_runs = asyncio.Event()
+        replacement_started = asyncio.Event()
+        release_replacement = asyncio.Event()
 
         async def execute_action(_task, *, run_id):
             started.append(run_id)
             if len(started) <= 2:
                 await release_original_runs.wait()
+            else:
+                replacement_started.set()
+                await release_replacement.wait()
             effects.append(run_id)
             return f"completed:{run_id}", True
 
@@ -103,20 +114,33 @@ def test_stop_cancels_captured_force_runs_but_not_replacement(
             route.endpoint for route in router.routes
             if getattr(route, "path", None) == "/api/tasks/{task_id}/stop"
         )
-        # Hold the ownership lock so Stop pauses after its synchronous run-row
-        # capture. A replacement force-run created during that wait is outside
-        # the capture and must not be cancelled or marked aborted.
+        # Hold the ownership lock and pause the DB worker after handle/run-ID
+        # capture but before its query. A replacement created in that gap must
+        # remain outside the stop request's captured run IDs.
         await scheduler._executing_lock.acquire()
         stop_request = asyncio.create_task(stop_endpoint(SimpleNamespace(), "force-stop"))
         await asyncio.sleep(0)
         assert not stop_request.done()
+        assert await asyncio.to_thread(abort_worker_started.wait, 2), (
+            "Stop did not start the captured-run abort worker"
+        )
+
+        assert await scheduler.run_task_now("force-stop", force=True)
+        replacement = scheduler._task_handles["force-stop"]
+        await asyncio.wait_for(replacement_started.wait(), 2)
+        replacement_run_id = started[-1]
+
+        release_abort_worker.set()
         assert await asyncio.to_thread(abort_persisted.wait, 2), (
             "Stop did not persist the captured run aborts"
         )
         db = sessions()
         try:
             original_run_ids = {
-                run.id for run in db.query(database.TaskRun).filter_by(task_id="force-stop").all()
+                run.id for run in db.query(database.TaskRun).filter(
+                    database.TaskRun.task_id == "force-stop",
+                    database.TaskRun.id != replacement_run_id,
+                ).all()
             }
             assert len(original_run_ids) == 2
             assert {
@@ -124,17 +148,17 @@ def test_stop_cancels_captured_force_runs_but_not_replacement(
                     database.TaskRun.id.in_(original_run_ids)
                 ).all()
             } == {"aborted"}
+            replacement_run = db.get(database.TaskRun, replacement_run_id)
+            assert replacement_run.status == "running"
         finally:
             db.close()
-
-        assert await scheduler.run_task_now("force-stop", force=True)
-        replacement = scheduler._task_handles["force-stop"]
-        await replacement
-        replacement_run_id = effects[0]
+        assert not replacement.done()
 
         scheduler._executing_lock.release()
         response = await stop_request
         assert response == {"ok": True, "message": "Stop requested"}
+        release_replacement.set()
+        await replacement
         await asyncio.gather(first, second, return_exceptions=True)
         assert first.done()
         assert second.done()
@@ -296,14 +320,32 @@ def test_foreground_stop_cancels_normal_and_force_runs_then_allows_replacement(
         scheduler._pending_notifications = []
         scheduler._last_run_model = None
         scheduler._task_needs_model_slot = lambda _task_id: False
+        abort_worker_started = threading.Event()
+        release_abort_worker = threading.Event()
+        abort_persisted = threading.Event()
+        mark_run_aborted = scheduler._mark_run_aborted
+
+        def gate_abort_worker(*args, **kwargs):
+            if kwargs.get("run_ids") is not None:
+                abort_worker_started.set()
+                assert release_abort_worker.wait(2)
+            result = mark_run_aborted(*args, **kwargs)
+            if kwargs.get("run_ids") is not None:
+                abort_persisted.set()
+            return result
+
+        scheduler._mark_run_aborted = gate_abort_worker
         started = []
         releases = {}
         effects = []
+        replacement_started = asyncio.Event()
 
         async def execute_action(_task, *, run_id):
             event = asyncio.Event()
             releases[run_id] = event
             started.append(run_id)
+            if len(started) == 3:
+                replacement_started.set()
             await event.wait()
             effects.append(run_id)
             return f"done:{run_id}", True
@@ -322,35 +364,44 @@ def test_foreground_stop_cancels_normal_and_force_runs_then_allows_replacement(
             await asyncio.sleep(0)
         assert len(started) == 2
 
-        # Foreground interaction cancels ordinary and force-parallel handles.
-        assert await scheduler.stop_background_tasks_for_foreground(
-            reason="controlled interactive API request",
-        ) == 1
+        # Pause the foreground stop after it snapshots owned run IDs. A new
+        # run must not be included in the worker's later database update.
+        foreground_stop = asyncio.create_task(
+            scheduler.stop_background_tasks_for_foreground(
+                reason="controlled interactive API request",
+            )
+        )
+        assert await asyncio.to_thread(abort_worker_started.wait, 2)
         await asyncio.gather(normal, forced, return_exceptions=True)
         assert normal.done() and forced.done()
         assert effects == []
 
+        assert await scheduler.run_task_now("foreground-stop")
+        replacement = scheduler._task_handles["foreground-stop"]
+        await asyncio.wait_for(replacement_started.wait(), 2)
+        replacement_run_id = started[2]
+
+        release_abort_worker.set()
+        assert await asyncio.to_thread(abort_persisted.wait, 2)
+
         db = sessions()
         try:
             original_runs = db.query(database.TaskRun).filter_by(task_id="foreground-stop").all()
-            original_ids = {run.id for run in original_runs}
-            assert len(original_ids) == 2
-            assert {run.status for run in original_runs} == {"aborted"}
+            original_ids = set(started[:2])
+            states = {run.id: run.status for run in original_runs}
+            assert len(states) == 3
+            assert all(states[run_id] == "aborted" for run_id in original_ids)
+            assert states[replacement_run_id] == "running"
         finally:
             db.close()
+        assert await foreground_stop == 1
 
-        # Once the canceled run releases its reservation, a new normal run
-        # owns it until completion; old callbacks cannot clear that ownership.
-        assert await scheduler.run_task_now("foreground-stop")
-        replacement = scheduler._task_handles["foreground-stop"]
-        for _ in range(100):
-            if len(started) == 3:
-                break
-            await asyncio.sleep(0)
-        assert len(started) == 3
+        # The replacement owns the normal execution reservation; old callbacks
+        # cannot clear it while that run is active.
         assert scheduler._execution_handles["foreground-stop"] is replacement
         assert scheduler._executing == {"foreground-stop"}
-        releases[started[2]].set()
+        assert await scheduler.run_task_now("foreground-stop") is False
+        releases[replacement_run_id].set()
         await replacement
 
         db = sessions()
@@ -358,7 +409,6 @@ def test_foreground_stop_cancels_normal_and_force_runs_then_allows_replacement(
             task = db.query(database.ScheduledTask).filter_by(id="foreground-stop").one()
             runs = db.query(database.TaskRun).filter_by(task_id="foreground-stop").all()
             states = {run.id: run.status for run in runs}
-            replacement_run_id = started[2]
             assert states[replacement_run_id] == "success"
             assert all(states[run_id] == "aborted" for run_id in original_ids)
             assert task.run_count == 1

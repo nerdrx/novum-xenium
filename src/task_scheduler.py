@@ -398,6 +398,7 @@ class TaskScheduler:
         self._concurrency_cap = 1
         self._task_handles = {}
         self._all_task_handles = {}
+        self._run_ids_by_handle = {}
         self._deleting_tasks = set()
         self._draining_deletions = set()
         self._task_deletion_refs = {}
@@ -431,6 +432,7 @@ class TaskScheduler:
             if self._execution_handles.get(task_id) is done:
                 self._execution_handles.pop(task_id, None)
                 self._executing.discard(task_id)
+            getattr(self, "_run_ids_by_handle", {}).pop(done, None)
 
         handle.add_done_callback(_cleanup)
         return handle
@@ -483,7 +485,7 @@ class TaskScheduler:
 
     def _mark_run_aborted(
         self, task_id: str, run_id: str | None = None, message: str = "Stopped by user",
-        *, all_runs: bool = False,
+        *, all_runs: bool = False, run_ids: set[str] | None = None,
     ) -> bool:
         """Mark an active run as aborted. Used by stop/cancel paths."""
         try:
@@ -491,7 +493,11 @@ class TaskScheduler:
             db = SessionLocal()
             try:
                 q = db.query(TaskRun)
-                if run_id:
+                if run_ids is not None:
+                    if not run_ids:
+                        return False
+                    q = q.filter(TaskRun.id.in_(run_ids))
+                elif run_id:
                     q = q.filter(TaskRun.id == run_id)
                 else:
                     q = q.filter(
@@ -941,6 +947,11 @@ class TaskScheduler:
             if release_executing and task_id in self._executing:
                 self._execution_handles.setdefault(task_id, current)
         run_id = str(uuid.uuid4())
+        if current:
+            run_ids = getattr(self, "_run_ids_by_handle", None)
+            if run_ids is None:
+                run_ids = self._run_ids_by_handle = {}
+            run_ids.setdefault(current, run_id)
         _q_db = SessionLocal()
         try:
             run = TaskRun(
@@ -988,8 +999,12 @@ class TaskScheduler:
             handle = self._task_handles.get(task_id)
             if handle is current:
                 self._task_handles.pop(task_id, None)
-            if release_executing:
-                await self._release_execution(task_id, current)
+            try:
+                if release_executing:
+                    await self._release_execution(task_id, current)
+            finally:
+                if current:
+                    getattr(self, "_run_ids_by_handle", {}).pop(current, None)
     def _defer_immediately_due_task(self, task_id: str, *, delay: timedelta):
         """A queued task can be cancelled before _execute_task_locked gets a DB
         handle. If its next_run stays in the past, the scheduler dispatches it
@@ -2531,9 +2546,10 @@ class TaskScheduler:
             return False
         if force:
             self._track_task(
-                task_id,
-                self._execute_task(task_id, bypass_model_slot=True, release_executing=False,
-                                   allow_paused=allow_paused),
+                task_id, self._execute_task(
+                    task_id, bypass_model_slot=True, release_executing=False,
+                    allow_paused=allow_paused,
+                ),
                 release_executing=False,
             )
             return True
@@ -2583,16 +2599,22 @@ class TaskScheduler:
         if latest:
             handles.add(latest)
         active = [handle for handle in handles if not handle.done()]
+        run_ids_by_handle = getattr(self, "_run_ids_by_handle", {})
+        captured_run_ids = {
+            run_ids_by_handle[handle] for handle in active
+            if run_ids_by_handle.get(handle)
+        }
         for handle in active:
             if not handle.cancelling():
                 handle.cancel()
         stopped = bool(active)
-        # Mark only runs present at the instant Stop is requested. This sync
-        # DB operation runs before the first await, so a later replacement run
-        # can't be swept into the same task-ID query.
-        stopped = await asyncio.to_thread(
-            self._mark_run_aborted, task_id, message="Stop requested", all_runs=True,
-        ) or stopped
+        # Restrict the worker-thread update to run IDs owned by the handles
+        # captured above; a replacement can start while that worker is queued.
+        if captured_run_ids:
+            stopped = await asyncio.to_thread(
+                self._mark_run_aborted, task_id, message="Stop requested",
+                all_runs=True, run_ids=captured_run_ids,
+            ) or stopped
         async with self._executing_guard():
             current_owner = getattr(self, "_execution_handles", {}).get(task_id)
             if (
@@ -2623,6 +2645,7 @@ class TaskScheduler:
                 | set(getattr(self, "_task_handles", {}))
             )
         captured = {}
+        run_ids_by_handle = getattr(self, "_run_ids_by_handle", {})
         for task_id in task_ids:
             handles = set(getattr(self, "_all_task_handles", {}).get(task_id, set()))
             latest = getattr(self, "_task_handles", {}).get(task_id)
@@ -2630,19 +2653,25 @@ class TaskScheduler:
                 handles.add(latest)
             active = [handle for handle in handles if not handle.done()]
             if active or task_id in getattr(self, "_executing", set()):
-                captured[task_id] = active
+                run_ids = {
+                    run_ids_by_handle[handle] for handle in active
+                    if run_ids_by_handle.get(handle)
+                }
+                captured[task_id] = (active, run_ids)
 
         stopped = 0
-        # Capture and abort current rows before yielding. In particular, force
-        # runs are absent from _executing but still need cancellation here.
-        for task_id, handles in captured.items():
+        # Capture run IDs before yielding. Force runs are absent from
+        # _executing but still need cancellation here.
+        for task_id, (handles, run_ids) in captured.items():
             for handle in handles:
                 if not handle.cancelling():
                     handle.cancel()
-            marked = await asyncio.to_thread(
-                self._mark_run_aborted, task_id,
-                message=f"Stop requested: {reason}", all_runs=True,
-            )
+            marked = False
+            if run_ids:
+                marked = await asyncio.to_thread(
+                    self._mark_run_aborted, task_id, run_ids=run_ids,
+                    message=f"Stop requested: {reason}", all_runs=True,
+                )
             if handles or marked:
                 stopped += 1
         if stopped:

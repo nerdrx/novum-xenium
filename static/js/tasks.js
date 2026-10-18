@@ -27,6 +27,7 @@ let _tasksLoadError = null;
 let _tasksLoadSeq = 0;
 let _escHandler = null;
 let _viewingRuns = null; // task id when viewing run history
+let _runHistoryRequestSeq = 0;
 let _clockInterval = null;
 let _taskFailurePending = false;
 let _taskCompletionPending = false;
@@ -213,12 +214,25 @@ async function _stopTask(id) {
 }
 
 async function _fetchRuns(taskId, limit = 10) {
-  const res = await fetch(`${API_BASE}/api/tasks/${taskId}/runs?limit=${limit}`, {
-    credentials: 'same-origin',
-  });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.runs || [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`${API_BASE}/api/tasks/${taskId}/runs?limit=${limit}`, {
+      credentials: 'same-origin',
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data.runs)) throw new Error('Invalid history response');
+    return data.runs;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function _leaveRunHistory() {
+  _viewingRuns = null;
+  _runHistoryRequestSeq++;
 }
 
 let _outputTargets = null;
@@ -1970,21 +1984,49 @@ function _showForm(existing, initTaskType, initTriggerType) {
 // ---- Run History ----
 
 async function _showRunHistory(taskId, taskName) {
-  _viewingRuns = taskId;
   const modal = document.getElementById('tasks-modal');
   if (!modal) return;
   const body = modal.querySelector('.modal-body');
   if (!body) return;
 
-  body.innerHTML = '';
-  body.appendChild(spinnerModule.createLoadingRow('Loading…'));
-
-  const runs = await _fetchRuns(taskId);
-
-  let html = `<div class="task-history-header">
+  _viewingRuns = taskId;
+  const requestSeq = ++_runHistoryRequestSeq;
+  const isCurrent = () => requestSeq === _runHistoryRequestSeq
+    && _viewingRuns === taskId
+    && _open
+    && document.getElementById('tasks-modal') === modal
+    && body.isConnected;
+  const header = `<div class="task-history-header">
     <button id="task-history-back" class="task-btn">← Back</button>
     <span style="font-size:13px;opacity:0.7;">${_esc(taskName)} — Run history</span>
   </div>`;
+
+  body.innerHTML = '';
+  body.appendChild(spinnerModule.createLoadingRow('Loading…'));
+
+  let runs;
+  try {
+    runs = await _fetchRuns(taskId);
+  } catch (error) {
+    if (!isCurrent()) return;
+    const message = error?.name === 'AbortError'
+      ? 'The request timed out. Try again.'
+      : String(error?.message || 'Request failed').slice(0, 200);
+    body.innerHTML = `${header}
+      <div role="alert" class="task-history-error">Could not load run history: ${_esc(message)}</div>
+      <button id="task-history-retry" class="task-btn" type="button">Retry</button>`;
+    body.querySelector('#task-history-retry')?.addEventListener('click', () => {
+      if (isCurrent()) _showRunHistory(taskId, taskName);
+    });
+    body.querySelector('#task-history-back')?.addEventListener('click', () => {
+      _leaveRunHistory();
+      _renderMainView();
+    });
+    return;
+  }
+  if (!isCurrent()) return;
+
+  let html = header;
 
   if (runs.length === 0) {
     html += '<div style="opacity:0.4;font-size:12px;text-align:center;padding:24px 0;">No runs yet.</div>';
@@ -2008,7 +2050,7 @@ async function _showRunHistory(taskId, taskName) {
   body.innerHTML = html;
 
   document.getElementById('task-history-back').addEventListener('click', () => {
-    _viewingRuns = null;
+    _leaveRunHistory();
     _renderMainView();
   });
 
@@ -2179,6 +2221,7 @@ function _syncPauseAllButton() {
 let _activeTab = 'tasks';
 
 function _switchTab(tab) {
+  if (_viewingRuns) _leaveRunHistory();
   _activeTab = tab;
   const modal = document.getElementById('tasks-modal');
   if (!modal) return;
@@ -3250,7 +3293,7 @@ export function openTasks(focusId, opts) {
   _pendingFocusAction = o.focusAction || null;
   _open = true;
   _tasksCascadeNext = true;
-  _viewingRuns = null;
+  _leaveRunHistory();
   _outputTargets = null; // refresh available targets
   _builtinActions = null;
   _triggerEvents = null;
@@ -3330,7 +3373,7 @@ export function openTasks(focusId, opts) {
   _escHandler = (e) => {
     if (e.key === 'Escape') {
       if (_viewingRuns) {
-        _viewingRuns = null;
+        _leaveRunHistory();
         _renderMainView();
         return;
       }
@@ -3407,7 +3450,7 @@ function _focusTask(taskId, { expand = false } = {}) {
 export function closeTasks() {
   if (!_open) return;
   _open = false;
-  _viewingRuns = null;
+  _leaveRunHistory();
   const modal = document.getElementById('tasks-modal');
   if (modal) {
     const content = modal.querySelector('.modal-content');

@@ -5277,8 +5277,9 @@ function _createCard(em) {
   titleRow.className = 'email-card-titlerow';
   titleRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
 
-  const titleEl = document.createElement('span');
-  titleEl.className = 'memory-item-title';
+  const titleEl = document.createElement('button');
+  titleEl.type = 'button';
+  titleEl.className = 'memory-item-title email-card-open-button';
   titleEl.textContent = em.subject || '(no subject)';
   // Hover preview: surface the cached AI summary directly on the title via
   // a native browser tooltip — no need to open the email to skim it.

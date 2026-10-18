@@ -2870,7 +2870,8 @@ def setup_email_routes():
             return fixture_result
         manual_refresh = bool(refresh)
         if cached_only and not from_addr:
-            indexed_emails, indexed_total, indexed_at = _email_index_list(
+            indexed_emails, indexed_total, indexed_at = await _asyncio.to_thread(
+                _email_index_list,
                 owner, account_id, folder, filter, limit, offset, bool(has_attachments),
             )
             if indexed_total:
@@ -3488,21 +3489,31 @@ def setup_email_routes():
                 "sync": fixture_result.get("sync") or {"source": "local"},
             }
         indexed_response = None
-        try:
-            indexed_emails, indexed_total, indexed_at = _email_index_search(owner, account_id, folder, q, limit, global_search=global_search)
-            indexed_response = {
-                "emails": indexed_emails,
-                "total": indexed_total,
-                "query": q,
-                "folder": folder,
-                "source": "index",
-                "sync": {
+        index_lookup_attempted = False
+
+        def load_indexed_response():
+            nonlocal indexed_response, index_lookup_attempted
+            if not index_lookup_attempted:
+                index_lookup_attempted = True
+                indexed_emails, indexed_total, indexed_at = _email_index_search(
+                    owner, account_id, folder, q, limit, global_search=global_search,
+                )
+                indexed_response = {
+                    "emails": indexed_emails,
+                    "total": indexed_total,
+                    "query": q,
+                    "folder": folder,
                     "source": "index",
-                    "updated_at": indexed_at,
-                },
-            }
+                    "sync": {
+                        "source": "index",
+                        "updated_at": indexed_at,
+                    },
+                }
+            return indexed_response
+
+        try:
             if local_only:
-                return indexed_response
+                return load_indexed_response()
 
             with _imap(account_id, owner=owner) as conn:
                 # If the user asked for INBOX, try to upgrade to All Mail —
@@ -3540,6 +3551,7 @@ def setup_email_routes():
 
                 status, data = _imap_uid_search(conn, search_cmd)
                 if status != "OK" or not data[0]:
+                    indexed_response = load_indexed_response()
                     if indexed_response and indexed_response.get("emails"):
                         indexed_response["fallback"] = True
                         indexed_response["source"] = "index"
@@ -3620,6 +3632,11 @@ def setup_email_routes():
                 }
         except Exception as e:
             logger.error(f"Search failed: {e}")
+            if not index_lookup_attempted:
+                try:
+                    indexed_response = load_indexed_response()
+                except Exception:
+                    logger.debug("email index fallback skipped", exc_info=True)
             if indexed_response and indexed_response.get("emails"):
                 indexed_response["fallback"] = True
                 return indexed_response

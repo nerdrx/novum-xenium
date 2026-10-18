@@ -330,6 +330,11 @@ select.task-form-input { text-overflow: ellipsis; }
     flex-wrap: wrap;
   }
 }
+
+@media (max-width: 768px) and (max-height: 400px) {
+  #email-lib-modal #email-lib-fab { display: none; }
+  #email-lib-modal #email-lib-compose-btn { display: inline-flex; }
+}
 .email-tags-collapsed .email-tag-extra { display: none; }
 .email-tags-expanded .email-tag-extra { display: inline-flex; align-items: center; }
 .email-card-tags.email-tags-mini:not(.email-tags-expanded) > .email-tags-more:not(.email-tags-more-single) {
@@ -1567,4 +1572,56 @@ button.cal-btn.cal-btn-danger:hover { background:var(--accent, var(--red)); colo
 @keyframes note-card-flash-anim {
   0%   { box-shadow: 0 0 0 2px var(--accent, var(--red)); }
   100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+/* Keep the Email reader and mailbox controls comfortable to tap on phones. */
+@media (max-width: 768px) {
+  #email-lib-modal .email-reader-actions-inline .reader-icon-btn {
+    min-width: 44px;
+  }
+  #email-lib-modal .email-accounts-row .email-account-chip,
+  #email-lib-modal #email-lib-compose-btn,
+  #email-lib-modal .memory-category-filters .email-filter-btn,
+  #email-lib-modal .memory-category-filters .email-filter-select-btn,
+  #email-lib-modal .memory-category-filters .email-filter-refresh-btn,
+  #email-lib-modal .memory-category-filters .email-filter-settings-btn {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  #email-lib-modal .email-accounts-row .email-account-chip,
+  #email-lib-modal #email-lib-compose-btn {
+    height: 44px;
+  }
+  #email-lib-modal #email-lib-compose-btn {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    top: 0;
+  }
+  #email-lib-modal .memory-category-filters .email-filter-btn {
+    height: 44px;
+    top: 0;
+  }
+  #email-lib-modal .memory-category-filters .email-filter-select-btn,
+  #email-lib-modal .memory-category-filters .email-filter-refresh-btn,
+  #email-lib-modal .memory-category-filters .email-filter-settings-btn {
+    height: 44px !important;
+  }
+  #email-lib-modal .memory-category-filters .email-filter-refresh-btn,
+  #email-lib-modal .memory-category-filters .email-filter-settings-btn {
+    width: 44px;
+    min-width: 44px;
+  }
+  #email-lib-modal .email-search-row .memory-search-input {
+    height: 44px;
+    min-height: 44px;
+    padding-right: 52px !important;
+    box-sizing: border-box;
+  }
+  #email-lib-modal .email-search-options-btn {
+    width: 44px !important;
+    min-width: 44px !important;
+    height: 44px !important;
+    top: 50%;
+    transform: translateY(-50%);
+  }
 }

@@ -1797,11 +1797,13 @@ def test_frontend_tool_approval_uses_opaque_id_and_fixed_decisions():
     assert "input.dispatchEvent(new Event('input'" in chat
     assert "_pendingToolApproval.draft = input.value" in chat
     assert "const approvalForSend = _pendingToolApproval" in chat
-    assert "!approvalForSend && fileHandlerModule.getPendingCount()" in chat
+    assert "const pendingAttachmentSnapshotForSend = !approvalForSend\n      ? fileHandlerModule.getPendingSnapshot()\n      : null;" in chat
+    assert "snapshot: pendingAttachmentSnapshotForSend" in chat
     assert "if (!approvalForSend) _pendingRegenAttachments = null" in chat
     assert "const pendingRegenAttachmentsForSend = !approvalForSend ? _pendingRegenAttachments : null" in chat
     assert "!approvalForSend && !recoveryForSend && el('research-toggle').checked" in chat
-    assert "approvalForSend ? (approvalForSend.draft || '') : ''" in chat
+    assert "if (approvalForSend) messageInput.value = approvalForSend.draft || '';" in chat
+    assert "else if (!preserveNewerDraft) messageInput.value = '';" in chat
     assert "if (approvalForSend && documentSaved === false)" in chat
     assert "if (!approvalForSend) {\n          try {\n            _sendPerf.mark('doc_silent_save_begin')" in chat
     assert "document_id: aq.action && aq.action.document_id" in renderer

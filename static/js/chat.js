@@ -2403,7 +2403,7 @@ import { invalidateSettings } from './appConfig.js';
       ? _pendingRecovery : null;
     const streamGeneration = (_streamGenerations.get(streamSessionId) || 0) + 1;
     _streamGenerations.set(streamSessionId, streamGeneration);
-    const _sendState = { generation: streamGeneration, abortCtrl: null };
+    const _sendState = { generation: streamGeneration, abortCtrl: null, waitingForModelSwitch: false, cancelled: false };
     _sendStates.set(streamSessionId, _sendState);
     // The previous send's run identity dies with its ownership: a Stop after
     // this instant must queue for THIS send, not fire against the old run.
@@ -2439,8 +2439,13 @@ import { invalidateSettings } from './appConfig.js';
         // Legacy untagged promises still serialize sends; tagged picker work
         // belongs only to its captured chat (including null for a new draft).
         if (!hasOwner || sameOwner) {
-          await pendingSwitch;
-          modelSwitchResolved = true;
+          _sendState.waitingForModelSwitch = true;
+          try {
+            await pendingSwitch;
+            modelSwitchResolved = true;
+          } finally {
+            _sendState.waitingForModelSwitch = false;
+          }
         }
       }
     } catch (_) {}
@@ -2448,12 +2453,14 @@ import { invalidateSettings } from './appConfig.js';
     // session now, and everything below (state resets, registration, POST)
     // is its business alone.
     if (_streamGenerations.get(streamSessionId) !== streamGeneration) return;
-    // Navigation can happen while the model switch is pending. The composer
-    // and attachment strip belong to the newly selected chat, so cancel this
-    // pre-dispatch send before it snapshots or clears either global UI state.
-    if (String(sessionModule.getCurrentSessionId() || '') !== String(streamSessionId || '')) {
+    // Navigation or an explicit Stop can cancel this pre-dispatch send before
+    // it touches the composer or attachments. Keep both paths under the same
+    // ownership cleanup so a replacement send or older stream stays visible.
+    const sessionChanged = String(sessionModule.getCurrentSessionId() || '') !== String(streamSessionId || '');
+    if (_sendState.cancelled || sessionChanged) {
+      const ownsSendState = _sendStates.get(streamSessionId) === _sendState;
       _pendingRunStops.delete(streamSessionId + ':' + streamGeneration);
-      if (_sendStates.get(streamSessionId) === _sendState) _sendStates.delete(streamSessionId);
+      if (ownsSendState) _sendStates.delete(streamSessionId);
       if (_streamSessionId === streamSessionId) _streamSessionId = null;
       const foregroundSessionId = sessionModule.getCurrentSessionId();
       if (_sendInFlight || _sendStates.has(foregroundSessionId)) return;
@@ -6394,7 +6401,7 @@ import { invalidateSettings } from './appConfig.js';
         if (messageInput) {
           messageInput.disabled = false;
           if (window.innerWidth <= 768) {
-            messageInput.blur();
+            if (document.activeElement === messageInput && !messageInput.value) messageInput.blur();
           } else if (!document.getElementById('doc-editor-pane')) {
             // Do not steal focus from an open document at stream completion.
             // preventScroll also keeps the chat viewport stable in browsers
@@ -6492,9 +6499,13 @@ import { invalidateSettings } from './appConfig.js';
     // send commit — never borrowed from the stream registry, which during the
     // replacement's preflight still holds the superseded send's entry.
     // Aborting that older controller here would sever the only identity
-    // channel able to name the old run. A send committed but pre-POST has a
-    // null controller: the Stop queues and there is nothing to abort yet.
+    // channel able to name the old run. A send waiting on its model switch has
+    // no server run yet, so explicit Stop cancels only that pending send.
     const _sendStateNow = _sid ? _sendStates.get(_sid) : null;
+    if (stopServer && _sendStateNow?.waitingForModelSwitch) {
+      _sendStateNow.cancelled = true;
+      return;
+    }
     const active = _getForegroundStreamState();
     const abortCtrl = _sendStateNow
       ? _sendStateNow.abortCtrl

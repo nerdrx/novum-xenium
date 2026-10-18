@@ -293,13 +293,38 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(sameChatEdit.uploaded, ['first-snapshot.txt'], 'only files captured for this send are uploaded');
     assert.equal(sameChatEdit.message, 'Prompt captured before waiting');
     assert.equal(sameChatEdit.draft, 'Newer draft stays in composer');
-    assert.equal(sameChatEdit.draftFocused, false, 'normal stream completion may dismiss mobile focus');
+    assert.equal(sameChatEdit.draftFocused, true, 'terminal cleanup preserves focus on a newer draft');
     assert.deepEqual(sameChatEdit.pendingNames, ['second-snapshot.txt'], 'new file remains for the next send');
     await page.evaluate(() => {
       window.testModules.files.clearPending();
       window.holdStreamSession = null;
       window.__odysseusModelSwitchPromise = null;
     });
+
+    // A focused empty composer still loses focus when a mobile response ends.
+    await page.evaluate(() => {
+      const { sessions, chat } = window.testModules;
+      sessions.setCurrentSessionId('chat-A');
+      document.getElementById('message').value = 'Empty composer keyboard check';
+      window.messageSessions = [];
+      window.holdStreamSession = 'chat-A';
+      window.bStreamStarted = false;
+      window.emptyComposerSettled = false;
+      window.emptyComposerSend = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.emptyComposerSettled = true; });
+    });
+    await page.waitForFunction(() => window.bStreamStarted === true);
+    await page.evaluate(() => {
+      const input = document.getElementById('message');
+      input.focus();
+      window.emptyComposerFocusedBeforeDone = document.activeElement === input && !input.value;
+      window.streamController.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+      window.streamController.close();
+    });
+    await page.waitForFunction(() => window.emptyComposerSettled === true);
+    assert.equal(await page.evaluate(() => window.emptyComposerFocusedBeforeDone), true);
+    assert.equal(await page.evaluate(() => document.activeElement === document.getElementById('message')), false,
+      'terminal cleanup still dismisses an active empty mobile composer');
+    await page.evaluate(() => { window.holdStreamSession = null; });
     await page.setViewportSize({ width: 1280, height: 800 });
 
     // One-shot bubble state and regen file IDs belong to the send that

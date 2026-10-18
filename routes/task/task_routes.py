@@ -222,7 +222,11 @@ def _find_task_create_replay(db, owner: Optional[str], key: str, fingerprint: st
     return _task_to_dict(task)
 
 
-def _task_to_dict(t: ScheduledTask, include_last_run_result: bool = False) -> dict:
+def _task_to_dict(
+    t: ScheduledTask,
+    include_last_run_result: bool = False,
+    latest_run_summary=None,
+) -> dict:
     defs = HOUSEKEEPING_DEFAULTS.get(t.action) if t.action else None
     d = {
         "id": t.id,
@@ -268,10 +272,10 @@ def _task_to_dict(t: ScheduledTask, include_last_run_result: bool = False) -> di
         )
     else:
         d["is_modified"] = False
-    if include_last_run_result and t.runs:
-        last = t.runs[0]  # ordered desc by started_at
-        d["last_run_status"] = last.status
-        d["last_run_result"] = (last.result or last.error or "")[:500]
+    if include_last_run_result and latest_run_summary is not None:
+        status, result, error = latest_run_summary
+        d["last_run_status"] = status
+        d["last_run_result"] = (result or error or "")[:500]
     return d
 
 
@@ -401,7 +405,38 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             if status:
                 q = q.filter(ScheduledTask.status == status)
             tasks = q.order_by(ScheduledTask.created_at.desc()).all()
-            return {"tasks": [_task_to_dict(t, include_last_run_result=include_last_run) for t in tasks]}
+            latest_runs = {}
+            if include_last_run and tasks:
+                from sqlalchemy import func
+
+                ranked_runs = (
+                    db.query(
+                        TaskRun.id.label("id"),
+                        func.row_number().over(
+                            partition_by=TaskRun.task_id,
+                            order_by=TaskRun.started_at.desc(),
+                        ).label("row_num"),
+                    )
+                    .filter(TaskRun.task_id.in_([task.id for task in tasks]))
+                    .subquery()
+                )
+                for run in db.query(
+                    TaskRun.task_id, TaskRun.status, TaskRun.result, TaskRun.error
+                ).join(ranked_runs, TaskRun.id == ranked_runs.c.id).filter(
+                    ranked_runs.c.row_num == 1
+                ).all():
+                    latest_runs[run.task_id] = (run.status, run.result, run.error)
+
+            return {
+                "tasks": [
+                    _task_to_dict(
+                        task,
+                        include_last_run_result=include_last_run,
+                        latest_run_summary=latest_runs.get(task.id),
+                    )
+                    for task in tasks
+                ]
+            }
         finally:
             db.close()
 

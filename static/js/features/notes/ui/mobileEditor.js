@@ -19,12 +19,41 @@ export function createMobileEditor({
   let _mobileFsOverlay = null;
 
   let _mobileFsNoteId = null;
+  let _mobileFsGeneration = 0;
+  let _focusRestoreGeneration = 0;
+
+  function _restoreMobileEditorFocus(noteId, generation) {
+    if (generation !== _focusRestoreGeneration) return;
+    if (!state.open || _mobileFsOverlay || state.editingId != null) return;
+    if (document.activeElement !== document.body && document.activeElement !== document.documentElement) return;
+    const card = [...document.querySelectorAll('.note-card[data-note-id]')]
+      .find(el => el.dataset.noteId === noteId);
+    const opener = card?.querySelector('.note-card-title[data-action="edit"]');
+    const visible = el => {
+      if (!el?.isConnected || el.closest('.note-fullscreen-overlay')) return false;
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0
+        && rect.width > 0 && rect.height > 0;
+    };
+    const target = visible(opener) ? opener : [
+      document.getElementById('notes-search'),
+      document.getElementById('notes-select-btn'),
+      document.getElementById('tool-notes-btn'),
+    ].find(visible);
+    if (target) {
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: 'nearest' });
+    }
+  }
 
   function _openMobileFullscreenEdit(id, fromCard) {
     const note = state.notes.find(n => n.id === id);
     if (!note) return;
     // Tear down any previous overlay (defensive).
     _closeMobileFullscreenEdit({ save: false });
+    _focusRestoreGeneration++;
+    const generation = ++_mobileFsGeneration;
     _mobileFsNoteId = id;
     app.setEditingId(id);
 
@@ -32,7 +61,7 @@ export function createMobileEditor({
     overlay.className = 'note-fullscreen-overlay';
     overlay.innerHTML = `
     <div class="note-fullscreen-header">
-      <button type="button" class="note-fullscreen-back" title="Back">
+      <button type="button" class="note-fullscreen-back" title="Back" aria-label="Back to notes">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
       </button>
       <div class="note-fullscreen-actions"></div>
@@ -48,6 +77,11 @@ export function createMobileEditor({
     if (restored) uiModule.showToast('Restored unsaved changes');
     document.body.appendChild(overlay);
     _mobileFsOverlay = overlay;
+    const closeThisOverlayAfter = (delay, options = {}) => setTimeout(() => {
+      if (generation === _mobileFsGeneration && _mobileFsOverlay === overlay) {
+        _closeMobileFullscreenEdit(options);
+      }
+    }, delay);
 
     // Animate up from the tapped tile's position so the transition reads
     // as a zoom rather than a hard cut.
@@ -64,9 +98,10 @@ export function createMobileEditor({
     // mousedown preventDefault so it doesn't blur the input on first tap (which
     // would eat the tap and require a second one).
     const _backBtn = overlay.querySelector('.note-fullscreen-back');
+    _backBtn.focus({ preventScroll: true });
     _backBtn.addEventListener('mousedown', (e) => e.preventDefault());
     _backBtn.addEventListener('click', () => {
-      _closeMobileFullscreenEdit({ save: true });
+      _closeMobileFullscreenEdit({ save: true, restoreFocus: true });
     });
 
     // The form's built-in Cancel only resets the in-place edit state; in
@@ -80,7 +115,7 @@ export function createMobileEditor({
       fresh.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        _closeMobileFullscreenEdit({ save: false });
+        _closeMobileFullscreenEdit({ save: false, restoreFocus: true });
       });
     }
     // The built-in Save handler does the API call + refresh, but doesn't
@@ -90,7 +125,7 @@ export function createMobileEditor({
     const saveBtn = form.querySelector('.note-form-save');
     if (saveBtn) {
       saveBtn.addEventListener('click', () => {
-        setTimeout(() => _closeMobileFullscreenEdit({ save: false }), 350);
+        closeThisOverlayAfter(350, { save: false, restoreFocus: true });
       });
     }
     // Make the checklist row drag handle (⋮⋮) actually work on touch.
@@ -119,15 +154,13 @@ export function createMobileEditor({
     // happened. Add follow-up listeners that close the overlay so the
     // user sees the action take effect.
     if (archiveBtn) {
-      archiveBtn.addEventListener('click', () => {
-        setTimeout(() => _closeMobileFullscreenEdit({ save: false }), 200);
-      });
+      archiveBtn.addEventListener('click', () => closeThisOverlayAfter(200, { save: false }));
     }
     if (deleteBtn) {
       deleteBtn.addEventListener('click', () => {
         // Delete shows a styled confirm : give it room to resolve before
         // we try to dismiss the overlay.
-        setTimeout(() => _closeMobileFullscreenEdit({ save: false }), 500);
+        closeThisOverlayAfter(500, { save: false });
       });
     }
 
@@ -213,8 +246,15 @@ export function createMobileEditor({
   }
 
   function _closeMobileFullscreenEdit(opts = {}) {
-    if (!_mobileFsOverlay) return;
+    if (!_mobileFsOverlay) {
+      if (!state.open) _focusRestoreGeneration++;
+      return;
+    }
+    const focusGeneration = ++_focusRestoreGeneration;
     const overlay = _mobileFsOverlay;
+    const noteId = _mobileFsNoteId;
+    const generation = _mobileFsGeneration;
+    const restoreFocus = opts.restoreFocus === true;
     overlay.querySelector('.note-form')?._flushDraft?.();
     _mobileFsOverlay = null;
     // If the form has a Save button, click it on close so edits aren't lost
@@ -227,10 +267,16 @@ export function createMobileEditor({
     overlay.classList.add('closing');
     setTimeout(() => {
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      if (generation !== _mobileFsGeneration || _mobileFsOverlay || _mobileFsNoteId !== noteId) return;
       _mobileFsNoteId = null;
-      app.setEditingId(null);
+      if (state.editingId === noteId) app.setEditingId(null);
       // Refresh the grid so any save the user made is reflected.
-      if (opts.save !== false) { _fetchNotes().then(_renderNotes).catch(() => {}); }
+      if (opts.save !== false) {
+        const refreshed = _fetchNotes().then(_renderNotes).catch(() => {});
+        if (restoreFocus) refreshed.finally(() => _restoreMobileEditorFocus(noteId, focusGeneration));
+      } else if (restoreFocus) {
+        _restoreMobileEditorFocus(noteId, focusGeneration);
+      }
     }, 220);
   }
 

@@ -106,6 +106,65 @@ test('submission preserves top ordering, server ID replacement and newer draft r
   assert.equal(renders, 2);
 });
 
+test('concurrent create responses replace only their own temporary rows', async () => {
+  for (const responseOrder of [[0, 1], [1, 0]]) {
+    const app = owner([]), pending = [];
+    const operations = createNotesSubmission({
+      app,
+      persistence: {
+        _loadFiredReminders: () => new Set(), _saveFiredReminders() {},
+        _loadGlowedReminders: () => new Set(), _saveGlowedReminders() {},
+        _loadDraft: () => null, _clearDraft() {},
+      },
+      clock: { now: () => 0 }, uid: (() => { let next = 0; return () => String(++next); })(),
+      api: { saveNote: payload => new Promise(resolve => pending.push({ payload, resolve })) },
+      effects: { render() {}, showError() {} }, fetchNotes: async () => {},
+    });
+    operations.submitNote({ title: 'First' }, null, false);
+    operations.submitNote({ title: 'Second' }, null, false);
+    assert.deepEqual(app.state.notes.map(({ id, title }) => [id, title]), [['tmp_2', 'Second'], ['tmp_1', 'First']]);
+
+    for (const responseIndex of responseOrder) {
+      const saved = responseIndex === 0 ? { id: 'server-first', title: 'First' } : { id: 'server-second', title: 'Second' };
+      pending[responseIndex].resolve(saved);
+      await drain();
+      const expected = responseIndex === 0
+        ? [['tmp_2', 'Second'], ['server-first', 'First']]
+        : [['server-second', 'Second'], ['tmp_1', 'First']];
+      if (app.state.notes.some(note => note.id.startsWith('tmp_'))) {
+        assert.deepEqual(app.state.notes.map(({ id, title }) => [id, title]), expected);
+      }
+    }
+    assert.deepEqual(app.state.notes.map(({ id, title }) => [id, title]), [['server-second', 'Second'], ['server-first', 'First']]);
+  }
+});
+
+test('removed create row response leaves other pending rows untouched', async () => {
+  const app = owner([]), pending = [];
+  const operations = createNotesSubmission({
+    app,
+    persistence: {
+      _loadFiredReminders: () => new Set(), _saveFiredReminders() {},
+      _loadGlowedReminders: () => new Set(), _saveGlowedReminders() {},
+      _loadDraft: () => null, _clearDraft() {},
+    },
+    clock: { now: () => 0 }, uid: (() => { let next = 0; return () => String(++next); })(),
+    api: { saveNote: payload => new Promise(resolve => pending.push({ payload, resolve })) },
+    effects: { render() {}, showError() {} }, fetchNotes: async () => {},
+  });
+  operations.submitNote({ title: 'First' }, null, false);
+  operations.submitNote({ title: 'Second' }, null, false);
+  app.removeNoteAt(1);
+
+  pending[0].resolve({ id: 'server-first', title: 'First' });
+  await drain();
+  assert.deepEqual(app.state.notes.map(({ id, title }) => [id, title]), [['tmp_2', 'Second']]);
+
+  pending[1].resolve({ id: 'server-second', title: 'Second' });
+  await drain();
+  assert.deepEqual(app.state.notes.map(({ id, title }) => [id, title]), [['server-second', 'Second']]);
+});
+
 test('editor save invalidates an older list response', async () => {
   const app = owner([{ id: 'note', title: 'Before' }]);
   let resolveList, resolveSave;

@@ -141,6 +141,7 @@ export function createCardInteractions({
         if (cb.checked) app.selectId(id);
         else app.deselectId(id);
         cb.closest('.note-card').classList.toggle('note-card-selected', cb.checked);
+        cb.closest('.note-card')?.querySelector('.note-card-title[data-action="edit"]')?.setAttribute('aria-pressed', String(cb.checked));
         _updateBulkBar();
       });
     });

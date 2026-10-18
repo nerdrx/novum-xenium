@@ -174,6 +174,9 @@ export function createCardRendering({
         </span>`
         : '';
       const drawingClass = note.note_type === 'draw' ? ' note-card-drawing' : '';
+      const noteTitle = note.title || '';
+      const noteTitleName = noteTitle || 'Untitled note';
+      const titleAction = state.selectMode ? `Select note: ${noteTitleName}` : `Open note: ${noteTitleName}`;
       html += `<div class="note-card${note.pinned ? ' note-card-pinned' : ''}${cc}${visualClass}${sel}${goalClass}${drawingClass}${reminderGlowClass}${state.selectMode ? ' note-card-selectmode' : ''}" draggable="${(state.selectMode || _isNotesMobileMode()) ? 'false' : 'true'}" data-note-id="${note.id}"${cardStyle}>
       ${state.selectMode ? `<input type="checkbox" class="memory-select-cb note-card-cb" data-note-id="${note.id}" ${state.selectedIds.has(note.id) ? 'checked' : ''} />` : ''}
       ${goalPill}
@@ -194,7 +197,7 @@ export function createCardRendering({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>` : ''}`}
       <div class="note-card-header">
-        <div class="note-card-title${note.title ? '' : ' empty'}" data-action="edit">${_esc(note.title || '')}</div>
+        <button type="button" class="note-card-title${noteTitle ? '' : ' empty'}" data-action="edit" aria-label="${_esc(titleAction)}"${state.selectMode ? ` aria-pressed="${state.selectedIds.has(note.id)}"` : ''}>${_esc(noteTitle)}</button>
         ${dueBadge}
       </div>
       ${_safeImgSrc(note.image_url) ? `<img class="note-card-image" src="${_esc(_safeImgSrc(note.image_url))}" alt="" draggable="false" />` : ''}

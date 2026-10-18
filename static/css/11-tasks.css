@@ -1064,6 +1064,25 @@ input.settings-select::placeholder { color: color-mix(in srgb, var(--fg) 35%, tr
   }
 }
 
+/* Search/Research settings are form controls used on phones; keep the wider
+   desktop rows unchanged and scope touch sizing to this panel's primary fields. */
+@media (max-width: 768px) {
+  [data-settings-panel="search"] :is(
+    #search-provider-btn, #set-searchResultCount, #set-searchResultCountCustom,
+    #set-searchUrl, #set-searchApiKey, #set-searchCx, #set-searchTestBtn,
+    #set-searchAddFallback, #set-researchSearch, #set-researchMaxTokens,
+    #set-researchExtractTimeout, #set-researchExtractConcurrency, #set-researchRunTimeout
+  ) {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  [data-settings-panel="search"] #set-searchResultCountCustom { min-width: 0 !important; }
+  [data-settings-panel="search"] #search-provider-picker { min-width: 0; }
+  [data-settings-panel="search"] .settings-row:has(#set-searchApiKey) > div { min-width: 0; }
+  #search-provider-picker { top: 0 !important; margin-bottom: 0; }
+  #set-searchTestBtn { top: 0 !important; }
+}
+
 /* Deep Research uses long labels and previously fixed-width fields. Keep
    every control constrained by the card at intermediate desktop widths too. */
 .admin-card:has(#set-researchSearch) .settings-row { min-width: 0; }

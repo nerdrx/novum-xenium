@@ -2446,6 +2446,8 @@ import { invalidateSettings } from './appConfig.js';
     let processingProbeTimer = null;
     let processingProbeAbort = null;
     let _renderStream = () => {};
+    let _cancelQueuedStreamRender = () => {};
+    let _queueStreamRender = () => {};
     let _finalizeRoundRender = () => {};
     let _settleTurnRendering = () => {};
     let _finalizeInterruptedView = () => null;
@@ -2992,7 +2994,7 @@ import { invalidateSettings } from './appConfig.js';
         lastActivity: Date.now(),
         // Resolve the mutable closure at call time: live-thinking helpers are
         // installed after the stream entry is registered.
-        cancelViewWork: () => _cancelLiveThinkingWork(),
+        cancelViewWork: () => { _cancelQueuedStreamRender(); _cancelLiveThinkingWork(); },
         finalizeView: () => _finalizeInterruptedView(),
       });
       // Every run cooks in the sidebar, including the currently selected chat.
@@ -3217,6 +3219,33 @@ import { invalidateSettings } from './appConfig.js';
       let _savedAssistantMessageId = '';
       const _turnRendering = createTurnRendering({ root: box, start: _streamTurnMarker, renderBody: setHtmlPreservingMedia });
       _settleTurnRendering = () => _turnRendering.settle();
+      let _streamRenderFrame = null;
+      let _queuedStreamRenderArgs = null;
+      let _queuedStreamRenderOwner = null;
+      _cancelQueuedStreamRender = () => {
+        if (_streamRenderFrame !== null) cancelAnimationFrame(_streamRenderFrame);
+        _streamRenderFrame = null;
+        _queuedStreamRenderArgs = null;
+        _queuedStreamRenderOwner = null;
+      };
+      _queueStreamRender = (args) => {
+        _queuedStreamRenderArgs = args;
+        _queuedStreamRenderOwner = { holder: roundHolder, generation: streamGeneration };
+        if (_streamRenderFrame !== null) return;
+        _streamRenderFrame = requestAnimationFrame(() => {
+          const pendingArgs = _queuedStreamRenderArgs;
+          const owner = _queuedStreamRenderOwner;
+          _streamRenderFrame = null;
+          _queuedStreamRenderArgs = null;
+          _queuedStreamRenderOwner = null;
+          if (!pendingArgs || !owner || owner.holder !== roundHolder
+              || owner.generation !== streamGeneration
+              || _streamGenerations.get(streamSessionId) !== streamGeneration
+              || !roundHolder?.isConnected || abortCtrl?.signal?.aborted
+              || sessionModule.getCurrentSessionId() !== streamSessionId) return;
+          _renderStream(pendingArgs);
+        });
+      };
       function _terminalAnswerHtml(text, body) {
         const expanded = _sourcesExpanded || !!body?.querySelector('.sources-content.expanded');
         return (_sourcesData ? _buildSourcesBox(_sourcesData, _sourcesType, expanded) : '')
@@ -3225,6 +3254,7 @@ import { invalidateSettings } from './appConfig.js';
       }
       function _renderTerminalAnswer(text, messageId = '', renderOwner, replacementScope) {
         if (renderOwner && !_turnRendering.accepts({ type: 'final_response', render_owner: renderOwner, replacement_scope: replacementScope })) return false;
+        _cancelQueuedStreamRender();
         _ensureVisibleRoundForDelta();
         const body = roundHolder?.querySelector('.body');
         if (!body) return false;
@@ -3286,6 +3316,7 @@ import { invalidateSettings } from './appConfig.js';
       function _ensureVisibleRoundForDelta() {
         if (!roundHolder || roundHolder.style.display !== 'none') return;
         if (sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId() !== streamSessionId) return;
+        _cancelQueuedStreamRender();
         const box = document.getElementById('chat-history');
         if (!box) {
           roundHolder.style.display = '';
@@ -3881,6 +3912,7 @@ import { invalidateSettings } from './appConfig.js';
       // one rich markdown render instead of richly finalizing thinking, then
       // rendering the reply, then replacing both again.
       _finalizeRoundRender = () => {
+        _cancelQueuedStreamRender();
         if (roundFinalized) return roundFinalization;
         const terminalHolder = roundHolder || holder;
         const dt = markdownModule.normalizeThinkingMarkup(_streamDisplayText(roundText));
@@ -3960,6 +3992,7 @@ import { invalidateSettings } from './appConfig.js';
 
       // Direct render helper for streaming text
       _renderStream = ({ knownNormal = false, displayText = null, replyText = null } = {}) => {
+        _cancelQueuedStreamRender();
         if (
           sessionModule.getCurrentSessionId
           && sessionModule.getCurrentSessionId() !== streamSessionId
@@ -4363,6 +4396,7 @@ import { invalidateSettings } from './appConfig.js';
                 if (!json.thinking && json.render_owner === 'streamed' && json.replacement_scope === 'turn') {
                   // The backend explicitly resumed synthesis after an
                   // intermediate structured answer. Start a fresh prose buffer.
+                  _cancelQueuedStreamRender();
                   accumulated = '';
                   roundText = '';
                   roundReplyText = null;
@@ -4439,9 +4473,9 @@ import { invalidateSettings } from './appConfig.js';
                     if (roundReplyText !== null) {
                       roundReplyText += _delta;
                       const replyDisplayText = _replyDisplayProjector.append(_delta, roundReplyText);
-                      _renderStream({ replyText: replyDisplayText });
+                      _queueStreamRender({ replyText: replyDisplayText });
                     } else {
-                      _renderStream({ knownNormal: true, displayText: _roundDisplayProjector.current() });
+                      _queueStreamRender({ knownNormal: true, displayText: _roundDisplayProjector.current() });
                     }
                     if (streamingTTS) window.aiTTSManager.streamingUpdate(roundText);
                   }
@@ -4505,6 +4539,7 @@ import { invalidateSettings } from './appConfig.js';
                 }
 
                 if (hasUnclosedThink && !isThinking) {
+                  _cancelQueuedStreamRender();
                   isThinking = true;
                   _thinkingMode = /<(?:think(?:ing)?|thought)(?:\s+[^>]*)?>|<\|channel>thought/i.test(normalizedRoundText)
                     ? 'tag'
@@ -4560,9 +4595,9 @@ import { invalidateSettings } from './appConfig.js';
                   if (roundReplyText !== null) {
                     roundReplyText += _delta;
                     const replyDisplayText = _replyDisplayProjector.append(_delta, roundReplyText);
-                    _renderStream({ replyText: replyDisplayText });
+                    _queueStreamRender({ replyText: replyDisplayText });
                   } else {
-                    _renderStream({ knownNormal: true, displayText: _roundDisplayProjector.current() });
+                    _queueStreamRender({ knownNormal: true, displayText: _roundDisplayProjector.current() });
                   }
                   // Feed streaming TTS with accumulated text
                   if (streamingTTS) window.aiTTSManager.streamingUpdate(roundText);
@@ -5556,8 +5591,9 @@ import { invalidateSettings } from './appConfig.js';
                 const teacherName = json.teacher_model || 'teacher';
                 const why = json.student_failure ? ` &mdash; <span style="opacity:0.7">${esc(json.student_failure)}</span>` : '';
                 banner.innerHTML = `<strong>Teacher takeover:</strong> escalating to <code>${esc(teacherName)}</code>${why}`;
-                chatBox.appendChild(banner);
                 // Reset round bubble state so the teacher's first text starts a new bubble
+                _finalizeRoundRender();
+                chatBox.appendChild(banner);
                 roundHolder = null;
                 roundText = '';
                 roundFinalized = false;
@@ -5981,6 +6017,7 @@ import { invalidateSettings } from './appConfig.js';
       } // end if (!_isBgFinal)
 
     } catch (err) {
+      _cancelQueuedStreamRender();
       // If a Stop or timeout was waiting for an identity header and the POST
       // failed before producing one, keep this on the cancellation path. There
       // is no safe headerless server cancel to send, but it must not be turned
@@ -6236,6 +6273,7 @@ import { invalidateSettings } from './appConfig.js';
         }
       }
     } finally {
+      _cancelQueuedStreamRender();
       _editorProgress = null;
       document.querySelectorAll('.agent-finish-editor').forEach(button => button.remove());
       _settleTurnRendering();

@@ -1,5 +1,5 @@
 {
- "digest": "30a45ffb20fadbe2",
+ "digest": "d3cc64e228526bf7",
  "elements": {
   "app-shell": {
    "app-loader": "976b4874a5f61b3f",
@@ -57,7 +57,7 @@
    "settings-modal": "024e1105a0e30409",
    "settings-nav-search": "096a5fb28c13e73e",
    "settings-row": "95b5d4b275d83ee4",
-   "settings-select": "e7720c6f673e2ca5",
+   "settings-select": "08d9f68ccc160efe",
    "settings-sidebar-toggle": "0c6c2890bb593437",
    "sidebar": "d182f0505197bc0b",
    "sidebar-brand": "960b29dbac10fc22",
@@ -698,18 +698,18 @@
    "laptop-light-comfortable": "2d7e7231a16c3bd3",
    "laptop-light-compact": "d413ff67b0ab0c91",
    "laptop-light-spacious": "b550eb8d2ac42987",
-   "phone-dark-comfortable": "facdade556dd2f32",
-   "phone-dark-compact": "c665819b6b689927",
-   "phone-dark-spacious": "facdade556dd2f32",
-   "phone-light-comfortable": "81cf4365ad06f0a8",
-   "phone-light-compact": "101aedc38260819f",
-   "phone-light-spacious": "81cf4365ad06f0a8",
-   "tablet-dark-comfortable": "ca0e303655211bd5",
-   "tablet-dark-compact": "f1c95b3dbc1da17f",
-   "tablet-dark-spacious": "ca0e303655211bd5",
-   "tablet-light-comfortable": "8281f8951b498cde",
-   "tablet-light-compact": "fbed92f7fca65e37",
-   "tablet-light-spacious": "8281f8951b498cde"
+   "phone-dark-comfortable": "471f2c92ea48fe7b",
+   "phone-dark-compact": "d37359cde88d5fde",
+   "phone-dark-spacious": "471f2c92ea48fe7b",
+   "phone-light-comfortable": "b08669a4fd7258a6",
+   "phone-light-compact": "feb52c5ca3f9f568",
+   "phone-light-spacious": "b08669a4fd7258a6",
+   "tablet-dark-comfortable": "353d704c134edef1",
+   "tablet-dark-compact": "a73496c9b600f744",
+   "tablet-dark-spacious": "353d704c134edef1",
+   "tablet-light-comfortable": "f3ab33ac721e15fd",
+   "tablet-light-compact": "bdd2e756342bfc93",
+   "tablet-light-spacious": "f3ab33ac721e15fd"
   },
   "bench": {
    "desktop-dark-comfortable": "28c3573dcf7cb166",

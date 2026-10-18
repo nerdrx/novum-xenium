@@ -82,6 +82,11 @@ and reviewed. On a mechanical CSS extraction it never should be: an extraction
 that preserves order produces an identical digest, and one that does not has
 changed the UI.
 
+On 2026-10-18, the mobile AI primary model selectors gained a 44px minimum
+height at viewport widths up to 768px for touch access. The reviewed snapshot
+showed this change only on phone and tablet; desktop and laptop styles remain
+unchanged. The element inventory is unchanged.
+
 ## Determinism
 
 The digest is only worth having if an unchanged stylesheet always produces the

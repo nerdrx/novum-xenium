@@ -1831,13 +1831,13 @@
             <div class="admin-toggle-sub" style="margin-bottom:8px">Search API used for web search and deep research.</div>
             <div class="settings-col">
               <div class="settings-row">
-                <label class="settings-label">Provider</label>
+                <label class="settings-label" id="set-searchProviderLabel" for="search-provider-btn">Provider</label>
                 <!-- Custom picker (with logos). Hidden native <select> mirrors
                      its value so the existing JS that reads
                      set-searchProvider keeps working unchanged. -->
                 <div class="adm-provider-picker search-provider-picker" id="search-provider-picker" style="flex:1;position:relative;top:5px;">
-                  <button type="button" class="adm-provider-btn" id="search-provider-btn">
-                    <span class="adm-provider-current"><span class="adm-provider-logo"></span><span class="adm-provider-name">SearXNG</span></span>
+                  <button type="button" class="adm-provider-btn" id="search-provider-btn" aria-labelledby="set-searchProviderLabel search-provider-name">
+                    <span class="adm-provider-current"><span class="adm-provider-logo"></span><span class="adm-provider-name" id="search-provider-name">SearXNG</span></span>
                     <svg class="adm-provider-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                   </button>
                   <div class="adm-provider-menu hidden" id="search-provider-menu"></div>
@@ -1856,7 +1856,7 @@
                 </button>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="How many web search results to fetch per query">Results per query</label>
+                <label class="settings-label" for="set-searchResultCount" title="How many web search results to fetch per query">Results per query</label>
                 <div style="display:flex;gap:8px;flex:1;">
                   <select id="set-searchResultCount" class="settings-select" style="flex:1;">
                     <option value="3">3</option>
@@ -1865,22 +1865,22 @@
                     <option value="20">20</option>
                     <option value="custom">Custom</option>
                   </select>
-                  <input id="set-searchResultCountCustom" type="number" class="settings-select" placeholder="Enter custom value" style="flex:1;display:none;min-width:120px;" min="1" max="100">
+                  <input id="set-searchResultCountCustom" type="number" class="settings-select" aria-label="Custom results per query" placeholder="Enter custom value" style="flex:1;display:none;min-width:120px;" min="1" max="100">
                 </div>
               </div>
               <div id="set-searchUrlRow" class="settings-row">
-                <label class="settings-label">URL</label>
+                <label class="settings-label" for="set-searchUrl">URL</label>
                 <input id="set-searchUrl" type="text" placeholder="http://localhost:8080 (optional)" class="settings-select">
               </div>
               <div id="set-searchKeyRow" class="settings-row" style="display:none;">
-                <label class="settings-label">API Key</label>
+                <label class="settings-label" for="set-searchApiKey">API Key</label>
                 <div style="position:relative;flex:1;display:flex;align-items:center;">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);opacity:0.55;pointer-events:none;"><path d="M21 2l-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="M15.5 7.5l3 3"/></svg>
                   <input id="set-searchApiKey" type="password" placeholder="API key" class="settings-select" style="flex:1;padding-left:28px;">
                 </div>
               </div>
               <div id="set-searchCxRow" class="settings-row" style="display:none;">
-                <label class="settings-label">CX ID</label>
+                <label class="settings-label" for="set-searchCx">CX ID</label>
                 <input id="set-searchCx" type="text" placeholder="Google PSE engine ID" class="settings-select">
               </div>
               <div class="settings-row" style="align-items:flex-start;">
@@ -1900,7 +1900,7 @@
             <div class="admin-toggle-sub" style="margin-bottom:8px">Deep Research runtime settings. Default Model is picked in <a href="#" data-go-settings-tab="ai" style="color:var(--accent, var(--red));text-decoration:underline;font-weight:600;">AI Defaults →</a></div>
             <div class="settings-col">
               <div class="settings-row">
-                <label class="settings-label">Search</label>
+                <label class="settings-label" for="set-researchSearch">Search</label>
                 <span style="margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;color:var(--fg);" id="set-researchSearch-logo"></span>
                 <select id="set-researchSearch" class="settings-select" style="width:358.5px;flex:0 0 auto;max-width:calc(100% - 24px);">
                   <option value="" data-search-logo="">Same as web search</option>
@@ -1913,25 +1913,25 @@
                 </select>
               </div>
               <div class="settings-row">
-                <label class="settings-label">Max Tokens</label>
+                <label class="settings-label" for="set-researchMaxTokens">Max Tokens</label>
                 <input id="set-researchMaxTokens" type="text" inputmode="numeric" placeholder="8192 (default)" class="settings-select" style="width:382.5px;flex:0 0 auto;margin-left:auto;">
               </div>
               <div class="settings-row">
-                <label class="settings-label">Extract Timeout</label>
+                <label class="settings-label" for="set-researchExtractTimeout">Extract Timeout</label>
                 <div style="position:relative;width:382.5px;flex:0 0 auto;margin-left:auto;">
                   <input id="set-researchExtractTimeout" type="text" inputmode="numeric" placeholder="90 sec" class="settings-select" style="width:100%;padding-right:30px;">
                   <span title="How long the researcher waits for a single URL to fetch and extract before giving up on it. Slow sites get skipped. Default 90 seconds." style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:16px;height:16px;border-radius:50%;border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;opacity:0.55;cursor:help;user-select:none;">?</span>
                 </div>
               </div>
               <div class="settings-row">
-                <label class="settings-label">Extract Parallel</label>
+                <label class="settings-label" for="set-researchExtractConcurrency">Extract Parallel</label>
                 <div style="position:relative;width:382.5px;flex:0 0 auto;margin-left:auto;">
                   <input id="set-researchExtractConcurrency" type="text" inputmode="numeric" placeholder="3" class="settings-select" style="width:100%;padding-right:30px;">
                   <span title="How many URLs the researcher fetches and extracts in parallel. Higher is faster but uses more memory/CPU. Default 3." style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:16px;height:16px;border-radius:50%;border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;opacity:0.55;cursor:help;user-select:none;">?</span>
                 </div>
               </div>
               <div class="settings-row">
-                <label class="settings-label">Timeout</label>
+                <label class="settings-label" for="set-researchRunTimeout">Timeout</label>
                 <input id="set-researchRunTimeout" type="text" inputmode="numeric" placeholder="1800 sec (0 = no limit)" class="settings-select" style="width:382.5px;flex:0 0 auto;margin-left:auto;">
               </div>
             </div>

@@ -711,24 +711,49 @@ async function _startQueuedDownload(task) {
     }
   }
   try {
+    const payload = { ...task.payload };
+    if (_envState.hfToken) payload.hf_token = _envState.hfToken;
     const res = await _fetchWithTimeout('/api/model/download', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(task.payload),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
       _updateTask(task.sessionId, { status: 'error', output: `HTTP ${res.status}: ${errText.slice(0, 200)}` });
       _renderRunningTab();
+      _processQueue();
       return;
     }
     const data = await res.json();
     if (!data.ok) {
       _updateTask(task.sessionId, { status: 'error', output: data.error || 'Unknown error' });
       _renderRunningTab();
+      _processQueue();
+      return;
+    }
+    if (!/^cookbook-[a-f0-9]{8}$/.test(String(data.session_id || ''))) {
+      _updateTask(task.sessionId, { status: 'error', output: 'Server returned an invalid download session ID' });
+      _renderRunningTab();
+      _processQueue();
       return;
     }
     const oldId = task.sessionId;
+    if (_isTombstoned(oldId)) {
+      _tombstoneTask(data.session_id);
+      try {
+        await _fetchWithTimeout('/api/shell/exec', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: _tmuxCmd(
+            { ...task, sessionId: data.session_id },
+            `kill-session -t ${data.session_id}`,
+          ) }),
+        });
+      } catch {}
+      _processQueue();
+      return;
+    }
     const launchedTask = { ...task, sessionId: data.session_id, id: data.session_id, status: 'running' };
     const key = _downloadDedupeKey(launchedTask);
     let found = false;
@@ -753,6 +778,7 @@ async function _startQueuedDownload(task) {
   } catch (e) {
     _updateTask(task.sessionId, { status: 'error', output: e.message || 'Network error' });
     _renderRunningTab();
+    _processQueue();
   }
 }
 
@@ -812,7 +838,7 @@ function _downloadDedupeKey(task) {
   if (!task || task.type !== 'download') return '';
   const repo = _downloadRepoKey(task);
   if (!repo) return '';
-  return `${_downloadHostKey(task)}\n${repo}`;
+  return `${_downloadHostKey(task)}\n${repo}\n${String(task.payload?.include || '').trim()}`;
 }
 
 function _pruneQueuedDownloadDuplicates(tasks) {
@@ -1005,6 +1031,7 @@ export function _removeTask(sessionId) {
 // Fade/slide the task card out, then remove it — so the smooth exit is the same
 // whether a task auto-stops or the user removes/kills it manually.
 function _animateOutThenRemove(el, sessionId) {
+  if (String(sessionId || '').startsWith('queue-')) _tombstoneTask(sessionId);
   if (!el || !el.style) { _removeTask(sessionId); return; }
   if (el._abort) el._abort.abort();
   el.style.transition = 'opacity 0.35s ease, transform 0.35s ease';
@@ -2980,6 +3007,9 @@ export function _renderRunningTab() {
     // already exited) silently left the live serve running while the
     // row disappeared from the UI.
     el.querySelector('.cookbook-task-action-kill').addEventListener('click', async () => {
+      if (task.type === 'download' && String(task.sessionId || '').startsWith('queue-')) {
+        _tombstoneTask(task.sessionId);
+      }
       const outputText = el.querySelector('.cookbook-output-pre')?.textContent || task.output || '';
       const isLive = task.type === 'serve' && ['running', 'ready', 'loading', 'warming', 'starting'].includes(task.status || '');
       const ollamaUnload = _ollamaUnloadCommand(task, outputText);
@@ -4524,4 +4554,4 @@ export function initRunning(shared) {
 }
 
 // Also export _retryDownload and _nextAvailablePort for use by other modules
-export { _retryDownload, _nextAvailablePort, _processQueue, _taskPort };
+export { _retryDownload, _nextAvailablePort, _processQueue, _startQueuedDownload, _taskPort };

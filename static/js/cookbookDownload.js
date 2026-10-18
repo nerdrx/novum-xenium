@@ -25,14 +25,33 @@ let _copyText;
 let _persistEnvState;
 let modelLogo;
 let esc;
-let _addTask;
 let _renderRunningTab;
 let _loadTasks;
 let _saveTasks;
+let _startQueuedDownload;
+let _downloadQueueSequence = 0;
 
 // Storage keys
 const SERVE_STATE_KEY = 'cookbook-serve-state';
-const _downloadStartsInFlight = new Set();
+
+function _newDownloadQueueId(tasks) {
+  const base = `queue-${Date.now().toString(36)}`;
+  let id;
+  do { id = `${base}-${_downloadQueueSequence++}`; }
+  while (tasks.some(task => task.sessionId === id));
+  return id;
+}
+
+function _queuedDownloadTask(tasks, name, payload, host) {
+  const id = _newDownloadQueueId(tasks);
+  return {
+    id, sessionId: id, name, type: 'download', status: 'queued', output: '',
+    ts: Date.now(), payload, remoteHost: payload.remote_host || host,
+    remoteServerKey: payload.remote_server_key || '',
+    remoteServerName: payload.remote_server_name || '',
+    sshPort: payload.ssh_port || '', platform: payload.platform || '',
+  };
+}
 
 function _fetchDownloadControlWithTimeout(input, init = {}, timeoutMs = 20000) {
   const controller = new AbortController();
@@ -588,7 +607,7 @@ export async function _runModelDownload(panel, model, backend, hostOverride) {
   if ((model.required_gb || 0) >= 10 || backend === 'llamacpp') payload.disable_hf_transfer = true;
   if (_envState.hfToken) payload.hf_token = _envState.hfToken;
   if (host) {
-    payload.remote_host = host;
+    payload.remote_host = selectedServer?.host || host;
     if (selectedServerKey && selectedServerKey !== 'local') payload.remote_server_key = selectedServerKey;
     if (srv.name) payload.remote_server_name = srv.name;
     const _sp = srv.port || _getPort(host);
@@ -614,7 +633,7 @@ export async function _runModelDownload(panel, model, backend, hostOverride) {
 
   const shortName = (model.name || repo).split('/').pop();
   const taskName = _downloadTaskName(shortName, payload);
-  const targetHost = host || 'local';
+  const targetHost = payload.remote_host || host || 'local';
 
   const tasks = _loadTasks();
   const sameDownload = (t) => {
@@ -670,52 +689,34 @@ export async function _runModelDownload(panel, model, backend, hostOverride) {
       }
     } catch { /* probe failed — fall through and let the user launch */ }
   }
-  const activeOnHost = tasks.find(t => t.type === 'download' && (t.status === 'running' || t.status === 'queued') && (t.remoteHost || 'local') === targetHost);
+  const currentTasks = _loadTasks();
+  const currentDuplicate = currentTasks.find(t => sameDownload(t) && (t.status === 'running' || t.status === 'queued'));
+  if (currentDuplicate) {
+    _renderRunningTab();
+    uiModule.showToast(`${shortName} is already ${currentDuplicate.status === 'queued' ? 'queued' : 'downloading'}`);
+    return;
+  }
+  const activeOnHost = currentTasks.find(t => t.type === 'download' && (t.status === 'running' || t.status === 'queued') && (t.remoteHost || 'local') === targetHost);
 
   if (activeOnHost) {
-    const queueId = `queue-${Date.now().toString(36)}`;
     const allTasks = _loadTasks();
-    allTasks.push({ id: queueId, sessionId: queueId, name: taskName, type: 'download', status: 'queued', output: '', ts: Date.now(), payload, remoteHost: host, remoteServerKey: payload.remote_server_key || '', remoteServerName: payload.remote_server_name || '', sshPort: payload.ssh_port || '', platform: payload.platform || '' });
+    const queued = _queuedDownloadTask(allTasks, taskName, payload, host);
+    allTasks.push(queued);
     _saveTasks(allTasks);
     _renderRunningTab();
     uiModule.showToast(`Queued ${shortName} — waiting for current download`);
     return;
   }
 
-  // The task list is persisted only after the POST returns. Guard the gap so
-  // rapid clicks (or two touch events) cannot start duplicate downloads before
-  // either request has registered its task.
-  const startKey = `${targetHost}\n${payload.repo_id}`;
-  if (_downloadStartsInFlight.has(startKey)) {
-    uiModule.showToast(`${shortName} download is already starting`);
-    return;
-  }
-  _downloadStartsInFlight.add(startKey);
-  try {
-    const res = await _fetchDownloadControlWithTimeout('/api/model/download', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      // Errors carry actionable text (e.g. "tmux is required …"); keep them up
-      // long enough to read, matching the serve path's duration (issue #1355).
-      uiModule.showToast('Download failed: HTTP ' + res.status, 9000);
-      return;
-    }
-    const data = await res.json();
-    if (!data.ok) {
-      uiModule.showToast('Download failed: ' + (data.error || ''), 9000);
-      return;
-    }
-    _addTask(data.session_id, taskName, 'download', payload);
-    uiModule.showToast(`Downloading ${taskName}...`);
-  } catch (e) {
-    uiModule.showToast('Download failed: ' + e.message, 9000);
-  } finally {
-    _downloadStartsInFlight.delete(startKey);
-  }
+  // Persist a placeholder and let the shared starter claim this host
+  // synchronously before its first await. Other clicks then enter the queue.
+  const pendingTasks = _loadTasks();
+  const queued = _queuedDownloadTask(pendingTasks, taskName, payload, host);
+  pendingTasks.push(queued);
+  _saveTasks(pendingTasks);
+  _renderRunningTab();
+  uiModule.showToast(`Starting ${taskName} download...`);
+  await _startQueuedDownload(queued);
 }
 
 // ── Init ──
@@ -738,8 +739,8 @@ export function initDownload(shared) {
   _persistEnvState = shared._persistEnvState;
   modelLogo = shared.modelLogo;
   esc = shared.esc;
-  _addTask = shared._addTask;
   _renderRunningTab = shared._renderRunningTab;
   _loadTasks = shared._loadTasks;
   _saveTasks = shared._saveTasks;
+  _startQueuedDownload = shared._startQueuedDownload;
 }

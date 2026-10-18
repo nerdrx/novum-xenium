@@ -25621,7 +25621,10 @@ async def stream_agent_loop(
                 def schema_priority(schema):
                     name = schema.get("function", {}).get("name", "")
                     if name in _explicit_requested_tools:
-                        return (-1, 0, name)
+                        return (-2, 0, name)
+                    if name in prioritized_forced_schema_names:
+                        forced_browser_rank = browser_core.get(name, len(browser_core))
+                        return (-1, forced_browser_rank, name)
                     if coding_requested and name in coding_core:
                         return (0, coding_core[name], name)
                     if workspace and not browser_requested and not coding_requested and name in workspace_core:
@@ -25630,9 +25633,6 @@ async def stream_agent_loop(
                         return (0, 5, name)
                     if name in budget_priority_names:
                         return (0, 6, name)
-                    if name in prioritized_forced_schema_names:
-                        forced_browser_rank = browser_core.get(name, len(browser_core))
-                        return (1, forced_browser_rank, name)
                     if browser_requested and name in browser_core:
                         return (2, browser_core[name], name)
                     if name in _runtime_skill_tools:
@@ -25666,6 +25666,23 @@ async def stream_agent_loop(
                 if required_forced_schema_names and not (
                     required_forced_schema_names & selected_names
                 ):
+                    forced_schema_costs = sorted(
+                        (
+                            schema.get("function", {}).get("name", ""),
+                            estimate_tool_schema_tokens([schema]),
+                        )
+                        for schema in route_tools
+                        if schema.get("function", {}).get("name", "")
+                        in required_forced_schema_names
+                    )
+                    logger.warning(
+                        "[agent] forced tool schemas exceed available route budget "
+                        "model=%s schema_cap=%s selected_tokens=%s forced=%s "
+                        "selected=%s forced_schema_costs=%s",
+                        candidate_model, schema_cap, selected_tokens,
+                        sorted(required_forced_schema_names), sorted(selected_names),
+                        forced_schema_costs,
+                    )
                     raise ValueError(
                         "Agent context budget cannot fit the requested tool schemas "
                         f"for model {candidate_model} within its {window_description}; "

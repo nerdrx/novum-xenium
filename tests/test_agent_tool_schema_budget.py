@@ -1038,6 +1038,63 @@ def test_optional_browser_discovery_does_not_starve_forced_web_tool(monkeypatch)
     assert model_context.estimate_tool_schema_tokens(tools) <= 1500
 
 
+def test_forced_web_fetch_precedes_optional_context_and_workspace_schemas(monkeypatch):
+    import src.model_context as model_context
+
+    names = {
+        "adopt_served_model", "ask_teacher", "delegate_subagent", "get_weather",
+        "list_downloads", "manage_settings", "manage_tasks", "trigger_research",
+        "search_tools", "context_search", "ls", "web_fetch",
+    }
+    schemas = [
+        schema for schema in loop.FUNCTION_TOOL_SCHEMAS
+        if schema.get("function", {}).get("name") in names
+    ]
+    requests = []
+    _configure_budget_fixture(monkeypatch, schemas, requests)
+    monkeypatch.setattr(model_context, "budget_context_for_model", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        loop, "get_setting",
+        lambda key, default=None: 6000 if key == "agent_input_token_budget" else default,
+    )
+
+    # This creates a 2,700-token protected user tail and a 6,116-token source
+    # prompt: the unknown-context default leaves only 1,252 schema tokens
+    # after preserving that request and the 2,048-token output reserve.
+    system = "Neutral instructions for this synthetic route. " * 242
+    question = "Please assess this information carefully. " * 214
+    assert model_context.estimate_tokens([{"role": "user", "content": question}]) == 2700
+    assert model_context.estimate_tokens([
+        {"role": "system", "content": system}, {"role": "user", "content": question},
+    ]) == 6116
+
+    async def run():
+        return [event async for event in loop.stream_agent_loop(
+            "https://local.test/v1", "gpt-6-astra",
+            [{"role": "system", "content": system}, {"role": "user", "content": question}],
+            workspace="/workspace", session_id="schema-budget-session",
+            relevant_tools={
+                "adopt_served_model", "ask_teacher", "delegate_subagent", "get_weather",
+                "list_downloads", "manage_settings", "manage_tasks", "trigger_research",
+            },
+            forced_tools={"web_fetch"}, max_rounds=1, _is_teacher_run=True,
+        )]
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    request = requests[0]
+    selected = request["kwargs"]["tools"]
+    selected_names = {schema["function"]["name"] for schema in selected}
+    assert {"search_tools", "web_fetch"} <= selected_names
+    assert any(message.get("content") == question for message in request["messages"])
+    assert (
+        model_context.estimate_tokens(request["messages"])
+        + model_context.estimate_tool_schema_tokens(selected)
+        + request["kwargs"]["max_tokens"]
+        <= 6000
+    )
+
+
 def test_unoffered_raw_browser_navigate_is_not_executed(monkeypatch):
     browser_name = "mcp__builtin_browser__browser_navigate"
     browser = {"type": "function", "function": {

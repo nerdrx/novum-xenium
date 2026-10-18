@@ -181,10 +181,12 @@ def test_terminal_download_status_skips_remote_cache_probes():
 def test_download_start_has_concurrent_click_guard():
     source = _read("static/js/cookbookDownload.js")
 
-    assert "const _downloadStartsInFlight = new Set();" in source
-    assert "_downloadStartsInFlight.has(startKey)" in source
-    assert "_downloadStartsInFlight.add(startKey);" in source
-    assert "_downloadStartsInFlight.delete(startKey);" in source
+    assert "const queued = _queuedDownloadTask(pendingTasks, taskName, payload, host);" in source
+    assert "await _startQueuedDownload(queued);" in source
+    assert "const base = `queue-${Date.now().toString(36)}`;" in source
+    running = _read("static/js/cookbookRunning.js")
+    assert "const _pt = _pre.find(t => t.sessionId === task.sessionId);" in running
+    assert "_pt._startLaunched = true;" in running
 
 
 def test_dependency_scan_only_latest_response_can_render():
@@ -489,7 +491,8 @@ def test_download_control_requests_are_bounded_but_sse_stream_remains_cancellabl
     assert "function _fetchDownloadControlWithTimeout(input, init = {}, timeoutMs = 20000)" in source
     assert "setTimeout(() => controller.abort(), timeoutMs)" in source
     assert "_fetchDownloadControlWithTimeout('/api/shell/exec'" in source
-    assert "_fetchDownloadControlWithTimeout('/api/model/download'" in source
+    running = _read("static/js/cookbookRunning.js")
+    assert "_fetchWithTimeout('/api/model/download'" in running
     assert "const res = await fetch('/api/shell/stream'" in source
     assert "signal: controller.signal" in source
 

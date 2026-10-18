@@ -16,7 +16,7 @@ import { SERVE_FAVORITES_KEY } from './cookbookServe.js';
 import {
   initRunning,
   _loadTasks, _saveTasks, _addTask, _removeTask,
-  _tmuxCmd, _renderRunningTab, _clearCookbookNotif,
+  _tmuxCmd, _renderRunningTab, _clearCookbookNotif, _startQueuedDownload,
   _launchServeTask, _serveAutoFix, _serveAutoRetry, _serveAutoRetryReplace, _serveAutoRetryRemove,
   _startBackgroundMonitor, _syncFromServer,
   _retryDownload, _nextAvailablePort, _processQueue,
@@ -3880,6 +3880,7 @@ initDownload({
   _renderRunningTab,
   _loadTasks,
   _saveTasks,
+  _startQueuedDownload,
 });
 
 // Init serve module (adds cached models, serve panels, launch)

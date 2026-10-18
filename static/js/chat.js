@@ -2415,6 +2415,19 @@ import { invalidateSettings } from './appConfig.js';
     // session now, and everything below (state resets, registration, POST)
     // is its business alone.
     if (_streamGenerations.get(streamSessionId) !== streamGeneration) return;
+    // Navigation can happen while the model switch is pending. The composer
+    // and attachment strip belong to the newly selected chat, so cancel this
+    // pre-dispatch send before it snapshots or clears either global UI state.
+    if (String(sessionModule.getCurrentSessionId() || '') !== String(streamSessionId || '')) {
+      _pendingRunStops.delete(streamSessionId + ':' + streamGeneration);
+      if (_sendStates.get(streamSessionId) === _sendState) _sendStates.delete(streamSessionId);
+      if (_streamSessionId === streamSessionId) _streamSessionId = null;
+      const foregroundSessionId = sessionModule.getCurrentSessionId();
+      if (_sendInFlight || _sendStates.has(foregroundSessionId)) return;
+      const activeForeground = _syncForegroundStreamGlobals();
+      if (!activeForeground) updateSubmitButton('idle', submitBtn);
+      return;
+    }
 
     _terminalSavedStreams.delete(streamSessionId);
     const streamQuery = msg;
@@ -2624,7 +2637,7 @@ import { invalidateSettings } from './appConfig.js';
       if (!approvalForSend) {
         try {
           _sendPerf.mark('upload_begin');
-          ids = await fileHandlerModule.uploadPending({ sessionId: sessionModule.getCurrentSessionId() });
+          ids = await fileHandlerModule.uploadPending({ sessionId: streamSessionId });
           _sendPerf.mark('upload_done');
         } catch(e) {
           console.error('upload failed', e);

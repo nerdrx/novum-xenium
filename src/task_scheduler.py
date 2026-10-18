@@ -20,6 +20,33 @@ from src.task_action_policy import (
 
 logger = logging.getLogger(__name__)
 
+# Reconciliation performs global orphan cleanup as well as owner-scoped
+# migration/seeding. Preserve its previous single-event-loop serialization when
+# the synchronous database work runs in worker threads.
+_DEFAULTS_RECONCILE_LOCK = threading.RLock()
+
+
+def _run_serialized_defaults_reconcile(callback, owner):
+    with _DEFAULTS_RECONCILE_LOCK:
+        return callback(owner)
+
+
+async def _run_defaults_reconcile_in_worker(callback, owner):
+    """Run reconciliation off-loop, but finish its DB transaction on cancel."""
+    worker = asyncio.create_task(asyncio.to_thread(
+        _run_serialized_defaults_reconcile, callback, owner
+    ))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # The old inline DB body could not be cancelled mid-transaction. Drain
+        # the worker before propagating cancellation to preserve that contract.
+        try:
+            await asyncio.shield(worker)
+        except Exception:
+            logger.exception("Default reconciliation worker failed during cancellation")
+        raise
+
 
 def _is_sft_fixture_owner(owner: str | None) -> bool:
     """Synthetic SFT accounts may manage tasks but must never auto-fire them."""
@@ -2680,6 +2707,23 @@ class TaskScheduler:
 
     async def ensure_defaults(self, owner: str):
         """Create default housekeeping tasks for this owner (idempotent per action)."""
+        cancelled = False
+        try:
+            await _run_defaults_reconcile_in_worker(self._ensure_defaults_sync, owner)
+        except asyncio.CancelledError:
+            cancelled = True
+        # Always ensure the personal assistant exists (independent of other tasks).
+        try:
+            await self.ensure_assistant_defaults(owner)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception as e:
+            logger.warning(f"Failed to seed assistant for {owner}: {e}")
+        if cancelled:
+            raise asyncio.CancelledError
+
+    def _ensure_defaults_sync(self, owner: str):
+        """Synchronously migrate and seed task defaults inside the worker."""
         from core.database import SessionLocal, ScheduledTask
         from src.agent_runtime.authority import seal_task_authority
         try:
@@ -2929,15 +2973,13 @@ class TaskScheduler:
             logger.warning(f"Failed to create default tasks: {e}")
         finally:
             db.close()
-        # Always ensure the personal assistant exists (independent of other tasks).
-        try:
-            await self.ensure_assistant_defaults(owner)
-        except Exception as e:
-            logger.warning(f"Failed to seed assistant for {owner}: {e}")
 
     async def ensure_assistant_defaults(self, owner: str):
-        """Create the personal-assistant CrewMember, its pinned session, and three
-        daily check-in ScheduledTasks for this owner — idempotent on is_default_assistant."""
+        """Create default assistant data without blocking the event loop."""
+        await _run_defaults_reconcile_in_worker(self._ensure_assistant_defaults_sync, owner)
+
+    def _ensure_assistant_defaults_sync(self, owner: str):
+        """Create the owner's default assistant and pinned session if missing."""
         # Hard-reject synthetic owners. Without this, AuthMiddleware-stamped
         # values like 'internal-tool' (loopback agent-tool callbacks) or 'api'
         # (bearer-token integrations) would get a real assistant + 3 daily

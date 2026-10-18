@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.helpers.stylesheets import stylesheet_cache_version, stylesheet_urls
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -116,4 +117,4 @@ def test_packet_renderer_is_wired_for_live_and_reconnected_streams():
     assert "packet evidence is not part of persisted chat history" in source
     assert "recordCodingWorkToolActivity(json, holder, node)" in source
     assert "recordCodingWorkToolActivity(json, holder, currentToolBubble)" in source
-    assert 'href="/static/task-activity-upgrade.css?v=20261016upstream1"' in (ROOT / "static/index.html").read_text(encoding="utf-8")
+    assert f"/static/task-activity-upgrade.css?v={stylesheet_cache_version()}" in stylesheet_urls()

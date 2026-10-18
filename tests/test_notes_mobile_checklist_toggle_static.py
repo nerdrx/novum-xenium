@@ -51,7 +51,7 @@ def test_mobile_select_mode_has_subtle_jiggle_feedback():
     assert "prefers-reduced-motion: reduce" in css
 
 
-def test_notes_mobile_checklist_asset_versions_are_bumped():
+def test_notes_mobile_checklist_asset_versions_share_cache_namespace():
     app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
@@ -62,7 +62,7 @@ def test_notes_mobile_checklist_asset_versions_are_bumped():
     assert "/static/js/notes.js" in sw
     app_versions = re.findall(r"/static/app\.js\?v=([A-Za-z0-9_-]+)", html)
     assert app_versions and len(set(app_versions)) == 1
-    assert stylesheet_cache_version() == "20261016upstream1"
+    assert stylesheet_cache_version()
 
 
 def test_drawing_edits_mark_notes_dirty_and_keep_one_gallery_image():

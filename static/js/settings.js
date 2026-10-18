@@ -443,29 +443,46 @@ async function initDefaultChat() {
     _fillModelSelect(selectEl, _selectableEndpointModels(ep), selected, false);
   }
 
-  try {
-    _endpoints = await _fetchModelEndpoints();
-    _fillEndpointSelect(epSel, _endpoints, epSel.value, false);
-  } catch (e) { console.warn('Failed to load endpoints for default chat', e); }
-
   function refreshModels(selectedModel) { fillModels(modelSel, epSel.value, selectedModel); }
   function refreshEndpointOptions(selectedEndpoint, selectedModel) {
     _fillEndpointSelect(epSel, _endpoints, selectedEndpoint !== undefined ? selectedEndpoint : epSel.value, false);
     refreshModels(selectedModel !== undefined ? selectedModel : modelSel.value);
   }
 
+  let userChangedSelection = false;
+  epSel.addEventListener('change', function() {
+    if (!_endpoints.some(function(ep) { return ep.id === epSel.value && ep.is_enabled; })) return;
+    userChangedSelection = true;
+    refreshModels('');
+    saveDefault();
+  });
+  modelSel.addEventListener('change', function() {
+    var endpoint = _endpoints.find(function(ep) { return ep.id === epSel.value && ep.is_enabled; });
+    if (!_selectableEndpointModels(endpoint).includes(modelSel.value)) return;
+    userChangedSelection = true;
+    saveDefault();
+  });
+
+  try {
+    _endpoints = await _fetchModelEndpoints();
+    _fillEndpointSelect(epSel, _endpoints, epSel.value, false);
+    refreshModels(modelSel.value);
+  } catch (e) { console.warn('Failed to load endpoints for default chat', e); }
+
   try {
     var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
-    if (settings.default_endpoint_id
-        && _endpoints.some(function(ep) { return ep.id === settings.default_endpoint_id && ep.is_enabled; })) {
-      epSel.value = settings.default_endpoint_id;
+    if (!userChangedSelection) {
+      if (settings.default_endpoint_id
+          && _endpoints.some(function(ep) { return ep.id === settings.default_endpoint_id && ep.is_enabled; })) {
+        epSel.value = settings.default_endpoint_id;
+      }
+      refreshModels(settings.default_model || '');
+    } else {
+      refreshModels(modelSel.value);
     }
-    refreshModels(settings.default_model || '');
   } catch (e) { console.warn('Failed to load default chat settings', e); }
-
-  epSel.addEventListener('change', function() { refreshModels(''); saveDefault(); });
-  modelSel.addEventListener('change', saveDefault);
 
   function saveDefault() {
     return saveSettings({

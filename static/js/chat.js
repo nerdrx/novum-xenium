@@ -2631,11 +2631,17 @@ import { invalidateSettings } from './appConfig.js';
       }
       if (_pendingAttachInfo && !ids.length && !(_pendingRegenAttachments && _pendingRegenAttachments.length)) {
         if (_userMsgEl && _userMsgEl.parentNode) _userMsgEl.remove();
+        const restoreSubmittedText = !!msg && !messageInput.value
+          && String(sessionModule.getCurrentSessionId() || '') === String(streamSessionId || '');
         if (fileHandlerModule.wasLastUploadCancelled && !fileHandlerModule.wasLastUploadCancelled()) {
           uiModule.showError && uiModule.showError('Upload failed. Attachment kept so you can retry.');
         }
         updateSubmitButton('idle', submitBtn);
         _releaseSendFlag();
+        if (restoreSubmittedText) {
+          messageInput.value = msg;
+          messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         return;
       }
 

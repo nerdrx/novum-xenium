@@ -6,7 +6,7 @@ import uiModule from './ui.js?v=20260916largetoolscroll1';
 import { loadPanel } from './panels.js?v=20260909movepicklayer1';
 import spinnerModule from './spinner.js';
 import { makeWindowDraggable } from './windowDrag.js';
-import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
+import { bindMenuDismiss, dismissOrRemove, registerEscapeLayer } from './escMenuStack.js';
 import { topPortalZ } from './toolWindowZOrder.js';
 import sessionModule from './sessions.js';
 import fileHandlerModule from './fileHandler.js?v=20260909mobileattachmentedit1';
@@ -19,6 +19,8 @@ let _libraryRequestSequence = 0;
 let _libraryRefreshPending = false;
 let _libraryResultsFilterKey = null;
 let _galleryScrollHandler = null;
+let _galleryDetailOpener = null;
+let _galleryDetailEscapeUnregister = null;
 
 // ── Image editor, loaded on first use ──
 // galleryEditor.js plus everything under js/editor/ is 54 modules / 576 KB.
@@ -1619,6 +1621,8 @@ function _galleryCardHtml(img, selectMode) {
     .trim();
   const labelText = (img.caption || '').trim() || (img.prompt || '').trim() || fallbackName || 'Photo';
   const promptPreview = labelText.length > 60 ? labelText.substring(0, 58) + '...' : labelText;
+  const openLabel = `Open ${_isVideoUrl(img.url) ? 'video' : 'photo'}: ${labelText}`;
+  const selectLabel = `Select ${_isVideoUrl(img.url) ? 'video' : 'photo'}: ${labelText}`;
   const favCls = img.favorite ? ' gallery-fav-active' : '';
   const sourceLabel = img.model === 'imported' ? 'Imported' : (img.model || 'Image');
   const badges = [
@@ -1644,7 +1648,7 @@ function _galleryCardHtml(img, selectMode) {
         ${badges ? `<span class="gallery-card-badges">${badges}</span>` : ''}
       </div>
       <div class="gallery-card-info">
-        <div class="gallery-card-prompt">${_esc(promptPreview)}</div>
+        <button type="button" class="gallery-card-open" data-id="${_esc(img.id)}" data-open-label="${_esc(openLabel)}" data-select-label="${_esc(selectLabel)}" aria-label="${_esc(selectMode ? selectLabel : openLabel)}"${selectMode ? ' aria-pressed="false"' : ''}><span class="gallery-card-prompt">${_esc(promptPreview)}</span></button>
         <div class="gallery-card-meta">
           ${sourceLabel ? `<span class="gallery-card-model">${_esc(sourceLabel)}</span>` : ''}
           <span class="gallery-card-date">${date}</span>
@@ -1659,7 +1663,7 @@ function _wireGalleryCards(cards) {
       if (e.target.closest('.gallery-fav-btn, .gallery-dl-btn')) return;
       if (document.getElementById('gallery-select-btn')?.classList.contains('active')) return;
       const img = _items.find(i => i.id === card.dataset.id);
-      if (img) _openDetail(img);
+      if (img) _openDetail(img, card.querySelector('.gallery-card-open'));
     });
   });
 
@@ -1762,9 +1766,26 @@ function _renderGrid(appendItems = null) {
 
 // ---- Detail overlay ----
 
-function _openDetail(img) {
+function _closeGalleryDetail() {
   const detail = document.getElementById('gallery-detail');
   if (!detail) return;
+  detail.style.display = 'none';
+  _galleryDetailEscapeUnregister?.();
+  _galleryDetailEscapeUnregister = null;
+  const opener = _galleryDetailOpener;
+  _galleryDetailOpener = null;
+  const fallback = document.getElementById('gallery-close');
+  const target = opener?.isConnected && opener.getClientRects().length && !opener.closest('[hidden]')
+    ? opener : fallback?.isConnected && fallback.getClientRects().length ? fallback : null;
+  target?.focus({ preventScroll: true });
+}
+
+function _openDetail(img, opener = null) {
+  const detail = document.getElementById('gallery-detail');
+  if (!detail) return;
+  const wasOpen = detail.style.display !== 'none';
+  const previousFocusId = wasOpen && detail.contains(document.activeElement) ? document.activeElement.id : '';
+  if (!wasOpen) _galleryDetailOpener = opener;
   // Drop any face-overlay resize listener from the previous photo
   // before the new render attaches its own.
 
@@ -1921,10 +1942,19 @@ function _openDetail(img) {
     </div>
   `;
   detail.style.display = 'flex';
+  if (!wasOpen) {
+    _galleryDetailEscapeUnregister?.();
+    _galleryDetailEscapeUnregister = registerEscapeLayer(
+      _closeGalleryDetail,
+      () => detail.isConnected && detail.style.display !== 'none',
+    );
+  }
 
   document.getElementById('gallery-detail-back').addEventListener('click', () => {
-    detail.style.display = 'none';
+    _closeGalleryDetail();
   });
+  if (!wasOpen) document.getElementById('gallery-detail-back').focus({ preventScroll: true });
+  else if (previousFocusId) document.getElementById(previousFocusId)?.focus({ preventScroll: true });
 
   const _openSourceChat = async () => {
     if (!img.session_id) return false;
@@ -2956,7 +2986,14 @@ export function openGallery() {
     document.querySelectorAll('#gallery-grid .gallery-select-dot').forEach(d => {
       d.style.display = on ? '' : 'none';
       if (!on) d.classList.remove('selected');
-      d.closest('.gallery-card')?.classList.toggle('gallery-card-selectable', on);
+      const card = d.closest('.gallery-card');
+      card?.classList.toggle('gallery-card-selectable', on);
+      const openButton = card?.querySelector('.gallery-card-open');
+      if (openButton) {
+        openButton.setAttribute('aria-label', on ? openButton.dataset.selectLabel : openButton.dataset.openLabel);
+        if (on) openButton.setAttribute('aria-pressed', String(d.classList.contains('selected')));
+        else openButton.removeAttribute('aria-pressed');
+      }
     });
     if (!on) document.querySelectorAll('.gallery-bulk-menu').forEach(m => m.remove());
     _updateGalleryBulkCount();
@@ -2990,7 +3027,11 @@ export function openGallery() {
   // Select all / none.
   document.getElementById('gallery-bulk-select-all')?.addEventListener('change', (e) => {
     const on = e.target.checked;
-    document.querySelectorAll('#gallery-grid .gallery-select-dot').forEach(d => d.classList.toggle('selected', on));
+    document.querySelectorAll('#gallery-grid .gallery-select-dot').forEach(d => {
+      d.classList.toggle('selected', on);
+      const openButton = d.closest('.gallery-card')?.querySelector('.gallery-card-open');
+      openButton?.setAttribute('aria-pressed', String(on));
+    });
     _updateGalleryBulkCount();
   });
 
@@ -3000,7 +3041,11 @@ export function openGallery() {
     if (!card) return;
     e.stopPropagation();
     const dot = card.querySelector('.gallery-select-dot');
-    if (dot) { dot.classList.toggle('selected'); _updateGalleryBulkCount(); }
+    if (dot) {
+      dot.classList.toggle('selected');
+      card.querySelector('.gallery-card-open')?.setAttribute('aria-pressed', String(dot.classList.contains('selected')));
+      _updateGalleryBulkCount();
+    }
   });
 
   // Mobile: long-press on a thumbnail enters select mode and marks that
@@ -3030,6 +3075,7 @@ export function openGallery() {
         const dot = lpCard.querySelector('.gallery-select-dot');
         if (dot && !dot.classList.contains('selected')) {
           dot.classList.add('selected');
+          lpCard.querySelector('.gallery-card-open')?.setAttribute('aria-pressed', 'true');
           _updateGalleryBulkCount();
         }
       }, LONG_PRESS_MS);
@@ -3290,14 +3336,11 @@ export function openGallery() {
       }
       const detail = document.getElementById('gallery-detail');
       if (detail && detail.style.display !== 'none') {
-        // Click Back so Esc and the visible button always do the same thing —
-        // future tweaks to Back's teardown automatically apply to Esc too.
-        // stopImmediatePropagation blocks app.js's generic dynamic-modal Esc
-        // handler that would otherwise close the whole gallery underneath us.
+        // Restore focus to the explicit opener (or a visible Gallery control)
+        // before the app-level Escape handler can close the whole Gallery.
         e.preventDefault();
         e.stopImmediatePropagation();
-        const back = document.getElementById('gallery-detail-back');
-        if (back) back.click(); else detail.style.display = 'none';
+        _closeGalleryDetail();
       } else {
         closeGallery();
       }
@@ -3413,6 +3456,9 @@ function _doCloseGallery() {
     return;
   }
   _open = false;
+  _galleryDetailEscapeUnregister?.();
+  _galleryDetailEscapeUnregister = null;
+  _galleryDetailOpener = null;
   _libraryRequestSequence += 1;
   _libraryRefreshPending = false;
   clearTimeout(_searchDebounce);

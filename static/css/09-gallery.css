@@ -384,6 +384,14 @@
   padding: 0;
 }
 .gallery-dl-btn:hover { background: rgba(0,0,0,0.7); color: #fff; }
+@media (max-width: 768px) {
+  .gallery-fav-btn,
+  .gallery-dl-btn {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+  }
+}
 /* In select mode the per-thumbnail hover buttons (favorite + download) just
    get in the way of picking — hide them so the card is a clean select target.
    `body.gallery-selecting` is the authoritative signal (one class for the
@@ -786,6 +794,23 @@ body.gallery-selecting .gallery-dl-btn,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.gallery-card-info > .gallery-card-open {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gallery-card-open:focus-visible {
+  outline: 2px solid var(--accent, var(--red));
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 .gallery-card-meta {
   display: flex;

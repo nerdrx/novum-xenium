@@ -6,7 +6,8 @@ export function createNotesSubmission({
   clock,
   uid,
   effects,
-  fetchNotes
+  fetchNotes,
+  saveNote = api.saveNote
 }) {
   const state = app.state;
   const { _loadFiredReminders, _saveFiredReminders, _loadGlowedReminders, _saveGlowedReminders, _loadDraft, _clearDraft } = persistence;
@@ -48,7 +49,7 @@ export function createNotesSubmission({
       }
       effects.render();
       // Background save
-      api.saveNote(payload).then(saved => {
+      saveNote(payload).then(saved => {
         if (JSON.stringify(_loadDraft(draftId)) === submittedDraft) _clearDraft(draftId);
         if (!isEdit && saved && saved.id) {
           // Replace temp ID with real one from server. AND re-render : the

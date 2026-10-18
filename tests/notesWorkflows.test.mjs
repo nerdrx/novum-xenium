@@ -106,6 +106,94 @@ test('submission preserves top ordering, server ID replacement and newer draft r
   assert.equal(renders, 2);
 });
 
+test('editor save invalidates an older list response', async () => {
+  const app = owner([{ id: 'note', title: 'Before' }]);
+  let resolveList, resolveSave;
+  const workflows = createNotesWorkflows({
+    app,
+    api: {
+      listNotes: () => new Promise(resolve => { resolveList = resolve; }),
+      saveNote: () => new Promise(resolve => { resolveSave = resolve; }),
+    },
+    effects: {},
+  });
+  const submission = createNotesSubmission({
+    app,
+    persistence: {
+      _loadFiredReminders: () => new Set(), _saveFiredReminders() {},
+      _loadGlowedReminders: () => new Set(), _saveGlowedReminders() {},
+      _loadDraft: () => null, _clearDraft() {},
+    },
+    clock: { now: () => 0 }, uid: () => 'new',
+    api: { saveNote: () => assert.fail('submission must use guarded save') },
+    saveNote: workflows._saveNote,
+    effects: { render() {}, showError() {}, clearGlow() {} },
+    fetchNotes: workflows._fetchNotes,
+  });
+
+  const refresh = workflows._fetchNotes();
+  submission.submitNote({ id: 'note', title: 'After' }, app.state.notes[0], true);
+  assert.equal(app.state.notes[0].title, 'After');
+  assert.equal(workflows.getDataRevision(), 1);
+
+  resolveList({ ok: true, json: async () => ({ notes: [{ id: 'note', title: 'Before' }] }) });
+  assert.equal(await refresh, false);
+  assert.equal(app.state.notes[0].title, 'After');
+
+  resolveSave({ id: 'note', title: 'After' });
+  await drain();
+  assert.equal(app.state.notes[0].title, 'After');
+});
+
+test('editor save failure still reports error and refreshes notes', async () => {
+  const app = owner([{ id: 'note', title: 'Before' }]), errors = [];
+  let rejectSave, refreshes = 0;
+  const workflows = createNotesWorkflows({
+    app,
+    api: { saveNote: () => new Promise((_resolve, reject) => { rejectSave = reject; }) },
+    effects: {},
+  });
+  const submission = createNotesSubmission({
+    app,
+    persistence: {
+      _loadFiredReminders: () => new Set(), _saveFiredReminders() {},
+      _loadGlowedReminders: () => new Set(), _saveGlowedReminders() {},
+      _loadDraft: () => null, _clearDraft() {},
+    },
+    clock: { now: () => 0 }, uid: () => 'new',
+    api: { saveNote: () => assert.fail('submission must use guarded save') },
+    saveNote: workflows._saveNote,
+    effects: { render() {}, showError: error => errors.push(error), clearGlow() {} },
+    fetchNotes: async () => { refreshes++; },
+  });
+  submission.submitNote({ id: 'note', title: 'After' }, app.state.notes[0], true);
+  rejectSave(Error('offline'));
+  await drain();
+  assert.deepEqual(errors, ['Save failed: offline']);
+  assert.equal(refreshes, 1);
+  assert.equal(workflows.getDataRevision(), 2);
+});
+
+test('archive patch invalidates an older list response', async () => {
+  const app = owner([{ id: 'note', title: 'Before', archived: false }]);
+  let resolveList, resolvePatch;
+  const workflows = createNotesWorkflows({
+    app,
+    api: {
+      listNotes: () => new Promise(resolve => { resolveList = resolve; }),
+      patchNote: () => new Promise(resolve => { resolvePatch = resolve; }),
+    },
+    effects: { render() {}, archived() {}, showError() {} },
+  });
+  const refresh = workflows._fetchNotes();
+  workflows._archiveNoteById('note');
+  resolveList({ ok: true, json: async () => ({ notes: [{ id: 'note', title: 'Before', archived: false }] }) });
+  assert.equal(await refresh, false);
+  assert.deepEqual(app.state.notes, []);
+  resolvePatch({ id: 'note', archived: true });
+  await drain();
+});
+
 test('selection can exit only after synchronous acceptance', () => {
   const app = owner([]), order = [];
   app.selectId('a');

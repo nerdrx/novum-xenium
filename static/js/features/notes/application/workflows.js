@@ -7,7 +7,7 @@ export function createNotesWorkflows({
   const state = app.state;
   const _undoStack = [];
   const _renderNotes = effects.render;
-  const patchNote = api.patchNote;
+  const patchNote = _patchNote;
   const uiModule = effects;
   let fetchSequence = 0;
   let dataRevision = 0;

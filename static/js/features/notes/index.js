@@ -494,6 +494,7 @@ const submission = createNotesSubmission({
   clock,
   uid: _uid,
   fetchNotes: _fetchNotes,
+  saveNote: note => workflows._saveNote(note),
   effects: { render: _renderNotes, showError: (...args) => uiModule.showError(...args), clearGlow: id => _setReminderCardGlow(id, false) }
 });
 const drafts = createNotesDrafts({

@@ -111,7 +111,7 @@ function _isLineBreakInputEvent(e) {
   return e
     && (e.inputType === 'insertLineBreak'
       || e.inputType === 'insertParagraph'
-      || e.data === '\n');
+      || (!e.inputType && e.data === '\n'));
 }
 
 function _submitMobileQueuedInput(input) {
@@ -3588,8 +3588,18 @@ function initializeEventListeners() {
     window.addEventListener('odysseus:chat-busy-change', () => _syncMobileEnterKeyHint(textarea));
     uiModule.autoResize(textarea);
     let previousTextareaValue = textarea.value || '';
+    let draftEditPending = false;
+    let draftEditResetTimer = null;
+    const _noteDraftEdit = () => {
+      draftEditPending = true;
+      clearTimeout(draftEditResetTimer);
+      draftEditResetTimer = setTimeout(() => {
+        draftEditPending = false;
+        draftEditResetTimer = null;
+      }, 0);
+    };
     textarea.addEventListener('beforeinput', (e) => {
-      if (_isLineBreakInputEvent(e) && _shouldQueueFromMobileLineBreak(textarea)) {
+      if (!e.isComposing && !draftEditPending && _isLineBreakInputEvent(e) && _shouldQueueFromMobileLineBreak(textarea)) {
         e.preventDefault();
         e.stopPropagation();
         _submitMobileQueuedInput(textarea);
@@ -3597,8 +3607,14 @@ function initializeEventListeners() {
     });
     textarea.addEventListener('input', (e) => {
       const currentValue = textarea.value || '';
-      const insertedLineBreak = _isLineBreakInputEvent(e)
-        || _countLineBreaks(currentValue) > _countLineBreaks(previousTextareaValue);
+      const preserveDraftEdit = draftEditPending;
+      if (draftEditPending) {
+        clearTimeout(draftEditResetTimer);
+        draftEditPending = false;
+        draftEditResetTimer = null;
+      }
+      const insertedLineBreak = !e.isComposing && !preserveDraftEdit && (_isLineBreakInputEvent(e)
+        || (!e.inputType && _countLineBreaks(currentValue) > _countLineBreaks(previousTextareaValue)));
       if (insertedLineBreak && _shouldQueueFromMobileLineBreak(textarea)) {
         textarea.value = currentValue.replace(/\n+$/g, '');
         previousTextareaValue = textarea.value || '';
@@ -3610,10 +3626,15 @@ function initializeEventListeners() {
       _syncMobileEnterKeyHint(textarea);
     });
     textarea.addEventListener('paste', () => {
+      _noteDraftEdit();
       setTimeout(() => uiModule.autoResize(textarea), 1);
     });
+    textarea.addEventListener('drop', _noteDraftEdit);
     textarea.addEventListener('keydown', (e) => {
       const isMobile = _isMobileChatInput();
+      if (isMobile && e.key === 'Enter' && !e.isComposing && (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey)) {
+        _noteDraftEdit();
+      }
 
       if (_shouldQueueFromMobileEnter(e, textarea) || (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isMobile)) {
         // If ghost autocomplete is active, accept the suggestion instead of submitting

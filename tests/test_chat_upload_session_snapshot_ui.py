@@ -17,4 +17,4 @@ def test_chat_upload_uses_send_session_snapshot():
         capture_output=True, text=True, timeout=90, cwd=root,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"mode": "cancel-on-session-change"' in result.stdout
+    assert '"mode": "session-owned-model-switch"' in result.stdout

@@ -720,23 +720,12 @@ async function _startQueuedDownload(task) {
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      _updateTask(task.sessionId, { status: 'error', output: `HTTP ${res.status}: ${errText.slice(0, 200)}` });
-      _renderRunningTab();
-      _processQueue();
-      return;
+      throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
     }
     const data = await res.json();
-    if (!data.ok) {
-      _updateTask(task.sessionId, { status: 'error', output: data.error || 'Unknown error' });
-      _renderRunningTab();
-      _processQueue();
-      return;
-    }
+    if (!data.ok) throw new Error(data.error || 'Unknown error');
     if (!/^cookbook-[a-f0-9]{8}$/.test(String(data.session_id || ''))) {
-      _updateTask(task.sessionId, { status: 'error', output: 'Server returned an invalid download session ID' });
-      _renderRunningTab();
-      _processQueue();
-      return;
+      throw new Error('Server returned an invalid download session ID');
     }
     const oldId = task.sessionId;
     if (_isTombstoned(oldId)) {
@@ -776,9 +765,11 @@ async function _startQueuedDownload(task) {
     await new Promise(r => setTimeout(r, 2000));
     _renderRunningTab();
   } catch (e) {
-    _updateTask(task.sessionId, { status: 'error', output: e.message || 'Network error' });
+    const message = e.message || 'Network error';
+    _updateTask(task.sessionId, { status: 'error', output: message });
     _renderRunningTab();
     _processQueue();
+    uiModule.showToast('Download failed: ' + message, 9000);
   }
 }
 

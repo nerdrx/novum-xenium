@@ -42,6 +42,8 @@ const server = http.createServer((req, res) => {
       window.uploadFiles = [];
       window.messageSessions = [];
       window.messageBodies = [];
+      window.messageFileIds = [];
+      window.messageRoutes = [];
       window.uploadAttempts = 0;
       const originalFetch = window.fetch.bind(window);
       window.fetch = async (input, init = {}) => {
@@ -60,15 +62,27 @@ const server = http.createServer((req, res) => {
             status: 200, headers: { 'Content-Type': 'application/json' },
           });
         }
+        if (url.includes('/api/session/') && url.includes('/truncate')) {
+          return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
         if (url.includes('/api/chat_stream')) {
           window.messageSessions.push(init.body.get('session'));
           window.messageBodies.push(init.body.get('message'));
+          window.messageFileIds.push(JSON.parse(init.body.get('attachments') || '[]'));
+          window.messageRoutes.push({
+            model: init.body.get('selected_model'),
+            endpointUrl: init.body.get('selected_endpoint_url'),
+          });
           if (window.holdStreamSession === init.body.get('session')) {
             return new Response(new ReadableStream({ start(controller) { window.streamController = controller; window.bStreamStarted = true; } }), {
               status: 200, headers: { 'Content-Type': 'text/event-stream' },
             });
           }
-          return new Response('data: [DONE]\n\n', { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+          const streamText = window.streamText;
+          window.streamText = null;
+          return new Response((streamText ? `data: ${JSON.stringify({ delta: streamText })}\n\n` : '') + 'data: [DONE]\n\n', {
+            status: 200, headers: { 'Content-Type': 'text/event-stream' },
+          });
         }
         return originalFetch(input, init);
       };
@@ -126,6 +140,7 @@ const server = http.createServer((req, res) => {
       window.messageSessions = [];
       window.modelSwitchWaiting = false;
       window.__odysseusModelSwitchPromise = {
+        sessionId: 'chat-A',
         then(resolve) { window.modelSwitchWaiting = true; window.resolveAModelSwitch = resolve; },
       };
       window.pendingASettled = false;
@@ -135,15 +150,26 @@ const server = http.createServer((req, res) => {
     await page.evaluate(() => {
       const { sessions, chat } = window.testModules;
       sessions.setCurrentSessionId('chat-B');
-      // Clear A's stale foreground Stop state, then hold a separate B preflight.
+      // Clear A's stale foreground Stop state, then prove B ignores A's tag.
       window.navigationReset = chat.handleChatSubmit({ preventDefault() {} });
+      document.getElementById('message').value = 'B independent draft';
+      window.messageSessions = [];
+      window.messageBodies = [];
+      window.independentBSettled = false;
+      window.independentBPromise = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.independentBSettled = true; });
+    });
+    await page.waitForFunction(() => window.independentBSettled === true);
+    assert.deepEqual(await page.evaluate(() => window.messageSessions), ['chat-B'], 'B send skips the unrelated held A switch');
+    assert.equal(await page.evaluate(() => window.pendingASettled), false, 'B completes before A switch resolves');
+    await page.evaluate(() => {
       document.getElementById('message').value = 'B pending draft';
       window.bModelSwitchWaiting = false;
       window.__odysseusModelSwitchPromise = {
+        sessionId: 'chat-B',
         then(resolve) { window.bModelSwitchWaiting = true; window.resolveBModelSwitch = resolve; },
       };
       window.pendingBSettled = false;
-      window.pendingBPromise = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.pendingBSettled = true; });
+      window.pendingBPromise = window.testModules.chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.pendingBSettled = true; });
     });
     await page.waitForFunction(() => window.bModelSwitchWaiting === true);
     await page.evaluate(() => window.resolveAModelSwitch());
@@ -156,14 +182,14 @@ const server = http.createServer((req, res) => {
     }));
     assert.equal(pendingBAfterACancel.mode, 'streaming', 'A cancellation leaves B pending send indicator intact');
     assert.equal(pendingBAfterACancel.draft, 'B pending draft');
-    assert.equal(pendingBAfterACancel.posts, 0, 'neither preflight POSTs before its model switch resolves');
+    assert.equal(pendingBAfterACancel.posts, 1, 'only the completed independent B send has posted');
     assert.equal(pendingBAfterACancel.busy, true, 'A cancellation preserves B pending-send busy state');
     await page.evaluate(() => {
       window.testModules.files.clearPending();
       window.resolveBModelSwitch();
     });
     await page.waitForFunction(() => window.pendingBSettled === true);
-    assert.deepEqual(await page.evaluate(() => window.messageSessions), ['chat-B'], 'B pending send continues after A cleanup');
+    assert.deepEqual(await page.evaluate(() => window.messageSessions), ['chat-B', 'chat-B'], 'B pending send continues after A cleanup');
 
     // A same-chat deferred send continues normally after the model switch settles.
     await page.evaluate(async () => {
@@ -179,12 +205,14 @@ const server = http.createServer((req, res) => {
       window.messageBodies = [];
       window.modelSwitchWaiting = false;
       window.__odysseusModelSwitchPromise = {
+        sessionId: 'chat-A',
         then(resolve) { window.modelSwitchWaiting = true; window.resolveModelSwitch = resolve; },
       };
       window.sameChatSettled = false;
       window.sameChatPromise = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.sameChatSettled = true; });
     });
     await page.waitForFunction(() => window.modelSwitchWaiting === true);
+    assert.equal(await page.evaluate(() => window.sameChatSettled), false, 'same-owner A send waits for its tagged switch');
     await page.evaluate(() => window.resolveModelSwitch());
     await page.waitForFunction(() => window.sameChatSettled === true);
     const sameChat = await page.evaluate(() => ({
@@ -199,6 +227,161 @@ const server = http.createServer((req, res) => {
     assert.equal(sameChat.messageSession, 'chat-A');
     assert.equal(sameChat.messageBody, 'Same-chat prompt');
     assert.equal(sameChat.pending, 0);
+
+    // One-shot bubble state and regen file IDs belong to the send that
+    // captured them, even if that send waits on another chat's switch.
+    await page.evaluate(() => {
+      const { sessions, chat } = window.testModules;
+      sessions.setCurrentSessionId('chat-A');
+      chat.setDisplayOverride('A ONLY DISPLAY');
+      chat.setHideUserBubble();
+      window.__odysseusModelSwitchPromise = {
+        sessionId: 'chat-A',
+        then(resolve) { window.modelSwitchWaiting = true; window.resolveAModelSwitch = resolve; },
+      };
+      window.modelSwitchWaiting = false;
+      window.messageSessions = [];
+      window.messageBodies = [];
+      window.messageFileIds = [];
+      window.sendButtonHandler = () => {
+        window.aSendSettled = false;
+        window.aSend = chat.handleChatSubmit({ preventDefault() { } }).finally(() => { window.aSendSettled = true; });
+      };
+      document.querySelector('.send-btn').addEventListener('click', window.sendButtonHandler);
+      const history = document.getElementById('chat-history');
+      history.innerHTML = '<div class="msg msg-user" data-raw="A regeneration prompt"><div class="body">A regeneration prompt</div><span data-file-id="A_ONLY_FILE_ID"></span></div>'
+        + '<div class="msg msg-assistant" data-raw="Prior answer"><div class="body">Prior answer</div></div>';
+      const ai = history.querySelector('.msg-assistant');
+      window.regenerateA = chat.regenerateFrom(ai);
+    });
+    await page.waitForFunction(() => window.modelSwitchWaiting === true);
+    await page.evaluate(() => {
+      const { sessions, chat } = window.testModules;
+      document.querySelector('.send-btn').removeEventListener('click', window.sendButtonHandler);
+      sessions.setCurrentSessionId('chat-B');
+      // The normal navigation path lets the newly visible chat detach A's
+      // foreground UI before submitting its own message.
+      window.navigationResetForOneShot = chat.handleChatSubmit({ preventDefault() {} });
+      document.getElementById('message').value = 'B normal bubble';
+      window.__odysseusModelSwitchPromise = null;
+      window.independentBSettled = false;
+      window.independentB = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.independentBSettled = true; });
+    });
+    await page.waitForFunction(() => window.independentBSettled === true);
+    const isolatedOneShots = await page.evaluate(() => ({
+      sessions: window.messageSessions,
+      bodies: window.messageBodies,
+      fileIds: window.messageFileIds,
+      bubbleText: Array.from(document.querySelectorAll('#chat-history .msg-user .body')).at(-1)?.textContent || '',
+    }));
+    assert.deepEqual(isolatedOneShots.sessions, ['chat-B']);
+    assert.deepEqual(isolatedOneShots.bodies, ['B normal bubble']);
+    assert.deepEqual(isolatedOneShots.fileIds, [[]], 'A regen file IDs cannot leak into B payload');
+    assert.equal(isolatedOneShots.bubbleText, 'B normal bubble', 'A hide/display state cannot affect B bubble');
+    await page.evaluate(() => window.resolveAModelSwitch());
+    await page.waitForFunction(() => window.aSendSettled === true);
+    assert.deepEqual(await page.evaluate(() => window.messageSessions), ['chat-B'], 'navigated A regen cancels before POST');
+
+    // A same-chat regeneration still sends its captured file ID.
+    await page.evaluate(() => {
+      const { sessions, chat } = window.testModules;
+      sessions.setCurrentSessionId('chat-A');
+      window.__odysseusModelSwitchPromise = null;
+      window.messageSessions = [];
+      window.messageBodies = [];
+      window.messageFileIds = [];
+      window.streamText = 'Synthetic regenerated answer';
+      const history = document.getElementById('chat-history');
+      history.innerHTML = '<div class="msg msg-user" data-raw="Same-chat regen"><div class="body">Same-chat regen</div><span data-file-id="SAME_CHAT_FILE_ID"></span></div>'
+        + '<div class="msg msg-assistant" data-raw="Prior answer"><div class="body">Prior answer</div></div>';
+      const ai = history.querySelector('.msg-assistant');
+      window.regenSettled = false;
+      window.regenSendHandler = () => {
+        window.sameChatRegenSend = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.regenSettled = true; });
+      };
+      document.querySelector('.send-btn').addEventListener('click', window.regenSendHandler, { once: true });
+      window.regenerateA = chat.regenerateFrom(ai);
+    });
+    await page.waitForFunction(() => window.regenSettled === true);
+    const sameChatRegen = await page.evaluate(() => ({
+      sessions: window.messageSessions,
+      fileIds: window.messageFileIds[0],
+    }));
+    assert.deepEqual(sameChatRegen.sessions, ['chat-A']);
+    assert.deepEqual(sameChatRegen.fileIds, ['SAME_CHAT_FILE_ID'], 'same-chat regen retains its original attachment ID');
+
+    // Same-chat public one-shot helpers still affect their intended send.
+    await page.evaluate(() => {
+      const { sessions, chat } = window.testModules;
+      sessions.setCurrentSessionId('chat-A');
+      document.getElementById('chat-history').innerHTML = '';
+      document.getElementById('message').value = 'Same-chat hidden continuation';
+      chat.setHideUserBubble();
+      chat.setPendingContinue(document.createElement('div'));
+      window.__odysseusModelSwitchPromise = null;
+      window.messageSessions = [];
+      window.messageBodies = [];
+      window.sameChatOneShotSettled = false;
+      window.sameChatOneShot = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.sameChatOneShotSettled = true; });
+    });
+    await page.waitForFunction(() => window.sameChatOneShotSettled === true);
+    assert.deepEqual(await page.evaluate(() => window.messageSessions), ['chat-A']);
+    assert.equal(await page.evaluate(() => document.querySelector('#chat-history .msg-user')), null, 'same-chat hide state still suppresses its bubble');
+
+    await page.evaluate(() => {
+      const { sessions, chat } = window.testModules;
+      sessions.setCurrentSessionId('chat-A');
+      document.getElementById('chat-history').innerHTML = '';
+      document.getElementById('message').value = 'Same-chat visible prompt';
+      chat.setDisplayOverride('Same-chat visible override');
+      window.messageSessions = [];
+      window.sameChatDisplaySettled = false;
+      window.sameChatDisplay = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.sameChatDisplaySettled = true; });
+    });
+    await page.waitForFunction(() => window.sameChatDisplaySettled === true);
+    assert.equal(await page.locator('#chat-history .msg-user .body').textContent(), 'Same-chat visible override');
+
+    // The route submitted to the backend must reflect the confirmed picker
+    // choice made while this same-chat send was waiting.
+    await page.evaluate(() => {
+      const { sessions, chat } = window.testModules;
+      sessions.setCurrentSessionId('chat-A');
+      window.originalRouteGetters = {
+        model: sessions.getCurrentModel,
+        endpoint: sessions.getCurrentEndpointUrl,
+      };
+      window.routeFixture = { model: 'old-model', endpoint: 'http://old.example' };
+      sessions.getCurrentModel = () => window.routeFixture.model;
+      sessions.getCurrentEndpointUrl = () => window.routeFixture.endpoint;
+      window.messageSessions = [];
+      window.messageRoutes = [];
+      document.getElementById('message').value = 'Confirm the new route';
+      window.modelSwitchWaiting = false;
+      window.__odysseusModelSwitchPromise = {
+        sessionId: 'chat-A',
+        then(resolve) { window.modelSwitchWaiting = true; window.resolveRouteSwitch = resolve; },
+      };
+      window.routeSendSettled = false;
+      window.routeSend = chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.routeSendSettled = true; });
+    });
+    await page.waitForFunction(() => window.modelSwitchWaiting === true);
+    await page.evaluate(() => {
+      window.routeFixture = { model: 'new-model', endpoint: 'http://new.example' };
+      window.resolveRouteSwitch();
+    });
+    await page.waitForFunction(() => window.routeSendSettled === true);
+    const routeAfterSwitch = await page.evaluate(() => ({
+      session: window.messageSessions[0],
+      route: window.messageRoutes[0],
+    }));
+    assert.equal(routeAfterSwitch.session, 'chat-A');
+    assert.deepEqual(routeAfterSwitch.route, { model: 'new-model', endpointUrl: 'http://new.example' });
+    await page.evaluate(() => {
+      const { sessions } = window.testModules;
+      sessions.getCurrentModel = window.originalRouteGetters.model;
+      sessions.getCurrentEndpointUrl = window.originalRouteGetters.endpoint;
+      window.__odysseusModelSwitchPromise = null;
+    });
 
     // Same-chat HTTP failure keeps the file and prompt; the retry uses the same chat ID.
     await page.evaluate(async () => {
@@ -233,7 +416,7 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(retry.messageSessions, ['chat-A']);
     assert.equal(retry.pending, 0);
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ pass: true, mode: 'cancel-on-session-change', switched, pendingBAfterACancel, sameChat, retry, pageErrors: errors }, null, 2));
+    console.log(JSON.stringify({ pass: true, mode: 'session-owned-model-switch', switched, pendingBAfterACancel, sameChat, isolatedOneShots, sameChatRegen, routeAfterSwitch, retry, pageErrors: errors }, null, 2));
   } finally {
     await browser.close();
     await new Promise(resolve => server.close(resolve));

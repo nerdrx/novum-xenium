@@ -76,20 +76,25 @@ def test_bfl_download_defaults_to_bundle_but_preserves_explicit_include_and_host
     helpers = re.search(r"const FLUX2_KLEIN_SHARED_COMPONENTS = \[.*?\n\];", source, re.S)
     recipe = re.search(r"export function flux2KleinDownloadRecipe\(variant\) \{.*?\n\}", source, re.S)
     bundle = re.search(r"export async function downloadFlux2KleinBundle\(.*?\n\}", source, re.S)
+    queue_sequence = re.search(r"let _downloadQueueSequence = 0;", source)
+    queue_id = re.search(r"function _newDownloadQueueId\(tasks\) \{.*?\n\}", source, re.S)
+    queued_task = re.search(r"function _queuedDownloadTask\(tasks, name, payload, host\) \{.*?\n\}", source, re.S)
     run = re.search(
         r"export async function _runModelDownload\(.*?(?=\n// ── Init ──)", source, re.S
     )
-    assert helpers and recipe and bundle and run
+    assert helpers and recipe and bundle and queue_sequence and queue_id and queued_task and run
     declarations = "\n".join((
         helpers.group(0),
         recipe.group(0).replace("export function", "function", 1),
         bundle.group(0).replace("export async function", "async function", 1),
+        queue_sequence.group(0),
+        queue_id.group(0),
+        queued_task.group(0),
         run.group(0).replace("export async function", "async function", 1),
     ))
     script = r"""
 const requests = [];
 let _envState = {env:'none', envPath:'', hfToken:'', servers:[]};
-const _downloadStartsInFlight = new Set();
 const uiModule = {showToast() {}};
 const window = {cookbookModule:{_serverKey:()=> 'gpu-key'}};
 const document = {getElementById:()=>null};
@@ -105,11 +110,7 @@ const _buildEnvPrefix = () => '';
 const _loadTasks = () => [];
 const _saveTasks = () => {};
 const _renderRunningTab = () => {};
-const _addTask = () => {};
-const _fetchDownloadControlWithTimeout = async (_url, init) => {
-  requests.push(JSON.parse(init.body));
-  return {ok:true, json:async()=>({ok:true,session_id:'fixture'})};
-};
+const _startQueuedDownload = async task => { requests.push({...task.payload}); };
 __FUNCTIONS__
 const panel = {querySelectorAll:()=>[]};
 await _runModelDownload(panel, {name:'black-forest-labs/FLUX.2-klein-4B'}, 'stable-diffusion.cpp', 'gpu.example');

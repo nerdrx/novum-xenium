@@ -60,7 +60,7 @@ let now = 1000;
 Date.now = () => now;
 const localStorage = { getItem: () => null, setItem() {} };
 const _envState = { hfToken: 'hf_SYNTHETIC_ONLY', servers: [], env: 'none', envPath: '', platform: '' };
-const uiModule = { showToast: m => toasts.push(m), showError() {} };
+const uiModule = { showToast: (message, duration) => toasts.push({message, duration}), showError() {} };
 const window = { cookbookModule: { _serverKey: srv => srv.name } };
 const document = { getElementById: () => null, querySelector: () => null };
 const _loadTasks = () => JSON.parse(JSON.stringify(state));
@@ -251,6 +251,9 @@ await Promise.resolve();
 await _runModelDownload(panel, {name:'org/B'}, 'huggingface', 'x');
 requests[0].resolve({ok:true,json:async()=>({ok:false,error:'synthetic failure'})});
 await first;
+if (!toasts.some(toast => toast.message.startsWith('Download failed: synthetic failure') && toast.duration === 9000)) {
+  throw new Error('shared starter did not preserve readable download failure toast');
+}
 await Promise.resolve();
 if (requests.length !== 2 || requests[1].payload.repo_id !== 'org/B') throw new Error('failed start did not release host to queued task');
 requests[1].resolve({ok:true,json:async()=>({ok:true,session_id:'cookbook-eeee0005'})});

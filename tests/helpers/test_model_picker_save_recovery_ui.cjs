@@ -46,7 +46,7 @@ const server = http.createServer((req, res) => {
 
 const waitUntil = async (fn, timeoutMs = 3000) => {
   const until = Date.now() + timeoutMs;
-  while (Date.now() < until) { if (fn()) return; await new Promise(r => setTimeout(r, 10)); }
+  while (Date.now() < until) { if (await fn()) return; await new Promise(r => setTimeout(r, 10)); }
   throw new Error('Timed out waiting for fixture state');
 };
 
@@ -74,10 +74,76 @@ const waitUntil = async (fn, timeoutMs = 3000) => {
       await page.route('**/api/session/s1', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"detail":"fixture failure"}' }));
       await choose(page, 'Alpha');
       await page.waitForFunction(() => !window.__odysseusModelSwitchPromise);
-      assert.equal(await page.locator('#model-picker-label').textContent(), 'old-model');
+      assert.match(await page.locator('#model-picker-label').textContent(), /old-model/);
       assert.equal(await page.evaluate(() => window.sessions[0].model), 'old-model');
       assert.equal(await page.evaluate(() => window.__odysseusLastPickedRoute.model), 'old-model');
-      assert.match(await page.locator('#toast').textContent(), /previous selection kept.*retry/i);
+      assert.match(await page.locator('#toast').textContent(), /check the current model before retrying/i);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // A stalled PATCH aborts on deadline, releases the switch promise, and lets
+    // the next same-session pick proceed without changing the confirmed route.
+    {
+      const { page, errors } = await newPage();
+      await page.evaluate(() => {
+        const nativeSetTimeout = window.setTimeout.bind(window);
+        const nativeClearTimeout = window.clearTimeout.bind(window);
+        window.__pickTimerCounts = { created: 0, cleared: 0 };
+        window.__pickTimeoutIds = new Set();
+        window.__pickTimeoutCallbacks = new Map();
+        window.setTimeout = (fn, delay, ...args) => {
+          if (delay === 15000) {
+            window.__pickTimerCounts.created++;
+            const id = nativeSetTimeout(fn, delay, ...args);
+            window.__pickTimeoutIds.add(id);
+            window.__pickTimeoutCallbacks.set(id, () => fn(...args));
+            return id;
+          }
+          return nativeSetTimeout(fn, delay, ...args);
+        };
+        window.clearTimeout = id => {
+          if (window.__pickTimeoutIds.delete(id)) {
+            window.__pickTimerCounts.cleared++;
+            window.__pickTimeoutCallbacks.delete(id);
+          }
+          return nativeClearTimeout(id);
+        };
+        const calls = [];
+        const nativeFetch = window.fetch.bind(window);
+        window.__pickCalls = calls;
+        window.fetch = (url, options = {}) => {
+          if (!String(url).includes('/api/session/s1') || options.method !== 'PATCH') return nativeFetch(url, options);
+          calls.push({ url, model: options.body?.get('model') || '' });
+          if (calls.length === 1) return new Promise((resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+          });
+          return new Promise(resolve => { window.__releaseSecondPick = () => resolve(new Response('{}', { status: 200 })); });
+        };
+        window.__fireNextPickDeadline = () => {
+          const callback = window.__pickTimeoutCallbacks.values().next().value;
+          if (!callback) throw new Error('No pending model-pick deadline');
+          callback();
+        };
+      });
+      await choose(page, 'Alpha');
+      await waitUntil(() => page.evaluate(() => window.__pickCalls.length === 1));
+      assert.equal(await page.evaluate(() => window.__odysseusModelSwitchPromise.sessionId), 's1');
+      await choose(page, 'Beta');
+      assert.equal(await page.evaluate(() => window.__pickCalls.length), 1, 'next pick waits for first PATCH deadline');
+      await page.evaluate(() => window.__fireNextPickDeadline());
+      await waitUntil(() => page.evaluate(() => window.__pickCalls.length === 2));
+      assert.deepEqual(await page.evaluate(() => window.__pickCalls.map(call => call.model)), ['alpha-model', 'beta-model']);
+      assert.equal(await page.evaluate(() => window.sessions[0].model), 'old-model', 'timed-out pick must not optimistically change confirmed model');
+      assert.equal(await page.evaluate(() => window.__odysseusLastPickedRoute.model), 'old-model', 'pending model must not replace confirmed send route');
+      assert.equal(await page.evaluate(() => window.__odysseusModelSwitchPromise.sessionId), 's1');
+      await page.evaluate(() => window.__releaseSecondPick());
+      await page.waitForFunction(() => !window.__odysseusModelSwitchPromise);
+      await page.waitForTimeout(60);
+      assert.equal(await page.evaluate(() => window.sessions[0].model), 'beta-model');
+      assert.equal(await page.evaluate(() => window.__odysseusLastPickedRoute.model), 'beta-model');
+      assert.equal(await page.evaluate(() => window.__pickCalls.length), 2, 'timeout must not duplicate PATCH');
+      assert.deepEqual(await page.evaluate(() => window.__pickTimerCounts), { created: 2, cleared: 2 });
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -101,13 +167,13 @@ const waitUntil = async (fn, timeoutMs = 3000) => {
       await choose(page, 'Beta');
       await page.waitForTimeout(80);
       assert.deepEqual(calls, ['alpha-model'], 'B waits for A instead of racing its PATCH');
-      assert.equal(await page.locator('#model-picker-label').textContent(), 'old-model', 'pending picks keep last confirmed label');
+      assert.match(await page.locator('#model-picker-label').textContent(), /old-model/, 'pending picks keep last confirmed label');
       releaseA();
       await waitUntil(() => calls.length === 2);
       await page.waitForFunction(() => !window.__odysseusModelSwitchPromise);
       assert.deepEqual(calls, ['alpha-model', 'beta-model']);
       assert.equal(await page.evaluate(() => window.sessions[0].model), 'beta-model');
-      assert.equal(await page.locator('#model-picker-label').textContent(), 'beta-model');
+      assert.match(await page.locator('#model-picker-label').textContent(), /beta-model/);
       assert.equal(await page.evaluate(() => window.__odysseusLastPickedRoute.model), 'beta-model');
       assert.deepEqual(errors, []);
       await page.close();
@@ -121,13 +187,14 @@ const waitUntil = async (fn, timeoutMs = 3000) => {
       await page.route('**/api/session/s1', async route => { await held; await route.fulfill({ status: 200, body: '{}' }); });
       await choose(page, 'Alpha');
       await page.waitForTimeout(40);
+      assert.equal(await page.evaluate(() => window.__odysseusModelSwitchPromise.sessionId), 's1');
       await page.evaluate(() => window.setCurrentSession('s2'));
-      assert.equal(await page.locator('#model-picker-label').textContent(), 'other-model');
+      assert.match(await page.locator('#model-picker-label').textContent(), /other-model/);
       release();
       await page.waitForFunction(() => !window.__odysseusModelSwitchPromise);
       assert.equal(await page.evaluate(() => window.sessions[0].model), 'alpha-model');
       assert.equal(await page.evaluate(() => window.sessions[1].model), 'other-model');
-      assert.equal(await page.locator('#model-picker-label').textContent(), 'other-model');
+      assert.match(await page.locator('#model-picker-label').textContent(), /other-model/);
       assert.equal(await page.evaluate(() => window.__odysseusLastPickedRoute.model), 'old-model',
         'a successful save for the inactive chat must not replace the active send route');
       assert.deepEqual(errors, []);
@@ -170,7 +237,7 @@ const waitUntil = async (fn, timeoutMs = 3000) => {
       assert.deepEqual(calls, [], 'auto-selection is discarded when its captured chat is no longer active');
       assert.equal(await page.evaluate(() => window.sessions[0].model), 'old-model');
       assert.equal(await page.evaluate(() => window.sessions[1].model), 'other-model');
-      assert.equal(await page.locator('#model-picker-label').textContent(), 'other-model');
+      assert.match(await page.locator('#model-picker-label').textContent(), /other-model/);
       assert.deepEqual(errors, []);
       await page.close();
     }

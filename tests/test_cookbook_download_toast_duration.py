@@ -9,15 +9,18 @@ guards the durations at the source level.
 import re
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parent.parent / "static/js/cookbookDownload.js"
+SRC = Path(__file__).resolve().parent.parent / "static/js/cookbookRunning.js"
 _MIN_MS = 5000
 
 
 def test_download_failure_toasts_stay_visible():
-    # Each download-failure toast is a single line; assert each carries an
-    # explicit duration >= _MIN_MS so the actionable error stays readable.
+    # Starting a download now uses the shared Running-tab starter. Keep its
+    # actionable failure toast visible long enough to read.
+    source = SRC.read_text(encoding="utf-8")
+    start = source.split("async function _startQueuedDownload(task) {", 1)[1]
+    start = start.split("// ── Task CRUD ──", 1)[0]
     lines = [
-        ln for ln in SRC.read_text(encoding="utf-8").splitlines()
+        ln for ln in start.splitlines()
         if "showToast(" in ln and "Download failed:" in ln
     ]
     assert lines, "expected at least one 'Download failed' showToast call"

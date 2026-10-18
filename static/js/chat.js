@@ -8,6 +8,7 @@
 import Storage from './storage.js';
 import uiModule from './ui.js?v=20260916largetoolscroll1';
 import sessionModule from './sessions.js';
+import { getPendingModelSwitch } from './modelPicker.js?v=20260909routeidentity1';
 import chatRenderer, { modelOutputFallbackHtml, renderToolIcon } from './chatRenderer.js?v=20261007toolstatus1';
 import { modelOutputFallback } from './modelOutputFallback.js';
 import chatStream from './chatStream.js?v=20261007approvalfix2';
@@ -2265,7 +2266,7 @@ import { invalidateSettings } from './appConfig.js';
       await _adoptOpenedSessionBeforeAutoCreate();
     }
 
-    const selectedRouteForSend = selectModelRouteForSend({
+    let selectedRouteForSend = selectModelRouteForSend({
       pending: sessionModule.getPendingChat && sessionModule.getPendingChat(),
       model: sessionModule.getCurrentModel && sessionModule.getCurrentModel(),
       endpointUrl: sessionModule.getCurrentEndpointUrl && sessionModule.getCurrentEndpointUrl(),
@@ -2405,10 +2406,34 @@ import { invalidateSettings } from './appConfig.js';
     _streamSessionId = streamSessionId;
     _sendInFlight = false;
 
+    // One-shot UI state belongs to the send that captured this session. Take
+    // it before awaiting a session-owned model switch so another chat cannot
+    // consume it while this send is suspended.
+    let displayOverrideForSend = _displayOverride;
+    _displayOverride = null;
+    const hideUserBubbleForSend = _hideUserBubble;
+    _hideUserBubble = false;
+    const pendingRegenAttachmentsForSend = !approvalForSend ? _pendingRegenAttachments : null;
+    if (!approvalForSend) _pendingRegenAttachments = null;
+    let pendingContinueForSend = _pendingContinue;
+    _pendingContinue = null;
+    const pendingVariantsForSend = _pendingVariants;
+    const pendingVariantLabelForSend = _pendingVariantLabel;
+    _pendingVariants = null;
+    _pendingVariantLabel = null;
+
+    let modelSwitchResolved = false;
     try {
-      const pendingSwitch = window.__odysseusModelSwitchPromise;
+      const pendingSwitch = getPendingModelSwitch(streamSessionId) || window.__odysseusModelSwitchPromise;
       if (pendingSwitch && typeof pendingSwitch.then === 'function') {
-        await pendingSwitch;
+        const hasOwner = Object.prototype.hasOwnProperty.call(pendingSwitch, 'sessionId');
+        const sameOwner = (pendingSwitch.sessionId ?? null) === (streamSessionId ?? null);
+        // Legacy untagged promises still serialize sends; tagged picker work
+        // belongs only to its captured chat (including null for a new draft).
+        if (!hasOwner || sameOwner) {
+          await pendingSwitch;
+          modelSwitchResolved = true;
+        }
       }
     } catch (_) {}
     // Superseded while awaiting the model switch: the replacement owns the
@@ -2427,6 +2452,15 @@ import { invalidateSettings } from './appConfig.js';
       const activeForeground = _syncForegroundStreamGlobals();
       if (!activeForeground) updateSubmitButton('idle', submitBtn);
       return;
+    }
+
+    if (modelSwitchResolved) {
+      const confirmedRoute = selectModelRouteForSend({
+        pending: sessionModule.getPendingChat && sessionModule.getPendingChat(),
+        model: sessionModule.getCurrentModel && sessionModule.getCurrentModel(),
+        endpointUrl: sessionModule.getCurrentEndpointUrl && sessionModule.getCurrentEndpointUrl(),
+      });
+      if (confirmedRoute.model) selectedRouteForSend = confirmedRoute;
     }
 
     _terminalSavedStreams.delete(streamSessionId);
@@ -2558,13 +2592,11 @@ import { invalidateSettings } from './appConfig.js';
         const lineRefs = sels.map(s =>
           s.startLine === s.endLine ? `L${s.startLine}` : `L${s.startLine}-${s.endLine}`
         );
-        _displayOverride = `[Doc edit: ${lineRefs.join(', ')}] ${msg}`;
+        displayOverrideForSend = `[Doc edit: ${lineRefs.join(', ')}] ${msg}`;
       }
 
-      const userDisplay = _displayOverride || msg;
-      _displayOverride = null;
-      const skipBubble = _hideUserBubble || !!approvalForSend;
-      _hideUserBubble = false;
+      const userDisplay = displayOverrideForSend || msg;
+      const skipBubble = hideUserBubbleForSend || !!approvalForSend;
       // Auto-recovery counter: carries across a turn's auto-continues, but resets
       // when the user genuinely sends a new message (so each task gets a fresh cap).
       // A real user turn (visible bubble) ALWAYS resets the budget — even if a
@@ -2644,7 +2676,7 @@ import { invalidateSettings } from './appConfig.js';
           _sendPerf.mark('upload_failed');
         }
       }
-      if (_pendingAttachInfo && !ids.length && !(_pendingRegenAttachments && _pendingRegenAttachments.length)) {
+      if (_pendingAttachInfo && !ids.length && !(pendingRegenAttachmentsForSend && pendingRegenAttachmentsForSend.length)) {
         if (_userMsgEl && _userMsgEl.parentNode) _userMsgEl.remove();
         const restoreSubmittedText = !!msg && !messageInput.value
           && String(sessionModule.getCurrentSessionId() || '') === String(streamSessionId || '');
@@ -2660,15 +2692,11 @@ import { invalidateSettings } from './appConfig.js';
         return;
       }
 
-      // Carry over the original message's file-ids on a regenerate so the new
-      // send still references the same photos / docs (and picks up the user's
-      // edited OCR text via the server-side .vision cache). Always CONSUME the
-      // slot — even when empty / errored — so the regen ids can't bleed into
-      // an unrelated next message if uploadPending() above had thrown.
-      if (!approvalForSend && _pendingRegenAttachments && _pendingRegenAttachments.length) {
-        ids = ids.concat(_pendingRegenAttachments);
+      // Carry over this send's captured regen file IDs so it references the
+      // original photos / docs and their edited OCR cache.
+      if (!approvalForSend && pendingRegenAttachmentsForSend && pendingRegenAttachmentsForSend.length) {
+        ids = ids.concat(pendingRegenAttachmentsForSend);
       }
-      if (!approvalForSend) _pendingRegenAttachments = null;
 
       // The optimistic user bubble was rendered before the upload assigned ids,
       // so image previews couldn't show (the renderer needs att.id). Now that
@@ -5971,12 +5999,12 @@ import { invalidateSettings } from './appConfig.js';
           displayMetrics(_metricsTargetForTurn() || footerTarget, metrics);
         }
         // Attach variant navigation if this was a regeneration
-        _attachVariantNav(footerTarget);
+        _attachVariantNav(footerTarget, pendingVariantsForSend, pendingVariantLabelForSend);
 
         // Merge with previous stopped message if this was a continue
-        if (_pendingContinue) {
-          const prevEl = _pendingContinue;
-          _pendingContinue = null;
+        if (pendingContinueForSend) {
+          const prevEl = pendingContinueForSend;
+          pendingContinueForSend = null;
           const prevBody = prevEl.querySelector('.body');
           const newBody = footerTarget.querySelector('.body');
           if (prevBody && newBody && prevEl.parentNode) {
@@ -6013,7 +6041,7 @@ import { invalidateSettings } from './appConfig.js';
         uiModule.restoreHistoryScroll?.(_terminalScrollSnapshot);
 
         // A saved answer can correct the live answer without rebuilding the turn.
-        if (!_pendingContinue) {
+        if (!pendingContinueForSend) {
           const _needsCanonicalTurnRebuild = !!(
             lastToolThread
             || terminalFinalResponseRendered
@@ -7610,6 +7638,8 @@ import { invalidateSettings } from './appConfig.js';
    */
   export async function editUserMessage(userMsgElement) {
     const box = document.getElementById('chat-history');
+    const ownerSessionId = sessionModule.getCurrentSessionId();
+    if (!ownerSessionId || !userMsgElement?.isConnected || !box.contains(userMsgElement)) return;
     const allMsgs = Array.from(box.querySelectorAll('.msg'));
     const msgIndex = allMsgs.indexOf(userMsgElement);
     if (msgIndex < 0) return;
@@ -7623,6 +7653,9 @@ import { invalidateSettings } from './appConfig.js';
     editor.className = 'edit-textarea';
     editor.value = currentText;
     editor.rows = Math.max(2, currentText.split('\n').length);
+    const ownsEditor = () => sessionModule.getCurrentSessionId() === ownerSessionId
+      && userMsgElement.isConnected && box.contains(userMsgElement)
+      && editor.isConnected && bodyEl.contains(editor);
 
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display:flex; gap:6px; margin-top:4px;';
@@ -7656,16 +7689,17 @@ import { invalidateSettings } from './appConfig.js';
       const newText = editor.value.trim();
       if (!newText) return;
 
-      const sessionId = sessionModule.getCurrentSessionId();
-      if (!sessionId) return;
+      if (!ownsEditor()) return;
 
       const keepCount = msgIndex;
       try {
-        await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
+        const response = await fetch(`${API_BASE}/api/session/${ownerSessionId}/truncate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ keep_count: keepCount })
         });
+        if (!response.ok) throw new Error('Server error ' + response.status);
+        if (!ownsEditor()) return;
 
         // Remove DOM elements from msgIndex onward
         for (let i = allMsgs.length - 1; i >= msgIndex; i--) {
@@ -7679,8 +7713,8 @@ import { invalidateSettings } from './appConfig.js';
         if (submitBtn) submitBtn.click();
       } catch (err) {
         console.error('Edit failed:', err);
+        if (!ownsEditor()) return;
         if (uiModule) uiModule.showError('Edit failed: ' + err.message);
-        bodyEl.innerHTML = originalHTML;
       }
     });
 
@@ -7704,6 +7738,10 @@ import { invalidateSettings } from './appConfig.js';
     const appendOnly = Boolean(opts && opts.append);
     const replaceFromHere = !appendOnly || Boolean(opts && opts.replaceFromHere);
     const box = document.getElementById('chat-history');
+    const sessionId = sessionModule.getCurrentSessionId();
+    if (!sessionId || !userMsgElement?.isConnected || !box.contains(userMsgElement)) return;
+    const ownsMessage = () => sessionModule.getCurrentSessionId() === sessionId
+      && userMsgElement.isConnected && box.contains(userMsgElement);
     const allMsgs = Array.from(box.querySelectorAll('.msg'));
     const msgIndex = allMsgs.indexOf(userMsgElement);
     if (msgIndex < 0) return;
@@ -7745,10 +7783,8 @@ import { invalidateSettings } from './appConfig.js';
       return;
     }
 
-    const sessionId = sessionModule.getCurrentSessionId();
-    if (!sessionId) return;
-
     try {
+      if (!ownsMessage()) return;
       if (replaceFromHere) {
         // Resend/regenerate trims history to this point before resubmitting so
         // the replacement request is the only copy the backend sees.
@@ -7761,6 +7797,7 @@ import { invalidateSettings } from './appConfig.js';
           body: JSON.stringify(truncateBody)
         });
         if (!truncateRes.ok) throw new Error('Server error ' + truncateRes.status);
+        if (!ownsMessage()) return;
 
         // Drop the selected user turn and every rendered trace after it,
         // including agent-thread tool history that is not a `.msg` bubble.
@@ -7780,12 +7817,18 @@ import { invalidateSettings } from './appConfig.js';
       if (submitBtn) submitBtn.click();
     } catch (err) {
       console.error('Resend failed:', err);
+      if (!ownsMessage()) return;
       if (uiModule) uiModule.showError('Resend failed: ' + err.message);
     }
   }
 
   export async function regenerateFrom(aiMsgElement) {
     const box = document.getElementById('chat-history');
+    const sessionId = sessionModule.getCurrentSessionId();
+    if (!sessionId || !aiMsgElement?.isConnected || !box.contains(aiMsgElement)) return;
+    const ownsMessages = (userMsg) => sessionModule.getCurrentSessionId() === sessionId
+      && aiMsgElement.isConnected && box.contains(aiMsgElement)
+      && userMsg.isConnected && box.contains(userMsg);
     const allMsgs = Array.from(box.querySelectorAll('.msg'));
     const aiIndex = allMsgs.indexOf(aiMsgElement);
     if (aiIndex < 0) return;
@@ -7832,8 +7875,6 @@ import { invalidateSettings } from './appConfig.js';
         if (_m && _m[1] && !_regenIds.includes(_m[1])) _regenIds.push(_m[1]);
       }
     }
-    _pendingRegenAttachments = _regenIds;
-
     // Rescue: earlier-version regens (before the dataset.raw fix) stored the
     // photo's filename as the user-message content. On a follow-up regen,
     // that filename would be sent back as the literal user prompt, so the
@@ -7841,7 +7882,7 @@ import { invalidateSettings } from './appConfig.js';
     // an image file". If userText is just a bare image filename and we have
     // attachments, drop it so the OCR text (or the image bytes for vision
     // models) is what the model actually sees.
-    if (userText && _pendingRegenAttachments.length &&
+    if (userText && _regenIds.length &&
         /^[^\n\r]{1,200}\.(png|jpe?g|gif|webp|svg|bmp|heic|heif)$/i.test(userText.trim())) {
       userText = '';
     }
@@ -7849,13 +7890,10 @@ import { invalidateSettings } from './appConfig.js';
     // A photo-only message has empty user text — regen must still proceed,
     // because the attachments themselves are the message. Bail only if there
     // is no text AND no attachments to send.
-    if (!userText && !_pendingRegenAttachments.length) {
+    if (!userText && !_regenIds.length) {
       if (uiModule) uiModule.showError('Nothing to regenerate — the user message has no text and no attachments');
       return;
     }
-
-    const sessionId = sessionModule.getCurrentSessionId();
-    if (!sessionId) return;
 
     // Save current response as a variant
     const oldRaw = aiMsgElement.dataset.raw || aiMsgElement.querySelector('.body')?.textContent || '';
@@ -7870,11 +7908,13 @@ import { invalidateSettings } from './appConfig.js';
     const keepCount = userIndex;
 
     try {
-      await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
+      const response = await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keep_count: keepCount })
       });
+      if (!response.ok) throw new Error('Server error ' + response.status);
+      if (!ownsMessages(userMsgEl)) return;
 
       // Keep the original user bubble, but remove every rendered trace after
       // it, including agent-thread tool history between the user and AI bubble.
@@ -7887,6 +7927,7 @@ import { invalidateSettings } from './appConfig.js';
 
       // The old AI message was removed from DOM — it will be replaced by the new streaming response
       // But first, stash the variants data so we can transfer it to the new element
+      _pendingRegenAttachments = _regenIds;
       _pendingVariants = variants;
       _pendingVariantLabel = 'regen';
 
@@ -7898,6 +7939,7 @@ import { invalidateSettings } from './appConfig.js';
 
     } catch (err) {
       console.error('Regenerate failed:', err);
+      if (!ownsMessages(userMsgEl)) return;
       if (uiModule) uiModule.showError('Regenerate failed: ' + err.message);
     }
   }
@@ -7912,16 +7954,13 @@ import { invalidateSettings } from './appConfig.js';
   /**
    * Called after streaming completes to attach variant navigation if this was a regen.
    */
-  function _attachVariantNav(msgElement) {
-    if (!_pendingVariants) return;
-    const variants = _pendingVariants;
-    _pendingVariants = null;
+  function _attachVariantNav(msgElement, variants, variantLabel) {
+    if (!variants) return;
 
     // Add the new response as the latest variant
     const newRaw = msgElement.dataset.raw || msgElement.querySelector('.body')?.textContent || '';
     const newHtml = msgElement.querySelector('.body')?.innerHTML || '';
-    const varLabel = _pendingVariantLabel || 'regen';
-    _pendingVariantLabel = null;
+    const varLabel = variantLabel || 'regen';
     variants.push({ raw: newRaw, html: newHtml, label: varLabel });
 
     msgElement.dataset.variants = JSON.stringify(variants);

@@ -90,6 +90,10 @@ let _autoSelectSeq = 0;
 const _modelPickQueues = new Map();
 const _modelPickSeq = new Map();
 
+export function getPendingModelSwitch(sessionId) {
+  return sessionId ? _modelPickQueues.get(sessionId) || null : null;
+}
+
 function _modelExists(modelId, url) {
   if (!modelId || !window.modelsModule || !window.modelsModule.getCachedItems) return false;
   const items = window.modelsModule.getCachedItems() || [];
@@ -718,18 +722,10 @@ function _initModelPickerDropdown() {
 
 async function _pick(m) {
     _defaultPendingSeq++;
-    try {
-      window.__odysseusLastPickedRoute = {
-        model: m.mid || '',
-        endpoint_url: m.url || '',
-        endpoint_id: m.endpointId || '',
-        display: m.display || m.mid || '',
-        picked_at: Date.now(),
-        session_id: _deps.getCurrentSessionId() || null,
-      };
-    } catch (_) {}
+    const currentSessionId = _deps.getCurrentSessionId();
     let switchDone = null;
     const switchPromise = new Promise(resolve => { switchDone = resolve; });
+    switchPromise.sessionId = currentSessionId;
     try { window.__odysseusModelSwitchPromise = switchPromise; } catch (_) {}
     const finishSwitch = () => {
       try {
@@ -737,7 +733,6 @@ async function _pick(m) {
         if (window.__odysseusModelSwitchPromise === switchPromise) delete window.__odysseusModelSwitchPromise;
       } catch (_) {}
     };
-    const currentSessionId = _deps.getCurrentSessionId();
     const _pendingChat = _deps.getPendingChat();
     const rememberRoute = () => {
       if (_deps.getCurrentSessionId() !== currentSessionId) return;
@@ -799,7 +794,16 @@ async function _pick(m) {
       if (m.endpointId) fd.append('endpoint_id', m.endpointId);
       const previousPick = _modelPickQueues.get(currentSessionId) || Promise.resolve();
       const savePick = previousPick.catch(() => {}).then(async () => {
-        const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(currentSessionId)}`, { method: 'PATCH', body: fd });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        let res;
+        try {
+          res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(currentSessionId)}`, {
+            method: 'PATCH', body: fd, signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const session = _deps.getSessions().find(x => x.id === currentSessionId);
         if (session) {
@@ -820,7 +824,7 @@ async function _pick(m) {
       } catch (e) {
         if (_modelPickSeq.get(currentSessionId) === pickSeq) {
           if (_deps.getCurrentSessionId() === currentSessionId) updateModelPicker();
-          uiModule.showError('Could not save model. Previous selection kept; choose it again to retry.');
+          uiModule.showError('Could not confirm the model change. Check the current model before retrying.');
         }
       } finally {
         if (_modelPickQueues.get(currentSessionId) === savePick) _modelPickQueues.delete(currentSessionId);

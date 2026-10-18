@@ -155,7 +155,7 @@ def test_final_response_skips_duplicate_end_of_stream_render():
 
 def test_only_rich_completed_turns_reload_saved_canonical_assistant_row():
     assert "if (_canonicalTerminalSaved && _savedAssistantMessageId && !_pendingContinue)" not in _CHAT
-    assert "if (!_pendingContinue)" in _CHAT
+    assert "if (!pendingContinueForSend)" in _CHAT
     assert "if (!streamSessionId || !_savedAssistantMessageId) return false;" in _CHAT
     assert "String(msg.metadata?._db_id || '') === _savedAssistantMessageId" in _CHAT
     assert "const _needsCanonicalTurnRebuild" in _CHAT

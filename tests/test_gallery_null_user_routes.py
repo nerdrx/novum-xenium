@@ -11,7 +11,7 @@ from core.database import GalleryAlbum, GalleryImage
 import routes.gallery_routes as gallery_routes
 
 
-def _client_with_gallery(monkeypatch, tmp_path):
+def _client_with_gallery(monkeypatch, tmp_path, *, with_engine=False):
     engine = create_engine(
         f"sqlite:///{tmp_path / 'gallery.db'}",
         connect_args={"check_same_thread": False},
@@ -59,7 +59,8 @@ def _client_with_gallery(monkeypatch, tmp_path):
 
     app = FastAPI()
     app.include_router(gallery_routes.setup_gallery_routes())
-    return TestClient(app)
+    client = TestClient(app)
+    return (client, engine) if with_engine else client
 
 
 def test_auth_enabled_null_user_gallery_routes_fail_closed(monkeypatch, tmp_path):
@@ -147,3 +148,39 @@ def test_authenticated_gallery_routes_remain_owner_scoped(monkeypatch, tmp_path)
         "total_untagged": 1,
         "image_ids": ["img-alice"],
     }
+
+
+def test_gallery_library_can_skip_facets_without_changing_owner_scoped_page(monkeypatch, tmp_path):
+    from sqlalchemy import event
+
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setattr(gallery_routes, "get_current_user", lambda request: "alice")
+    client, engine = _client_with_gallery(monkeypatch, tmp_path, with_engine=True)
+    statements = []
+
+    def capture(_conn, _cursor, statement, _params, _context, _many):
+        statements.append(statement.lower())
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        default = client.get("/api/gallery/library")
+        default_statements = list(statements)
+        statements.clear()
+        page = client.get("/api/gallery/library", params={"include_facets": "false", "limit": 1})
+        skipped_statements = list(statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    default_data = default.json()
+    page_data = page.json()
+    assert default.status_code == page.status_code == 200
+    assert default_data["tags"] == ["alice-tag"]
+    assert default_data["models"] == ["model-a"]
+    assert [item["id"] for item in page_data["items"]] == ["img-alice"]
+    assert page_data["total"] == default_data["total"] == 1
+    assert page_data["total_tagged"] == default_data["total_tagged"] == 0
+    assert "tags" not in page_data and "models" not in page_data
+    assert any("select gallery_images.tags" in statement for statement in default_statements)
+    assert any("select distinct gallery_images.model" in statement for statement in default_statements)
+    assert not any("select gallery_images.tags" in statement for statement in skipped_statements)
+    assert not any("select distinct gallery_images.model" in statement for statement in skipped_statements)

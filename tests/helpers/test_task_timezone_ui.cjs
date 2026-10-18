@@ -105,8 +105,11 @@ async function main() {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   const results = [];
   try {
-    const linked = await openFixture(browser, task({ schedule_timezone: 'Europe/Berlin', scheduled_time: '09:13' }));
+    const literalPrompt = 'Draft HTML: </textarea><span id="fixture-markup">demo</span> & keep "quotes".';
+    const linked = await openFixture(browser, task({ schedule_timezone: 'Europe/Berlin', scheduled_time: '09:13', prompt: literalPrompt }));
     let { page, context, errors } = linked;
+    assert.equal(await page.locator('#task-form-prompt').inputValue(), literalPrompt);
+    assert.equal(await page.locator('#fixture-markup').count(), 0, 'prompt markup must remain text');
     assert.match(linked.scheduleLabel, /Daily at 09:13 \(Europe\/Berlin\)/);
     assert.equal(await page.locator('#task-form-time-wrap-hour').inputValue(), '9');
     assert.equal(await page.locator('#task-form-time-wrap-min').inputValue(), '13');
@@ -120,6 +123,7 @@ async function main() {
     await page.waitForTimeout(50);
     await page.locator('.task-form').screenshot({ path: path.join(evidenceDir, 'task-timezone-linked-berlin-editor.png') });
     const berlinPayload = await save(page);
+    assert.equal(berlinPayload.prompt, literalPrompt);
     assert.equal(berlinPayload.scheduled_time, '09:13');
     assert.equal(berlinPayload.schedule_timezone, undefined, 'server owns linked timezone');
     results.push({ case: 'linked daily Berlin roundtrip', label: linked.scheduleLabel, picker: '09:13', payload: berlinPayload });

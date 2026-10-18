@@ -230,13 +230,15 @@ async function _fetchLibrary(append) {
   if (_activeModel) params.set('model', _activeModel);
   if (_activeAlbum) params.set('album', _activeAlbum);
   if (_favoritesOnly) params.set('favorites', 'true');
+  if (append) params.set('include_facets', 'false');
   try {
     const res = await fetch(`${API_BASE}/api/gallery/library?${params}`, { credentials: 'same-origin' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!isCurrentRequest()) return;
+    const appendedItems = append ? (data.items || []) : null;
     if (append) {
-      _items = _items.concat(data.items || []);
+      _items = _items.concat(appendedItems);
     } else {
       _items = data.items || [];
       _libraryResultsFilterKey = requestFilters;
@@ -253,10 +255,13 @@ async function _fetchLibrary(append) {
     _total = data.total || 0;
     if (typeof data.total_tagged === 'number') _totalTagged = data.total_tagged;
     _updateTagCount();
-    _renderGrid();
-    _renderTags(data.tags || []);
-    _renderModels(data.models || []);
-    _renderAlbums();
+    _renderGrid(appendedItems);
+    if (!append) {
+      _renderTags(data.tags || []);
+      _renderModels(data.models || []);
+      _renderAlbums();
+    }
+    if (append) _updateGalleryBulkCount();
     _renderStats();
   } catch (e) {
     if (!isCurrentRequest()) return;
@@ -299,6 +304,19 @@ function _galleryLibraryFilterKey() {
     _sort, _sort === 'shuffle' ? _shuffleSeed : null, _search,
     _activeTags, _activeModel, _activeAlbum, _favoritesOnly,
   ]);
+}
+
+function _updateGalleryBulkCount() {
+  const sel = document.querySelectorAll('#gallery-grid .gallery-select-dot.selected').length;
+  const total = document.querySelectorAll('#gallery-grid .gallery-select-dot').length;
+  const el = document.getElementById('gallery-bulk-count');
+  if (el) el.textContent = sel + ' selected';
+  const all = document.getElementById('gallery-bulk-select-all');
+  if (all) { all.checked = total > 0 && sel === total; all.indeterminate = sel > 0 && sel < total; }
+  const actions = document.getElementById('gallery-bulk-actions');
+  if (actions) actions.style.color = sel > 0 ? 'var(--fg)' : '';
+  const deleteBtn = document.getElementById('gallery-bulk-delete');
+  if (deleteBtn) deleteBtn.disabled = sel === 0;
 }
 
 async function _fetchAlbums() {
@@ -1590,107 +1608,62 @@ function _renderSkeletons(n) {
   if (lm) lm.style.display = 'none';
 }
 
-function _renderGrid() {
-  const grid = document.getElementById('gallery-grid');
-  const loadMore = document.getElementById('gallery-load-more');
-  if (!grid) return;
-
-  // First tile: always-visible "Upload" affordance. Mirrors the Upload album
-  // tile in the Albums tab so the upload entry point is consistent across
-  // both grids.
-  const uploadTile = `
-    <div class="gallery-card gallery-card-upload" id="gallery-upload-tile" title="Upload photos or videos">
-      <div class="gallery-card-upload-inner">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        <div class="gallery-card-upload-label">Upload</div>
+function _galleryCardHtml(img, selectMode) {
+  const date = img.taken_at
+    ? new Date(img.taken_at).toLocaleDateString()
+    : (img.created_at ? new Date(img.created_at).toLocaleDateString() : '');
+  const fallbackName = (img.filename || '')
+    .replace(/^\d{4,}[_-]/, '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  const labelText = (img.caption || '').trim() || (img.prompt || '').trim() || fallbackName || 'Photo';
+  const promptPreview = labelText.length > 60 ? labelText.substring(0, 58) + '...' : labelText;
+  const favCls = img.favorite ? ' gallery-fav-active' : '';
+  const sourceLabel = img.model === 'imported' ? 'Imported' : (img.model || 'Image');
+  const badges = [
+    img.favorite ? '<span class="gallery-card-badge gallery-card-badge-fav">&#9829;</span>' : '',
+    img.album_id ? '<span class="gallery-card-badge">Album</span>' : '',
+    img.ai_tags ? '<span class="gallery-card-badge">AI tags</span>' : '',
+    _isVideoUrl(img.url) ? '<span class="gallery-card-badge">Video</span>' : '',
+  ].filter(Boolean).join('');
+  return `
+    <div class="gallery-card${selectMode ? ' gallery-card-selectable' : ''}" data-id="${_esc(img.id)}">
+      <span class="gallery-select-dot" style="display:${selectMode ? 'flex' : 'none'};"></span>
+      <button class="gallery-fav-btn${favCls}" data-id="${_esc(img.id)}" title="Favorite">&#9829;</button>
+      <button class="gallery-dl-btn" data-id="${_esc(img.id)}" data-url="${_esc(img.url)}" data-filename="${_esc(img.filename || '')}" title="Download">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </button>
+      ${_isVideoUrl(img.url)
+        ? `<video src="${_esc(img.url)}" preload="metadata" muted playsinline></video>
+           <span class="gallery-card-play" aria-hidden="true">
+             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+           </span>`
+        : `<img src="${_esc(img.url)}" alt="${_esc(img.prompt)}" loading="lazy" />`}
+      <div class="gallery-card-overlay" aria-hidden="true">
+        ${badges ? `<span class="gallery-card-badges">${badges}</span>` : ''}
+      </div>
+      <div class="gallery-card-info">
+        <div class="gallery-card-prompt">${_esc(promptPreview)}</div>
+        <div class="gallery-card-meta">
+          ${sourceLabel ? `<span class="gallery-card-model">${_esc(sourceLabel)}</span>` : ''}
+          <span class="gallery-card-date">${date}</span>
+        </div>
       </div>
     </div>`;
+}
 
-  if (_items.length === 0) {
-    grid.innerHTML = uploadTile + '<div class="gallery-empty">No photos yet. Click Upload or drag-and-drop to get started!</div>';
-    _wireUploadTile();
-    if (loadMore) loadMore.style.display = 'none';
-    return;
-  }
-
-  let html = uploadTile;
-  _items.forEach(img => {
-    const date = img.taken_at
-      ? new Date(img.taken_at).toLocaleDateString()
-      : (img.created_at ? new Date(img.created_at).toLocaleDateString() : '');
-    // Card label: prefer the prompt (which doubles as the user-editable
-    // name for uploaded photos). Fall back to a cleaned filename so
-    // imported photos with empty prompts still show something useful
-    // instead of a blank row.
-    const fallbackName = (img.filename || '')
-      .replace(/^\d{4,}[_-]/, '')   // drop date-prefix on uploads
-      .replace(/\.[^.]+$/, '')       // drop extension
-      .replace(/[_-]+/g, ' ')
-      .trim();
-    const labelText = (img.caption || '').trim() || (img.prompt || '').trim() || fallbackName || 'Photo';
-    const promptPreview = labelText.length > 60 ? labelText.substring(0, 58) + '...' : labelText;
-    const favCls = img.favorite ? ' gallery-fav-active' : '';
-    const sourceLabel = img.model === 'imported' ? 'Imported' : (img.model || 'Image');
-    const badges = [
-      img.favorite ? '<span class="gallery-card-badge gallery-card-badge-fav">&#9829;</span>' : '',
-      img.album_id ? '<span class="gallery-card-badge">Album</span>' : '',
-      img.ai_tags ? '<span class="gallery-card-badge">AI tags</span>' : '',
-      _isVideoUrl(img.url) ? '<span class="gallery-card-badge">Video</span>' : '',
-    ].filter(Boolean).join('');
-    html += `
-      <div class="gallery-card" data-id="${_esc(img.id)}">
-        <span class="gallery-select-dot" style="display:none;"></span>
-        <button class="gallery-fav-btn${favCls}" data-id="${_esc(img.id)}" title="Favorite">&#9829;</button>
-        <button class="gallery-dl-btn" data-id="${_esc(img.id)}" data-url="${_esc(img.url)}" data-filename="${_esc(img.filename || '')}" title="Download">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        </button>
-        ${_isVideoUrl(img.url)
-          ? `<video src="${_esc(img.url)}" preload="metadata" muted playsinline></video>
-             <span class="gallery-card-play" aria-hidden="true">
-               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-             </span>`
-          : `<img src="${_esc(img.url)}" alt="${_esc(img.prompt)}" loading="lazy" />`}
-        <div class="gallery-card-overlay" aria-hidden="true">
-          ${badges ? `<span class="gallery-card-badges">${badges}</span>` : ''}
-        </div>
-        <div class="gallery-card-info">
-          <div class="gallery-card-prompt">${_esc(promptPreview)}</div>
-          <div class="gallery-card-meta">
-            ${sourceLabel ? `<span class="gallery-card-model">${_esc(sourceLabel)}</span>` : ''}
-            <span class="gallery-card-date">${date}</span>
-          </div>
-        </div>
-      </div>`;
-  });
-  grid.innerHTML = html;
-  _wireUploadTile();
-
-  // Domino-in cascade the first render after opening (not on filter/sort/
-  // load-more re-renders) — mirrors the document library.
-  if (!_galleryCascaded) {
-    _galleryCascaded = true;
-    grid.classList.add('gallery-just-opened');
-    setTimeout(() => grid.classList.remove('gallery-just-opened'), 900);
-  }
-
-  if (loadMore) {
-    loadMore.style.display = _items.length < _total ? 'block' : 'none';
-  }
-
-  // Card click → detail (skip the upload tile, it has its own handler)
-  grid.querySelectorAll('.gallery-card[data-id]').forEach(card => {
+function _wireGalleryCards(cards) {
+  cards.forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.gallery-fav-btn')) return;
-      if (e.target.closest('.gallery-dl-btn')) return;
-      const selectBtn = document.getElementById('gallery-select-btn');
-      if (selectBtn && selectBtn.classList.contains('active')) return;
+      if (e.target.closest('.gallery-fav-btn, .gallery-dl-btn')) return;
+      if (document.getElementById('gallery-select-btn')?.classList.contains('active')) return;
       const img = _items.find(i => i.id === card.dataset.id);
       if (img) _openDetail(img);
     });
   });
 
-  // Download buttons
-  grid.querySelectorAll('.gallery-dl-btn').forEach(btn => {
+  cards.flatMap(card => [...card.querySelectorAll('.gallery-dl-btn')]).forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const url = btn.dataset.url;
@@ -1717,8 +1690,7 @@ function _renderGrid() {
     });
   });
 
-  // Favorite buttons
-  grid.querySelectorAll('.gallery-fav-btn').forEach(btn => {
+  cards.flatMap(card => [...card.querySelectorAll('.gallery-fav-btn')]).forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const id = btn.dataset.id;
@@ -1733,6 +1705,59 @@ function _renderGrid() {
       }
     });
   });
+}
+
+function _renderGrid(appendItems = null) {
+  const grid = document.getElementById('gallery-grid');
+  const loadMore = document.getElementById('gallery-load-more');
+  if (!grid) return;
+  const selectMode = document.body.classList.contains('gallery-selecting');
+
+  if (appendItems !== null) {
+    if (appendItems.length) {
+      if (!grid.querySelector('.gallery-card[data-id]')) {
+        _renderGrid();
+        return;
+      }
+      const fragment = document.createRange().createContextualFragment(
+        appendItems.map(img => _galleryCardHtml(img, selectMode)).join('')
+      );
+      const newCards = [...fragment.querySelectorAll('.gallery-card[data-id]')];
+      grid.append(fragment);
+      _wireGalleryCards(newCards);
+    }
+    if (loadMore) loadMore.style.display = _items.length < _total ? 'block' : 'none';
+    return;
+  }
+
+  const uploadTile = `
+    <div class="gallery-card gallery-card-upload" id="gallery-upload-tile" title="Upload photos or videos">
+      <div class="gallery-card-upload-inner">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <div class="gallery-card-upload-label">Upload</div>
+      </div>
+    </div>`;
+
+  if (_items.length === 0) {
+    grid.innerHTML = uploadTile + '<div class="gallery-empty">No photos yet. Click Upload or drag-and-drop to get started!</div>';
+    _wireUploadTile();
+    if (loadMore) loadMore.style.display = 'none';
+    if (selectMode) _updateGalleryBulkCount();
+    return;
+  }
+
+  grid.innerHTML = uploadTile + _items.map(img => _galleryCardHtml(img, selectMode)).join('');
+  _wireUploadTile();
+
+  if (!_galleryCascaded) {
+    _galleryCascaded = true;
+    grid.classList.add('gallery-just-opened');
+    setTimeout(() => grid.classList.remove('gallery-just-opened'), 900);
+  }
+
+  if (loadMore) loadMore.style.display = _items.length < _total ? 'block' : 'none';
+  _wireGalleryCards([...grid.querySelectorAll('.gallery-card[data-id]')]);
+  if (selectMode) _updateGalleryBulkCount();
 }
 
 // ---- Detail overlay ----
@@ -2915,23 +2940,8 @@ export function openGallery() {
   const selectBtn = document.getElementById('gallery-select-btn');
   const bulkBar = document.getElementById('gallery-bulk-bar');
 
-  const _selectedDots = () => [...document.querySelectorAll('.gallery-select-dot.selected')];
+  const _selectedDots = () => [...document.querySelectorAll('#gallery-grid .gallery-select-dot.selected')];
   const _selectedIds = () => _selectedDots().map(d => d.closest('.gallery-card')?.dataset.id).filter(Boolean);
-
-  function _updateBulkCount() {
-    const sel = document.querySelectorAll('.gallery-select-dot.selected').length;
-    const total = document.querySelectorAll('.gallery-select-dot').length;
-    const el = document.getElementById('gallery-bulk-count');
-    if (el) el.textContent = sel + ' selected';
-    const all = document.getElementById('gallery-bulk-select-all');
-    if (all) { all.checked = total > 0 && sel === total; all.indeterminate = sel > 0 && sel < total; }
-    // When something's selected, brighten Actions to the same full --fg color as
-    // the "N selected" count (the button is a dimmer 60% --fg by default).
-    const actions = document.getElementById('gallery-bulk-actions');
-    if (actions) actions.style.color = sel > 0 ? 'var(--fg)' : '';
-    const deleteBtn = document.getElementById('gallery-bulk-delete');
-    if (deleteBtn) deleteBtn.disabled = sel === 0;
-  }
 
   function _setSelectMode(on) {
     _selectMode = on;
@@ -2943,13 +2953,13 @@ export function openGallery() {
     // buttons (favorite/download) applies to every card — including cards
     // rendered after select mode was already on (load-more etc).
     document.body.classList.toggle('gallery-selecting', on);
-    document.querySelectorAll('.gallery-select-dot').forEach(d => {
+    document.querySelectorAll('#gallery-grid .gallery-select-dot').forEach(d => {
       d.style.display = on ? '' : 'none';
       if (!on) d.classList.remove('selected');
       d.closest('.gallery-card')?.classList.toggle('gallery-card-selectable', on);
     });
     if (!on) document.querySelectorAll('.gallery-bulk-menu').forEach(m => m.remove());
-    _updateBulkCount();
+    _updateGalleryBulkCount();
   }
 
   function _exitSelectMode() { _setSelectMode(false); }
@@ -2980,8 +2990,8 @@ export function openGallery() {
   // Select all / none.
   document.getElementById('gallery-bulk-select-all')?.addEventListener('change', (e) => {
     const on = e.target.checked;
-    document.querySelectorAll('.gallery-select-dot').forEach(d => d.classList.toggle('selected', on));
-    _updateBulkCount();
+    document.querySelectorAll('#gallery-grid .gallery-select-dot').forEach(d => d.classList.toggle('selected', on));
+    _updateGalleryBulkCount();
   });
 
   document.getElementById('gallery-grid').addEventListener('click', (e) => {
@@ -2990,7 +3000,7 @@ export function openGallery() {
     if (!card) return;
     e.stopPropagation();
     const dot = card.querySelector('.gallery-select-dot');
-    if (dot) { dot.classList.toggle('selected'); _updateBulkCount(); }
+    if (dot) { dot.classList.toggle('selected'); _updateGalleryBulkCount(); }
   });
 
   // Mobile: long-press on a thumbnail enters select mode and marks that
@@ -3020,7 +3030,7 @@ export function openGallery() {
         const dot = lpCard.querySelector('.gallery-select-dot');
         if (dot && !dot.classList.contains('selected')) {
           dot.classList.add('selected');
-          _updateBulkCount();
+          _updateGalleryBulkCount();
         }
       }, LONG_PRESS_MS);
     }, { passive: true });

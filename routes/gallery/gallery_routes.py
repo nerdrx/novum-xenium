@@ -901,30 +901,33 @@ def setup_gallery_routes() -> APIRouter:
         seed: Optional[int] = Query(None),
         offset: int = Query(0, ge=0),
         limit: int = Query(24, ge=1, le=100),
+        include_facets: bool = Query(True),
     ) -> Dict[str, Any]:
         user = get_current_user(request)
         db = SessionLocal()
         try:
-            # Distinct tags for filter UI
-            tag_q = db.query(GalleryImage.tags).filter(
-                GalleryImage.is_active == True, GalleryImage.tags != None, GalleryImage.tags != ""
-            )
-            tag_q = _owner_filter(tag_q, user)
-            tag_rows = tag_q.all()
-            all_tags = set()
-            for (raw,) in tag_rows:
-                for t in raw.split(","):
-                    t = t.strip()
-                    if t:
-                        all_tags.add(t)
+            facets = {}
+            if include_facets:
+                # Distinct tags for filter UI
+                tag_q = db.query(GalleryImage.tags).filter(
+                    GalleryImage.is_active == True, GalleryImage.tags != None, GalleryImage.tags != ""
+                )
+                tag_q = _owner_filter(tag_q, user)
+                tag_rows = tag_q.all()
+                all_tags = set()
+                for (raw,) in tag_rows:
+                    for t in raw.split(","):
+                        t = t.strip()
+                        if t:
+                            all_tags.add(t)
 
-            # Distinct models for filter UI
-            model_q = db.query(GalleryImage.model).filter(
-                GalleryImage.is_active == True, GalleryImage.model != None
-            )
-            model_q = _owner_filter(model_q, user)
-            model_rows = model_q.distinct().all()
-            all_models = sorted([m for (m,) in model_rows if m])
+                # Distinct models for filter UI
+                model_q = db.query(GalleryImage.model).filter(
+                    GalleryImage.is_active == True, GalleryImage.model != None
+                )
+                model_q = _owner_filter(model_q, user)
+                model_rows = model_q.distinct().all()
+                facets = {"tags": sorted(all_tags), "models": sorted([m for (m,) in model_rows if m])}
 
             # Base query with left join to sessions for session_name
             q = (
@@ -1017,8 +1020,7 @@ def setup_gallery_routes() -> APIRouter:
                 "items": items,
                 "total": total,
                 "total_tagged": total_tagged,
-                "tags": sorted(all_tags),
-                "models": all_models,
+                **facets,
             }
         except Exception:
             logger.exception("Failed to fetch gallery library")

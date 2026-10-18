@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -62,6 +63,15 @@ def test_stop_cancels_captured_force_runs_but_not_replacement(
         scheduler._pending_notifications = []
         scheduler._last_run_model = None
         scheduler._task_needs_model_slot = lambda _task_id: False
+        abort_persisted = threading.Event()
+        mark_run_aborted = scheduler._mark_run_aborted
+
+        def mark_run_aborted_and_signal(*args, **kwargs):
+            result = mark_run_aborted(*args, **kwargs)
+            abort_persisted.set()
+            return result
+
+        scheduler._mark_run_aborted = mark_run_aborted_and_signal
         started = []
         effects = []
         release_original_runs = asyncio.Event()
@@ -100,6 +110,9 @@ def test_stop_cancels_captured_force_runs_but_not_replacement(
         stop_request = asyncio.create_task(stop_endpoint(SimpleNamespace(), "force-stop"))
         await asyncio.sleep(0)
         assert not stop_request.done()
+        assert await asyncio.to_thread(abort_persisted.wait, 2), (
+            "Stop did not persist the captured run aborts"
+        )
         db = sessions()
         try:
             original_run_ids = {

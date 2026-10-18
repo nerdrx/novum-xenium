@@ -3230,30 +3230,42 @@ function _updateResearchDots() {
 
 function _startResearchPolling() {
   if (_researchPollTimer) return;
+  let inFlight = false;
   _researchPollTimer = setInterval(async function() {
+    if (inFlight) return;
     if (_researchingSessions.size === 0) {
       clearInterval(_researchPollTimer);
       _researchPollTimer = null;
       return;
     }
-    for (var sid of _researchingSessions) {
-      try {
-        var res = await fetch(`${API_BASE}/api/research/status/${sid}`);
-        if (!res.ok) {
-          // Invalid IDs and auth/ownership/missing states are terminal; retry other statuses.
-          if ([400, 401, 403, 404].includes(res.status)) _researchingSessions.delete(sid);
-          continue;
+    inFlight = true;
+    try {
+      for (var sid of _researchingSessions) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        try {
+          var res = await fetch(`${API_BASE}/api/research/status/${sid}`, { signal: controller.signal });
+          if (!res.ok) {
+            // Invalid IDs and auth/ownership/missing states are terminal; retry other statuses.
+            if ([400, 401, 403, 404].includes(res.status)) _researchingSessions.delete(sid);
+            continue;
+          }
+          var data = await res.json();
+          if (data.status !== 'running') {
+            _researchingSessions.delete(sid);
+          }
+        } catch { /* Keep tracking; the next tick retries transient failures. */ }
+        finally {
+          clearTimeout(timeout);
         }
-        var data = await res.json();
-        if (data.status !== 'running') {
-          _researchingSessions.delete(sid);
-        }
-      } catch { /* Keep tracking; the next tick retries transient failures. */ }
-    }
-    _updateResearchDots();
-    if (_researchingSessions.size === 0 && _researchPollTimer) {
-      clearInterval(_researchPollTimer);
-      _researchPollTimer = null;
+      }
+      _updateResearchDots();
+      if (_researchingSessions.size === 0 && _researchPollTimer) {
+        clearInterval(_researchPollTimer);
+        _researchPollTimer = null;
+      }
+    } finally {
+      inFlight = false;
     }
   }, 5000);
 }

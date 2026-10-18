@@ -27,6 +27,41 @@ from src.foreground_model_routing import (
 )
 
 
+@pytest.fixture
+def owned_document_db(monkeypatch):
+    """Give owned-document approval tests an isolated, complete schema."""
+    import importlib
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    current_database = importlib.import_module("core.database")
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    try:
+        current_database.Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        db = session_factory()
+        try:
+            db.add(current_database.Document(
+                id="document-7",
+                title="Approval test",
+                current_content="original",
+                version_count=4,
+                owner="alice",
+            ))
+            db.commit()
+        finally:
+            db.close()
+        monkeypatch.setattr(current_database, "SessionLocal", session_factory)
+        yield
+    finally:
+        engine.dispose()
+
+
 def _collect(gen):
     async def _run():
         return [chunk async for chunk in gen]
@@ -497,7 +532,9 @@ async def test_chat_stream_route_preserves_only_valid_unlimited_round_setting(
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_consumes_exact_tool_approval_for_own_session(monkeypatch):
+async def test_chat_stream_consumes_exact_tool_approval_for_own_session(
+    monkeypatch, owned_document_db,
+):
     from src.tool_capabilities import capabilities_for_action
 
     captured = {}

@@ -44,7 +44,9 @@ else:
 PY
 )"
   echo ">> fetching ${name} ${ver}: ${url}"
-  curl -fsSL "$url" -o "${name}.tar.gz"
+  # Retry transient TLS/transport failures without leaving a build waiting forever.
+  curl -fsSL --retry 3 --retry-all-errors --retry-max-time 120 \
+    --connect-timeout 20 --max-time 120 "$url" -o "${name}.tar.gz"
   tar xzf "${name}.tar.gz"
 done
 

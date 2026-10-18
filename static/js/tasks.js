@@ -185,15 +185,18 @@ async function _runNow(id, force = false) {
     method: 'POST', credentials: 'same-origin',
   });
   if (!res.ok) {
-    // Surface the backend's actual reason — 409 means "already running",
-    // 404 task missing, etc. Previously every error rendered as the same
-    // generic "Failed to trigger task", which hid the cause.
+    // Prefer the backend's reason (including 409 eligibility races); use a
+    // generic already-running message only when the server gave no detail.
     let msg = `Failed to trigger task (${res.status})`;
+    let hasDetail = false;
     try {
       const data = await res.json();
-      if (data && data.detail) msg = data.detail;
+      if (typeof data?.detail === 'string' && data.detail.trim()) {
+        msg = data.detail;
+        hasDetail = true;
+      }
     } catch (_) {}
-    if (res.status === 409) msg = 'Task is already running';
+    if (res.status === 409 && !hasDetail) msg = 'Task is already running';
     throw new Error(msg);
   }
 }
@@ -1012,7 +1015,7 @@ function _renderList() {
       const items = [];
       // Run now stays in the kebab too for users coming from muscle-memory /
       // mobile long-press. The expanded card also shows it next to Edit.
-      if (task.status !== 'completed') items.push({ label: 'Run now', icon: '<polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>', action: () => _doRunNow(task.id) });
+      if (task.can_run_again === true) items.push({ label: 'Run now', icon: '<polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>', action: () => _doRunNow(task.id) });
       items.push({ label: 'Edit', icon: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>', action: () => _showForm(task) });
       if (task.status === 'active') items.push({ label: 'Pause', icon: '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>', action: () => _doPause(task.id) });
       else if (task.status === 'paused') items.push({ label: 'Resume', icon: '<polygon points="5 3 19 12 5 21 5 3"/>', action: () => _doResume(task.id) });
@@ -1066,7 +1069,7 @@ function _renderList() {
     detail.style.cssText = 'display:none;margin-top:7px;padding:8px 0 2px;border-top:1px solid var(--border);position:relative;';
     const detailActions = document.createElement('div');
     detailActions.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;margin-top:7px;';
-    if (task.status !== 'completed') {
+    if (task.can_run_again === true) {
       const runBtn = document.createElement('button');
       runBtn.className = 'memory-toolbar-btn task-detail-run-btn';
       runBtn.title = 'Run now';
@@ -1084,7 +1087,7 @@ function _renderList() {
       const waitingForIdle = /waiting\s+for\s+.*?to\s+be\s+idle|queued/i.test(
         String(task.last_run_result || '')
       );
-      if (waitingForIdle) {
+      if (waitingForIdle && task.can_force_run === true) {
         const forceRunBtn = document.createElement('button');
         forceRunBtn.className = 'memory-toolbar-btn task-detail-force-run-btn';
         forceRunBtn.title = 'Run anyway, even while Novum Xenium is busy';
@@ -2311,6 +2314,8 @@ function _runToActivityEntry(r) {
     prompt: '',
     ts: r.finished_at || r.started_at,
     status: r.status,
+    canRunAgain: r.can_run_again === true,
+    canForceRun: r.can_force_run === true,
     model: r.model || '',
     endpointUrl: r.endpoint_url || '',
     sessionId: r.session_id || '',
@@ -3063,7 +3068,7 @@ function _renderActivityEntry(entry, opts = {}) {
          Clear cache
        </button>`;
   }
-  if (hasResult && entry.taskId) {
+  if (hasResult && entry.taskId && entry.canRunAgain) {
     actionBtn += `<button class="task-log-run-again" type="button" title="Run this task again">
          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
        Run again
@@ -3073,7 +3078,7 @@ function _renderActivityEntry(entry, opts = {}) {
   // task controls. It is specifically for queued runs waiting on the model
   // idle gate; completed rows retain the normal "Run again" action.
   const waitingForIdle = /waiting\s+for\s+.*?to\s+be\s+idle/i.test(String(entry.result || ''));
-  if (entry.taskId && (_isRunning && entry.status === 'queued' || waitingForIdle)) {
+  if (entry.taskId && entry.canForceRun && (_isRunning && entry.status === 'queued' || waitingForIdle)) {
       actionBtn += `<button class="task-log-run-again task-log-force-run task-log-force-run-action" type="button" title="Run anyway, even while Novum Xenium is busy">
          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
          Run anyway

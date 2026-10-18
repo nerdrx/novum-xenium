@@ -29,7 +29,8 @@ from src.task_action_policy import (
     owner_has_admin_task_privileges,
 )
 from src.task_scheduler import (
-    compute_next_run, HOUSEKEEPING_DEFAULTS,
+    compute_next_run, HOUSEKEEPING_DEFAULTS, can_run_task_again,
+    is_retryable_completed_once,
     _resolve_task_timezone, _resolve_task_timezones,
 )
 from routes.prefs_routes import _load_for_user, _save_for_user
@@ -222,7 +223,29 @@ def _find_task_create_replay(db, owner: Optional[str], key: str, fingerprint: st
     ).first()
     if not task:
         raise HTTPException(409, "This task request was already completed; use a new key to create another task")
-    return _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))
+    return _task_to_dict(
+        task,
+        latest_run_summary=_latest_run_summary(db, task.id),
+        schedule_timezone=_resolve_task_timezone(db, task),
+    )
+
+
+def _latest_run(db, task_id: str):
+    return db.query(TaskRun.id, TaskRun.status).filter(
+        TaskRun.task_id == task_id,
+    ).order_by(TaskRun.started_at.desc(), TaskRun.id.desc()).first()
+
+
+def _latest_run_summary(db, task_id: str, *, include_result: bool = False):
+    columns = [TaskRun.status]
+    if include_result:
+        columns.extend((TaskRun.result, TaskRun.error))
+    row = db.query(*columns).filter(TaskRun.task_id == task_id).order_by(
+        TaskRun.started_at.desc(), TaskRun.id.desc(),
+    ).first()
+    if not row:
+        return None
+    return tuple(row) if include_result else (row[0], None, None)
 
 
 def _task_to_dict(
@@ -251,6 +274,12 @@ def _task_to_dict(
         "next_run": t.next_run.isoformat() + "Z" if t.next_run else None,
         "last_run": t.last_run.isoformat() + "Z" if t.last_run else None,
         "status": t.status,
+        "can_force_run": t.status in {"active", "paused"},
+        "can_run_again": can_run_task_again(
+            t,
+            SimpleNamespace(status=latest_run_summary[0])
+            if latest_run_summary else None,
+        ),
         "output_target": t.output_target,
         "session_id": t.session_id,
         "crew_member_id": getattr(t, "crew_member_id", None),
@@ -412,7 +441,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             tasks = q.order_by(ScheduledTask.created_at.desc()).all()
             task_timezones = _resolve_task_timezones(db, tasks)
             latest_runs = {}
-            if include_last_run and tasks:
+            if tasks:
                 from sqlalchemy import func
 
                 ranked_runs = (
@@ -420,18 +449,21 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                         TaskRun.id.label("id"),
                         func.row_number().over(
                             partition_by=TaskRun.task_id,
-                            order_by=TaskRun.started_at.desc(),
+                            order_by=(TaskRun.started_at.desc(), TaskRun.id.desc()),
                         ).label("row_num"),
                     )
                     .filter(TaskRun.task_id.in_([task.id for task in tasks]))
                     .subquery()
                 )
-                for run in db.query(
-                    TaskRun.task_id, TaskRun.status, TaskRun.result, TaskRun.error
-                ).join(ranked_runs, TaskRun.id == ranked_runs.c.id).filter(
-                    ranked_runs.c.row_num == 1
-                ).all():
-                    latest_runs[run.task_id] = (run.status, run.result, run.error)
+                run_columns = [TaskRun.task_id, TaskRun.status]
+                if include_last_run:
+                    run_columns.extend((TaskRun.result, TaskRun.error))
+                for run in db.query(*run_columns).join(
+                    ranked_runs, TaskRun.id == ranked_runs.c.id,
+                ).filter(ranked_runs.c.row_num == 1).all():
+                    latest_runs[run[0]] = (
+                        run[1], run[2], run[3],
+                    ) if include_last_run else (run[1], None, None)
 
             return {
                 "tasks": [
@@ -691,7 +723,11 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                     raise
                 return replay
             db.refresh(task)
-            return _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))
+            return _task_to_dict(
+                task,
+                latest_run_summary=_latest_run_summary(db, task.id),
+                schedule_timezone=_resolve_task_timezone(db, task),
+            )
         finally:
             db.close()
 
@@ -901,7 +937,11 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                 raise HTTPException(404, "Task not found")
             if user and task.owner != user:
                 raise HTTPException(403, "Access denied")
-            return _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))
+            return _task_to_dict(
+                task,
+                latest_run_summary=_latest_run_summary(db, task.id),
+                schedule_timezone=_resolve_task_timezone(db, task),
+            )
         finally:
             db.close()
 
@@ -1002,7 +1042,11 @@ def setup_task_routes(task_scheduler) -> APIRouter:
 
             db.commit()
             db.refresh(task)
-            return _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))
+            return _task_to_dict(
+                task,
+                latest_run_summary=_latest_run_summary(db, task.id),
+                schedule_timezone=_resolve_task_timezone(db, task),
+            )
         finally:
             db.close()
 
@@ -1135,7 +1179,11 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                 )
             db.commit()
             db.refresh(task)
-            return {"ok": True, "task": _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))}
+            return {"ok": True, "task": _task_to_dict(
+                task,
+                latest_run_summary=_latest_run_summary(db, task.id),
+                schedule_timezone=_resolve_task_timezone(db, task),
+            )}
         finally:
             db.close()
 
@@ -1151,14 +1199,31 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                 raise HTTPException(403, "Access denied")
             _require_admin_for_task_action(user, task.task_type, task.action)
             task_status = getattr(task, "status", "active")
-            if task_status not in {"active", "paused"}:
+            retry_run_id = None
+            if task_status == "completed":
+                latest = _latest_run(db, task.id)
+                if force or not is_retryable_completed_once(task, latest):
+                    raise HTTPException(
+                        409,
+                        f"Task cannot be run while status is {task_status or 'unknown'}",
+                    )
+                retry_run_id = latest.id
+            elif task_status not in {"active", "paused"}:
                 raise HTTPException(
                     409,
                     f"Task cannot be run while status is {task_status or 'unknown'}",
                 )
         finally:
             db.close()
-        started = await task_scheduler.run_task_now(task_id, force=force, allow_paused=True)
+        if retry_run_id:
+            started = await task_scheduler.run_task_now(
+                task_id,
+                completed_once_retry_run_id=retry_run_id,
+            )
+        else:
+            started = await task_scheduler.run_task_now(
+                task_id, force=force, allow_paused=True,
+            )
         if not started:
             raise HTTPException(409, "Task is already running")
         return {"ok": True, "message": "Task triggered" + (" in parallel" if force else "")}
@@ -1205,7 +1270,10 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             # produces several identical "no email accounts configured" rows in
             # the same minute. Keep the task records intact, but collapse those
             # duplicate Activity rows for display.
-            rows = q.order_by(TaskRun.started_at.desc()).limit(limit * 3).all()
+            rows = q.order_by(TaskRun.started_at.desc(), TaskRun.id.desc()).limit(limit * 3).all()
+            latest_run_ids = {}
+            for run, task in rows:
+                latest_run_ids.setdefault(task.id, run.id)
             deduped = []
             seen_urgency_rows = set()
             for r, t in rows:
@@ -1234,6 +1302,10 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                     {
                         **_clip_run(r),
                         "task_name": _display_task_name(t),
+                        "can_force_run": t.status in {"active", "paused"},
+                        "can_run_again": can_run_task_again(
+                            t, r if latest_run_ids.get(t.id) == r.id else None,
+                        ),
                         "task_type": t.task_type or "llm",
                         "action": t.action,
                         # Model + endpoint the task ran on, so the Activity

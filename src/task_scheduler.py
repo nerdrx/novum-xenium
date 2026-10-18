@@ -149,6 +149,43 @@ def _refresh_task_schedule(db, task) -> None:
     ])
 
 
+def is_retryable_completed_once(task, latest_run) -> bool:
+    """A failed scheduled one-shot may be retried manually without rearming it."""
+    return bool(
+        task
+        and task.status == "completed"
+        and task.schedule == "once"
+        and (task.trigger_type or "schedule") == "schedule"
+        and task.next_run is None
+        and latest_run
+        and latest_run.status in {"error", "aborted"}
+    )
+
+
+def can_run_task_again(task, latest_run=None) -> bool:
+    """Expose the ordinary active/paused run action plus strict one-shot retry."""
+    return bool(
+        task
+        and (task.status in {"active", "paused"}
+             or is_retryable_completed_once(task, latest_run))
+    )
+
+
+def _completed_once_retry_is_current(db, task, run_id, expected_previous_run_id) -> bool:
+    if not expected_previous_run_id:
+        return False
+    from core.database import TaskRun
+    latest_previous = db.query(TaskRun).filter(
+        TaskRun.task_id == task.id,
+        TaskRun.id != run_id,
+    ).order_by(TaskRun.started_at.desc(), TaskRun.id.desc()).first()
+    return bool(
+        latest_previous
+        and latest_previous.id == expected_previous_run_id
+        and is_retryable_completed_once(task, latest_previous)
+    )
+
+
 # Shell/file tools a scheduled task's agent should be offered by default,
 # mirroring the chat agent (where these are on unless a privilege or global
 # setting turns them off). The RAG tool selector + ASSISTANT_ALWAYS_AVAILABLE
@@ -636,7 +673,8 @@ class TaskScheduler:
             return False
 
     def _finish_cancelled_run(self, task_id: str, run_id: str, message: str,
-                              foreground: bool, was_paused: bool = False):
+                              foreground: bool, was_paused: bool = False,
+                              completed_once_retry: bool = False):
         """Persist running-task cancellation using a worker-owned DB session."""
         from core.database import SessionLocal, ScheduledTask, TaskRun
         with SessionLocal() as db:
@@ -650,7 +688,9 @@ class TaskScheduler:
             if task:
                 _refresh_task_schedule(db, task)
                 task.last_run = _utcnow()
-                if was_paused or task.status == "paused":
+                if completed_once_retry:
+                    pass  # Preserve the task's current schedule and status.
+                elif was_paused or task.status == "paused":
                     pass
                 elif foreground:
                     task.next_run = _utcnow() + timedelta(minutes=15)
@@ -1049,7 +1089,8 @@ class TaskScheduler:
             db.close()
 
     async def _execute_task(self, task_id: str, *, bypass_model_slot: bool = False,
-                            release_executing: bool = True, allow_paused: bool = False):
+                            release_executing: bool = True, allow_paused: bool = False,
+                            completed_once_retry_run_id: str | None = None):
         # Create the run record with status="queued" BEFORE waiting on the
         # semaphore so the UI can show that a manually-triggered task is in
         # line behind another. Once we acquire the slot, flip to "running"
@@ -1090,6 +1131,7 @@ class TaskScheduler:
                     release_executing=release_executing,
                     gate_foreground=not bypass_model_slot,
                     allow_paused=allow_paused,
+                    completed_once_retry_run_id=completed_once_retry_run_id,
                 )
                 return
 
@@ -1100,14 +1142,16 @@ class TaskScheduler:
                     release_executing=release_executing,
                     gate_foreground=True,
                     allow_paused=allow_paused,
+                    completed_once_retry_run_id=completed_once_retry_run_id,
                 )
         except asyncio.CancelledError:
             # If cancellation happens while queued behind the semaphore,
             # _execute_task_locked never runs and cannot update the Activity row.
             await asyncio.to_thread(self._mark_run_aborted, task_id, run_id)
-            await asyncio.to_thread(
-                self._defer_immediately_due_task, task_id, delay=timedelta(minutes=15),
-            )
+            if not completed_once_retry_run_id:
+                await asyncio.to_thread(
+                    self._defer_immediately_due_task, task_id, delay=timedelta(minutes=15),
+                )
             raise
         finally:
             handle = self._task_handles.get(task_id)
@@ -1149,6 +1193,7 @@ class TaskScheduler:
         release_executing: bool = True,
         gate_foreground: bool = True,
         allow_paused: bool = False,
+        completed_once_retry_run_id: str | None = None,
     ):
         from core.database import SessionLocal, ScheduledTask, TaskRun
 
@@ -1162,7 +1207,19 @@ class TaskScheduler:
         db = SessionLocal()
         try:
             task = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
-            if not task or (task.status != "active" and not (allow_paused and task.status == "paused")):
+            retry_allowed = bool(
+                task and completed_once_retry_run_id
+                and _completed_once_retry_is_current(
+                    db, task, run_id, completed_once_retry_run_id,
+                )
+            )
+            if not task or (
+                completed_once_retry_run_id and not retry_allowed
+            ) or (
+                not completed_once_retry_run_id
+                and task.status != "active"
+                and not (allow_paused and task.status == "paused")
+            ):
                 # Task was paused/deleted while queued — record that outcome
                 # so the run row doesn't sit as "queued" forever.
                 stale = db.query(TaskRun).filter(TaskRun.id == run_id).first()
@@ -1202,6 +1259,19 @@ class TaskScheduler:
                     db.commit()
                 from src.interactive_gate import wait_for_interactive_quiet
                 await wait_for_interactive_quiet(f"scheduled task {task.name}")
+
+            if completed_once_retry_run_id:
+                db.refresh(task, attribute_names=["status", "schedule", "trigger_type", "next_run"])
+                if not _completed_once_retry_is_current(
+                    db, task, run_id, completed_once_retry_run_id,
+                ):
+                    stale = db.query(TaskRun).filter(TaskRun.id == run_id).first()
+                    if stale and stale.status == "queued":
+                        stale.status = "skipped"
+                        stale.finished_at = _utcnow()
+                        stale.error = "Completed one-shot retry is no longer eligible"
+                        db.commit()
+                    return
 
             # Flip the run from queued → running. Reset started_at to the
             # actual execution start so queue wait time is visible from
@@ -1294,7 +1364,7 @@ class TaskScheduler:
                 run_obj = db.query(TaskRun).filter(TaskRun.id == run_id).first()
                 if run_obj:
                     db.delete(run_obj)
-                if task.status != "paused":
+                if task.status != "paused" and not completed_once_retry_run_id:
                     task.next_run = when
                 db.commit()
                 return
@@ -1312,6 +1382,7 @@ class TaskScheduler:
                 await asyncio.to_thread(
                     self._finish_cancelled_run, task_id, run_id, msg,
                     bool(foreground_cancel.get("hit")), was_paused,
+                    bool(completed_once_retry_run_id),
                 )
                 return
             except TaskNoop as noop:
@@ -1326,7 +1397,9 @@ class TaskScheduler:
                 run.result = str(noop)
                 run.finished_at = _utcnow()
                 task.last_run = _utcnow()
-                if task.status == "paused":
+                if completed_once_retry_run_id:
+                    pass  # A manual retry never rearms a completed one-shot.
+                elif task.status == "paused":
                     pass  # Manual runs never resume or reschedule a paused task.
                 elif (task.trigger_type or "schedule") == "schedule":
                     task.next_run = compute_next_run(
@@ -1364,7 +1437,9 @@ class TaskScheduler:
             self._task_defer_counts.pop(task_id, None)
 
             # Compute next run only for schedule-triggered tasks
-            if task.status == "paused":
+            if completed_once_retry_run_id:
+                pass  # A manual retry leaves the completed one-shot schedule intact.
+            elif task.status == "paused":
                 pass  # Keep the paused task's schedule intact after a manual run.
             elif (task.trigger_type or "schedule") == "schedule":
                 task.next_run = compute_next_run(
@@ -1464,7 +1539,11 @@ class TaskScheduler:
                 task_obj = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
                 if task_obj:
                     _refresh_task_schedule(db, task_obj)
-                if task_obj and task_obj.status != "paused" and (task_obj.trigger_type or "schedule") == "schedule":
+                if task_obj and completed_once_retry_run_id:
+                    task_obj.last_run = _utcnow()
+                elif (task_obj
+                        and task_obj.status != "paused"
+                        and (task_obj.trigger_type or "schedule") == "schedule"):
                     task_obj.last_run = _utcnow()
                     try:
                         task_obj.next_run = compute_next_run(
@@ -1497,7 +1576,9 @@ class TaskScheduler:
                             _r.error = f"commit_failed: {type(commit_err).__name__}: {commit_err}"[:2000]
                             _r.finished_at = _utcnow()
                         _t = _recover_db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
-                        if _t and (_t.trigger_type or "schedule") == "schedule":
+                        if _t and completed_once_retry_run_id:
+                            _t.last_run = _utcnow()
+                        elif _t and (_t.trigger_type or "schedule") == "schedule":
                             # Push next_run forward 5min as a safe stall so the
                             # scheduler doesn't immediately re-dispatch.
                             _t.next_run = _utcnow() + _td(minutes=5)
@@ -2716,9 +2797,12 @@ class TaskScheduler:
         except Exception as e:
             logger.error(f"Task {task.id} MCP delivery failed: {e}")
 
-    async def run_task_now(self, task_id: str, *, force: bool = False, allow_paused: bool = False):
+    async def run_task_now(self, task_id: str, *, force: bool = False, allow_paused: bool = False,
+                           completed_once_retry_run_id: str | None = None):
         """Manually trigger a task execution."""
         if task_id in getattr(self, "_deleting_tasks", set()):
+            return False
+        if completed_once_retry_run_id and force:
             return False
         if force:
             self._track_task(
@@ -2734,7 +2818,11 @@ class TaskScheduler:
                     or task_id in getattr(self, "_deleting_tasks", set())):
                 return False
             self._executing.add(task_id)
-        self._track_task(task_id, self._execute_task(task_id, allow_paused=allow_paused))
+        self._track_task(task_id, self._execute_task(
+            task_id,
+            allow_paused=allow_paused,
+            completed_once_retry_run_id=completed_once_retry_run_id,
+        ))
         return True
 
     def begin_task_deletion(self, task_id: str) -> None:

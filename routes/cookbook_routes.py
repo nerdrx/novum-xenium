@@ -74,6 +74,83 @@ def _is_image_server_command(command: str | None) -> bool:
     )
 
 
+async def _cleanup_unreachable_model_endpoint(endpoint_id: str) -> tuple[str, str | None, str | None]:
+    """Probe and conditionally remove a stale Cookbook endpoint off-loop."""
+    def cleanup():
+        from core.database import SessionLocal, ModelEndpoint
+
+        db = SessionLocal()
+        try:
+            endpoint = db.query(ModelEndpoint).filter(ModelEndpoint.id == endpoint_id).first()
+            if endpoint is None:
+                return "missing", None, None
+            base_url = endpoint.base_url
+            updated_at = endpoint.updated_at
+            name = endpoint.name
+        finally:
+            db.close()
+
+        try:
+            with urllib.request.urlopen(base_url.rstrip("/") + "/models", timeout=3) as response:
+                if 200 <= getattr(response, "status", 0) < 300:
+                    return "reachable", name, base_url
+        except Exception:
+            pass
+
+        db = SessionLocal()
+        try:
+            deleted = db.query(ModelEndpoint).filter(
+                ModelEndpoint.id == endpoint_id,
+                ModelEndpoint.base_url == base_url,
+                ModelEndpoint.updated_at == updated_at,
+            ).delete(synchronize_session=False)
+            if deleted:
+                db.commit()
+                return "deleted", name, base_url
+            db.rollback()
+            return "changed", name, base_url
+        finally:
+            db.close()
+
+    return await asyncio.to_thread(cleanup)
+
+
+async def _stop_watchdog_capture_process(proc) -> None:
+    """Terminate only the capture child owned by one watchdog attempt."""
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2)
+        return
+    except asyncio.TimeoutError:
+        pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2)
+    except asyncio.TimeoutError:
+        logger.warning("crash-watchdog: capture-pane child did not exit after kill")
+
+
+async def _capture_watchdog_pane_output(capture_cmd: list[str]) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        *capture_cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+        return stdout.decode("utf-8", errors="replace")
+    finally:
+        await _stop_watchdog_capture_process(proc)
+
+
 def _stable_diffusion_cpp_endpoint(
     command: str, remote: str | None = None, launch_id: str | None = None
 ) -> tuple[str, str]:
@@ -1908,13 +1985,7 @@ def setup_cookbook_routes() -> APIRouter:
         for wait_s in _waits:
             await asyncio.sleep(wait_s)
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *capture_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-                output = stdout.decode("utf-8", errors="replace")
+                output = await _capture_watchdog_pane_output(capture_cmd)
             except Exception as e:
                 logger.debug(f"crash-watchdog: capture-pane failed (will retry): {e!r}")
                 continue
@@ -1946,35 +2017,17 @@ def setup_cookbook_routes() -> APIRouter:
                 return
             # Non-zero exit — drop the endpoint.
             try:
-                from core.database import SessionLocal as _SL, ModelEndpoint as _ME
-                db = _SL()
-                try:
-                    ep = db.query(_ME).filter(_ME.id == endpoint_id).first()
-                    if ep:
-                        # A scheduled serve can leave old non-zero exit markers
-                        # in tmux scrollback while the current OpenAI endpoint is
-                        # actually alive. Verify reachability before deleting the
-                        # endpoint row; otherwise chats fall back even though the
-                        # served model is ready.
-                        try:
-                            probe_url = ep.base_url.rstrip("/") + "/models"
-                            with urllib.request.urlopen(probe_url, timeout=3) as resp:
-                                if 200 <= getattr(resp, "status", 0) < 300:
-                                    logger.info(
-                                        f"crash-watchdog: serve {session_id} has exit marker {exit_code} "
-                                        f"but endpoint {ep.id} is reachable; leaving it registered"
-                                    )
-                                    return
-                        except Exception:
-                            pass
-                        logger.info(
-                            f"crash-watchdog: dropping endpoint {endpoint_id} "
-                            f"({ep.name} @ {ep.base_url}) — serve exited {exit_code}"
-                        )
-                        db.delete(ep)
-                        db.commit()
-                finally:
-                    db.close()
+                status, endpoint_name, base_url = await _cleanup_unreachable_model_endpoint(endpoint_id)
+                if status == "reachable":
+                    logger.info(
+                        f"crash-watchdog: serve {session_id} has exit marker {exit_code} "
+                        f"but endpoint {endpoint_id} is reachable; leaving it registered"
+                    )
+                elif status == "deleted":
+                    logger.info(
+                        f"crash-watchdog: dropping endpoint {endpoint_id} "
+                        f"({endpoint_name} @ {base_url}) — serve exited {exit_code}"
+                    )
             except Exception as e:
                 logger.warning(f"crash-watchdog: endpoint cleanup failed: {e!r}")
             return

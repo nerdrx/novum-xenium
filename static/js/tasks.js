@@ -400,7 +400,8 @@ function _scheduleLabel(task) {
   }
   if (tt === 'webhook') return 'Webhook';
   const t = task.scheduled_time || '00:00';
-  if (task.schedule === 'cron') return `Cron: ${task.cron_expression || '?'}`;
+  const scheduleZone = task.schedule_timezone;
+  if (task.schedule === 'cron') return `Cron${scheduleZone ? ` (${scheduleZone})` : ''}: ${task.cron_expression || '?'}`;
   if (task.schedule === 'once') {
     if (task.scheduled_date) {
       const d = new Date(task.scheduled_date);
@@ -408,16 +409,17 @@ function _scheduleLabel(task) {
     }
     return 'Once';
   }
-  const localTime = _utcTimeToLocal(t);
-  if (task.schedule === 'daily') return `Daily at ${localTime}`;
+  const localTime = scheduleZone ? t : _utcTimeToLocal(t);
+  const zoneLabel = scheduleZone ? ` (${scheduleZone})` : '';
+  if (task.schedule === 'daily') return `Daily at ${localTime}${zoneLabel}`;
   if (task.schedule === 'weekly') {
     const day = DAYS_OF_WEEK[task.scheduled_day ?? 0];
-    return `Weekly on ${day} at ${localTime}`;
+    return `Weekly on ${day} at ${localTime}${zoneLabel}`;
   }
   if (task.schedule === 'monthly') {
     const d = task.scheduled_day ?? 1;
     const suffix = ordinalSuffix(d);
-    return `Monthly on ${d}${suffix} at ${localTime}`;
+    return `Monthly on ${d}${suffix} at ${localTime}${zoneLabel}`;
   }
   return task.schedule || '—';
 }
@@ -567,11 +569,11 @@ function _buildTimePicker(containerId, hour, minute) {
   const minSel = document.createElement('select');
   minSel.className = 'task-form-input task-time-select';
   minSel.id = containerId + '-min';
-  for (let m = 0; m < 60; m += 5) {
+  for (let m = 0; m < 60; m++) {
     const opt = document.createElement('option');
     opt.value = m;
     opt.textContent = String(m).padStart(2, '0');
-    if (m === minute || (m <= minute && m + 5 > minute)) opt.selected = true;
+    if (m === minute) opt.selected = true;
     minSel.appendChild(opt);
   }
 
@@ -1375,6 +1377,7 @@ function _showForm(existing, initTaskType, initTriggerType) {
 
   const curTaskType = existing?.task_type || initTaskType || 'llm';
   const curTriggerType = existing?.trigger_type || initTriggerType || 'schedule';
+  const scheduleTimezone = existing?.schedule_timezone || null;
 
   body.innerHTML = `
     <div class="admin-card" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
@@ -1551,20 +1554,28 @@ function _showForm(existing, initTaskType, initTriggerType) {
 
       // Build time picker
       let initH = 9, initM = 0;
-      if (existing && existing.scheduled_time) {
-        const [uh, um] = existing.scheduled_time.split(':').map(Number);
-        const d = new Date();
-        d.setUTCHours(uh, um, 0, 0);
-        initH = d.getHours();
-        initM = d.getMinutes();
+      if (existing?.schedule === 'once' && existing.scheduled_date) {
+        const date = new Date(existing.scheduled_date);
+        initH = date.getHours();
+        initM = date.getMinutes();
+      } else if (existing && existing.scheduled_time) {
+        if (scheduleTimezone && existing.schedule !== 'once') {
+          [initH, initM] = existing.scheduled_time.split(':').map(Number);
+        } else {
+          const [utcHour, utcMinute] = existing.scheduled_time.split(':').map(Number);
+          const localDate = new Date();
+          localDate.setUTCHours(utcHour, utcMinute, 0, 0);
+          initH = localDate.getHours();
+          initM = localDate.getMinutes();
+        }
       }
       _buildTimePicker('task-form-time-wrap', initH, initM);
 
       const schedSelect = document.getElementById('task-form-schedule');
       const schedOpts = document.getElementById('task-form-schedule-opts');
-
       function updateScheduleOpts() {
         schedOpts.innerHTML = '';
+        document.querySelectorAll('#task-form-time-section .task-schedule-timezone-hint, #task-form-schedule-opts .task-schedule-timezone-hint').forEach(el => el.remove());
         const sched = schedSelect.value;
         const timeSection = document.getElementById('task-form-time-section');
         if (timeSection) timeSection.style.display = sched === 'cron' ? 'none' : '';
@@ -1623,9 +1634,31 @@ function _showForm(existing, initTaskType, initTriggerType) {
           hint.textContent = 'min hour day month weekday — e.g. "0 */2 * * *" = every 2 hours';
           schedOpts.appendChild(hint);
         }
+        const hintContainer = sched === 'cron' ? schedOpts : document.getElementById('task-form-time-section');
+        const zoneHint = document.createElement('div');
+        zoneHint.className = 'memory-desc task-schedule-timezone-hint';
+        if (sched === 'cron' && scheduleTimezone) {
+          zoneHint.textContent = `Cron runs in ${scheduleTimezone}; expression is kept as entered.`;
+        } else if (sched === 'cron') {
+          zoneHint.remove();
+          return;
+        } else if (sched === 'once') {
+          zoneHint.textContent = 'One-time date and time use your device timezone and save as an absolute instant.';
+        } else if (scheduleTimezone) {
+          zoneHint.textContent = `Time is ${_getTimePickerValue('task-form-time-wrap')} in ${scheduleTimezone}.`;
+        } else {
+          zoneHint.textContent = 'Time is shown in your device timezone.';
+        }
+        hintContainer?.appendChild(zoneHint);
       }
       schedSelect.addEventListener('change', updateScheduleOpts);
       updateScheduleOpts();
+      document.getElementById('task-form-time-wrap')?.addEventListener('change', () => {
+        const hint = document.querySelector('#task-form-time-section .task-schedule-timezone-hint');
+        if (hint && scheduleTimezone && schedSelect.value !== 'once') {
+          hint.textContent = `Time is ${_getTimePickerValue('task-form-time-wrap')} in ${scheduleTimezone}.`;
+        }
+      });
 
     } else if (triggerType === 'event') {
       triggerOpts.innerHTML = `
@@ -1930,7 +1963,9 @@ function _showForm(existing, initTaskType, initTriggerType) {
           payload.cron_expression = cronVal;
         } else {
           const timeVal = _getTimePickerValue('task-form-time-wrap');
-          payload.scheduled_time = _localTimeToUtc(timeVal);
+          payload.scheduled_time = scheduleTimezone && payload.schedule !== 'once'
+            ? timeVal
+            : _localTimeToUtc(timeVal);
 
           const dayInput = document.getElementById('task-form-day');
           if (dayInput) payload.scheduled_day = parseInt(dayInput.value, 10);

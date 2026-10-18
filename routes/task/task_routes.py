@@ -28,7 +28,10 @@ from src.task_action_policy import (
     is_admin_only_task_action,
     owner_has_admin_task_privileges,
 )
-from src.task_scheduler import compute_next_run, HOUSEKEEPING_DEFAULTS
+from src.task_scheduler import (
+    compute_next_run, HOUSEKEEPING_DEFAULTS,
+    _resolve_task_timezone, _resolve_task_timezones,
+)
 from routes.prefs_routes import _load_for_user, _save_for_user
 
 logger = logging.getLogger(__name__)
@@ -219,13 +222,14 @@ def _find_task_create_replay(db, owner: Optional[str], key: str, fingerprint: st
     ).first()
     if not task:
         raise HTTPException(409, "This task request was already completed; use a new key to create another task")
-    return _task_to_dict(task)
+    return _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))
 
 
 def _task_to_dict(
     t: ScheduledTask,
     include_last_run_result: bool = False,
     latest_run_summary=None,
+    schedule_timezone: str | None = None,
 ) -> dict:
     defs = HOUSEKEEPING_DEFAULTS.get(t.action) if t.action else None
     d = {
@@ -236,6 +240,7 @@ def _task_to_dict(
         "action": t.action,
         "schedule": t.schedule,
         "scheduled_time": t.scheduled_time,
+        "schedule_timezone": schedule_timezone,
         "scheduled_day": t.scheduled_day,
         "scheduled_date": t.scheduled_date.isoformat() + "Z" if t.scheduled_date else None,
         "cron_expression": t.cron_expression,
@@ -405,6 +410,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             if status:
                 q = q.filter(ScheduledTask.status == status)
             tasks = q.order_by(ScheduledTask.created_at.desc()).all()
+            task_timezones = _resolve_task_timezones(db, tasks)
             latest_runs = {}
             if include_last_run and tasks:
                 from sqlalchemy import func
@@ -433,6 +439,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                         task,
                         include_last_run_result=include_last_run,
                         latest_run_summary=latest_runs.get(task.id),
+                        schedule_timezone=task_timezones.get(getattr(task, "crew_member_id", None)),
                     )
                     for task in tasks
                 ]
@@ -484,6 +491,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                             task.scheduled_day,
                             task.scheduled_date,
                             cron_expression=task.cron_expression,
+                            tz_name=_resolve_task_timezone(db, task),
                         )
                     resumed += 1
                 db.commit()
@@ -683,7 +691,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                     raise
                 return replay
             db.refresh(task)
-            return _task_to_dict(task)
+            return _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))
         finally:
             db.close()
 
@@ -893,7 +901,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                 raise HTTPException(404, "Task not found")
             if user and task.owner != user:
                 raise HTTPException(403, "Access denied")
-            return _task_to_dict(task)
+            return _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))
         finally:
             db.close()
 
@@ -989,11 +997,12 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                     task.schedule, task.scheduled_time,
                     task.scheduled_day, task.scheduled_date,
                     cron_expression=task.cron_expression,
+                    tz_name=_resolve_task_timezone(db, task),
                 )
 
             db.commit()
             db.refresh(task)
-            return _task_to_dict(task)
+            return _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))
         finally:
             db.close()
 
@@ -1082,6 +1091,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                     task.schedule, task.scheduled_time,
                     task.scheduled_day, task.scheduled_date,
                     cron_expression=task.cron_expression,
+                    tz_name=_resolve_task_timezone(db, task),
                 )
             db.commit()
             return {"ok": True, "status": "active", "next_run": task.next_run.isoformat() + "Z" if task.next_run else None}
@@ -1121,10 +1131,11 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                 task.next_run = compute_next_run(
                     defs["schedule"], defs["scheduled_time"], None, None,
                     cron_expression=defs["cron_expression"],
+                    tz_name=_resolve_task_timezone(db, task),
                 )
             db.commit()
             db.refresh(task)
-            return {"ok": True, "task": _task_to_dict(task)}
+            return {"ok": True, "task": _task_to_dict(task, schedule_timezone=_resolve_task_timezone(db, task))}
         finally:
             db.close()
 

@@ -323,7 +323,7 @@ def _task_structured_schedule(args, fallback_time=None):
     try:
         parsed = datetime.strptime(clock, '%H:%M')
     except (TypeError, ValueError) as exc:
-        raise ValueError('scheduled_time in HH:MM UTC is required with weekdays') from exc
+        raise ValueError('scheduled_time in HH:MM task wall-clock time is required with weekdays') from exc
     cron_days = ','.join(str(n) for n in sorted({names.index(d) for d in days}))
     return {**args, 'schedule': 'cron', 'scheduled_time': parsed.strftime('%H:%M'),
             'cron_expression': f'{parsed.minute} {parsed.hour} * * {cron_days}'}
@@ -333,7 +333,7 @@ async def do_manage_tasks(content: str, owner: Optional[str] = None) -> Dict:
     """Handle manage_tasks tool calls: CRUD on scheduled tasks."""
     import uuid as _uuid
     from core.database import SessionLocal, ScheduledTask
-    from src.task_scheduler import compute_next_run
+    from src.task_scheduler import compute_next_run, _resolve_task_timezone, _resolve_task_timezones
 
     try:
         args = _parse_tool_args(content)
@@ -441,6 +441,7 @@ async def do_manage_tasks(content: str, owner: Optional[str] = None) -> Dict:
                 return {"response": f"No scheduled tasks found{suffix}.", "exit_code": 0}
 
             lines = [f"Found {len(tasks)} tasks:"]
+            task_timezones = _resolve_task_timezones(db, tasks)
             for idx, t in enumerate(tasks, 1):
                 bits = [t.status or "unknown"]
                 if t.schedule:
@@ -449,6 +450,9 @@ async def do_manage_tasks(content: str, owner: Optional[str] = None) -> Dict:
                     bits.append(t.cron_expression)
                 if t.scheduled_time:
                     bits.append(str(t.scheduled_time))
+                tz_name = task_timezones.get(getattr(t, "crew_member_id", None))
+                if t.schedule and (t.trigger_type or "schedule") == "schedule":
+                    bits.append(f"timezone {tz_name or 'UTC'}")
                 if t.next_run:
                     bits.append(f"next {t.next_run.isoformat()}Z")
                 detail = ", ".join(bits)
@@ -545,7 +549,7 @@ async def do_manage_tasks(content: str, owner: Optional[str] = None) -> Dict:
                 try:
                     clock = datetime.strptime(args['scheduled_time'], '%H:%M')
                 except (TypeError, ValueError) as exc:
-                    raise ValueError('scheduled_time must be HH:MM UTC') from exc
+                    raise ValueError('scheduled_time must be HH:MM in the task timezone') from exc
                 fields = (task.cron_expression or '').split()
                 if len(fields) != 5:
                     raise ValueError('Supply cron_expression to retime a schedule without a five-field cron expression')
@@ -598,6 +602,7 @@ async def do_manage_tasks(content: str, owner: Optional[str] = None) -> Dict:
                     task.schedule, task.scheduled_time, task.scheduled_day,
                     task.scheduled_date,
                     cron_expression=task.cron_expression,
+                    tz_name=_resolve_task_timezone(db, task),
                 )
                 if task.schedule == "once" and task.next_run is None:
                     raise ValueError("scheduled_date must be in the future")
@@ -634,6 +639,7 @@ async def do_manage_tasks(content: str, owner: Optional[str] = None) -> Dict:
                         task.schedule, task.scheduled_time, task.scheduled_day,
                         task.scheduled_date,
                         cron_expression=task.cron_expression,
+                        tz_name=_resolve_task_timezone(db, task),
                     )
                     if task.schedule == "once" and task.next_run is None:
                         raise ValueError("A future scheduled_date is required to resume this one-off task")

@@ -292,18 +292,42 @@ def compute_next_run(schedule: str, scheduled_time: str,
     return None
 
 
-def _resolve_task_timezone(db, task) -> str | None:
-    """Look up the IANA timezone name for a task via its linked CrewMember, if any."""
-    if not getattr(task, "crew_member_id", None):
+def _validated_task_timezone(tz_name: str | None) -> str | None:
+    """Return a valid IANA zone, preserving the scheduler's UTC fallback."""
+    if not isinstance(tz_name, str) or not tz_name:
         return None
     try:
-        from core.database import CrewMember
-        cm = db.query(CrewMember).filter(CrewMember.id == task.crew_member_id).first()
-        if cm and cm.timezone:
-            return cm.timezone
+        from zoneinfo import ZoneInfo
+        ZoneInfo(tz_name)
+        return tz_name
     except Exception:
-        pass
-    return None
+        return None
+
+
+def _resolve_task_timezones(db, tasks) -> dict[str, str]:
+    """Resolve linked IANA zones in one query for task-list serialization."""
+    crew_ids = {getattr(task, "crew_member_id", None) for task in tasks}
+    crew_ids.discard(None)
+    if not crew_ids:
+        return {}
+    try:
+        from core.database import CrewMember
+        return {
+            crew_id: valid_zone
+            for crew_id, zone in db.query(CrewMember.id, CrewMember.timezone)
+            .filter(CrewMember.id.in_(crew_ids)).all()
+            if (valid_zone := _validated_task_timezone(zone))
+        }
+    except Exception:
+        return {}
+
+
+def _resolve_task_timezone(db, task) -> str | None:
+    """Look up the valid IANA timezone for a linked task; else use legacy UTC."""
+    crew_id = getattr(task, "crew_member_id", None)
+    if not crew_id:
+        return None
+    return _resolve_task_timezones(db, [task]).get(crew_id)
 
 
 # Built-in "housekeeping" tasks seeded for every owner, keyed by action.

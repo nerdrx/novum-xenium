@@ -220,6 +220,10 @@ class LocalImageEngine:
             raise ValueError("Unsafe engine manager storage")
         self.home.chmod(0o700)
         self.lock = threading.RLock()
+        # A slow first scan must not block controls or duplicate Start scans.
+        self.start_lock = threading.Lock()
+        # Stop invalidates a Start that was already scanning the cache.
+        self.stop_generation = 0
         self.refresh_lock = threading.Lock()
         self.wake = threading.Event()
         self.closed = threading.Event()
@@ -304,8 +308,13 @@ class LocalImageEngine:
         try:
             scanned = self.scanner() if rows is None else rows
             with self.lock:
+                selected_mode = self.settings["mode"]
                 binary, mode = self._binary()
-                models, pending = image_catalog(scanned, binary, mode)
+            models, pending = image_catalog(scanned, binary, mode)
+            with self.lock:
+                if self.settings["mode"] != selected_mode:
+                    self.wake.set()
+                    raise ValueError("Engine settings changed during refresh; a new scan was scheduled.")
                 previous = {}
                 path = self.home / "image-models.json"
                 if path.exists():
@@ -379,8 +388,8 @@ class LocalImageEngine:
 
     def health(self):
         from scripts.managed_image_engine import _owned_listener
-        if (self.process is None or self.process.poll() is not None
-                or not _owned_listener(self.port, self.process.pid)):
+        proc = self.process
+        if proc is None or proc.poll() is not None or not _owned_listener(self.port, proc.pid):
             raise ValueError("The owned image engine does not hold its listener")
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
         try:
@@ -398,42 +407,74 @@ class LocalImageEngine:
 
     def start(self):
         with self.lock:
-            if self.process is not None and self.process.poll() is None:
-                return
-            # Never adopt or kill a listener merely because it owns this port.
-            import socket
-            with socket.socket() as sock:
-                # Match HTTPServer's address reuse after an owned Stop. Without
-                # it, TIME_WAIT sockets can block an immediate Start for a minute.
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.bind(("127.0.0.1", self.port))
+            generation = self.stop_generation
+        with self.start_lock:
+            with self.lock:
+                if self.closed.is_set() or generation != self.stop_generation:
+                    return
+                if self.process is not None and self.process.poll() is None:
+                    return
             if not (self.home / "image-models.json").exists():
                 if not self.refresh():
                     raise ValueError("The initial model scan is still running. Try again when it finishes.")
-            script = Path(__file__).resolve().parents[1] / "scripts/managed_image_engine.py"
-            log = (self.home / "image-engine.log").open("ab")
-            try:
-                self.process = subprocess.Popen([sys.executable, "-I", str(script),
-                    "--catalog", str(self.home / "image-models.json"), "--port", str(self.port),
-                    "--token-file", str(self.home / "image.token"), "--parent-pid", str(os.getpid())],
-                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                    **({"start_new_session": True} if os.name != "nt" else {}))
-            finally:
-                log.close()
+
+            with self.lock:
+                if self.closed.is_set() or generation != self.stop_generation:
+                    return
+                if self.process is not None and self.process.poll() is None:
+                    return
+                # Never adopt or kill a listener merely because it owns this port.
+                import socket
+                with socket.socket() as sock:
+                    # Match HTTPServer's address reuse after an owned Stop. Without
+                    # it, TIME_WAIT sockets can block an immediate Start for a minute.
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    sock.bind(("127.0.0.1", self.port))
+                script = Path(__file__).resolve().parents[1] / "scripts/managed_image_engine.py"
+                log = (self.home / "image-engine.log").open("ab")
+                try:
+                    proc = subprocess.Popen([sys.executable, "-I", str(script),
+                        "--catalog", str(self.home / "image-models.json"), "--port", str(self.port),
+                        "--token-file", str(self.home / "image.token"), "--parent-pid", str(os.getpid())],
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                        **({"start_new_session": True} if os.name != "nt" else {}))
+                    self.process = proc
+                finally:
+                    log.close()
             for _ in range(25):
-                if self.process.poll() is not None:
+                with self.lock:
+                    if self.closed.is_set() or generation != self.stop_generation or self.process is not proc:
+                        return
+                if proc.poll() is not None:
+                    with self.lock:
+                        if self.process is proc:
+                            self.process = None
                     raise ValueError("The image engine stopped before becoming ready. Check its manager log.")
                 try:
                     self.health()
-                    self.register_endpoint()
+                    with self.lock:
+                        if self.closed.is_set() or generation != self.stop_generation or self.process is not proc:
+                            return
+                        self.register_endpoint()
                     return
                 except (OSError, ValueError, urllib.error.URLError):
                     time.sleep(0.2)
-            self.stop()
+            with self.lock:
+                if self.process is not proc or generation != self.stop_generation:
+                    return
+                self.process = None
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=2)
             raise ValueError("The image engine did not become ready in time.")
 
     def stop(self):
         with self.lock:
+            self.stop_generation += 1
             proc, self.process = self.process, None
             if proc is not None and proc.poll() is None:
                 proc.terminate()

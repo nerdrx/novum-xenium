@@ -37,6 +37,248 @@ def test_cache_scan_does_not_block_controls_or_duplicate_scans(tmp_path, monkeyp
         engine.close()
 
 
+def _patch_start_without_worker(monkeypatch, engine):
+    launches = []
+
+    class FakeSocket:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def setsockopt(self, *_args): pass
+        def bind(self, *_args): pass
+
+    class FakeProcess:
+        returncode = None
+        def poll(self): return self.returncode
+        def terminate(self): self.returncode = 0
+        def wait(self, **_kwargs): return self.returncode
+
+    monkeypatch.setattr(socket, "socket", FakeSocket)
+    monkeypatch.setattr(engine, "_binary", lambda: ("/unused/sd-server", "cpu"))
+    monkeypatch.setattr(engine, "health", lambda: {})
+    monkeypatch.setattr(engine, "register_endpoint", lambda: None)
+    monkeypatch.setattr(
+        "src.local_image_engine.subprocess.Popen",
+        lambda *_args, **_kwargs: launches.append(FakeProcess()) or launches[-1],
+    )
+    return launches
+
+
+def test_first_start_scan_and_catalog_build_do_not_block_configure(tmp_path, monkeypatch):
+    entered, release, catalog_entered, catalog_release = (threading.Event() for _ in range(4))
+    configured_scan, configured_catalog = threading.Event(), threading.Event()
+
+    def scanner():
+        entered.set()
+        assert release.wait(3)
+        return []
+
+    def catalog(*_args):
+        catalog_modes.append(_args[2])
+        catalog_entered.set()
+        if len(catalog_modes) == 1:
+            assert catalog_release.wait(3)
+        return [], []
+
+    engine = LocalImageEngine(tmp_path, scanner=scanner)
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    catalog_modes = []
+    engine._binary = lambda: ("/unused/sd-server", engine.settings["mode"])
+    monkeypatch.setattr("src.local_image_engine.image_catalog", catalog)
+    errors = []
+    start = threading.Thread(target=lambda: _capture_error(engine.start, errors))
+    start.start()
+    try:
+        assert entered.wait(1)
+        configure = threading.Thread(
+            target=lambda: (engine.configure({"auto_start": False}), configured_scan.set())
+        )
+        configure.start()
+        assert configured_scan.wait(1), "initial scan must not hold the control lock"
+        release.set()
+        assert catalog_entered.wait(1)
+        configure = threading.Thread(
+            target=lambda: (engine.configure({"mode": "cpu", "idle_seconds": 600}), configured_catalog.set())
+        )
+        configure.start()
+        assert configured_catalog.wait(1), "catalog building must not hold the control lock"
+        catalog_release.set()
+        start.join(2)
+        configure.join(2)
+        assert not start.is_alive()
+        assert len(errors) == 1
+        assert "settings changed during refresh" in str(errors[0])
+        assert launches == []
+        assert catalog_modes == ["auto"]
+        assert not (engine.home / "image-models.json").exists()
+    finally:
+        release.set()
+        catalog_release.set()
+        start.join(3)
+        engine.close()
+
+
+def test_stop_during_first_start_scan_prevents_gateway_launch(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    def scanner():
+        entered.set()
+        assert release.wait(3)
+        return []
+
+    engine = LocalImageEngine(tmp_path, scanner=scanner)
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    start = threading.Thread(target=engine.start)
+    start.start()
+    try:
+        assert entered.wait(1)
+        engine.stop()
+        release.set()
+        start.join(2)
+        assert not start.is_alive()
+        assert launches == []
+        assert engine.process is None
+    finally:
+        release.set()
+        start.join(3)
+        engine.close()
+
+
+def test_stop_and_configure_during_readiness_do_not_block_or_publish(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    (engine.home / "image-models.json").write_text("{}")
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    registered = []
+
+    def health():
+        entered.set()
+        assert release.wait(3)
+        return {}
+
+    monkeypatch.setattr(engine, "health", health)
+    monkeypatch.setattr(engine, "register_endpoint", lambda: registered.append(True))
+    errors = []
+    start = threading.Thread(target=lambda: _capture_error(engine.start, errors))
+    start.start()
+    try:
+        assert entered.wait(1)
+        # These controls must be able to invalidate the in-flight readiness wait.
+        engine.configure({"idle_seconds": 600})
+        engine.stop()
+        release.set()
+        start.join(2)
+        assert not start.is_alive()
+        assert not errors
+        assert len(launches) == 1 and launches[0].returncode == 0
+        assert engine.process is None
+        assert registered == []
+    finally:
+        release.set()
+        start.join(3)
+        engine.close()
+
+
+def test_close_during_first_start_scan_prevents_gateway_launch(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    def scanner():
+        entered.set()
+        assert release.wait(3)
+        return []
+
+    engine = LocalImageEngine(tmp_path, scanner=scanner)
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    start = threading.Thread(target=engine.start)
+    start.start()
+    try:
+        assert entered.wait(1)
+        engine.close()
+        release.set()
+        start.join(2)
+        assert not start.is_alive()
+        assert launches == []
+        assert engine.process is None
+    finally:
+        release.set()
+        start.join(3)
+        engine.close()
+
+
+def test_concurrent_first_starts_scan_and_launch_once(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    def scanner():
+        entered.set()
+        assert release.wait(3)
+        return []
+
+    engine = LocalImageEngine(tmp_path, scanner=scanner)
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    errors = []
+    starts = [threading.Thread(target=lambda: _capture_error(engine.start, errors)) for _ in range(2)]
+    for start in starts:
+        start.start()
+    try:
+        assert entered.wait(1)
+        release.set()
+        for start in starts:
+            start.join(2)
+        assert all(not start.is_alive() for start in starts)
+        assert not errors
+        assert len(launches) == 1
+    finally:
+        release.set()
+        for start in starts:
+            start.join(3)
+        engine.close()
+
+
+def test_failed_first_start_scan_does_not_launch_gateway(tmp_path, monkeypatch):
+    def scanner():
+        raise ValueError("scan failed")
+
+    engine = LocalImageEngine(tmp_path, scanner=scanner)
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    try:
+        try:
+            engine.start()
+        except ValueError as exc:
+            assert str(exc) == "scan failed"
+        else:
+            raise AssertionError("failed initial scan must abort start")
+        assert launches == []
+        assert engine.process is None
+    finally:
+        engine.close()
+
+
+def test_failed_first_start_catalog_does_not_launch_gateway(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    monkeypatch.setattr(
+        "src.local_image_engine.image_catalog",
+        lambda *_args: (_ for _ in ()).throw(ValueError("catalog failed")),
+    )
+    try:
+        try:
+            engine.start()
+        except ValueError as exc:
+            assert str(exc) == "catalog failed"
+        else:
+            raise AssertionError("failed initial catalog must abort start")
+        assert launches == []
+        assert engine.process is None
+    finally:
+        engine.close()
+
+
+def _capture_error(action, errors):
+    try:
+        action()
+    except Exception as exc:
+        errors.append(exc)
+
+
 def _gguf(architecture):
     key = b"general.architecture"
     value = architecture.encode()

@@ -371,7 +371,7 @@ async function _renderEmailActionOptions(action, existing, extra) {
     }),
   ].join('');
   extra.insertAdjacentHTML('afterbegin', `
-    <label class="task-form-label">Email account</label>
+    <label class="task-form-label" for="task-form-email-account">Email account</label>
     <select id="task-form-email-account" class="task-form-input">${options}</select>
   `);
 }
@@ -554,6 +554,7 @@ function _buildTimePicker(containerId, hour, minute) {
   const hourSel = document.createElement('select');
   hourSel.className = 'task-form-input task-time-select';
   hourSel.id = containerId + '-hour';
+  hourSel.setAttribute('aria-label', 'Hour');
   for (let h = 0; h < 24; h++) {
     const opt = document.createElement('option');
     opt.value = h;
@@ -569,6 +570,7 @@ function _buildTimePicker(containerId, hour, minute) {
   const minSel = document.createElement('select');
   minSel.className = 'task-form-input task-time-select';
   minSel.id = containerId + '-min';
+  minSel.setAttribute('aria-label', 'Minute');
   for (let m = 0; m < 60; m++) {
     const opt = document.createElement('option');
     opt.value = m;
@@ -602,6 +604,7 @@ function _buildDatePicker(containerId, initialDate) {
   const yearSel = document.createElement('select');
   yearSel.className = 'task-form-input task-date-select';
   yearSel.id = containerId + '-year';
+  yearSel.setAttribute('aria-label', 'Year');
   for (let y = year; y <= year + 2; y++) {
     const opt = document.createElement('option');
     opt.value = y;
@@ -615,6 +618,7 @@ function _buildDatePicker(containerId, initialDate) {
   const monthSel = document.createElement('select');
   monthSel.className = 'task-form-input task-date-select';
   monthSel.id = containerId + '-month';
+  monthSel.setAttribute('aria-label', 'Month');
   MONTHS.forEach((name, i) => {
     const opt = document.createElement('option');
     opt.value = i;
@@ -627,6 +631,7 @@ function _buildDatePicker(containerId, initialDate) {
   const daySel = document.createElement('select');
   daySel.className = 'task-form-input task-date-select';
   daySel.id = containerId + '-day';
+  daySel.setAttribute('aria-label', 'Day');
   function populateDays() {
     const y = parseInt(yearSel.value, 10);
     const m = parseInt(monthSel.value, 10);
@@ -1386,39 +1391,39 @@ function _showForm(existing, initTaskType, initTriggerType) {
       </div>
       <p class="memory-desc">${existing?.id ? 'Update this task’s schedule, prompt, and output.' : 'Configure a prompt, research, or action to run automatically.'}</p>
     <div class="task-form" style="flex:1;overflow-y:auto;min-height:0;">
-      <label class="task-form-label">Name</label>
+      <label class="task-form-label" for="task-form-name">Name</label>
       <input type="text" id="task-form-name" class="task-form-input" value="${_esc(existing?.name || '')}" placeholder="${existing ? '' : 'Auto-generated if blank'}" />
 
-      <label class="task-form-label">Type</label>
-      <div class="task-form-toggle" id="task-form-type-toggle">
-        <button class="task-toggle-btn ${curTaskType === 'llm' ? 'active' : ''}" data-val="llm" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>Prompt</button>
-        <button class="task-toggle-btn ${curTaskType === 'research' ? 'active' : ''}" data-val="research" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Research</button>
-        <button class="task-toggle-btn ${curTaskType === 'action' ? 'active' : ''}" data-val="action" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Action</button>
+      <div class="task-form-label" id="task-form-type-label">Type</div>
+      <div class="task-form-toggle" id="task-form-type-toggle" role="group" aria-labelledby="task-form-type-label">
+        <button class="task-toggle-btn ${curTaskType === 'llm' ? 'active' : ''}" aria-pressed="${curTaskType === 'llm'}" data-val="llm" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>Prompt</button>
+        <button class="task-toggle-btn ${curTaskType === 'research' ? 'active' : ''}" aria-pressed="${curTaskType === 'research'}" data-val="research" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Research</button>
+        <button class="task-toggle-btn ${curTaskType === 'action' ? 'active' : ''}" aria-pressed="${curTaskType === 'action'}" data-val="action" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Action</button>
       </div>
 
       <div id="task-form-type-opts"></div>
 
-      <label class="task-form-label">Trigger</label>
-      <div class="task-form-toggle" id="task-form-trigger-toggle">
-        <button class="task-toggle-btn ${curTriggerType === 'schedule' ? 'active' : ''}" data-val="schedule" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Schedule</button>
-        <button class="task-toggle-btn ${curTriggerType === 'event' ? 'active' : ''}" data-val="event" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>Event</button>
-        <button class="task-toggle-btn ${curTriggerType === 'webhook' ? 'active' : ''}" data-val="webhook" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Webhook</button>
+      <div class="task-form-label" id="task-form-trigger-label">Trigger</div>
+      <div class="task-form-toggle" id="task-form-trigger-toggle" role="group" aria-labelledby="task-form-trigger-label">
+        <button class="task-toggle-btn ${curTriggerType === 'schedule' ? 'active' : ''}" aria-pressed="${curTriggerType === 'schedule'}" data-val="schedule" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Schedule</button>
+        <button class="task-toggle-btn ${curTriggerType === 'event' ? 'active' : ''}" aria-pressed="${curTriggerType === 'event'}" data-val="event" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>Event</button>
+        <button class="task-toggle-btn ${curTriggerType === 'webhook' ? 'active' : ''}" aria-pressed="${curTriggerType === 'webhook'}" data-val="webhook" style="position:relative;top:-4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Webhook</button>
       </div>
 
       <div id="task-form-trigger-opts"></div>
 
-      <label class="task-form-label">Output</label>
+      <label class="task-form-label" for="task-form-output">Output</label>
       <select id="task-form-output" class="task-form-input">
         <option value="session">Session</option>
       </select>
       <div id="task-form-output-extra"></div>
 
-      <label class="task-form-label">Run with model <span style="opacity:0.5;font-weight:normal;font-size:10px;">(optional — uses Utility by default)</span></label>
+      <label class="task-form-label" for="task-form-model">Run with model <span style="opacity:0.5;font-weight:normal;font-size:10px;">(optional — uses Utility by default)</span></label>
       <select id="task-form-model" class="task-form-input">
         <option value="">Use Utility default</option>
       </select>
 
-      <label class="task-form-label">Chain</label>
+      <label class="task-form-label" for="task-form-chain">Chain</label>
       <select id="task-form-chain" class="task-form-input">
         <option value="">None</option>
       </select>
@@ -1461,15 +1466,15 @@ function _showForm(existing, initTaskType, initTriggerType) {
       const _personaOptsHtml = _personaOpts.map(([v, label]) =>
         `<option value="${v}" ${v === _curPersona ? 'selected' : ''}>${label}</option>`).join('');
       typeOpts.innerHTML = `
-        <label class="task-form-label">${taskType === 'research' ? 'Research question' : 'Prompt'}</label>
+        <label class="task-form-label" for="task-form-prompt">${taskType === 'research' ? 'Research question' : 'Prompt'}</label>
         <textarea id="task-form-prompt" class="task-form-input task-form-textarea" rows="4" placeholder="${placeholder}">${existing?.prompt || ''}</textarea>
 
-        <label class="task-form-label">Persona <span style="opacity:0.5;font-weight:normal;font-size:10px;">(optional — biases the output voice)</span></label>
+        <label class="task-form-label" for="task-form-persona">Persona <span style="opacity:0.5;font-weight:normal;font-size:10px;">(optional — biases the output voice)</span></label>
         <select id="task-form-persona" class="task-form-input">${_personaOptsHtml}</select>
       `;
     } else {
       typeOpts.innerHTML = `
-        <label class="task-form-label">Action</label>
+        <label class="task-form-label" for="task-form-action">Action</label>
         <select id="task-form-action" class="task-form-input">
           <option value="">Loading…</option>
         </select>
@@ -1488,7 +1493,7 @@ function _showForm(existing, initTaskType, initTriggerType) {
         await _renderEmailActionOptions(action, existing, extra);
         if (action === 'check_email_urgency') {
           extra.insertAdjacentHTML('beforeend', `
-            <label class="task-form-label">Email triage rules</label>
+            <label class="task-form-label" for="task-form-urgent-email-prompt">Email triage rules</label>
             <textarea id="task-form-urgent-email-prompt" class="task-form-input task-form-textarea" rows="4" placeholder="What should count as urgent? e.g. deadlines, blockers, people waiting outside."></textarea>
             <div class="memory-desc" style="font-size:11px;margin-top:4px;">Pause/resume and schedule are controlled by this task. It tags work, personal, urgent, action-needed, finance, legal, travel, newsletter, marketing, spam, and related mail categories. Urgent/reply-soon emails use your reminder settings.</div>
           `);
@@ -1523,7 +1528,11 @@ function _showForm(existing, initTaskType, initTriggerType) {
     const btn = e.target.closest('.task-toggle-btn');
     if (!btn) return;
     taskType = btn.dataset.val;
-    typeToggle.querySelectorAll('.task-toggle-btn').forEach(b => b.classList.toggle('active', b.dataset.val === taskType));
+    typeToggle.querySelectorAll('.task-toggle-btn').forEach(b => {
+      const selected = b.dataset.val === taskType;
+      b.classList.toggle('active', selected);
+      b.setAttribute('aria-pressed', String(selected));
+    });
     renderTypeOpts();
   });
   renderTypeOpts();
@@ -1537,7 +1546,7 @@ function _showForm(existing, initTaskType, initTriggerType) {
     triggerOpts.innerHTML = '';
     if (triggerType === 'schedule') {
       triggerOpts.innerHTML = `
-        <label class="task-form-label">Frequency</label>
+        <label class="task-form-label" for="task-form-schedule">Frequency</label>
         <select id="task-form-schedule" class="task-form-input">
           <option value="daily" ${(!existing || existing.schedule === 'daily') ? 'selected' : ''}>Daily</option>
           <option value="weekly" ${existing?.schedule === 'weekly' ? 'selected' : ''}>Weekly</option>
@@ -1547,8 +1556,8 @@ function _showForm(existing, initTaskType, initTriggerType) {
         </select>
         <div id="task-form-schedule-opts"></div>
         <div id="task-form-time-section">
-          <label class="task-form-label">Time</label>
-          <div class="task-time-picker" id="task-form-time-wrap"></div>
+          <div class="task-form-label" id="task-form-time-label">Time</div>
+          <div class="task-time-picker" id="task-form-time-wrap" role="group" aria-labelledby="task-form-time-label"></div>
         </div>
       `;
 
@@ -1582,6 +1591,7 @@ function _showForm(existing, initTaskType, initTriggerType) {
         if (sched === 'weekly') {
           const label = document.createElement('label');
           label.className = 'task-form-label';
+          label.htmlFor = 'task-form-day';
           label.textContent = 'Day of week';
           schedOpts.appendChild(label);
           const sel = document.createElement('select');
@@ -1598,6 +1608,7 @@ function _showForm(existing, initTaskType, initTriggerType) {
         } else if (sched === 'monthly') {
           const label = document.createElement('label');
           label.className = 'task-form-label';
+          label.htmlFor = 'task-form-day';
           label.textContent = 'Day of month';
           schedOpts.appendChild(label);
           const inp = document.createElement('input');
@@ -1608,18 +1619,22 @@ function _showForm(existing, initTaskType, initTriggerType) {
           inp.value = existing?.scheduled_day ?? 1;
           schedOpts.appendChild(inp);
         } else if (sched === 'once') {
-          const label = document.createElement('label');
+          const label = document.createElement('div');
           label.className = 'task-form-label';
+          label.id = 'task-form-date-label';
           label.textContent = 'Date';
           schedOpts.appendChild(label);
           const dateWrap = document.createElement('div');
           dateWrap.className = 'task-date-picker';
           dateWrap.id = 'task-form-date';
+          dateWrap.setAttribute('role', 'group');
+          dateWrap.setAttribute('aria-labelledby', 'task-form-date-label');
           schedOpts.appendChild(dateWrap);
           _buildDatePicker('task-form-date', existing?.scheduled_date ? new Date(existing.scheduled_date) : new Date());
         } else if (sched === 'cron') {
           const label = document.createElement('label');
           label.className = 'task-form-label';
+          label.htmlFor = 'task-form-cron';
           label.textContent = 'Cron expression';
           schedOpts.appendChild(label);
           const inp = document.createElement('input');
@@ -1662,11 +1677,11 @@ function _showForm(existing, initTaskType, initTriggerType) {
 
     } else if (triggerType === 'event') {
       triggerOpts.innerHTML = `
-        <label class="task-form-label">Event</label>
+        <label class="task-form-label" for="task-form-event">Event</label>
         <select id="task-form-event" class="task-form-input">
           <option value="">Loading…</option>
         </select>
-        <label class="task-form-label">Every N occurrences</label>
+        <label class="task-form-label" for="task-form-trigger-count">Every N occurrences</label>
         <input type="number" id="task-form-trigger-count" class="task-form-input" min="1" max="1000" value="${existing?.trigger_count || 5}" />
       `;
       _fetchEvents().then(events => {
@@ -1685,7 +1700,7 @@ function _showForm(existing, initTaskType, initTriggerType) {
       if (existing?.webhook_token) {
         const url = `${API_BASE}/api/tasks/${existing.id}/webhook/${existing.webhook_token}`;
         triggerOpts.innerHTML = `
-          <label class="task-form-label">Webhook URL</label>
+          <label class="task-form-label" for="task-form-webhook-url">Webhook URL</label>
           <div style="display:flex;gap:4px;align-items:center;">
             <input type="text" class="task-form-input" value="${url}" readonly style="flex:1;font-size:11px;opacity:0.8;" id="task-form-webhook-url" />
             <button class="task-btn" id="task-form-webhook-copy" style="white-space:nowrap;">Copy</button>
@@ -1706,7 +1721,11 @@ function _showForm(existing, initTaskType, initTriggerType) {
     const btn = e.target.closest('.task-toggle-btn');
     if (!btn) return;
     triggerType = btn.dataset.val;
-    triggerToggle.querySelectorAll('.task-toggle-btn').forEach(b => b.classList.toggle('active', b.dataset.val === triggerType));
+    triggerToggle.querySelectorAll('.task-toggle-btn').forEach(b => {
+      const selected = b.dataset.val === triggerType;
+      b.classList.toggle('active', selected);
+      b.setAttribute('aria-pressed', String(selected));
+    });
     renderTriggerOpts();
   });
   renderTriggerOpts();

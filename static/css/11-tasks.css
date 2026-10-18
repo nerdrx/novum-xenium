@@ -984,6 +984,19 @@ a.chat-link[href^="#research-"] {
   word-break: break-word;
 }
 
+@media (max-width: 768px) {
+  #tasks-modal .task-form .task-form-input,
+  #tasks-modal .task-form .task-toggle-btn,
+  #tasks-modal .task-form .task-form-actions > button,
+  #tasks-modal .task-form .task-btn {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  #tasks-modal .task-form .task-form-notif-toggle {
+    min-height: 44px;
+  }
+}
+
 /* ── Settings Form Utilities ── */
 
 .settings-row {

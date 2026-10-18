@@ -217,7 +217,7 @@ async function _searchFiles(query) {
     let rows = data.results.map(item =>
       `<div class="workspace-file-result"><span><strong>${uiModule.esc(item.name)}</strong><br><small>${uiModule.esc(item.path)}</small></span><button type="button" class="workspace-preview-file" data-path="${uiModule.esc(item.path)}">Preview</button><a href="${uiModule.esc(item.url)}" target="_blank" rel="noopener">Download</a></div>`
     ).join('');
-    if (data.truncated) rows += '<div class="workspace-empty">Search limit reached. Refine the filename to see more.</div>';
+    if (data.truncated) rows += '<div class="workspace-empty">Search limit reached. Use a more specific filename or open a narrower folder and search again.</div>';
     resultsEl.innerHTML = rows || '<div class="workspace-empty">No matching files found.</div>';
     resultsEl.querySelectorAll('.workspace-preview-file').forEach(button => {
       button.addEventListener('click', () => _previewFile(root, button.dataset.path));

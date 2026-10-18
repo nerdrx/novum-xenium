@@ -51,6 +51,7 @@
 @media (max-width: 768px) {
   .workspace-dock { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
   .workspace-dock button { min-height: 44px; }
+  .workspace-dock-toggle { min-height: 44px; }
 }
 
 #workspace-file-preview { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }

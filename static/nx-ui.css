@@ -524,6 +524,16 @@ html.nx-workspace.density-spacious .settings-nav-item {
 }
 
 @media (max-width: 768px) {
+  html.nx-workspace .sidebar .sidebar-hamburger {
+    width: 44px;
+    height: 44px;
+  }
+  html.nx-workspace .sidebar .user-bar-btn {
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
   html.nx-workspace .settings-modal-content .modal-header {
     padding: 8px 12px;
   }

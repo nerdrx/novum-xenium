@@ -371,35 +371,36 @@ function _installHistoryPager(id, pageInfo, modelName) {
   };
 
   const loadOlder = async () => {
-    if (!_historyPager || _historyPager.loading || _historyPager.done) return;
-    if (_historyPager.sessionId !== currentSessionId) return;
+    const pager = _historyPager;
+    if (!pager || pager.loading || pager.done) return;
+    if (pager.sessionId !== currentSessionId) return;
     if (box.scrollTop > 90) return;
 
-    const nextOffset = Math.max(0, _historyPager.offset - _historyPager.limit);
-    const nextLimit = _historyPager.offset - nextOffset;
+    const nextOffset = Math.max(0, pager.offset - pager.limit);
+    const nextLimit = pager.offset - nextOffset;
     if (nextLimit <= 0) {
-      _historyPager.done = true;
+      pager.done = true;
       return;
     }
 
-    _historyPager.loading = true;
+    pager.loading = true;
     const anchor = box.querySelector('.msg, .agent-thread, .gallery-bubble');
     const beforeHeight = box.scrollHeight;
     try {
-      const res = await fetch(_historyUrl(_historyPager.sessionId, { limit: nextLimit, offset: nextOffset }));
+      const res = await fetch(_historyUrl(pager.sessionId, { limit: nextLimit, offset: nextOffset }));
       const data = await res.json();
-      if (!_historyPager || _historyPager.sessionId !== currentSessionId) return;
+      if (_historyPager !== pager || pager.sessionId !== currentSessionId) return;
       const newEls = [];
       for (const msg of data.history || []) {
         if (msg.role !== 'user' && msg.role !== 'assistant') continue;
-        const els = _renderHistoryMessage(msg, _historyPager.modelName);
+        const els = _renderHistoryMessage(msg, pager.modelName);
         if (Array.isArray(els)) newEls.push(...els);
       }
       for (const el of newEls) {
         box.insertBefore(el, anchor || box.firstChild);
       }
-      _historyPager.offset = Number(data.offset || nextOffset);
-      _historyPager.done = !data.has_more_before;
+      pager.offset = Number(data.offset || nextOffset);
+      pager.done = !data.has_more_before;
       if (window.hljs) {
         newEls.forEach(el => el.querySelectorAll('pre code:not(.hljs)').forEach(block => window.hljs.highlightElement(block)));
       }
@@ -408,7 +409,7 @@ function _installHistoryPager(id, pageInfo, modelName) {
     } catch (e) {
       console.warn('Failed to load older chat history:', e);
     } finally {
-      if (_historyPager) _historyPager.loading = false;
+      if (_historyPager === pager) pager.loading = false;
     }
   };
 
@@ -3639,14 +3640,24 @@ function _arcRelativeTime(iso) {
 
 // Peek at an archived session — load its history without unarchiving
 let _peekingSessionId = null;
+let _archivePeekGeneration = 0;
 
 async function _arcPeekOpen(sid) {
+  let peekGeneration = null;
+  let navToken = null;
   try {
-    _peekingSessionId = sid;
     closeArchive();
+    peekGeneration = ++_archivePeekGeneration;
+    navToken = _sessionNavToken;
+    _peekingSessionId = sid;
     // Load history directly without unarchiving
     const res = await fetch(`${API_BASE}/api/history/${sid}`);
     const data = await res.json();
+    if (
+      peekGeneration !== _archivePeekGeneration
+      || _peekingSessionId !== sid
+      || navToken !== _sessionNavToken
+    ) return;
     const history = data.history || [];
 
     // Set as current session so chat renders
@@ -3674,6 +3685,7 @@ async function _arcPeekOpen(sid) {
     }
     if (window.uiModule) window.uiModule.scrollHistory();
   } catch (e) {
+    if (peekGeneration !== null && (peekGeneration !== _archivePeekGeneration || navToken !== _sessionNavToken)) return;
     console.error('Peek open failed:', e);
     uiModule.showError('Failed to open archived session');
   }
@@ -3683,6 +3695,7 @@ async function _arcPeekOpen(sid) {
 function _checkPeekCleanup(newSessionId) {
   if (_peekingSessionId && _peekingSessionId !== newSessionId) {
     _peekingSessionId = null;
+    _archivePeekGeneration++;
   }
 }
 
@@ -4379,6 +4392,8 @@ export function openArchive() {
 }
 
 export function closeArchive() {
+  _archivePeekGeneration++;
+  _peekingSessionId = null;
   const modal = document.getElementById('archive-modal');
   if (modal) {
     const content = modal.querySelector('.modal-content');

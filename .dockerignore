@@ -63,8 +63,10 @@ timetree*.png
 *_calendar_view.png
 .gitignore
 
-# Native desktop files are not backend runtime dependencies.
+# Native companion source and build outputs are not backend runtime dependencies.
 desktop/
+/android/
+/dist-android/
 # Include distribution notices despite the general documentation exclusion.
 !ACKNOWLEDGMENTS.md
 !services/hwfit/data/README.md

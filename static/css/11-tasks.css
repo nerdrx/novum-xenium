@@ -1050,6 +1050,20 @@ input.settings-select::placeholder { color: color-mix(in srgb, var(--fg) 35%, tr
   border-color: var(--red);
 }
 
+/* Primary AI model pickers are touch controls on phones; keep fallback rows
+   compact and the desktop settings layout unchanged. */
+@media (max-width: 768px) {
+  [data-settings-panel="ai"] :is(
+    #set-defaultEpSelect, #set-defaultModelSelect,
+    #set-utilityEpSelect, #set-utilityModelSelect, #set-utilityEffortSelect,
+    #set-vlModelSelect, #set-researchEndpoint, #set-researchModel,
+    #set-imgModelSelect, #set-imgQualitySelect
+  ) {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+}
+
 /* Deep Research uses long labels and previously fixed-width fields. Keep
    every control constrained by the card at intermediate desktop widths too. */
 .admin-card:has(#set-researchSearch) .settings-row { min-width: 0; }

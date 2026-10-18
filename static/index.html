@@ -1645,12 +1645,12 @@
             <div class="admin-toggle-sub" style="margin-bottom:8px">The model used when creating a new chat session.</div>
             <div class="settings-col">
               <div class="settings-row">
-                <label class="settings-label">Endpoint</label>
+                <label class="settings-label" for="set-defaultEpSelect">Endpoint</label>
                 <span class="adm-model-logo" id="set-defaultEpSelect-logo" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;opacity:0.9;color:var(--fg);"></span>
                 <select id="set-defaultEpSelect" class="settings-select"></select>
               </div>
               <div class="settings-row">
-                <label class="settings-label">Model</label>
+                <label class="settings-label" for="set-defaultModelSelect">Model</label>
                 <span class="adm-model-logo" id="set-defaultModelSelect-logo" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;opacity:0.9;color:var(--fg);"></span>
                 <select id="set-defaultModelSelect" class="settings-select"></select>
               </div>
@@ -1662,17 +1662,17 @@
             <div class="admin-toggle-sub" style="margin-bottom:8px">Runs background tasks (compaction, cleanup, auto-naming, retrieving memories from files) on a small/local model instead of your chat model. Leave blank to use the chat model.</div>
             <div class="settings-col">
               <div class="settings-row">
-                <label class="settings-label">Endpoint</label>
+                <label class="settings-label" for="set-utilityEpSelect">Endpoint</label>
                 <span class="adm-model-logo" id="set-utilityEpSelect-logo" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;opacity:0.9;color:var(--fg);"></span>
                 <select id="set-utilityEpSelect" class="settings-select"><option value="">—</option></select>
               </div>
               <div class="settings-row">
-                <label class="settings-label">Model</label>
+                <label class="settings-label" for="set-utilityModelSelect">Model</label>
                 <span class="adm-model-logo" id="set-utilityModelSelect-logo" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;opacity:0.9;color:var(--fg);"></span>
                 <select id="set-utilityModelSelect" class="settings-select"><option value="">—</option></select>
               </div>
               <div class="settings-row" id="set-utilityEffortRow" style="display:none;">
-                <label class="settings-label" id="set-utilityEffortLabel">Effort<span class="settings-label-sub" id="set-utilityEffortQualifier">(when supported)</span></label>
+                <label class="settings-label" id="set-utilityEffortLabel" for="set-utilityEffortSelect">Effort<span class="settings-label-sub" id="set-utilityEffortQualifier">(when supported)</span></label>
                 <span class="adm-model-logo" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;opacity:0.9;color:var(--fg);"></span>
                 <select id="set-utilityEffortSelect" class="settings-select"><option value="">Provider default</option></select>
               </div>
@@ -1692,7 +1692,7 @@
             <div class="admin-toggle-sub" style="margin-bottom:8px">Analyze images with a vision-capable model.</div>
             <div style="display:flex;flex-direction:column;gap:0.5rem;">
               <div style="display:flex;align-items:center;gap:0.75rem;">
-                <label class="settings-label">Model</label>
+                <label class="settings-label" for="set-vlModelSelect">Model</label>
                 <span class="adm-model-logo" id="set-vlModelSelect-logo" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;opacity:0.9;color:var(--fg);"></span>
                 <select id="set-vlModelSelect" class="settings-select"><option value="">Auto-detect</option></select>
               </div>
@@ -1711,13 +1711,13 @@
             <div class="admin-toggle-sub" style="margin-bottom:8px">Model used for Deep Research, more settings under <a href="#" data-go-settings-tab="search" style="color:var(--accent, var(--red));text-decoration:underline;font-weight:600;">Search →</a></div>
             <div class="settings-col">
               <div class="settings-row">
-                <label class="settings-label">Endpoint</label>
+                <label class="settings-label" for="set-researchEndpoint">Endpoint</label>
                 <select id="set-researchEndpoint" class="settings-select">
                   <option value="">Same as chat</option>
                 </select>
               </div>
               <div class="settings-row">
-                <label class="settings-label">Model</label>
+                <label class="settings-label" for="set-researchModel">Model</label>
                 <span class="adm-model-logo" id="set-researchModel-logo" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;opacity:0.9;color:var(--fg);"></span>
                 <select id="set-researchModel" class="settings-select">
                   <option value="">Same as chat</option>
@@ -1732,11 +1732,11 @@
             <div class="admin-toggle-sub" style="margin-bottom:8px">Choose an image provider. ChatGPT subscription images use the optional host Codex bridge.</div>
             <div style="display:flex;flex-direction:column;gap:0.5rem;">
               <div style="display:flex;align-items:center;gap:0.75rem;">
-                <label class="settings-label">Model</label>
+                <label class="settings-label" for="set-imgModelSelect">Model</label>
                 <select id="set-imgModelSelect" class="settings-select"><option value="">Auto-detect</option></select>
               </div>
               <div style="display:flex;align-items:center;gap:0.75rem;">
-                <label class="settings-label">Quality</label>
+                <label class="settings-label" for="set-imgQualitySelect">Quality</label>
                 <select id="set-imgQualitySelect" class="settings-select">
                   <option value="low">Low (fastest, cheapest)</option>
                   <option value="medium">Medium (default)</option>

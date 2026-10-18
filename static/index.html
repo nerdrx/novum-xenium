@@ -1836,11 +1836,11 @@
                      its value so the existing JS that reads
                      set-searchProvider keeps working unchanged. -->
                 <div class="adm-provider-picker search-provider-picker" id="search-provider-picker" style="flex:1;position:relative;top:5px;">
-                  <button type="button" class="adm-provider-btn" id="search-provider-btn" aria-labelledby="set-searchProviderLabel search-provider-name">
+                  <button type="button" class="adm-provider-btn" id="search-provider-btn" aria-labelledby="set-searchProviderLabel search-provider-name" aria-haspopup="listbox" aria-controls="search-provider-menu" aria-expanded="false">
                     <span class="adm-provider-current"><span class="adm-provider-logo"></span><span class="adm-provider-name" id="search-provider-name">SearXNG</span></span>
                     <svg class="adm-provider-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                   </button>
-                  <div class="adm-provider-menu hidden" id="search-provider-menu"></div>
+                  <div class="adm-provider-menu hidden" id="search-provider-menu" role="listbox" aria-label="Search provider"></div>
                 </div>
                 <select id="set-searchProvider" class="settings-select" style="display:none;">
                   <option value="searxng" data-search-logo="searxng">SearXNG (self-hosted)</option>

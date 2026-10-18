@@ -37,7 +37,9 @@ def test_in_thinking_delta_short_circuits_before_cumulative_normalization():
     projector_append = "_roundDisplayProjector.append(_delta, roundText);"
     assert projector_append in delta_handler
     assert delta_handler.index(projector_append) < delta_handler.index(guard)
-    assert "_renderStream({ knownNormal: true, displayText: _roundDisplayProjector.current() });" in delta_path
+    # Delta paints now pass through the coalescer; this keeps the displayed
+    # projector text current while avoiding one DOM render per event.
+    assert "_queueStreamRender({ knownNormal: true, displayText: _roundDisplayProjector.current() });" in delta_path
     assert "_replyDisplayProjector.append(_delta, roundReplyText)" in delta_path
 
 
@@ -163,7 +165,8 @@ def test_only_rich_completed_turns_reload_saved_canonical_assistant_row():
 
 def test_detach_synchronously_cancels_delayed_view_work():
     registration = _between("_activeStreams.set(streamSessionId", "_syncForegroundStreamGlobals();")
-    assert "cancelViewWork: () => _cancelLiveThinkingWork()" in registration
+    # Detach must cancel both pending normal-text paints and live-thinking work.
+    assert "cancelViewWork: () => { _cancelQueuedStreamRender(); _cancelLiveThinkingWork(); }" in registration
 
     detach = _between("export function detachCurrentStream", "// _notifyStreamComplete")
     cancel = "if (active.cancelViewWork) active.cancelViewWork();"

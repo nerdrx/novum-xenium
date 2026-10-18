@@ -496,6 +496,10 @@ span[id$="-logo"] svg:not([width]) {
 }
 .adm-provider-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .adm-provider-item.active { background: color-mix(in srgb, var(--accent, var(--red)) 14%, transparent); }
+#search-provider-menu .adm-provider-item:focus-visible {
+  outline: 2px solid var(--accent, var(--red));
+  outline-offset: -2px;
+}
 
 /* When the Appearance tab is open, the #settings-modal-opacity slider (in
    the header) fades the modal so the user can see the rest of the UI react

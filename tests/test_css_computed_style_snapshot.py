@@ -10,7 +10,11 @@ Run ``python scripts/css_snapshot.py --write-baseline`` to re-record the
 baseline, and only after confirming the change is intended - see
 ``tests/css_snapshot/README.md``.
 """
+import http.server
 import os
+import socket
+import threading
+import urllib.request
 
 import pytest
 
@@ -35,6 +39,44 @@ def static_origin() -> str:
     one, so this still works on a revision that predates that change.
     """
     return os.environ.get("ODYSSEUS_TEST_STATIC_ORIGIN", "http://127.0.0.1:7011")
+
+
+def test_cli_static_server_handles_idle_connection_and_bounded_shutdown(monkeypatch, tmp_path):
+    """One idle client must not block a second GET or server shutdown."""
+    (tmp_path / "ok.txt").write_text("synthetic response", encoding="utf-8")
+    first_handler_started = threading.Event()
+    original_handle = http.server.SimpleHTTPRequestHandler.handle
+
+    def mark_handler_started(handler):
+        first_handler_started.set()
+        return original_handle(handler)
+
+    monkeypatch.setattr(snapshot.http.server.SimpleHTTPRequestHandler, "handle", mark_handler_started)
+    origin, shutdown = snapshot.serve_repository(tmp_path)
+    idle = None
+    stop_thread = None
+    try:
+        port = int(origin.rsplit(":", 1)[1])
+        idle = socket.create_connection(("127.0.0.1", port), timeout=2)
+        assert first_handler_started.wait(2), "server did not accept the idle connection"
+
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"{origin}/ok.txt", timeout=2) as response:
+            assert response.status == 200
+            assert response.read() == b"synthetic response"
+
+        stop_thread = threading.Thread(target=shutdown, daemon=True)
+        stop_thread.start()
+        stop_thread.join(2)
+        assert not stop_thread.is_alive(), "server shutdown waited for the idle client"
+    finally:
+        if idle is not None:
+            idle.close()
+        if stop_thread is None:
+            stop_thread = threading.Thread(target=shutdown, daemon=True)
+            stop_thread.start()
+        stop_thread.join(2)
+        assert not stop_thread.is_alive(), "server cleanup did not finish within the 2s bound"
 
 # One conflicting selector used to prove the harness is actually sensitive to
 # source order. `.attach-strip` is declared three times at the top level of

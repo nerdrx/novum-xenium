@@ -1010,7 +1010,7 @@ async function initSearchSettings() {
     pickerMenu.innerHTML = Array.from(provSel.options).map(function(o) {
       var logo = _searchProviderLogoSvg(o.dataset.searchLogo);
       var active = o.value === provSel.value ? ' active' : '';
-      return '<div class="adm-provider-item' + active + '" role="option" data-value="' + o.value.replace(/"/g, '&quot;') + '">' +
+      return '<div class="adm-provider-item' + active + '" role="option" aria-selected="' + (o.value === provSel.value ? 'true' : 'false') + '" tabindex="-1" data-value="' + o.value.replace(/"/g, '&quot;') + '">' +
         '<span class="adm-provider-logo">' + logo + '</span>' +
         '<span>' + o.textContent + '</span>' +
       '</div>';
@@ -1026,20 +1026,59 @@ async function initSearchSettings() {
   if (picker && pickerBtn && pickerMenu && pickerCurrent) {
     _renderSearchPickerMenu();
     _syncSearchPicker();
+    var closeSearchPicker = null;
+    function _closeSearchPicker(restoreFocus) {
+      if (restoreFocus) pickerBtn.focus();
+      if (closeSearchPicker) closeSearchPicker();
+      else {
+        pickerMenu.classList.add('hidden');
+        pickerBtn.setAttribute('aria-expanded', 'false');
+      }
+    }
+    function _openSearchPicker() {
+      _renderSearchPickerMenu();
+      pickerMenu.classList.remove('hidden');
+      pickerBtn.setAttribute('aria-expanded', 'true');
+      closeSearchPicker = bindMenuDismiss(pickerMenu, function() {
+        var restoreFocus = pickerMenu.contains(document.activeElement);
+        pickerMenu.classList.add('hidden');
+        pickerBtn.setAttribute('aria-expanded', 'false');
+        closeSearchPicker = null;
+        if (restoreFocus && pickerBtn.isConnected) pickerBtn.focus();
+      }, function(e) { return !picker.contains(e.target); });
+      var selected = pickerMenu.querySelector('[aria-selected="true"]');
+      if (selected) selected.focus();
+    }
     pickerBtn.addEventListener('click', function(e) {
       e.stopPropagation();
-      pickerMenu.classList.toggle('hidden');
+      if (pickerMenu.classList.contains('hidden')) _openSearchPicker();
+      else _closeSearchPicker(false);
+    });
+    pickerMenu.addEventListener('keydown', function(e) {
+      var options = Array.from(pickerMenu.querySelectorAll('[role="option"]'));
+      if (!options.length) return;
+      var index = options.indexOf(document.activeElement);
+      var next = index;
+      if (e.key === 'ArrowDown') next = Math.min(index + 1, options.length - 1);
+      else if (e.key === 'ArrowUp') next = Math.max(index - 1, 0);
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = options.length - 1;
+      else if (e.key === 'Tab') { _closeSearchPicker(true); return; }
+      else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (document.activeElement.matches('[role="option"]')) document.activeElement.click();
+        return;
+      } else return;
+      e.preventDefault();
+      options[next].focus();
     });
     pickerMenu.addEventListener('click', function(e) {
       var item = e.target.closest('.adm-provider-item');
       if (!item) return;
       provSel.value = item.dataset.value;
       provSel.dispatchEvent(new Event('change', { bubbles: true }));
-      pickerMenu.classList.add('hidden');
       _renderSearchPickerMenu();
-    });
-    document.addEventListener('click', function(e) {
-      if (!picker.contains(e.target)) pickerMenu.classList.add('hidden');
+      _closeSearchPicker(true);
     });
   }
 

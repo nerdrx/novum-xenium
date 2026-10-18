@@ -203,8 +203,9 @@ def serve_repository(root=ROOT):
                 return "text/css"
             return super().guess_type(path)
 
-    class Server(socketserver.TCPServer):
+    class Server(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
+        daemon_threads = True
 
     server = Server(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

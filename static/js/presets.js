@@ -703,10 +703,17 @@ export function openCustomPresetModal(openTab = '') {
     // Reset only makes sense on the character tab (it resets the persona).
     if (resetBtn) resetBtn.style.display = (changedWithVisibility && activeTab === 'character') ? '' : 'none';
   }
-  [nameInput, promptInput, tempInput, tokensInput, thinkingInput, showNameInput].forEach(el => {
-    if (el) el.addEventListener('input', _updateStartBtn);
+  [nameInput, promptInput, tempInput, tokensInput, thinkingInput, showNameInput].forEach(input => {
+    if (!input) return;
+    if (input._startBtnSync) input.removeEventListener('input', input._startBtnSync);
+    input._startBtnSync = _updateStartBtn;
+    input.addEventListener('input', _updateStartBtn);
   });
-  if (reasoningInput) reasoningInput.addEventListener('change', _updateStartBtn);
+  if (reasoningInput) {
+    if (reasoningInput._startBtnSync) reasoningInput.removeEventListener('change', reasoningInput._startBtnSync);
+    reasoningInput._startBtnSync = _updateStartBtn;
+    reasoningInput.addEventListener('change', _updateStartBtn);
+  }
   // Re-label the Start button when the user switches tabs. Rebind the fresh
   // closure each time the modal opens (removing any stale one) so the label
   // logic always reads this open's snapshot/inputs.
@@ -738,16 +745,20 @@ export function openCustomPresetModal(openTab = '') {
     });
   }
   // When selecting a template, update snapshot so it counts as "unchanged"
-  if (charSelect) charSelect.addEventListener('change', () => setTimeout(() => {
-    _snapshot.name = nameInput ? nameInput.value : '';
-    _snapshot.prompt = promptInput ? promptInput.value : '';
-    _snapshot.temp = tempInput ? tempInput.value : '1';
-    _snapshot.tokens = tokensInput ? tokensInput.value : '8448';
-    _snapshot.reasoning = reasoningInput ? reasoningInput.value : 'auto';
-    _snapshot.thinking = thinkingInput ? thinkingInput.value : '';
-    _snapshot.showName = showNameInput ? showNameInput.checked : true;
-    _updateStartBtn();
-  }, 50));
+  if (charSelect) {
+    if (charSelect._presetSnapshotSync) charSelect.removeEventListener('change', charSelect._presetSnapshotSync);
+    charSelect._presetSnapshotSync = () => {
+      _snapshot.name = nameInput ? nameInput.value : '';
+      _snapshot.prompt = promptInput ? promptInput.value : '';
+      _snapshot.temp = tempInput ? tempInput.value : '1';
+      _snapshot.tokens = tokensInput ? tokensInput.value : '8448';
+      _snapshot.reasoning = reasoningInput ? reasoningInput.value : 'auto';
+      _snapshot.thinking = thinkingInput ? thinkingInput.value : '';
+      _snapshot.showName = showNameInput ? showNameInput.checked : true;
+      _updateStartBtn();
+    };
+    charSelect.addEventListener('change', charSelect._presetSnapshotSync);
+  }
   _updateStartBtn();
 
   function _syncCharRows() {
@@ -799,6 +810,7 @@ export function openCustomPresetModal(openTab = '') {
     const tab = document.querySelector(`.preset-tab[data-chartab="${openTab}"]`);
     if (tab) tab.click();
   }
+  modal.querySelector('.preset-tab.active')?.focus({ preventScroll: true });
 }
 
 /**

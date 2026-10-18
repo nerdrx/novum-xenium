@@ -7930,3 +7930,19 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       font-size: 12px; white-space: nowrap; transition: all 0.15s;
       font-family: inherit; width: 100%;
     }
+
+    @media (max-width: 768px) {
+      #custom-preset-modal #group-mode-btn,
+      #custom-preset-modal #group-add-btn {
+        min-height: 44px;
+      }
+      #custom-preset-modal #group-participants > .group-participant-entry,
+      #custom-preset-modal #group-participants > .group-participant-picker {
+        flex-shrink: 0;
+      }
+      #custom-preset-modal #group-participants .group-participant-entry button {
+        flex: 0 0 44px;
+        min-width: 44px;
+        min-height: 44px;
+      }
+    }

@@ -509,7 +509,7 @@ def setup_document_routes(session_manager, upload_handler=None) -> APIRouter:
 
     # ---- GET /api/documents/library ----
     @router.get("/api/documents/library")
-    async def documents_library(
+    def documents_library(
         request: Request,
         search: Optional[str] = Query(None),
         language: Optional[str] = Query(None),

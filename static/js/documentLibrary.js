@@ -161,6 +161,12 @@ let _libraryActiveLanguage = null;
 let _librarySort = 'recent';
 let _librarySearch = '';
 let _librarySearchDebounce = null;
+let _libraryFetchGeneration = 0;
+let _libraryAppliedGeneration = 0;
+
+function _invalidateLibraryFetches() {
+  _libraryFetchGeneration++;
+}
 
 // Highlight the active search terms inside a plain string. Escapes first,
 // then wraps each whitespace-separated term in <mark>. Multi-term, matching
@@ -441,13 +447,17 @@ function _setLibraryCountChipContent(chip, label, count) {
 
   async function libraryFetch(append) {
     if (!append) _libraryOffset = 0;
+    const generation = append ? _libraryFetchGeneration : ++_libraryFetchGeneration;
+    const offset = append ? _libraryOffset : 0;
+    if (append && _libraryAppliedGeneration !== generation) return false;
+    if (append && _libraryDocs.length !== offset) return false;
     // Bump page size to the backend max (50) so fullscreen doesn't leave
     // empty space below the loaded rows — same idea as emailLibrary's
     // limit=100, but documents_library validates `le=50` so we have to
     // cap at that. Auto-fill loop below picks up any remaining gap.
     const params = new URLSearchParams({
       sort: _librarySort,
-      offset: String(_libraryOffset),
+      offset: String(offset),
       limit: '50',
     });
     if (_librarySearch) params.set('search', _librarySearch);
@@ -458,12 +468,16 @@ function _setLibraryCountChipContent(chip, label, count) {
       const res = await fetch(`${API_BASE}/api/documents/library?${params}`);
       if (!res.ok) throw new Error(res.statusText);
       const data = await res.json();
+      if (generation !== _libraryFetchGeneration) return false;
+      if (append && _libraryAppliedGeneration !== generation) return false;
+      if (append && _libraryDocs.length !== offset) return false;
 
       if (append) {
         _libraryDocs = _libraryDocs.concat(data.documents);
       } else {
         _libraryDocs = data.documents;
         _docsVisibleLimit = 20;  // reset chunk on a fresh load / search / sort
+        _libraryAppliedGeneration = generation;
       }
       _libraryTotal = data.total;
       _libraryLanguages = data.languages;
@@ -473,8 +487,10 @@ function _setLibraryCountChipContent(chip, label, count) {
       libraryRenderLangChips();
       libraryRenderGrid();
       libraryRenderLoadMore();
+      return true;
     } catch (e) {
       console.error('Library fetch error:', e);
+      return false;
     }
   }
 
@@ -3678,6 +3694,7 @@ function _setLibraryCountChipContent(chip, label, count) {
 
   export function closeLibrary() {
     if (!_libraryOpen) return;
+    _invalidateLibraryFetches();
     _libraryOpen = false;
     _librarySelectMode = false;
     _librarySelectedIds.clear();

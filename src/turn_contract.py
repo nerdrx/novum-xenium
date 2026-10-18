@@ -216,6 +216,51 @@ def _normalize_request_lead(value: str) -> str:
     return text
 
 
+def _explicit_model_download_request(text: str) -> bool:
+    """Recognize a positive model-repository download, not download prose."""
+    value = str(text or "")
+    # A slash by itself is not a Hub repository ID: prompts commonly contain
+    # alternatives (``.gguf/.safetensors``), links (``link/file``), and status
+    # wording (``LIVE/available``). Require the download verb to target a
+    # plausible owner/repository pair or a Hugging Face model URL.
+    repo = (
+        r"(?:https?://(?:www\.)?huggingface\.co/"
+        r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"
+        r"|[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*)"
+    )
+    action = re.compile(
+        r"^\s*" + _REQUEST_PREFIX + r"(?:download|grab)\s+(?:(?:the|a|this|that)\s+)?"
+        r"(?:(?:model|repo)\s+(?:from\s+)?)?" + repo + r"(?=$|[\s?#.,;:!])",
+        re.I,
+    )
+    explicit_from = re.compile(
+        r"^\s*" + _REQUEST_PREFIX + r"(?:download|grab)\s+(?:the\s+)?model\b"
+        r"[^.!?\n]{0,80}?\bfrom\s+"
+        + repo + r"(?=$|[\s?#.,;:!])",
+        re.I,
+    )
+    for clause in re.split(r"[!?;\n]+|(?<=[.!?])\s+", value):
+        command_clause = clause
+        conditional = _CONDITIONAL_ACTION.match(clause)
+        if conditional:
+            command_clause = conditional["action"]
+        elif command := re.search(
+            r",\s*(?:and\s+)?" + _REQUEST_PREFIX + r"(?:download|grab)\b|"
+            r"\bthen\s+" + _REQUEST_PREFIX + r"(?:download|grab)\b",
+            clause,
+            re.I,
+        ):
+            command_clause = re.sub(
+                r"^(?:,\s*)?(?:and\s+)?", "", clause[command.start():], flags=re.I,
+            )
+        if re.search(r"\b(?:do\s+not|don['’]?t|dont|never|not\s+to)\s+"
+                     r"(?:download|grab)\b", clause, re.I):
+            continue
+        if action.search(command_clause) or explicit_from.search(command_clause):
+            return True
+    return False
+
+
 def _strip_cancelled_request_lead(text: str) -> str:
     lead = re.match(r"^(?:never\s*mind|scratch\s+that)", text, re.I)
     if lead is None:
@@ -1791,16 +1836,35 @@ def selected_tools_for_request(message: str) -> frozenset[str] | None:
     ):
         return frozenset({"list_cached_models"})
     if (
-        re.search(r"\b(?:grab|download)\b", text, re.I)
-        and re.search(r"\b[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\b", text)
-        and re.search(r"\b(?:locally|local|download)\b", text, re.I)
-        and re.search(
-            r"\b(?:models?|qwen|llama|gemma|mistral|safetensors|gguf|"
-            r"hugging\s*face|huggingface|hf\s+hub|model\s+hub)\b",
+        not _explicit_model_download_request(text)
+        and re.match(
+            r"^\s*" + _REQUEST_PREFIX
+            + r"(?:fetch|open|read|check|look\s*up|search|verify|confirm)\b",
             text,
             re.I,
         )
+        and re.search(
+            r"\b(?:available|availability|ready|live|coming\s+soon|released?|published)\b",
+            text,
+            re.I,
+        )
+        and re.search(r"\b(?:model|download|weights?|hugging\s*face|huggingface)\b", text, re.I)
+        and (
+            re.search(r"https?://", text, re.I)
+            or (
+                not re.search(r"\b(?:local(?:ly)?|served|running|cached|cache|installed)\b", text, re.I)
+                and re.search(
+                    r"\bhugging\s*face\b|\bhuggingface\b|\bhf\s+hub\b|"
+                    r"(?<![/A-Za-z0-9_.-])[A-Za-z0-9][A-Za-z0-9_.-]*/"
+                    r"[A-Za-z0-9][A-Za-z0-9_.-]*\b",
+                    text,
+                    re.I,
+                )
+            )
+        )
     ):
+        return frozenset({"web_fetch" if re.search(r"https?://", text, re.I) else "web_search"})
+    if _explicit_model_download_request(text):
         return frozenset({"download_model"})
     if (
         re.search(r"\b(?:hugging\s*face|huggingface|hf)\s+(?:model\s+)?search\b", text, re.I)

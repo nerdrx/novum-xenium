@@ -44,7 +44,7 @@ def _gated_loop(released):
     return recording
 
 
-async def test_scheduler_result_is_the_gated_replacement_without_grace_call(monkeypatch):
+async def test_scheduler_rejects_incomplete_gate_replacement_without_grace_call(monkeypatch):
     from src.task_scheduler import TaskScheduler
 
     released = []
@@ -58,13 +58,14 @@ async def test_scheduler_result_is_the_gated_replacement_without_grace_call(monk
     monkeypatch.setattr('src.task_endpoint.resolve_task_candidates', lambda **kwargs: [])
     monkeypatch.setattr('src.task_endpoint.task_llm_call_async', grace)
 
-    result = await TaskScheduler(session_manager=None)._run_agent_loop(
-        'http://ep/v1', 'model', _task(), 's')
+    with pytest.raises(RuntimeError, match='did not complete'):
+        await TaskScheduler(session_manager=None)._run_agent_loop(
+            'http://ep/v1', 'model', _task(), 's')
 
     assert len(released) == 1
-    assert result == released[0].strip()
-    assert 'Inspected the layout.' in result
-    assert 'tests passed' not in result
+    assert released[0].startswith('The task is incomplete:')
+    assert 'Inspected the layout.' in released[0]
+    assert 'tests passed' not in released[0]
     assert grace_calls == []
 
 

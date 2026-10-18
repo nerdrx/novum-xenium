@@ -479,7 +479,7 @@ function _absoluteTime(iso) {
 }
 
 function _statusDot(status) {
-  const colors = { active: '#4caf50', paused: '#ff9800', completed: '#888', error: '#f44336', failed: '#f44336' };
+  const colors = { active: '#4caf50', paused: '#ff9800', completed: '#888', success: '#4caf50', error: '#f44336', failed: '#f44336', queued: '#fbbf24', running: '#60a5fa' };
   const c = colors[status] || '#888';
   return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};box-shadow:0 0 6px ${c}, 0 0 3px ${c};flex-shrink:0;position:relative;top:4px;"></span>`;
 }
@@ -1116,13 +1116,18 @@ function _renderList() {
       detail.appendChild(ex);
     }
     if (task.last_run_status) {
-      const isErr = task.last_run_status === 'error' || task.last_run_status === 'failed';
-      const color = isErr ? 'var(--red,#e06c75)' : 'var(--green,#50fa7b)';
+      const status = String(task.last_run_status).toLowerCase();
+      const isErr = status === 'error' || status === 'failed';
+      const isSuccess = status === 'success';
+      const isBusy = status === 'queued' || status === 'running';
+      const color = isErr ? 'var(--red,#e06c75)' : isSuccess ? 'var(--green,#50fa7b)' : 'var(--fg)';
       const result = (task.last_run_result || '').trim();
       const prev = result.length > 200 ? result.slice(0, 200) + '…' : result;
       const lr = document.createElement('div');
       lr.style.cssText = `font-size:11px;margin-bottom:6px;padding:4px 8px;border-left:2px solid ${color};background:color-mix(in srgb, ${color} 8%, transparent);border-radius:2px;line-height:1.4;cursor:pointer;`;
-      lr.innerHTML = `<span style="font-weight:600;color:${color};">${isErr ? '✗' : '✓'}</span> <span style="opacity:0.9;">${_esc(prev) || (isErr ? 'Failed (no detail)' : 'Success (no output)')}</span>`;
+      const marker = isErr ? '✗' : isSuccess ? '✓' : isBusy ? `<span class="task-log-status task-log-status-${status}" aria-hidden="true"></span>` : '–';
+      const fallback = isErr ? 'Failed (no detail)' : isSuccess ? 'Success (no output)' : status;
+      lr.innerHTML = `<span style="font-weight:600;color:${color};">${marker}</span> <span style="opacity:0.9;">${_esc(prev) || _esc(fallback)}</span>`;
       lr.title = 'Open full history';
       lr.addEventListener('click', (e) => { e.stopPropagation(); _showRunHistory(task.id, task.name); });
       detail.appendChild(lr);
@@ -2087,11 +2092,12 @@ async function _showRunHistory(taskId, taskName) {
   } else {
     html += '<div class="task-runs-list">';
     for (const run of runs) {
-      const statusClass = run.status === 'success' ? 'task-run-success' : (run.status === 'error' || run.status === 'failed') ? 'task-run-error' : 'task-run-running';
+      const status = String(run.status || '').toLowerCase();
+      const statusClass = status === 'success' ? 'task-run-success' : (status === 'error' || status === 'failed') ? 'task-run-error' : (status === 'queued' || status === 'running') ? 'task-run-running' : '';
       html += `<div class="task-run-item ${statusClass}">
         <div class="task-run-item-header">
-          ${_statusDot(run.status === 'success' ? 'active' : run.status)}
-          <span>${run.status}</span>
+          ${_statusDot(status)}
+          <span>${_esc(status || 'unknown')}</span>
           ${run.model ? `<span class="task-run-model" style="font-size:10px;opacity:0.5;">${_esc(run.model.split('/').pop())}</span>` : ''}
           <span class="task-run-time" title="${run.started_at ? _esc(_relativeTime(run.started_at)) : ''}">${run.started_at ? _absoluteTime(run.started_at) : ''}</span>
         </div>

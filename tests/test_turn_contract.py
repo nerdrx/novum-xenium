@@ -730,6 +730,46 @@ def test_two_url_comparison_does_not_read_saved_memory_from_evidence_warning():
     assert required_read_operation_for_request(prompt) is None
 
 
+@pytest.mark.parametrize("prompt", [
+    (
+        'Fetch https://example.test/ and check whether the Ajax model download is '
+        'LIVE/available. Signals: a download link/HuggingFace link, model file '
+        'names (.gguf/.safetensors), or link/file details.'
+    ),
+    'Fetch https://example.test/ and check whether a model download is available; do not download it.',
+    'Check whether download org/model is available.',
+    'What does "download org/model locally" mean?',
+    'Do not download org/model locally.',
+])
+def test_model_download_routing_requires_positive_download_command(prompt):
+    assert selected_tools_for_request(prompt) != {"download_model"}
+    assert "cookbook_admin" not in requested_capabilities(prompt)
+
+
+@pytest.mark.parametrize("prompt", [
+    "Check whether my local model is ready.",
+    "Check whether the model cache is available.",
+    "Check whether the local model server is ready.",
+    "Check whether my locally served Qwen/Qwen3-8B model is ready.",
+])
+def test_local_model_availability_does_not_route_to_public_web(prompt):
+    assert selected_tools_for_request(prompt) not in ({"web_search"}, {"web_fetch"})
+    assert "search_browser" not in requested_capabilities(prompt)
+
+
+@pytest.mark.parametrize("prompt", [
+    'Download org/model model locally.',
+    'Download the model locally from org/model.',
+    'Download https://huggingface.co/org/model locally.',
+    'Grab Qwen/Qwen3-8B locally.',
+    'If it is available, download org/model locally.',
+    'Fetch the page, then download org/model locally.',
+])
+def test_explicit_model_download_commands_keep_cookbook_routing(prompt):
+    assert selected_tools_for_request(prompt) == {"download_model"}
+    assert requested_capabilities(prompt) == {"cookbook_admin"}
+
+
 def test_exact_pdf_ocr_artifact_workflow_uses_compact_native_tool_chain():
     prompt = (
         "Use OCR/media inspection on the image-only PDF 'invoice_scan.pdf'. "

@@ -4,8 +4,8 @@ a minute-level timestamp that busts the Anthropic prompt cache.
 Three focused tests:
 1. End-to-end: system prompt is clean; message ordering is [system, datetime
    user-context, task user-prompt] through the real _run_agent_loop.
-2. Fallback: same ordering when the agent loop raises and task_llm_call_async
-   is used directly.
+2. Failure: an agent-loop error propagates instead of becoming an untooled
+   answer that can be marked successful.
 3. Helper: current_datetime_context_message_for_tz() renders the correct local
    time for an explicit IANA timezone, and falls back to UTC for None or invalid.
 """
@@ -50,8 +50,7 @@ async def test_scheduler_agent_loop_path(monkeypatch):
 
     async def _stub_stream(**kwargs):
         captured["messages"] = list(kwargs.get("messages", []))
-        return
-        yield  # async generator
+        yield "data: {\"delta\":\"Task finished.\"}\n\n"
 
     monkeypatch.setattr("src.agent_loop.stream_agent_loop", _stub_stream)
     monkeypatch.setattr("src.task_endpoint.resolve_task_candidates", lambda **kw: [])
@@ -147,39 +146,31 @@ async def test_unattended_approval_pause_is_recorded_as_needs_attention(monkeypa
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — fallback path receives the same datetime context
+# Test 2 — agent-loop failures do not become untooled success
 # ---------------------------------------------------------------------------
 
-async def test_scheduler_fallback_path(monkeypatch):
-    """When _run_agent_loop raises, task_llm_call_async must receive
-    [system, datetime user-context, task user-prompt] — the same ordering."""
+async def test_scheduler_agent_loop_failure_propagates(monkeypatch):
     _patch_scheduler_deps(monkeypatch)
 
-    captured = {}
+    fallback_calls = []
 
     async def _fail(*args, **kwargs):
         raise RuntimeError("simulated failure")
 
-    async def _capture_call(messages, **kw):
-        captured["messages"] = list(messages)
-        return "fallback"
+    async def _forbidden_fallback(*args, **kwargs):
+        fallback_calls.append((args, kwargs))
+        return "unverified fallback answer"
 
     import src.task_endpoint as _te
-    monkeypatch.setattr(_te, "task_llm_call_async", _capture_call)
+    monkeypatch.setattr(_te, "task_llm_call_async", _forbidden_fallback)
 
     from src.task_scheduler import TaskScheduler
     sched = TaskScheduler(session_manager=None)
     sched._run_agent_loop = _fail
-    await sched._execute_llm_task(_make_task(prompt="send the digest"), db=None)
-
-    msgs = captured.get("messages", [])
-    assert len(msgs) == 3, f"expected 3 messages, got {len(msgs)}"
-    assert msgs[0]["role"] == "system"
-    assert "Current time:" not in msgs[0]["content"]
-    assert msgs[1]["role"] == "user"
-    assert "## Current date and time" in msgs[1]["content"]
-    assert msgs[2]["role"] == "user"
-    assert msgs[2]["content"] == "send the digest"
+    import pytest
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        await sched._execute_llm_task(_make_task(prompt="send the digest"), db=None)
+    assert fallback_calls == []
 
 
 # ---------------------------------------------------------------------------

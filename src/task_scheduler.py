@@ -31,6 +31,69 @@ def _run_serialized_defaults_reconcile(callback, owner):
         return callback(owner)
 
 
+def _explicit_single_web_fetch_url(prompt: str) -> str | None:
+    """Return the sole URL only for a request routed exclusively to web_fetch."""
+    from src.chat_helpers import extract_urls
+    from src.turn_contract import selected_tools_for_request
+
+    if selected_tools_for_request(prompt) != frozenset({"web_fetch"}):
+        return None
+    urls = extract_urls(prompt)
+    return urls[0] if len(urls) == 1 else None
+
+
+def _normalized_public_url(value: str) -> str | None:
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parsed = urlsplit(value.strip())
+        host = parsed.hostname
+        port = parsed.port
+    except (AttributeError, ValueError):
+        return None
+    if (parsed.scheme.lower() not in {"http", "https"} or not host
+            or parsed.username is not None or parsed.password is not None):
+        return None
+    host = host.rstrip(".").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    default_port = (parsed.scheme.lower(), port) in {("http", 80), ("https", 443)}
+    netloc = host if port is None or default_port else f"{host}:{port}"
+    return urlunsplit((parsed.scheme.lower(), netloc, parsed.path or "/", parsed.query, ""))
+
+
+def _successful_web_fetch_receipt(receipt: dict, expected_url: str) -> bool:
+    """Check a server-emitted tool receipt, never model prose, for the URL read."""
+    if not _receipt_status_succeeded(receipt) or receipt.get("tool") != "web_fetch":
+        return False
+    command = receipt.get("command")
+    if not isinstance(command, str):
+        return False
+    try:
+        payload = json.loads(command)
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if isinstance(payload, dict):
+        actual_url = payload.get("url")
+    else:
+        from src.chat_helpers import extract_urls
+        urls = extract_urls(command)
+        actual_url = urls[0] if len(urls) == 1 else None
+    expected = _normalized_public_url(expected_url)
+    actual = _normalized_public_url(actual_url) if isinstance(actual_url, str) else None
+    return expected is not None and actual == expected
+
+
+def _receipt_status_succeeded(receipt: dict) -> bool:
+    return (
+        isinstance(receipt, dict)
+        and type(receipt.get("exit_code")) is int and receipt["exit_code"] == 0
+        and receipt.get("success") is not False and not receipt.get("error")
+        and receipt.get("blocked") is not True and not receipt.get("ask_user")
+        and receipt.get("execution_attempted") is not False
+    )
+
+
 async def _run_defaults_reconcile_in_worker(callback, owner):
     """Run reconciliation off-loop, but finish its DB transaction on cancel."""
     worker = asyncio.create_task(asyncio.to_thread(
@@ -1942,28 +2005,12 @@ class TaskScheduler:
         except Exception as e:
             logger.warning(f"[assistant] RAG tool selection failed, using all: {e}")
 
-        # Try using the agent loop for full tool access
-        try:
-            result = await self._run_agent_loop(
-                endpoint_url, model, task, session_id,
-                system_prompt=system_prompt, disabled_tools=disabled_tools or None,
-                relevant_tools=relevant_tools,
-                datetime_context_msg=_dt_msg,
-            )
-        except Exception as e:
-            logger.warning(f"Agent loop failed for task '{task.name}', falling back to simple call: {e}")
-            from src.task_endpoint import task_llm_call_async
-            messages: list = [{"role": "system", "content": system_prompt}]
-            if _dt_msg:
-                messages.append(_dt_msg)
-            messages.append({"role": "user", "content": task.prompt})
-            result = await task_llm_call_async(
-                messages,
-                fallback_url=endpoint_url,
-                fallback_model=model,
-                owner=task.owner,
-                timeout=120,
-            )
+        result = await self._run_agent_loop(
+            endpoint_url, model, task, session_id,
+            system_prompt=system_prompt, disabled_tools=disabled_tools or None,
+            relevant_tools=relevant_tools,
+            datetime_context_msg=_dt_msg,
+        )
 
         # Strip the model's chain-of-thought before saving/delivering. Task
         # output is LLM-only, so prose=True (which also removes untagged
@@ -2165,7 +2212,7 @@ class TaskScheduler:
                               datetime_context_msg: dict | None = None) -> str:
         """Run the full agent loop with tool access, collecting the final text."""
         from src.agent_loop import stream_agent_loop
-        from src.agent_runtime.authority import restore_task_authority
+        from src.agent_runtime.authority import ExactOperation, restore_task_authority
 
         system_content = system_prompt or "You are a helpful assistant executing a scheduled task. Use available tools to complete the task thoroughly."
         user_content = override_user_message or task.prompt
@@ -2197,6 +2244,10 @@ class TaskScheduler:
             pass
         full_text = ""
         final_text_replaced = False
+        answer_after_replacement = False
+        terminal_round_text = ""
+        has_terminal_round_text = False
+        terminal_failure = None
         tool_results = []
         approval_pause = None
 
@@ -2224,6 +2275,26 @@ class TaskScheduler:
             getattr(task, "request_authority_json", None), task.prompt,
             getattr(task, "task_type", "llm"), getattr(task, "action", None),
             owner=task.owner, session_id=session_id)
+        required_fetch_url = _explicit_single_web_fetch_url(task.prompt)
+        if required_fetch_url is not None:
+            from src.tool_policy import build_effective_tool_policy
+            effective_authority = request_authority.restrict(
+                build_effective_tool_policy(
+                    disabled_tools=disabled_tools,
+                    last_user_message=task.prompt,
+                ),
+                disabled_tools=disabled_tools,
+            )
+            operation = ExactOperation.normalize(
+                "web_fetch", json.dumps({"url": required_fetch_url})
+            )
+            if not effective_authority.permits(operation):
+                raise PermissionError(
+                    "Scheduled task needs renewed permission. Review and save this task "
+                    "to authorize its URL read."
+                )
+            request_authority = effective_authority
+        fetch_receipts = []
         async with contextlib.aclosing(stream_agent_loop(
                 endpoint_url=endpoint_url,
                 model=model,
@@ -2240,30 +2311,91 @@ class TaskScheduler:
                 request_authority=request_authority,
         )) as agent_stream:
             async for event_str in agent_stream:
+                if event_str.startswith("event: error"):
+                    error_message = "Agent stream reported a provider error"
+                    if "data:" in event_str:
+                        try:
+                            error_data = json.loads(event_str.split("data:", 1)[1].strip())
+                            error_message = str(error_data.get("error") or error_message)
+                        except (json.JSONDecodeError, AttributeError):
+                            pass
+                    if terminal_failure is None or terminal_failure == "Model request failed":
+                        terminal_failure = error_message[:500]
+                    continue
                 if event_str.startswith("data: ") and not event_str.startswith("data: [DONE]"):
                     try:
                         data = json.loads(event_str[6:])
-                        # Capture text from all event types, not just delta
+                        event_type = data.get("type")
                         if "delta" in data:
                             if data.get("thinking"):
                                 continue
                             if final_text_replaced:
-                                # A later answer supersedes the replacement,
-                                # as the completion gate treats it.
                                 full_text = ""
                                 final_text_replaced = False
+                                answer_after_replacement = True
                             full_text += data["delta"]
-                        elif data.get("type") == "final_response":
-                            # The completion gate may present its sanitized
-                            # answer as one replacement instead of deltas.
+                        elif event_type == "final_response":
                             full_text = str(data.get("content") or "")
                             final_text_replaced = True
-                        elif data.get("type") == "tool_output":
-                            # Tool results — capture summary so we have SOMETHING even
-                            # if the model never produces a final text response
-                            tool_summary = data.get("stdout") or data.get("output") or data.get("result") or ""
-                            if isinstance(tool_summary, str) and tool_summary.strip():
-                                tool_results.append(f"[{data.get('tool', '?')}] {tool_summary[:500]}")
+                            answer_after_replacement = False
+                        elif event_type == "completion_decision":
+                            decision = data.get("data") or {}
+                            if decision.get("can_complete") is False or decision.get("status") in {
+                                "failed", "blocked", "awaiting_user", "exhausted",
+                            }:
+                                terminal_failure = terminal_failure or str(
+                                    decision.get("reason") or
+                                    f"Agent completion was {decision.get('status', 'incomplete')}"
+                                )[:500]
+                        elif event_type == "agent_terminal":
+                            terminal = data.get("data") or data
+                            if terminal.get("failed") or terminal.get("status") == "failed":
+                                failure = terminal.get("failure") or {}
+                                terminal_failure = terminal_failure or str(
+                                    failure.get("message") or terminal.get("reason") or
+                                    "Agent terminated before completing the task"
+                                )[:500]
+                        elif event_type == "error":
+                            error_message = str(data.get("error") or "Agent stream reported a provider error")
+                            if terminal_failure is None or terminal_failure == "Model request failed":
+                                terminal_failure = error_message[:500]
+                        elif event_type == "metrics":
+                            metrics = data.get("data") or {}
+                            metric_receipts = metrics.get("tool_events")
+                            if isinstance(metric_receipts, list):
+                                fetch_receipts.extend(
+                                    receipt for receipt in metric_receipts
+                                    if isinstance(receipt, dict)
+                                )
+                            decision = metrics.get("completion_decision") or {}
+                            if decision.get("can_complete") is False or decision.get("status") in {
+                                "failed", "blocked", "awaiting_user", "exhausted",
+                            }:
+                                terminal_failure = terminal_failure or str(
+                                    decision.get("reason") or
+                                    f"Agent completion was {decision.get('status', 'incomplete')}"
+                                )[:500]
+                            if isinstance(metrics.get("round_texts"), list):
+                                has_terminal_round_text = True
+                                terminal_round_text = next((
+                                    item.strip() for item in reversed(metrics["round_texts"])
+                                    if isinstance(item, str) and item.strip()
+                                ), "")
+                        elif event_type == "tool_output":
+                            fetch_receipts.append(data)
+                            # Keep only successful receipts for an evidence-only fallback.
+                            tool_ok = (
+                                data.get("exit_code") in (None, 0)
+                                and data.get("success") is not False
+                                and not data.get("error")
+                                and data.get("blocked") is not True
+                                and not data.get("ask_user")
+                                and data.get("execution_attempted") is not False
+                            )
+                            if tool_ok:
+                                tool_summary = data.get("stdout") or data.get("output") or data.get("result") or ""
+                                if isinstance(tool_summary, str) and tool_summary.strip():
+                                    tool_results.append(f"[{data.get('tool', '?')}] {tool_summary[:500]}")
                             approval = data.get("ask_user")
                             if (
                                 isinstance(approval, dict)
@@ -2302,36 +2434,29 @@ class TaskScheduler:
                 "interactively to inspect and approve the action."
             )
 
-        # Grace summarization — if the model exhausted rounds on tool calls
-        # without producing a final text response, do one last LLM call
-        # asking it to summarize what it did. Guarantees output.
-        if not full_text.strip():
-            try:
-                from src.task_endpoint import task_llm_call_async
-                grace_context = "You ran out of steps. "
-                if tool_results:
-                    grace_context += "Here's what your tools returned:\n" + "\n".join(tool_results[-5:])
-                else:
-                    grace_context += "No tool results were captured."
-                grace_context += "\n\nSummarize what you accomplished and what's still pending. Be concise."
-                full_text = await task_llm_call_async(
-                    messages=[
-                        {"role": "system", "content": system_content},
-                        {"role": "user", "content": grace_context},
-                    ],
-                    fallback_url=endpoint_url,
-                    fallback_model=model,
-                    fallback_headers=headers,
-                    owner=task.owner or None,
-                    timeout=30,
-                )
-                full_text = (full_text or "").strip()
-            except Exception as e:
-                logger.warning(f"Grace summarization failed: {e}")
-                if tool_results:
-                    full_text = "\n".join(tool_results[-5:])
+        if terminal_failure:
+            raise RuntimeError(f"Scheduled agent did not complete: {terminal_failure}")
 
-        return full_text or "(no output)"
+        if (required_fetch_url is not None
+                and not any(_successful_web_fetch_receipt(receipt, required_fetch_url)
+                            for receipt in fetch_receipts)):
+            raise RuntimeError(
+                "Scheduled agent did not complete: the requested URL was not successfully fetched."
+            )
+
+        # Prefer the completion gate's sanitized replacement. Otherwise use its
+        # cleaned terminal round, which excludes earlier-round drafts. Legacy
+        # streams without canonical terminal metadata retain delta behavior.
+        if not final_text_replaced and not answer_after_replacement and has_terminal_round_text:
+            full_text = terminal_round_text
+
+        if not full_text.strip():
+            if tool_results:
+                full_text = "Tool output (no terminal answer):\n" + "\n".join(tool_results[-5:])
+            else:
+                raise RuntimeError("Scheduled agent returned no terminal answer or tool evidence")
+
+        return full_text.strip()
 
     async def _execute_research_task(self, task, db) -> str:
         """Execute a deep research task using DeepResearcher."""

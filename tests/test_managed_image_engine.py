@@ -1,11 +1,25 @@
 import http.client
 import json
+from pathlib import Path
 import socket
 import threading
 import time
 import pytest
 
-from scripts.managed_image_engine import create_server
+from scripts import managed_image_engine as engine
+from scripts.managed_image_engine import _owned_listener, create_server
+
+
+def test_owned_listener_returns_false_without_procfs(monkeypatch):
+    if engine.os.name == "nt":
+        pytest.skip("the Windows listener ownership check does not use procfs")
+    is_dir = Path.is_dir
+    def missing_procfs(path):
+        return False if path == Path("/proc") else is_dir(path)
+
+    monkeypatch.setattr(Path, "is_dir", missing_procfs)
+
+    assert _owned_listener(18124, 1234) is False
 
 
 FAKE_SERVER = r'''#!/usr/bin/env python3

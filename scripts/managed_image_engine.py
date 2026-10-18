@@ -176,7 +176,7 @@ def _owned_listener(port: int, process_group: int) -> bool:
             return False
         except (AttributeError, OSError, ValueError, TypeError):
             return False
-    if not Path("/proc/net/tcp").is_file():
+    if not Path("/proc").is_dir() or not Path("/proc/net/tcp").is_file():
         return False
     try:
         listeners = set()

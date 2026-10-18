@@ -321,11 +321,16 @@ fn run_bridge(
         backend.port.to_string(),
         request_json,
     ];
+    #[cfg(target_os = "linux")]
     let cache_root = if request_needs_cached_models(request) {
         super::alarms::hf_cache_source(&backend).ok()
     } else {
         None
     };
+    // Host model routing is Linux-only; the alarms/mount bridge is not built
+    // on Windows/macOS. Keep the desktop app compilable on those platforms.
+    #[cfg(not(target_os = "linux"))]
+    let cache_root: Option<PathBuf> = None;
     if let Some(cache_root) = cache_root {
         args.push(cache_root.to_string_lossy().into_owned());
     }

@@ -1,5 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
+import threading
+import time
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -14,6 +16,71 @@ def _request(owner=None):
     request = Request({"type": "http", "headers": [], "method": "GET", "path": "/"})
     request.state.current_user = owner
     return request
+
+
+def test_notification_feed_read_does_not_block_event_loop_and_keeps_owner(monkeypatch):
+    from routes.task import task_routes
+    from src import notification_feed
+
+    entered = threading.Event()
+    release = threading.Event()
+    owner_args = []
+    release_time = []
+
+    def gated_read(owner, after=None, limit=50):
+        owner_args.append((owner, after, limit))
+        entered.set()
+        release.wait(2)
+        release_time.append(time.monotonic())
+        return [], 17
+
+    monkeypatch.setattr(notification_feed, "read_notification_page", gated_read)
+    router = task_routes.setup_task_routes(task_scheduler=object())
+    endpoint = next(
+        route.endpoint for route in router.routes
+        if route.path.endswith("/notification-feed")
+    )
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        heartbeat_time = []
+        heartbeat = asyncio.Event()
+        def mark_heartbeat():
+            heartbeat_time.append(time.monotonic())
+            heartbeat.set()
+
+        loop.call_later(0.01, mark_heartbeat)
+        threading.Timer(0.2, release.set).start()
+
+        result = await endpoint(_request("alice"), after=8, limit=23, email=False)
+        await heartbeat.wait()
+        return result, heartbeat_time[0]
+
+    result, heartbeat_at = asyncio.run(run())
+    assert entered.is_set()
+    assert heartbeat_at < release_time[0]
+    assert owner_args == [("alice", 8, 23)]
+    assert result == {"notifications": [], "cursor": 17, "owner": "alice"}
+
+
+def test_notification_feed_read_errors_propagate(monkeypatch):
+    from routes.task import task_routes
+    from src import notification_feed
+
+    error = RuntimeError("feed read failed")
+
+    def fail_read(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(notification_feed, "read_notification_page", fail_read)
+    router = task_routes.setup_task_routes(task_scheduler=object())
+    endpoint = next(
+        route.endpoint for route in router.routes
+        if route.path.endswith("/notification-feed")
+    )
+
+    with pytest.raises(RuntimeError, match="feed read failed"):
+        asyncio.run(endpoint(_request("alice"), after=0, limit=50, email=False))
 
 
 def test_notification_feed_is_owner_scoped_non_destructive_and_starts_at_latest(monkeypatch):

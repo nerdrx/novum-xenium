@@ -714,7 +714,9 @@ def setup_task_routes(task_scheduler) -> APIRouter:
         if email is True:
             from routes.email_pollers import ensure_notification_email_poller
             ensure_notification_email_poller()
-        notifications, cursor = read_notification_page(user, after=after, limit=limit)
+        notifications, cursor = await asyncio.to_thread(
+            read_notification_page, user, after=after, limit=limit
+        )
         return {"notifications": notifications, "cursor": cursor, "owner": user}
 
     @router.get("/notification-feed/{event_id}")

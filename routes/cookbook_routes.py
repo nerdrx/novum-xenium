@@ -4487,7 +4487,7 @@ def setup_cookbook_routes() -> APIRouter:
             return cached
         inflight = _tasks_status_inflight.get("task")
         if inflight and not inflight.done():
-            return await inflight
+            return await asyncio.shield(inflight)
 
         async def _compute():
             data = await asyncio.to_thread(_cookbook_tasks_status_sync)
@@ -4496,11 +4496,19 @@ def setup_cookbook_routes() -> APIRouter:
 
         task = asyncio.create_task(_compute())
         _tasks_status_inflight["task"] = task
-        try:
-            return await task
-        finally:
-            if _tasks_status_inflight.get("task") is task:
+
+        def _finished(completed):
+            if _tasks_status_inflight.get("task") is completed:
                 _tasks_status_inflight["task"] = None
+            # A cancelled client leaves its shared scan running. Retrieve any
+            # failure even if no remaining request is waiting for the result.
+            if not completed.cancelled():
+                error = completed.exception()
+                if error is not None:
+                    logger.warning("Cookbook status refresh failed: %s", type(error).__name__)
+
+        task.add_done_callback(_finished)
+        return await asyncio.shield(task)
 
     def _cookbook_tasks_status_sync():
         import subprocess

@@ -178,6 +178,52 @@ def test_stop_and_configure_during_readiness_do_not_block_or_publish(tmp_path, m
         engine.close()
 
 
+def test_status_snapshots_process_before_concurrent_stop(tmp_path, monkeypatch):
+    process_read, release_read = threading.Event(), threading.Event()
+
+    class GatedProcessRead(LocalImageEngine):
+        def __getattribute__(self, name):
+            value = object.__getattribute__(self, name)
+            if name == "process" and object.__getattribute__(self, "_gate_process_read"):
+                object.__setattr__(self, "_gate_process_read", False)
+                process_read.set()
+                assert release_read.wait(3)
+            return value
+
+    class FakeProcess:
+        returncode = None
+        def poll(self): return self.returncode
+        def terminate(self): self.returncode = 0
+        def wait(self, **_kwargs): return self.returncode
+
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    engine.__class__ = GatedProcessRead
+    engine._gate_process_read = True
+    engine.process = FakeProcess()
+    monkeypatch.setattr(engine, "health", lambda: {})
+    result, errors = [], []
+    status = threading.Thread(target=lambda: _capture_error(lambda: result.append(engine.status()), errors))
+    status.start()
+    try:
+        assert process_read.wait(1)
+        stopped = threading.Event()
+        stop = threading.Thread(target=lambda: (engine.stop(), stopped.set()))
+        stop.start()
+        # Let Stop contend with the status snapshot before releasing the fake read.
+        stopped.wait(0.05)
+        release_read.set()
+        status.join(2)
+        stop.join(2)
+        assert not status.is_alive() and not stop.is_alive()
+        assert not errors
+        assert result[0]["running"] is True  # consistent snapshot from before Stop
+        assert engine.status()["running"] is False
+    finally:
+        release_read.set()
+        status.join(3)
+        engine.close()
+
+
 def test_close_during_first_start_scan_prevents_gateway_launch(tmp_path, monkeypatch):
     entered, release = threading.Event(), threading.Event()
 

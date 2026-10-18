@@ -3239,14 +3239,16 @@ function _startResearchPolling() {
     for (var sid of _researchingSessions) {
       try {
         var res = await fetch(`${API_BASE}/api/research/status/${sid}`);
-        if (!res.ok) { _researchingSessions.delete(sid); continue; }
+        if (!res.ok) {
+          // Invalid IDs and auth/ownership/missing states are terminal; retry other statuses.
+          if ([400, 401, 403, 404].includes(res.status)) _researchingSessions.delete(sid);
+          continue;
+        }
         var data = await res.json();
         if (data.status !== 'running') {
           _researchingSessions.delete(sid);
         }
-      } catch (e) {
-        _researchingSessions.delete(sid);
-      }
+      } catch { /* Keep tracking; the next tick retries transient failures. */ }
     }
     _updateResearchDots();
     if (_researchingSessions.size === 0 && _researchPollTimer) {

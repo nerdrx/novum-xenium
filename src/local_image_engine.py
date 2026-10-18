@@ -512,7 +512,9 @@ class LocalImageEngine:
             self.wake.set()
 
     def status(self):
-        running = self.process is not None and self.process.poll() is None
+        with self.lock:
+            proc = self.process
+            running = proc is not None and proc.poll() is None
         health = {}
         if running:
             try:

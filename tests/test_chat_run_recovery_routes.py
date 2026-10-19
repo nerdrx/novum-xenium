@@ -318,6 +318,8 @@ def test_chat_stream_continue_claims_once_and_preserves_saved_read_only_mode(tmp
     response = _continue(client, workspace=workspace)
     assert response.status_code == 200, response.text[:500]
     assert "continued" in response.text
+
+
     assert captured["loop_kwargs"]["plan_mode"] is True
     assert captured["loop_kwargs"]["workspace"] == workspace
     assert captured["loop_kwargs"]["external_untrusted_context_seen"] is True
@@ -330,6 +332,66 @@ def test_chat_stream_continue_claims_once_and_preserves_saved_read_only_mode(tmp
     again = _continue(client, workspace=workspace)
     assert again.status_code == 409
     assert captured["loop_kwargs"]["plan_mode"] is True
+
+
+@pytest.mark.parametrize("replaced_turn", [False, True])
+@pytest.mark.parametrize("has_tools", [False, True])
+def test_chat_stream_saves_terminal_tool_round_without_inline_reasoning_guess(
+    tmp_path, monkeypatch, replaced_turn, has_tools,
+):
+    workspace = str(tmp_path / "workspace")
+    Path(workspace).mkdir()
+    store = _interrupted_store(
+        tmp_path / f"terminal-answer-{replaced_turn}.sqlite",
+        workspace=workspace,
+        plan_mode=False,
+    )
+    client, _captured = _recovery_post_client(
+        monkeypatch, checkpoint_store=store, workspace=workspace,
+    )
+    streamed = (
+        "I need to read the project first. Earlier narration here.\n\n"
+        "Based on my analysis, the public source defines VERSION 0.4.31 and "
+        "RAM_GUARD_CAN_DISABLE as True.\n\n"
+        "The final paragraph would otherwise be the only saved prose."
+    )
+    terminal = (
+        "Based on my analysis, the public source defines:\n\n"
+        "```python\nVERSION = \"0.4.31\"\nRAM_GUARD_CAN_DISABLE = True\n```"
+    )
+    saved = []
+
+    def capture_save(_sess, _manager, _session_id, content, metrics, **_kwargs):
+        saved.append((content, metrics))
+        assert _kwargs.get("preserve_code_fences") is (not replaced_turn)
+        return "saved-answer"
+
+    async def answer_stream(*_args, **_kwargs):
+        yield "data: " + json.dumps({"delta": streamed if has_tools else terminal}) + "\n\n"
+        if replaced_turn:
+            yield "data: " + json.dumps({
+                "type": "final_response",
+                "content": "Authoritative replacement snapshot.",
+                "render_owner": "structured",
+            }) + "\n\n"
+        yield "data: " + json.dumps({
+            "type": "metrics",
+            "data": {
+                "tool_events": [{"round": 1, "tool": "read_file", "exit_code": 0}] if has_tools else [],
+                "round_texts": ["", terminal],
+                "preserve_terminal_code_fences": True,
+            },
+        }) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(chat_routes, "stream_agent_loop", answer_stream)
+    monkeypatch.setattr(chat_routes, "save_assistant_response", capture_save)
+    response = _continue(client, workspace=workspace)
+
+    assert response.status_code == 200, response.text[:500]
+    assert saved
+    expected = "Authoritative replacement snapshot." if replaced_turn else terminal
+    assert saved[-1][0] == expected
 
 
 @pytest.mark.parametrize(("outcome_events", "expected"), [

@@ -540,6 +540,27 @@ def test_save_assistant_response_incognito_does_not_mutate_session_history():
     assert sess.history == []
 
 
+def test_save_terminal_code_example_preserves_fence_and_strips_tool_markup(monkeypatch):
+    import core.database
+    monkeypatch.setattr(core.database, "update_session_last_accessed", lambda *_: None)
+    monkeypatch.setattr(chat_helpers, "_append_sft_trace_record", lambda **_: None)
+    sess = _FakeSession()
+    answer = "The source defines:\n\n```python\nRAM_GUARD_CAN_DISABLE = True\n```"
+    raw = answer + '\n<tool_call>{"name":"bash","arguments":{"command":"echo hidden"}}</tool_call>'
+    save_assistant_response(
+        sess, SimpleNamespace(save_sessions=lambda: None), "fixture", raw,
+        {"tool_events": [{"tool": "read_file", "exit_code": 0}]},
+        preserve_code_fences=True,
+    )
+    assert sess.history[-1].content == answer
+    from src.agent_loop import _visible_response_text
+    assert _visible_response_text(raw, skip_fenced=True) == answer
+    save_assistant_response(
+        sess, SimpleNamespace(save_sessions=lambda: None), "fixture", answer, {},
+    )
+    assert "```python" not in sess.history[-1].content
+
+
 def test_add_user_message_incognito_does_not_mutate_session_history():
     sess = _FakeSession("selected-model")
     chat_handler = SimpleNamespace(update_session_name_if_needed=lambda *_args, **_kwargs: None)

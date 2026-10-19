@@ -320,6 +320,30 @@ def _visible_response_text_for_save(text: object) -> str:
         flags=re.DOTALL,
     )
     return value
+
+
+def _response_for_assistant_save(
+    full_response: object,
+    metrics: dict | None,
+    *,
+    replaced_turn: bool = False,
+) -> str:
+    """Prefer the sanitized terminal round over narrated tool-round deltas."""
+    visible_full = _visible_response_text_for_save(full_response)
+    round_texts = (metrics or {}).get("round_texts") or []
+    terminal_round = next(
+        (
+            _visible_response_text_for_save(text)
+            for text in reversed(round_texts)
+            if _visible_response_text_for_save(text)
+        ),
+        "",
+    )
+    if (not replaced_turn and (metrics or {}).get("tool_events")):
+        return terminal_round or visible_full
+    return visible_full or terminal_round
+
+
 def _is_personal_data_search_without_web_target(text: str) -> bool:
     """Prevent generic ``search`` wording from disabling personal tools."""
     text = str(text or "")
@@ -5434,17 +5458,10 @@ def setup_chat_routes(
                                     # teacher segments distinct.
                                     if data.get("teacher") is True:
                                         _metrics_event["teacher"] = True
-                                    _metrics_round_texts = last_metrics.get("round_texts") or []
-                                    _metrics_fallback_response = next(
-                                        (
-                                            _visible_response_text_for_save(_item)
-                                            for _item in reversed(_metrics_round_texts)
-                                            if _visible_response_text_for_save(_item)
-                                        ),
-                                        "",
-                                    )
-                                    _saveable_no_tool_response = (
-                                        _visible_response_text_for_save(full_response) or _metrics_fallback_response
+                                    _saveable_no_tool_response = _response_for_assistant_save(
+                                        full_response,
+                                        last_metrics,
+                                        replaced_turn=_render_state.replaced_turn,
                                     )
                                     if (
                                         (
@@ -5463,6 +5480,10 @@ def setup_chat_routes(
                                             session,
                                             _saveable_no_tool_response,
                                             _metrics_to_save,
+                                            preserve_code_fences=bool(
+                                                _metrics_to_save.get("preserve_terminal_code_fences")
+                                                and not _render_state.replaced_turn
+                                            ),
                                             character_name=ctx.preset.character_name,
                                             web_sources=web_sources,
                                             rag_sources=ctx.rag_sources,
@@ -5484,18 +5505,12 @@ def setup_chat_routes(
                             if not _terminal_saved and (full_response or _has_tool_events):
                                 _metrics_to_save = _render_state.metadata(last_metrics)
                                 _round_texts = _metrics_to_save.get("round_texts") or []
-                                _final_round_text = next(
-                                    (
-                                        _visible_response_text_for_save(_item)
-                                        for _item in reversed(_round_texts)
-                                        if _visible_response_text_for_save(_item)
-                                    ),
-                                    "",
-                                )
-                                _visible_full_response = _visible_response_text_for_save(full_response)
                                 _response_to_save = (
-                                    _visible_full_response
-                                    or _final_round_text
+                                    _response_for_assistant_save(
+                                        full_response,
+                                        _metrics_to_save,
+                                        replaced_turn=_render_state.replaced_turn,
+                                    )
                                     or "Done."
                                 )
                                 if _response_to_save and _round_texts:
@@ -5508,6 +5523,10 @@ def setup_chat_routes(
                                     _metrics_to_save["thinking"] = thinking_response.strip()
                                 _saved_id = save_assistant_response(
                                     sess, session_manager, session, _response_to_save, _metrics_to_save,
+                                    preserve_code_fences=bool(
+                                        _metrics_to_save.get("preserve_terminal_code_fences")
+                                        and not _render_state.replaced_turn
+                                    ),
                                     character_name=ctx.preset.character_name,
                                     web_sources=web_sources,
                                     rag_sources=ctx.rag_sources,

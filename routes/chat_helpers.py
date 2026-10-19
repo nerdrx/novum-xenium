@@ -1540,6 +1540,7 @@ def save_assistant_response(
     do_research: bool = False,
     tool_events: list = None,
     incognito: bool = False,
+    preserve_code_fences: bool = False,
 ):
     """Add assistant response to session history.
 
@@ -1581,7 +1582,11 @@ def save_assistant_response(
     # persistence boundary so raw tool markup cannot survive in history.
     try:
         from src.tool_parsing import strip_tool_blocks
-        full_response = strip_tool_blocks(str(full_response or "")).strip()
+        # Only a completed, already-cleaned terminal round opts in. Partial
+        # error saves retain the stricter default; XML/DSML is always removed.
+        full_response = strip_tool_blocks(
+            str(full_response or ""), skip_fenced=preserve_code_fences,
+        ).strip()
     except Exception:
         full_response = str(full_response or "")
     full_response = clean_repeated_assistant_content(full_response)

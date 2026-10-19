@@ -6150,9 +6150,9 @@ def _single_email_uid_from_tool_output(raw: str) -> str:
 _INVISIBLE_RESPONSE_CHARS = "\u2063\u200b\u200c\u200d\ufeff"
 
 
-def _visible_response_text(text: str) -> str:
+def _visible_response_text(text: str, *, skip_fenced: bool = False) -> str:
     """Return model-visible prose, ignoring invisible provider separators."""
-    value = _strip_think_blocks(strip_tool_blocks(str(text or "")))
+    value = _strip_think_blocks(strip_tool_blocks(str(text or ""), skip_fenced=skip_fenced))
     # Some local Qwen chat templates suppress the opening <think> token while
     # still emitting its closing token. Everything before that orphan closer
     # is internal analysis; only the text after it belongs in chat.
@@ -26548,6 +26548,7 @@ async def stream_agent_loop(
     time_to_first_token = None
     first_token_received = False
     round_texts = []   # Cleaned text per round for history reload
+    _preserve_terminal_code_fences = False
     round_models = []  # Actual model for each corresponding round
     round_endpoint_ids = []
     round_endpoint_labels = []
@@ -32699,16 +32700,20 @@ async def stream_agent_loop(
         # model with no real native_tool_calls) must not be stripped from the
         # persisted text either — otherwise it streams once and then disappears
         # on reload (#3222 follow-up).
+        _preserve_terminal_code_fences = (_is_api_model and not used_native and not guide_only)
         cleaned_round = strip_tool_blocks(
             round_response,
-            skip_fenced=(_is_api_model and not used_native and not guide_only),
+            skip_fenced=_preserve_terminal_code_fences,
             additional_tool_names={
                 schema["function"]["name"]
                 for schema in normalized_external_tool_schemas
             },
         ).strip()
         if _ody_qwen_finetune_model or _qwen38_tool_router:
-            cleaned_round = _visible_response_text(cleaned_round)
+            cleaned_round = _visible_response_text(
+                cleaned_round,
+                skip_fenced=_preserve_terminal_code_fences,
+            )
             cleaned_round = _normalize_ody_qwen_text_artifacts(cleaned_round)
             if not tool_blocks and round_response and full_response.endswith(round_response):
                 full_response = full_response[:-len(round_response)] + cleaned_round
@@ -40535,7 +40540,10 @@ async def stream_agent_loop(
     # Do not persist raw textual tool-call JSON / role markers as assistant
     # prose. Local finetunes may emit those before the parser catches and
     # executes them; saved history should contain only the user-facing answer.
-    full_response = _visible_response_text(full_response)
+    full_response = _visible_response_text(
+        full_response,
+        skip_fenced=_preserve_terminal_code_fences,
+    )
     if re.match(r"^Done\b", full_response, re.IGNORECASE):
         without_trailing_done = _strip_trailing_done(full_response)
         if without_trailing_done:
@@ -41207,6 +41215,7 @@ async def stream_agent_loop(
         endpoint_url=endpoint_url,
     )
     metrics["requested_model"] = requested_model
+    metrics["preserve_terminal_code_fences"] = _preserve_terminal_code_fences
     if _last_context_inspection:
         metrics["context_inspection"] = _last_context_inspection
     metrics["endpoint_id"] = actual_endpoint_id

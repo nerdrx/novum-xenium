@@ -25625,7 +25625,14 @@ async def stream_agent_loop(
                 route_schema_names = {
                     schema.get("function", {}).get("name", "") for schema in route_tools
                 }
-                required_names = used_names | ({"search_tools"} & route_schema_names)
+                # Packet creation and clarification are prerequisites, not
+                # optional discovery. Keep their already-authorized schemas
+                # even when readers would otherwise fill the native cap.
+                packet_names = (
+                    {"todowrite", "ask_user"} & route_schema_names
+                    if _coding_work.requires_packet else set()
+                )
+                required_names = used_names | packet_names | ({"search_tools"} & route_schema_names)
                 selected = [
                     schema for schema in route_tools
                     if schema.get("function", {}).get("name") in required_names
@@ -25728,7 +25735,7 @@ async def stream_agent_loop(
                 selected_names = {
                     schema.get("function", {}).get("name", "") for schema in selected
                 }
-                if coding_requested and not (set(coding_core) & selected_names):
+                if coding_requested and not ((set(coding_core) | packet_names) & selected_names):
                     available_coding_names = {
                         schema.get("function", {}).get("name", "")
                         for schema in route_tools
@@ -27353,6 +27360,22 @@ async def stream_agent_loop(
 
     # Outcome history survives context trimming; narration is not tool progress.
     _progress_guard = _ToolProgressGuard(workspace)
+
+    def _recover_coding_packet_stall():
+        nonlocal _coding_packet_stall_recovery_used, _coding_packet_stall_recovery_active
+        _coding_packet_stall_recovery_used = True
+        _coding_packet_stall_recovery_active = True
+        _progress_guard.reset_read_stall_window()
+        messages.append({
+            "role": "system", "_protected": True,
+            "content": (
+                "Stop repeating workspace reads. Before reading more, create one small, "
+                "truthful coding packet with TodoWrite using only facts already available. "
+                "Use exact reproduction and acceptance commands you can justify; do not "
+                "invent commands or claim checks ran. If required task facts or a safe exact "
+                "command are missing, ask the user with ask_user instead."
+            ),
+        })
     _skill_stall_recovery_used = False
     _progress_paused = False
     # Keep the exact-call backstop for unmonitored tools, including mutations.
@@ -34503,6 +34526,24 @@ async def stream_agent_loop(
                 and (_coding_change_intent or _resume_coding_work or _artifact_creation_requested)
             )
         ):
+            if (
+                _read_only_inspection_rounds >= 6
+                and not _runaway
+                and _stuck_rounds < 4
+                and _blocked_status_rounds < 2
+                and not _coding_packet_stall_recovery_used
+                and _coding_work.requires_packet
+                and not _coding_grounding.skill_preparation_required
+                and any(
+                    _resolved_tool_event_name(event) == "read_file"
+                    and tool_result_is_successful(event)
+                    for event in tool_events
+                )
+            ):
+                _recover_coding_packet_stall()
+                _read_only_inspection_rounds = 0
+                yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+                continue
             _stall_evidence = EvidenceLedger.from_tool_events(
                 tool_events,
                 _completion_requirements,
@@ -40334,19 +40375,7 @@ async def stream_agent_loop(
                 and stall.get("failed_retries", 0) == 0
                 and not stall.get("failure_limit")
             ):
-                _coding_packet_stall_recovery_used = True
-                _coding_packet_stall_recovery_active = True
-                _progress_guard.reset_read_stall_window()
-                messages.append({
-                    "role": "system", "_protected": True,
-                    "content": (
-                        "Stop repeating workspace reads. Before reading more, create one small, "
-                        "truthful coding packet with TodoWrite using only facts already available. "
-                        "Use exact reproduction and acceptance commands you can justify; do not "
-                        "invent commands or claim checks ran. If required task facts or a safe exact "
-                        "command are missing, ask the user with ask_user instead."
-                    ),
-                })
+                _recover_coding_packet_stall()
                 yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
                 continue
             _progress_paused = True

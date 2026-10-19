@@ -46,7 +46,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 max_tool_calls=0, baseline_blocked=False, max_rounds=10, extra_tools=False,
                 schema_details=None, repeated_failed_checks=False, batch_retry=False,
                 extra_shell_after_acceptance=False, extra_shell_exit=0, user_request=None,
-                verifier_calls=None):
+                verifier_calls=None, distinct_read_stall=False, native_context=None):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -54,6 +54,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         checked_workflow if key == "agent_milestone_workflow" else (
             True if verifier_issues is not None and key == "agent_verifier_subagent" else default)
     ))
+    if native_context is not None:
+        monkeypatch.setattr("src.model_context.budget_context_for_model", lambda *a, **k: native_context)
     if extra_tools:
         monkeypatch.setattr(al, "_image_tool_available", lambda *args: True)
     if verifier_issues is not None:
@@ -100,7 +102,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         ("bash", {"command": _packet()["reproduce_command"]}),
     ]
     if stall_before_packet:
-        actions = [("read_file", {"path": "src/auth.py"}) for _ in range(4)] + actions
+        actions = [("read_file", {"path": f"src/file_{i}.py" if distinct_read_stall else "src/auth.py"})
+                   for i in range(6 if distinct_read_stall else 4)] + actions
     if attempt_shell_edit:
         actions.append(("bash", {"command": "sed -i 's/old/new/' src/auth.py"}))
     actions.extend([
@@ -187,7 +190,8 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
         if block.tool_type == "read_file":
             return block.tool_type, {
                 "exit_code": 1 if fail_stall_reads else 0,
-                "output": "permission denied" if fail_stall_reads else "same source contents",
+                "output": "permission denied" if fail_stall_reads else (
+                    "source contents: " + block.content if distinct_read_stall else "same source contents"),
             }
         raise AssertionError(f"Unexpected tool: {block.tool_type}")
 
@@ -285,6 +289,29 @@ def test_read_stall_recovers_to_truthful_packet_prompt(monkeypatch, tmp_path):
     assert executed[-1][1] == _packet()["reproduce_command"]
     packet_events = [event for event in events if event.get("type") == "coding_work_packet"]
     assert [event["stage"] for event in packet_events] == ["reproduce", "edit"]
+
+
+def test_distinct_read_stall_keeps_packet_action_before_generic_stop(monkeypatch, tmp_path):
+    events, executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, no_packet_start=True,
+        stall_before_packet=True, distinct_read_stall=True, max_rounds=12,
+    )
+
+    assert requested[6] == {"todowrite", "ask_user"}
+    assert [tool for tool, _ in executed] == ["read_file"] * 5 + ["todowrite", "bash", "write_file", "bash"]
+    assert executed[-1][1] == _packet()["acceptance_command"]
+    assert not any(event.get("reason") == "loop_breaker_stall" for event in events)
+    assert [event["stage"] for event in events if event.get("type") == "coding_work_packet"] == ["reproduce", "edit", "verify", "done"]
+
+
+def test_packet_actions_survive_small_native_schema_budget(monkeypatch, tmp_path):
+    _events, _executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, no_packet_start=True,
+        native_context=8192, max_rounds=1,
+    )
+
+    assert {"todowrite", "ask_user"} <= requested[0]
+    assert not ({"write_file", "edit_file", "apply_patch", "bash", "python"} & requested[0])
 
 
 def test_failed_reads_do_not_activate_packet_stall_recovery(monkeypatch, tmp_path):

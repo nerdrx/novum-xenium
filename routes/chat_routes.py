@@ -5389,19 +5389,32 @@ def setup_chat_routes(
                                         continue
                                     last_metrics = terminal_metadata
                                     failure = terminal_metadata.get("failure") or {}
-                                    safe_failure = describe_stream_failure(
-                                        failure.get("message"),
-                                        failure.get("status"),
-                                        failure.get("timeout_seconds"),
-                                    )
-                                    failure_message = safe_failure["message"]
-                                    terminal_metadata["failure"] = safe_failure
-                                    terminal_content = full_response.strip()
-                                    failure_note = f"[Agent stopped: {failure_message}]"
-                                    if terminal_content:
-                                        terminal_content = f"{terminal_content}\n\n{failure_note}"
+                                    if data.get("reason") == "completion_unverified" and not failure:
+                                        # This is an internal completion gate, not a provider
+                                        # failure. Its notice was already streamed into
+                                        # full_response; keep provider text out of the record.
+                                        failure_message = "Agent completion could not be verified."
+                                        terminal_metadata["reason"] = "completion_unverified"
+                                        terminal_metadata["failed"] = True
+                                        terminal_metadata["failure"] = {
+                                            "category": "completion_unverified",
+                                            "message": failure_message,
+                                        }
+                                        terminal_content = full_response.strip() or failure_message
                                     else:
-                                        terminal_content = failure_note
+                                        safe_failure = describe_stream_failure(
+                                            failure.get("message"),
+                                            failure.get("status"),
+                                            failure.get("timeout_seconds"),
+                                        )
+                                        failure_message = safe_failure["message"]
+                                        terminal_metadata["failure"] = safe_failure
+                                        terminal_content = full_response.strip()
+                                        failure_note = f"[Agent stopped: {failure_message}]"
+                                        if terminal_content:
+                                            terminal_content = f"{terminal_content}\n\n{failure_note}"
+                                        else:
+                                            terminal_content = failure_note
                                     if not _terminal_saved:
                                         _saved_id = save_assistant_response(
                                             sess,

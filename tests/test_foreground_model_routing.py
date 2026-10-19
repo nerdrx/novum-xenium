@@ -1144,6 +1144,46 @@ async def test_chat_stream_route_forwards_success_terminal_without_failure_notic
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_saves_completion_unverified_notice_without_provider_failure_label(monkeypatch):
+    captured = {}
+    notice = "**Incomplete — completion not verified:** No implementation was verified."
+    terminal = {
+        "type": "agent_terminal",
+        "status": "failed",
+        "reason": "completion_unverified",
+        "message": notice,
+    }
+    endpoint = _chat_stream_endpoint(
+        monkeypatch,
+        "agent",
+        captured,
+        agent_chunks=[
+            'data: ' + json.dumps({"delta": "Tool results were collected.\n\n"}) + "\n\n",
+            'data: ' + json.dumps({"delta": notice}) + "\n\n",
+            'data: ' + json.dumps(terminal) + "\n\n",
+        ],
+        capture_completion=True,
+    )
+
+    response = await endpoint(_RouteRequest("agent"))
+    emitted = [chunk async for chunk in response.body_iterator]
+
+    assert f'data: {json.dumps(terminal)}\n\n' in emitted
+    assert len(captured["saved"]) == 1
+    saved_args = captured["saved"][0][0]
+    assert "Tool results were collected." in saved_args[3]
+    assert notice in saved_args[3]
+    assert "Provider request failed" not in saved_args[3]
+    assert saved_args[4]["reason"] == "completion_unverified"
+    assert saved_args[4]["failed"] is True
+    assert saved_args[4]["failure"] == {
+        "category": "completion_unverified",
+        "message": "Agent completion could not be verified.",
+    }
+    assert "post_processed" not in captured
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider_status", "expected_status", "expected_message"),
     [

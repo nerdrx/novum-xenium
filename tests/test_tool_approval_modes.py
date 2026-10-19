@@ -192,3 +192,40 @@ def test_real_loop_respects_mode_disabled_tools_and_plan(monkeypatch, mode, disa
     assert bool(executed) is executes
     if mode == "ask":
         assert any('"kind": "tool_approval"' in chunk for chunk in chunks)
+
+
+def test_real_loop_attempts_native_memory_list_without_command(monkeypatch):
+    import src.agent_loop as loop
+    from src.ai_interaction import _manage_memory_lines
+
+    monkeypatch.setattr(loop, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(loop, "get_mcp_manager", lambda: None)
+    monkeypatch.setattr(loop, "estimate_tokens", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(loop, "blocked_tools_for_owner", lambda owner: set())
+    attempted = []
+
+    async def fake_stream(*args, **kwargs):
+        yield "data: " + json.dumps({"type": "tool_calls", "calls": [{
+            "id": "memory-list", "name": "manage_memory",
+            "arguments": json.dumps({"action": "list"}),
+        }]}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    async def fake_execute(block, **kwargs):
+        attempted.append((block.tool_type, _manage_memory_lines(block.content)))
+        return "manage_memory: list", {"output": "No memories found.", "exit_code": 0}
+
+    monkeypatch.setattr(loop, "stream_llm_with_fallback", fake_stream)
+    monkeypatch.setattr(loop, "execute_tool_block", fake_execute)
+
+    async def collect():
+        return [chunk async for chunk in loop.stream_agent_loop(
+            "http://local.test/v1", "test-model",
+            [{"role": "user", "content": "List my memories"}],
+            approval_mode="full", max_rounds=1, relevant_tools={"manage_memory"},
+        )]
+
+    chunks = asyncio.run(collect())
+    assert attempted == [("manage_memory", ["list"])]
+    assert any('"type": "tool_output"' in chunk for chunk in chunks)
+    assert chunks[-1].strip() == "data: [DONE]"

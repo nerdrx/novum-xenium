@@ -2476,7 +2476,7 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
             # not discard it and reinterpret a search query as the operation.
             content = command if not action or first == action else f"{action}\n{command}"
         else:
-            content = action
+            content = json.dumps(args)
     elif tool_type == "delegate_subagent":
         content = json.dumps(args)
     elif tool_type == "list_models":

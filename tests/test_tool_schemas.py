@@ -9,6 +9,22 @@ from src.tool_schemas import (
 import json
 
 
+def test_memory_structured_arguments_reach_the_existing_json_handler() -> None:
+    for arguments in (
+        {"action": "list"},
+        {"action": "list", "category": "preference", "command": ""},
+        {"action": "search", "text": "formatting"},
+        {"action": "add", "text": "Use tabs", "category": "preference"},
+        {"action": "edit", "memory_id": "memory-1", "text": "Use spaces"},
+        {"action": "delete", "memory_id": "memory-1"},
+        {},
+    ):
+        block = function_call_to_tool_block("manage_memory", json.dumps(arguments))
+        assert block is not None
+        assert block.tool_type == "manage_memory"
+        assert json.loads(block.content) == arguments
+
+
 def test_inspect_media_schema_matches_twelve_page_runtime_limit() -> None:
     schema = next(
         item["function"]

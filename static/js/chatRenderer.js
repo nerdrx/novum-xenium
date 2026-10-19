@@ -3891,6 +3891,10 @@ export function addMessage(role, content, modelName, metadata) {
         continueBtn.title = 'Send a new request using this partial response; saved run state is not resumed';
         continueBtn.textContent = 'Continue text';
         continueBtn.addEventListener('click', () => {
+          if (window.__odysseusChatBusy) {
+            uiModule.showToast?.('Wait for the current response to finish before continuing.');
+            return;
+          }
           stoppedIndicator.remove();
           if (window.chatModule) {
             window.chatModule.setHideUserBubble();

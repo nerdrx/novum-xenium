@@ -2166,6 +2166,10 @@ import { invalidateSettings } from './appConfig.js';
         continueBtn.textContent = 'Continue text';
         const _stoppedHolder = _stoppedViewHolder; // capture before globals are cleared
         continueBtn.addEventListener('click', () => {
+          if (_sendInFlight || isStreaming) {
+            uiModule.showToast?.('Wait for the current response to finish before continuing.');
+            return;
+          }
           stoppedIndicator.remove();
           _hideUserBubble = true;
           _pendingContinue = _stoppedHolder;
@@ -4946,6 +4950,10 @@ import { invalidateSettings } from './appConfig.js';
                   contBtn.textContent = 'Continue ▸';
                   const _holder = holder;
                   contBtn.addEventListener('click', () => {
+                    if (_sendInFlight || isStreaming) {
+                      uiModule.showToast?.('Wait for the current response to finish before continuing.');
+                      return;
+                    }
                     note.remove();
                     _hideUserBubble = true;
                     _pendingContinue = _holder;
@@ -6294,6 +6302,10 @@ import { invalidateSettings } from './appConfig.js';
             continueBtn.title = 'Send a new request using this partial response; saved run state is not resumed';
             continueBtn.textContent = 'Continue text';
             continueBtn.addEventListener('click', () => {
+              if (_sendInFlight || isStreaming) {
+                uiModule.showToast?.('Wait for the current response to finish before continuing.');
+                return;
+              }
               stoppedIndicator.remove();
               _hideUserBubble = true;
               _pendingContinue = _catchViewHolder;

@@ -224,6 +224,7 @@ class LocalImageEngine:
         self.start_lock = threading.Lock()
         # Stop invalidates a Start that was already scanning the cache.
         self.stop_generation = 0
+        self.desired_running = None
         self.refresh_lock = threading.Lock()
         self.wake = threading.Event()
         self.closed = threading.Event()
@@ -399,6 +400,8 @@ class LocalImageEngine:
             if response.status != 200 or len(body) > 65536:
                 raise ValueError("The image engine is not ready")
             data = json.loads(body)
+        except http.client.HTTPException:
+            raise ValueError("The image engine is not ready") from None
         finally:
             connection.close()
         if not isinstance(data, dict) or data.get("engine") != "novum-image-engine":
@@ -407,7 +410,11 @@ class LocalImageEngine:
 
     def start(self):
         with self.lock:
+            self.desired_running = True
             generation = self.stop_generation
+        self._ensure_start(generation)
+
+    def _ensure_start(self, generation):
         with self.start_lock:
             with self.lock:
                 if self.closed.is_set() or generation != self.stop_generation:
@@ -456,6 +463,8 @@ class LocalImageEngine:
                         if self.closed.is_set() or generation != self.stop_generation or self.process is not proc:
                             return
                         self.register_endpoint()
+                        if self.desired_running is None:
+                            self.desired_running = True
                     return
                 except (OSError, ValueError, urllib.error.URLError):
                     time.sleep(0.2)
@@ -474,6 +483,7 @@ class LocalImageEngine:
 
     def stop(self):
         with self.lock:
+            self.desired_running = False
             self.stop_generation += 1
             proc, self.process = self.process, None
             if proc is not None and proc.poll() is None:
@@ -495,6 +505,8 @@ class LocalImageEngine:
             if mode not in MODES or type(auto) is not bool or type(idle) is not int or not 30 <= idle <= 3600:
                 raise ValueError("Invalid image engine settings")
             # Apply settings to the next model load, never interrupt generation.
+            if not auto and self.desired_running is None:
+                self.stop_generation += 1
             self.settings.update(mode=mode, auto_start=auto, idle_seconds=idle)
             _private_json(self.home / "settings.json", self.settings)
             self.wake.set()
@@ -529,13 +541,20 @@ class LocalImageEngine:
                 "models": [{k:m[k] for k in ("id", "name", "size_bytes")} for m in self.models],
                 "pending": self.pending, "error": self.error}
 
+    def _start_if_desired(self):
+        with self.lock:
+            generation = self.stop_generation
+            desired = self.desired_running
+            should_start = self.settings["auto_start"] if desired is None else desired
+        if should_start and not self.closed.is_set():
+            self._ensure_start(generation)
+
     def run(self):
         def work():
             while not self.closed.is_set():
                 try:
                     self.refresh()
-                    if self.settings["auto_start"] and not self.closed.is_set():
-                        self.start()
+                    self._start_if_desired()
                 except Exception as exc:
                     self.error = str(exc)[:300]
                     logger.warning("Local image engine is pending: %s", type(exc).__name__)

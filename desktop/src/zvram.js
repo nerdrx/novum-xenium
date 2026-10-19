@@ -16,6 +16,7 @@ const elements = {
 const budgetInputs = ['resident', 'cold', 'clean-cache', 'headroom', 'virtual'].map(id => $(`#zvram-${id}`));
 let invoke = null;
 let busy = false;
+let statusRevision = 0;
 let available = false;
 let routerSupported = false;
 let ignoreSwapGuardSupported = false;
@@ -33,6 +34,7 @@ function showError(message = '') {
 }
 
 function setStatus(message) {
+  statusRevision++;
   elements.status.textContent = message;
 }
 
@@ -142,8 +144,9 @@ function renderStatus(result) {
   elements.routerState.textContent = router.healthy === true ? 'Provider ready'
     : router.state === 'starting' ? 'Starting provider'
       : router.running === true ? 'Server running · checking health'
-        : ['failed', 'exited'].includes(router.state) ? 'Provider failed'
-        : 'Provider stopped';
+        : router.recovery_enabled === true ? 'Waiting to restart provider'
+          : ['failed', 'exited'].includes(router.state) ? 'Provider failed'
+            : 'Provider stopped';
   const loadedModels = Array.isArray(router.models)
     ? router.models.filter(model => typeof model === 'string' || /^(loaded|loading)$/i.test(String(model?.status || '')))
       .map(model => typeof model === 'string' ? model : model?.id || model?.model).filter(Boolean)
@@ -160,6 +163,7 @@ function renderStatus(result) {
   else if (router.healthy) setStatus('Your local provider is ready. Choose a local model in chat.');
   else if (router.state === 'starting') setStatus('Provider is starting.');
   else if (router.running) setStatus('Provider is running; checking that it is ready.');
+  else if (router.recovery_enabled === true) setStatus('Waiting for the provider to restart.');
   else if (['failed', 'exited'].includes(router.state)) setStatus(`Provider failed to start. ${router.lastlog || 'Check Advanced settings and try again.'}`);
   else if (conflict) setStatus(`Legacy server ${conflict.alias || conflict.name} is using port ${conflict.port}. Stop it below or choose another port.`);
   else setStatus(`Provider is ready to start. ${models.length} local model${models.length === 1 ? '' : 's'} found.`);
@@ -362,7 +366,14 @@ elements.legacyList.addEventListener('click', async event => {
 });
 
 setInterval(() => {
-  if (invoke && !busy && !configurationDirty && router.running === true) loadStatus().catch(() => {});
+  if (invoke && !busy && !configurationDirty && (router.running === true || router.recovery_enabled === true)) {
+    const revision = statusRevision;
+    loadStatus().catch(() => {
+      if (revision !== statusRevision || busy || configurationDirty) return;
+      elements.routerState.textContent = 'Provider status unavailable';
+      setStatus('Could not verify provider status. Last confirmed state may be stale; use Refresh to retry.');
+    });
+  }
 }, 2000);
 
 function initZvram(invokeFn) {

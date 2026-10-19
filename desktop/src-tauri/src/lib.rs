@@ -97,6 +97,7 @@ struct UpdateResult {
 struct NativeState {
     operation: Arc<Mutex<()>>,
     zvram_operation: Arc<Mutex<()>>,
+    zvram_recovery_intent: Arc<Mutex<Option<bool>>>,
     workbench_port: Arc<std::sync::atomic::AtomicU16>,
     last_workbench_notification: Mutex<Option<Instant>>,
     notification_action_listeners: Arc<AtomicUsize>,

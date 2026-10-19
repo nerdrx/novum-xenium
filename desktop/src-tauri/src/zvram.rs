@@ -15,6 +15,101 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const CACHED_ROUTER_TIMEOUT: Duration = Duration::from_secs(45);
 const MODEL_SYNC_SERVICE: &str = "novum-local-model-sync.service";
 
+fn read_recovery_intent(intent: &std::sync::Mutex<Option<bool>>) -> Option<bool> {
+    intent.lock().map(|value| *value).unwrap_or(Some(false))
+}
+
+fn router_recovery_enabled(auto_start: bool, intent: Option<bool>) -> bool {
+    intent.unwrap_or(auto_start)
+}
+
+fn decorate_recovery_status(mut status: Value, intent: Option<bool>) -> Value {
+    if let Some(router) = status.get_mut("router").filter(|router| router.is_object()) {
+        let auto_start = router["auto_start"] != false;
+        router["recovery_enabled"] = json!(router_recovery_enabled(auto_start, intent));
+    }
+    status
+}
+
+fn router_should_adopt_running(auto_start: bool, running: bool, intent: Option<bool>) -> bool {
+    running && !auto_start && intent.is_none()
+}
+
+fn router_installation_changed(previous: Option<&Path>, selected: &Path) -> bool {
+    previous != Some(selected)
+}
+
+fn router_observed_intentional_exit(
+    running: bool,
+    state: &str,
+    was_running: bool,
+    intent: Option<bool>,
+    lastlog: &str,
+) -> bool {
+    !running
+        && !matches!(state, "starting" | "running")
+        && (was_running || intent == Some(true))
+        && matches!(lastlog, "Stopped by user" | "Process exited (0)")
+}
+
+fn router_intent_after_observed_exit(
+    intent: Option<bool>,
+    running: bool,
+    state: &str,
+    was_running: bool,
+    lastlog: &str,
+) -> Option<bool> {
+    if router_observed_intentional_exit(running, state, was_running, intent, lastlog) {
+        Some(false)
+    } else {
+        intent
+    }
+}
+
+fn router_intent_after_action(
+    intent: Option<bool>,
+    action: &ZvramAction,
+    bridge_succeeded: bool,
+) -> Option<bool> {
+    match action {
+        ZvramAction::RouterStop => Some(false),
+        ZvramAction::RouterStart if bridge_succeeded => Some(true),
+        _ => intent,
+    }
+}
+
+fn router_start_eligible(
+    recovery_enabled: bool,
+    running: bool,
+    state: &str,
+    retry_ticks: u8,
+) -> bool {
+    recovery_enabled
+        && !running
+        && !matches!(state, "starting" | "running")
+        && retry_ticks == 0
+}
+
+fn router_failure_waits_before_retry(state: &str, lastlog: &str) -> bool {
+    matches!(state, "failed" | "exited")
+        || (state == "stopped"
+            && (lastlog.starts_with("Stopped:")
+                || (lastlog.starts_with("Process exited (") && lastlog != "Process exited (0)")))
+}
+
+fn next_router_retry_delay(delay: u8) -> u8 {
+    delay.saturating_mul(2).min(6)
+}
+
+fn monitor_start_request(mode: String, auto_start: bool) -> ZvramRequest {
+    ZvramRequest {
+        action: ZvramAction::RouterStart,
+        mode: Some(mode),
+        auto_start: Some(auto_start),
+        ..ZvramRequest::status()
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn model_sync_unit_contents(
     checkout: &Path,
@@ -141,6 +236,8 @@ pub(super) struct ZvramRequest {
     headroom_mib: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     virtual_gib: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_available_mib: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ignore_swap_guard: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -403,6 +500,7 @@ pub(super) async fn zvram_status(
     let app = app.clone();
     let lock = state.zvram_operation.clone();
     let quit_pending = state.quit_pending.clone();
+    let recovery_state = state.zvram_recovery_intent.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
@@ -422,6 +520,7 @@ pub(super) async fn zvram_status(
         };
         let request = ZvramRequest::status();
         run_bridge(&app, &installation, &request)
+            .map(|status| decorate_recovery_status(status, read_recovery_intent(&recovery_state)))
     })
     .await
     .map_err(|e| format!("zVram status worker failed: {e}"))?
@@ -439,6 +538,7 @@ pub(super) async fn zvram_choose_installation(
     let path = zvram_config_path(&app)?;
     let lock = state.zvram_operation.clone();
     let quit_pending = state.quit_pending.clone();
+    let recovery_intent = state.zvram_recovery_intent.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
@@ -448,7 +548,14 @@ pub(super) async fn zvram_choose_installation(
             return Ok(None);
         };
         let checkout = validate_installation(&selected)?;
-        save_installation(&path, &checkout).map(Some)
+        let previous = read_installation(&path).ok().flatten();
+        let saved = save_installation(&path, &checkout)?;
+        if router_installation_changed(previous.as_deref(), checkout.as_path()) {
+            *recovery_intent
+                .lock()
+                .map_err(|_| "zVram recovery state is unavailable.")? = None;
+        }
+        Ok(Some(saved))
     })
     .await
     .map_err(|e| format!("zVram folder picker failed: {e}"))?
@@ -470,12 +577,27 @@ pub(super) async fn zvram_action(
     let app = app.clone();
     let lock = state.zvram_operation.clone();
     let quit_pending = state.quit_pending.clone();
+    let recovery_intent = state.zvram_recovery_intent.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock
             .lock()
             .map_err(|_| "zVram operation lock is unavailable.")?;
         ensure_not_quitting(&quit_pending)?;
-        run_bridge(&app, &installation, &request)
+        if matches!(&request.action, ZvramAction::RouterStop) {
+            let mut intent = recovery_intent
+                .lock()
+                .map_err(|_| "zVram recovery state is unavailable.")?;
+            *intent = router_intent_after_action(*intent, &request.action, false);
+        }
+        let result = run_bridge(&app, &installation, &request);
+        if matches!(&request.action, ZvramAction::RouterStart) && result.is_ok() {
+            let mut intent = recovery_intent
+                .lock()
+                .map_err(|_| "zVram recovery state is unavailable.")?;
+            *intent = router_intent_after_action(*intent, &request.action, true);
+        }
+        result
+            .map(|status| decorate_recovery_status(status, read_recovery_intent(&recovery_intent)))
     })
     .await
     .map_err(|e| format!("zVram action worker failed: {e}"))?
@@ -484,11 +606,14 @@ pub(super) async fn zvram_action(
 pub(super) fn monitor_autostart(app: AppHandle) {
     std::thread::spawn(move || {
         let mut start_succeeded = false;
+        let mut start_retry_waiting = false;
         let mut start_retry_ticks = 0u8;
         let mut start_retry_delay = 1u8;
         let mut registered = false;
         let mut registration_ticks = 0u8;
         let mut last_mode: Option<String> = None;
+        let mut last_installation: Option<PathBuf> = None;
+        let mut observed_router_running = false;
         let mut first_attempt = true;
         #[cfg(target_os = "linux")]
         let mut model_sync_key: Option<(String, String, u16)> = None;
@@ -526,6 +651,16 @@ pub(super) fn monitor_autostart(app: AppHandle) {
             }) else {
                 continue;
             };
+            if router_installation_changed(last_installation.as_deref(), installation.as_path()) {
+                last_installation = Some(installation.clone());
+                observed_router_running = false;
+                registered = false;
+                registration_ticks = 0;
+                start_succeeded = false;
+                start_retry_waiting = false;
+                start_retry_ticks = 0;
+                start_retry_delay = 1;
+            }
             let status = match run_bridge(&app, &installation, &ZvramRequest::status()) {
                 Ok(status) if status["available"] == true => status,
                 _ => continue,
@@ -536,43 +671,80 @@ pub(super) fn monitor_autostart(app: AppHandle) {
                 registered = false;
                 registration_ticks = 0;
                 start_succeeded = false;
+                start_retry_waiting = false;
                 start_retry_ticks = 0;
                 start_retry_delay = 1;
             }
             last_mode = Some(mode.clone());
             let router_running = router["running"] == true;
+            let auto_start = router["auto_start"] != false;
+            let lastlog = router["lastlog"].as_str().unwrap_or("");
+            let router_state = router["state"].as_str().unwrap_or("stopped");
+            let mut recovery_intent = read_recovery_intent(&state.zvram_recovery_intent);
+            let after_exit_intent = router_intent_after_observed_exit(
+                recovery_intent,
+                router_running,
+                router_state,
+                observed_router_running,
+                lastlog,
+            );
+            if after_exit_intent != recovery_intent {
+                if let Ok(mut intent) = state.zvram_recovery_intent.lock() {
+                    *intent = after_exit_intent;
+                    recovery_intent = after_exit_intent;
+                }
+            }
+            if router_should_adopt_running(auto_start, router_running, recovery_intent) {
+                if let Ok(mut intent) = state.zvram_recovery_intent.lock() {
+                    *intent = Some(true);
+                    recovery_intent = Some(true);
+                }
+            }
+            let recovery_enabled = router_recovery_enabled(auto_start, recovery_intent);
+            if router_running {
+                observed_router_running = true;
+            } else if !matches!(router_state, "starting" | "running") {
+                observed_router_running = false;
+            }
             if !router_running {
                 registered = false;
                 registration_ticks = 0;
             }
-            let router_state = router["state"].as_str().unwrap_or("stopped");
+            let mut retry_scheduled = false;
             if router_running {
                 start_succeeded = true;
-                start_retry_ticks = 0;
-                start_retry_delay = 1;
+                if router["healthy"] == true {
+                    start_retry_ticks = 0;
+                    start_retry_delay = 1;
+                    start_retry_waiting = false;
+                }
             } else if !matches!(router_state, "starting" | "running") {
+                if recovery_enabled
+                    && !start_retry_waiting
+                    && (start_succeeded || router_failure_waits_before_retry(router_state, lastlog))
+                {
+                    start_retry_ticks = start_retry_delay;
+                    start_retry_delay = next_router_retry_delay(start_retry_delay);
+                    start_retry_waiting = true;
+                    retry_scheduled = true;
+                }
                 start_succeeded = false;
             }
-            if router["auto_start"] != false
-                && !router_running
-                && !matches!(router_state, "starting" | "running")
-                && !start_succeeded
-                && start_retry_ticks == 0
-            {
-                let start = ZvramRequest {
-                    action: ZvramAction::RouterStart,
-                    mode: Some(mode),
-                    auto_start: Some(true),
-                    ..ZvramRequest::status()
-                };
+            if router_start_eligible(
+                recovery_enabled,
+                router_running,
+                router_state,
+                start_retry_ticks,
+            ) {
+                start_retry_waiting = false;
+                let start = monitor_start_request(mode, auto_start);
                 start_succeeded = run_bridge(&app, &installation, &start).is_ok();
-                if start_succeeded {
-                    start_retry_delay = 1;
-                } else {
+                if !start_succeeded {
                     start_retry_ticks = start_retry_delay;
-                    start_retry_delay = start_retry_delay.saturating_mul(2).min(6);
+                    start_retry_delay = next_router_retry_delay(start_retry_delay);
+                    start_retry_waiting = true;
                 }
-            } else if start_retry_ticks > 0 {
+            } else if start_retry_ticks > 0 && !retry_scheduled {
                 start_retry_ticks -= 1;
             }
             if router_running && registered {
@@ -582,7 +754,7 @@ pub(super) fn monitor_autostart(app: AppHandle) {
                     registration_ticks = 0;
                 }
             }
-            if router_running && !registered && router["auto_start"] != false {
+            if router_running && !registered && recovery_enabled {
                 let register = ZvramRequest {
                     action: ZvramAction::RouterRegister,
                     ..ZvramRequest::status()
@@ -648,6 +820,7 @@ impl ZvramRequest {
             clean_cache_mib: None,
             headroom_mib: None,
             virtual_gib: None,
+            min_available_mib: None,
             ignore_swap_guard: None,
             live_control: None,
             mode: None,
@@ -659,6 +832,155 @@ impl ZvramRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn router_recovery_separates_startup_preference_from_runtime_intent() {
+        assert!(router_recovery_enabled(false, Some(true)));
+        assert!(!router_recovery_enabled(true, Some(false)));
+        assert!(!router_recovery_enabled(false, None));
+        assert!(router_recovery_enabled(true, None));
+        // A fresh session still honors the saved launch-on-open preference.
+        assert!(router_recovery_enabled(true, None));
+
+        let adopted = if router_should_adopt_running(false, true, None) {
+            Some(true)
+        } else {
+            None
+        };
+        assert_eq!(adopted, Some(true));
+        assert!(router_recovery_enabled(false, adopted));
+        assert!(!router_should_adopt_running(false, true, Some(false)));
+        let selected = Path::new("/new/zvram");
+        let changed = router_installation_changed(Some(Path::new("/old/zvram")), selected);
+        assert!(changed);
+        let intent = if changed { None } else { Some(true) };
+        assert_eq!(intent, None);
+        assert!(!router_installation_changed(Some(selected), selected));
+
+        let external_stop =
+            router_intent_after_observed_exit(None, false, "stopped", true, "Stopped by user");
+        assert_eq!(external_stop, Some(false));
+        assert!(!router_recovery_enabled(true, external_stop));
+        let clean_exit = router_intent_after_observed_exit(
+            Some(true),
+            false,
+            "stopped",
+            false,
+            "Process exited (0)",
+        );
+        assert_eq!(clean_exit, Some(false));
+        assert_eq!(
+            router_intent_after_observed_exit(None, false, "stopped", false, "Stopped by user"),
+            None
+        );
+        assert_eq!(
+            router_intent_after_observed_exit(None, false, "stopped", false, "Process exited (0)"),
+            None
+        );
+        assert!(!router_observed_intentional_exit(
+            false,
+            "stopped",
+            false,
+            None,
+            "Process exited (0)"
+        ));
+        // Health failure alone cannot make an owned, running process restart-eligible.
+        let enabled = router_recovery_enabled(false, Some(true));
+        assert!(enabled);
+        assert!(!router_start_eligible(
+            enabled, true, "running", 0
+        ));
+    }
+
+    #[test]
+    fn recovery_status_reports_effective_runtime_intent_and_fails_closed_on_poison() {
+        let status = json!({
+            "available": true,
+            "router": { "auto_start": false, "running": true }
+        });
+        assert_eq!(
+            decorate_recovery_status(status.clone(), Some(true))["router"]["recovery_enabled"],
+            true
+        );
+        assert_eq!(
+            decorate_recovery_status(status.clone(), Some(false))["router"]["recovery_enabled"],
+            false
+        );
+        assert_eq!(
+            decorate_recovery_status(status, None)["router"]["recovery_enabled"],
+            false
+        );
+        assert_eq!(
+            decorate_recovery_status(
+                json!({ "router": { "auto_start": true, "running": false } }),
+                None
+            )["router"]["recovery_enabled"],
+            true
+        );
+
+        let intent = std::sync::Mutex::new(None);
+        assert_eq!(read_recovery_intent(&intent), None);
+        // A poisoned intent must not fall back to persisted auto_start=true.
+        let poisoned = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let poisoned_thread = poisoned.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned_thread.lock().unwrap();
+            panic!("poison recovery intent for test");
+        })
+        .join();
+        assert_eq!(read_recovery_intent(&poisoned), Some(false));
+    }
+
+    #[test]
+    fn router_action_intent_preserves_explicit_stop_and_start_ordering() {
+        let mut intent = None;
+        intent = router_intent_after_action(intent, &ZvramAction::RouterStop, false);
+        assert_eq!(intent, Some(false));
+        assert!(!router_recovery_enabled(true, intent));
+
+        // A failed start does not erase the explicit stop; a successful one does.
+        intent = router_intent_after_action(intent, &ZvramAction::RouterStart, false);
+        assert_eq!(intent, Some(false));
+        intent = router_intent_after_action(intent, &ZvramAction::RouterStart, true);
+        assert_eq!(intent, Some(true));
+        assert!(router_recovery_enabled(false, intent));
+
+        // Configure does not change runtime intent; a fresh app defers to auto_start.
+        intent = router_intent_after_action(intent, &ZvramAction::RouterConfigure, true);
+        assert_eq!(intent, Some(true));
+        assert!(!router_recovery_enabled(false, None));
+        assert_eq!(
+            monitor_start_request("regular".into(), false).auto_start,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn router_retry_backoff_grows_for_short_lived_failures() {
+        let mut delay = 1;
+        let mut scheduled = Vec::new();
+        for _ in 0..5 {
+            scheduled.push(delay);
+            delay = next_router_retry_delay(delay);
+        }
+        assert_eq!(scheduled, [1, 2, 4, 6, 6]);
+        assert!(router_failure_waits_before_retry(
+            "exited",
+            "Process exited (1)"
+        ));
+        assert!(router_failure_waits_before_retry(
+            "stopped",
+            "Stopped: available RAM guard"
+        ));
+        assert!(!router_failure_waits_before_retry(
+            "stopped",
+            "Stopped by user"
+        ));
+        assert!(!router_failure_waits_before_retry(
+            "stopped",
+            "Process exited (0)"
+        ));
+    }
 
     fn installation_fixture(path: &Path) {
         fs::create_dir_all(path).unwrap();
@@ -718,6 +1040,36 @@ mod tests {
             "ignore_swap_guard": "yes"
         }))
         .is_err());
+    }
+
+    #[test]
+    fn router_ram_floor_is_optional_nonnegative_and_typed() {
+        for floor in [0, 4096] {
+            let request: ZvramRequest = serde_json::from_value(json!({
+                "action": "router_start",
+                "min_available_mib": floor
+            }))
+            .unwrap();
+            let encoded = serde_json::to_value(request).unwrap();
+            assert_eq!(encoded["min_available_mib"], floor);
+        }
+        assert!(serde_json::from_value::<ZvramRequest>(json!({
+            "action": "router_start",
+            "min_available_mib": -1
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<ZvramRequest>(json!({
+            "action": "router_start",
+            "min_available_mib": "0"
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<ZvramRequest>(json!({
+            "action": "router_start",
+            "unrecognized": true
+        }))
+        .is_err());
+        let status = serde_json::to_value(ZvramRequest::status()).unwrap();
+        assert!(status.get("min_available_mib").is_none());
     }
 
     #[test]

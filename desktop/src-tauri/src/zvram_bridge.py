@@ -953,6 +953,12 @@ def _owned_profile_running(manager_helper, manager, name, params):
         pid = job.get("child_pid")
         if type(pid) is not int or pid <= 0:
             return False
+        child_identity = job.get("child_identity")
+        if not isinstance(child_identity, dict) or manager_helper.identity(pid) != child_identity:
+            return False
+        stat_tail = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        if int(stat_tail[1]) != job["identity"]["pid"]:
+            return False
         argv = [part.decode(errors="replace") for part in
                 Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if part]
         return (
@@ -960,8 +966,9 @@ def _owned_profile_running(manager_helper, manager, name, params):
             and (_has_pair(argv, '--models-preset', str(_router_preset_path(manager))) if params.get('router')
                  else _has_pair(argv, "--alias", params["alias"]))
             and _has_pair(argv, "--host", "127.0.0.1")
+            and manager_helper.identity(pid) == child_identity
         )
-    except (OSError, KeyError, TypeError, ValueError):
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
         return False
 
 

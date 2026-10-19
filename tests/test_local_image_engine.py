@@ -1,3 +1,4 @@
+import http.client
 import json
 import os
 import socket
@@ -5,6 +6,7 @@ import struct
 import threading
 from types import SimpleNamespace
 from pathlib import Path
+import pytest
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -47,6 +49,7 @@ def _patch_start_without_worker(monkeypatch, engine):
         def bind(self, *_args): pass
 
     class FakeProcess:
+        pid = 1234
         returncode = None
         def poll(self): return self.returncode
         def terminate(self): self.returncode = 0
@@ -61,6 +64,205 @@ def _patch_start_without_worker(monkeypatch, engine):
         lambda *_args, **_kwargs: launches.append(FakeProcess()) or launches[-1],
     )
     return launches
+
+
+def _fake_health_response(monkeypatch, responses):
+    class Response:
+        status = 200
+        def read(self, _limit): return b'{"engine":"novum-image-engine"}'
+
+    connections = []
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            self.closed = False
+            connections.append(self)
+        def request(self, *_args, **_kwargs): pass
+        def getresponse(self):
+            outcome = responses.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return Response()
+        def close(self): self.closed = True
+
+    monkeypatch.setattr("src.local_image_engine.http.client.HTTPConnection", Connection)
+    monkeypatch.setattr("scripts.managed_image_engine._owned_listener", lambda *_args: True)
+    return connections
+
+
+def test_manual_start_recovers_even_when_auto_start_is_disabled(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path)
+    (engine.home / "image-models.json").write_text("{}")
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    try:
+        engine.configure({"auto_start": False})
+        engine.start()
+        assert engine.desired_running is True and len(launches) == 1
+        launches[0].returncode = 1
+        engine._start_if_desired()
+        assert len(launches) == 2 and engine.process is launches[1]
+    finally:
+        engine.close()
+
+
+@pytest.mark.parametrize("change", ["configure", "stop"])
+def test_stale_auto_start_decision_is_invalidated(tmp_path, monkeypatch, change):
+    engine = LocalImageEngine(tmp_path)
+    (engine.home / "image-models.json").write_text("{}")
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    entered, release = threading.Event(), threading.Event()
+    ensure_start = engine._ensure_start
+
+    def gated_ensure(generation):
+        entered.set()
+        assert release.wait(3)
+        ensure_start(generation)
+
+    monkeypatch.setattr(engine, "_ensure_start", gated_ensure)
+    worker = threading.Thread(target=engine._start_if_desired)
+    worker.start()
+    try:
+        assert entered.wait(1)
+        if change == "configure":
+            engine.configure({"auto_start": False})
+        else:
+            engine.stop()
+        release.set()
+        worker.join(2)
+        assert not worker.is_alive()
+        assert launches == [] and engine.process is None
+    finally:
+        release.set()
+        worker.join(3)
+        engine.close()
+
+
+def test_enabling_startup_does_not_clear_explicit_stop_intent(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path)
+    (engine.home / "image-models.json").write_text("{}")
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    try:
+        engine.configure({"auto_start": False})
+        engine.stop()
+        engine.configure({"auto_start": True})
+        engine._start_if_desired()
+        assert engine.desired_running is False and launches == []
+        engine.start()
+        assert engine.desired_running is True and len(launches) == 1
+    finally:
+        engine.close()
+
+
+def test_manual_start_intent_survives_disabling_auto_start(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path)
+    (engine.home / "image-models.json").write_text("{}")
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    try:
+        engine.start()
+        process = engine.process
+        engine.configure({"auto_start": False})
+        engine._start_if_desired()
+        assert engine.desired_running is True
+        assert engine.process is process and process.poll() is None
+        assert len(launches) == 1
+    finally:
+        engine.close()
+
+
+def test_auto_start_adopts_recovery_intent_only_after_readiness(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path)
+    (engine.home / "image-models.json").write_text("{}")
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    try:
+        assert engine.desired_running is None
+        engine._start_if_desired()
+        assert engine.desired_running is True and len(launches) == 1
+        launches[0].returncode = 1
+        engine._start_if_desired()
+        assert len(launches) == 2 and engine.process is launches[1]
+    finally:
+        engine.close()
+
+
+def test_auto_start_disabled_defers_without_manual_intent(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path)
+    engine.configure({"auto_start": False})
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    try:
+        engine._start_if_desired()
+        assert engine.desired_running is None and launches == []
+    finally:
+        engine.close()
+
+
+def test_health_normalizes_malformed_http_response_and_closes_connection(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path)
+    engine.process = SimpleNamespace(pid=1234, poll=lambda: None, terminate=lambda: None,
+                                     wait=lambda **_kwargs: None)
+    connections = _fake_health_response(monkeypatch, [http.client.BadStatusLine("bad")])
+    try:
+        try:
+            engine.health()
+        except ValueError as exc:
+            assert str(exc) == "The image engine is not ready"
+        else:
+            raise AssertionError("malformed health response must be normalized")
+        assert len(connections) == 1 and connections[0].closed
+    finally:
+        engine.close()
+
+
+def test_start_retries_transient_malformed_health_response(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    (engine.home / "image-models.json").write_text("{}")
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    # Exercise the real health method with one malformed response, then success.
+    monkeypatch.setattr(engine, "health", lambda: LocalImageEngine.health(engine))
+    connections = _fake_health_response(monkeypatch, [http.client.BadStatusLine("bad"), None])
+    monkeypatch.setattr("src.local_image_engine.time.sleep", lambda *_args: None)
+    try:
+        engine.start()
+        assert len(launches) == 1 and engine.process is launches[0]
+        assert len(connections) == 2 and all(connection.closed for connection in connections)
+    finally:
+        engine.close()
+
+
+def test_start_cleans_up_owned_child_after_persistent_malformed_health(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    (engine.home / "image-models.json").write_text("{}")
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    monkeypatch.setattr(engine, "health", lambda: LocalImageEngine.health(engine))
+    connections = _fake_health_response(
+        monkeypatch, [http.client.BadStatusLine("bad") for _ in range(25)]
+    )
+    monkeypatch.setattr("src.local_image_engine.time.sleep", lambda *_args: None)
+    try:
+        try:
+            engine.start()
+        except ValueError as exc:
+            assert str(exc) == "The image engine did not become ready in time."
+        else:
+            raise AssertionError("persistent malformed health must fail startup")
+        assert len(launches) == 1 and launches[0].poll() is not None
+        assert engine.process is None
+        assert len(connections) == 25 and all(connection.closed for connection in connections)
+    finally:
+        engine.close()
+
+
+def test_status_degrades_on_malformed_health_response(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path)
+    engine.process = SimpleNamespace(pid=1234, poll=lambda: None, terminate=lambda: None,
+                                     wait=lambda **_kwargs: None)
+    connections = _fake_health_response(monkeypatch, [http.client.BadStatusLine("bad")])
+    try:
+        result = engine.status()
+        assert result["running"] is True
+        assert result["healthy"] is False
+        assert result["state"] == "starting"
+        assert connections[0].closed
+    finally:
+        engine.close()
 
 
 def test_first_start_scan_and_catalog_build_do_not_block_configure(tmp_path, monkeypatch):

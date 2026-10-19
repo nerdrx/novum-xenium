@@ -297,6 +297,7 @@ function _initModelPickerDropdown() {
   const _LOCAL_PROBE_TTL_MS = 5000;
   let _pickerLoading = false;
   let _pickerLoadSeq = 0;
+  let _lastRefreshFailed = false;
 
   async function _refreshLocalProbe() {
     try {
@@ -392,21 +393,44 @@ function _initModelPickerDropdown() {
     listEl.appendChild(row);
   }
 
+  function _renderRefreshFailure(filter) {
+    _lastRefreshFailed = true;
+    const row = document.createElement('div');
+    row.className = 'model-switch-empty';
+    row.setAttribute('role', 'status');
+    if (_getAllModels().length) {
+      _populate(filter, true);
+      row.textContent = 'Could not refresh the model list. Showing cached models.';
+      listEl.prepend(row);
+      return;
+    }
+    listEl.innerHTML = '';
+    listEl.classList.remove('is-loading', 'is-empty');
+    menu.classList.add('no-models');
+    if (search) search.placeholder = 'Model list unavailable';
+    row.textContent = 'Could not load models. Use Refresh to retry.';
+    listEl.appendChild(row);
+  }
+
   async function _refreshPickerModels({ force = false, showLoading = false } = {}) {
-    if (!window.modelsModule || typeof window.modelsModule.refreshModels !== 'function') return false;
+    if (!window.modelsModule || typeof window.modelsModule.refreshModels !== 'function') return { latest: true, failed: true };
     const seq = ++_pickerLoadSeq;
     _pickerLoading = true;
     if (showLoading) _renderLoading(force ? 'Refreshing models…' : 'Loading models…');
+    let failed = false;
     try {
-      await window.modelsModule.refreshModels(force, { waitForRefresh: force });
-      await _refreshLocalProbe();
+      const refreshed = await window.modelsModule.refreshModels(force, { waitForRefresh: force });
+      if (refreshed === false) failed = true;
+      else await _refreshLocalProbe();
+    } catch (_) {
+      failed = true;
     } finally {
       if (seq === _pickerLoadSeq) {
         _pickerLoading = false;
         listEl.classList.remove('is-loading');
       }
     }
-    return seq === _pickerLoadSeq;
+    return { latest: seq === _pickerLoadSeq, failed };
   }
 
   // ── Provider display names and grouping ──
@@ -480,7 +504,11 @@ function _initModelPickerDropdown() {
   const _collapsedProviders = new Set(_loadList('odysseus-model-collapsed'));
   let _justExpandedProvider = null;
 
-  function _populate(filter) {
+  function _populate(filter, allowFailedState = false) {
+    if (_lastRefreshFailed && !allowFailedState) {
+      _renderRefreshFailure(filter);
+      return;
+    }
     listEl.innerHTML = '';
     listEl.classList.remove('is-loading');
     const all = _getAllModels();
@@ -908,8 +936,16 @@ async function _pick(m) {
         _renderLoading('Loading models…');
       }
       if (window.modelsModule && window.modelsModule.refreshModels) {
-        _refreshPickerModels({ force: true, showLoading: !hasCache }).then(isLatest => {
-          if (isLatest && !menu.classList.contains('hidden')) _populate(search.value || '');
+        _refreshPickerModels({ force: true, showLoading: !hasCache }).then(result => {
+          if (result.latest) {
+            _lastRefreshFailed = result.failed;
+          }
+          if (result.latest && !menu.classList.contains('hidden')) {
+            if (result.failed) _renderRefreshFailure(search.value || '');
+            else {
+              _populate(search.value || '');
+            }
+          }
           updateModelPicker();
         }).catch(() => {});
       }
@@ -933,8 +969,16 @@ async function _pick(m) {
       refreshBtn.disabled = true;
       refreshBtn.classList.add('spinning');
       try {
-        await _refreshPickerModels({ force: true, showLoading: true });
-        if (!menu.classList.contains('hidden')) _populate(search.value || '');
+        const result = await _refreshPickerModels({ force: true, showLoading: true });
+        if (result.latest) {
+          _lastRefreshFailed = result.failed;
+        }
+        if (result.latest && !menu.classList.contains('hidden')) {
+          if (result.failed) _renderRefreshFailure(search.value || '');
+          else {
+            _populate(search.value || '');
+          }
+        }
         updateModelPicker();
       } catch (_) {
         uiModule.showToast('Model refresh failed');

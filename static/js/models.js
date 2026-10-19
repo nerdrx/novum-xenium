@@ -217,7 +217,7 @@ export async function refreshModels(force = false, opts = {}) {
     } catch (e) {
       console.error(e);
       if (box) box.textContent = '(scan failed)';
-      return;
+      return false;
     } finally {
       try { _loadingSpinner && _loadingSpinner.stop && _loadingSpinner.stop(); } catch (_) {}
       if (box) box.classList.remove('models-refreshing');

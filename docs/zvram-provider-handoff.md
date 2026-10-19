@@ -142,3 +142,25 @@ opt-in that saves `min_available_mib: 0`. It requires a zVram manager advertisin
 `RAM_GUARD_CAN_DISABLE`; older installations keep the control disabled. The
 swap-growth guard is independent. The operating system can still terminate
 the process if memory is exhausted.
+
+### Runtime recovery
+
+“Start provider when Novum opens” controls startup preference. A provider
+explicitly started in the current desktop session can recover after an unexpected
+exit even when that preference is off. The native monitor adopts an already
+running owned provider without changing its saved startup preference. Explicit
+Stop, an observed external manager stop, and clean exits suppress recovery until
+the next explicit Start; a fresh desktop session still honors launch-on-open.
+
+Recovery verifies both the manager worker and its child identity and parent.
+It never adopts another service merely because it listens on the configured port.
+Short-lived failures back off using the existing ten-second monitor cadence;
+a successful fork alone does not reset the delay. A running server that is still
+loading or has an unavailable health response is not terminated by this policy.
+The manager panel keeps checking while recovery is enabled, shows stale status
+when a poll fails, and leaves manually stopped providers alone.
+
+The managed image gateway similarly separates runtime Start/Stop intent from
+its startup setting, normalizes malformed health replies into startup retry and
+cleanup, and prevents a delayed child launch from surviving shutdown. These
+checks do not retry or replay inference requests.

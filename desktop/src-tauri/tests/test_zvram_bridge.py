@@ -849,6 +849,31 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "differ from the Novum backend port"):
             self.dispatch(self.save_request(port=8000))
 
+    def test_running_profile_requires_same_child_identity_and_worker_parent(self):
+        from types import SimpleNamespace
+        saved = {"pid": 200, "start": "old", "uid": 1000}
+        job = {"identity": {"pid": 100}, "child_pid": 200, "child_identity": saved}
+        helper = SimpleNamespace(read_json=lambda *_: job, owned_worker=lambda *_: True,
+                                 identity=mock.Mock(return_value=saved))
+        manager = SimpleNamespace(job_path=lambda _: Path('/fake/job'))
+        argv = b'\0'.join(x.encode() for x in
+                          ['server', '--port', '8097', '--alias', 'demo', '--host', '127.0.0.1'])
+        params = {"port": 8097, "alias": "demo"}
+        def check(parent=100):
+            with mock.patch.object(Path, 'read_bytes', return_value=argv), \
+                    mock.patch.object(Path, 'read_text', return_value=f'200 (server) S {parent} 0'):
+                return bridge._owned_profile_running(helper, manager, 'demo', params)
+        self.assertTrue(check())
+        helper.identity.return_value = {**saved, "start": "reused"}
+        self.assertFalse(check())
+        helper.identity.return_value = saved
+        self.assertFalse(check(parent=999))
+        helper.identity.side_effect = [saved, {**saved, "start": "reused"}]
+        self.assertFalse(check())
+        helper.identity.side_effect = None
+        job.pop('child_identity')
+        self.assertFalse(check())
+
     def test_save_refuses_overwriting_owned_running_profile(self):
         self.dispatch(self.save_request())
         with mock.patch.object(bridge, "_owned_profile_running", return_value=True):

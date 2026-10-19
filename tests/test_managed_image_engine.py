@@ -295,6 +295,60 @@ def test_occupied_loopback_port_is_never_adopted(tmp_path, monkeypatch):
         occupied.shutdown(); occupied.server_close(); occupied_thread.join(timeout=2)
 
 
+def test_close_before_child_assignment_stops_newly_returned_owned_process(tmp_path, monkeypatch):
+    catalog_path = _write_catalog(tmp_path)
+    catalog = engine.load_catalog(catalog_path)
+    manager = engine.EngineManager(catalog_path)
+    entered_popen, release_popen = threading.Event(), threading.Event()
+
+    class FakeProcess:
+        pid = 1234
+        returncode = None
+        def poll(self): return self.returncode
+        def terminate(self): self.returncode = 0
+        def wait(self, **_kwargs): return self.returncode
+
+    child = FakeProcess()
+    monkeypatch.setattr(engine, "_loopback_port", lambda: 49152)
+    monkeypatch.setattr(manager, "_terminate_owned", lambda proc: proc.terminate() if proc else None)
+    def gated_popen(*_args, **_kwargs):
+        entered_popen.set()
+        assert release_popen.wait(3)
+        return child
+    monkeypatch.setattr(engine.subprocess, "Popen", gated_popen)
+    errors = []
+
+    def generate():
+        try:
+            manager.run(catalog.models[0], catalog, "/v1/images/generations", b"{}", "application/json")
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=generate)
+    closer = None
+    worker.start()
+    try:
+        assert entered_popen.wait(1)
+        closer = threading.Thread(target=manager.close)
+        closer.start()
+        assert manager.stopping.wait(1)
+        release_popen.set()
+        worker.join(2)
+        closer.join(2)
+        assert not worker.is_alive() and not closer.is_alive()
+        assert len(errors) == 1 and isinstance(errors[0], engine.GatewayError)
+        assert str(errors[0]) == "image engine is shutting down"
+        assert child.poll() is not None
+        assert manager.process is None
+    finally:
+        release_popen.set()
+        if worker.is_alive():
+            worker.join(3)
+        manager.close()
+        if closer is not None and closer.is_alive():
+            closer.join(3)
+
+
 def test_catalog_rejects_link_or_unsafe_command(tmp_path):
     catalog = _write_catalog(tmp_path)
     linked = tmp_path / "linked.json"

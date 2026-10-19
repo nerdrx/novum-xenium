@@ -36,6 +36,9 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.addInitScript(() => {
     window.__calls = [];
     window.__failAction = '';
+    window.__failStatusPoll = false;
+    window.__holdNextStatusPoll = false;
+    window.__rejectHeldStatusPoll = null;
     window.__imageEngine = {
       available: true, running: false, healthy: false, state: 'stopped', mode: 'auto',
       effective_mode: null, auto_start: true, idle_seconds: 300, loaded_model: null,
@@ -49,7 +52,7 @@ test('local provider offers Regular and zVram modes and registers after health',
       ram_guard_opt_out_supported: true,
       live_control_supported: true,
       models: [{ name: 'Test Model.gguf', path: '/models/test.gguf', size: 1234 }, { name: 'Second.gguf', path: '/models/second.gguf', size: 5678 }],
-      router: { name: 'nx-zvram-router', mode: 'regular', auto_start: true, min_available_mib: 4096, running: false, healthy: false, state: 'stopped', models: [] },
+      router: { name: 'nx-zvram-router', mode: 'regular', auto_start: true, min_available_mib: 4096, running: false, healthy: false, state: 'stopped', recovery_enabled: false, models: [] },
       profiles: [{ name: 'legacy-model', alias: 'Qwen 9B', port: 8097, running: true, state: 'running', lastlog: '' }],
       memory: { ram_available_mib: 8000, swap_available_mib: 12000 }, gpu: [{ card: 'card1', vram_used_mib: 9000, vram_total_mib: 24000 }],
     };
@@ -66,16 +69,23 @@ test('local provider offers Regular and zVram modes and registers after health',
         return structuredClone(window.__imageEngine);
       }
       if (command === 'zvram_choose_installation') return '/opt/zvram';
-      if (command === 'zvram_status') return structuredClone(window.__zvram);
+      if (command === 'zvram_status') {
+        if (window.__holdNextStatusPoll) {
+          window.__holdNextStatusPoll = false;
+          return new Promise((resolve, reject) => { window.__rejectHeldStatusPoll = reject; });
+        }
+        if (window.__failStatusPoll) throw new Error('Fixture status failure');
+        return structuredClone(window.__zvram);
+      }
       if (command === 'zvram_action') {
         const request = args.request;
         if (window.__failAction === request.action) { window.__failAction = ''; throw 'Fixture action failure'; }
         if (request.action === 'router_start') {
-          window.__zvram.router = { name: 'nx-zvram-router', mode: request.mode, auto_start: request.auto_start, min_available_mib: request.min_available_mib, running: true, healthy: true, state: 'running', port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, models: [] };
+          window.__zvram.router = { name: 'nx-zvram-router', mode: request.mode, auto_start: request.auto_start, min_available_mib: request.min_available_mib, running: true, healthy: true, state: 'running', recovery_enabled: true, port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, models: [] };
         }
         if (request.action === 'router_configure') window.__zvram.router = { ...window.__zvram.router, mode: request.mode, auto_start: request.auto_start, min_available_mib: request.min_available_mib, port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard };
         if (request.action === 'router_register') window.__zvram.router.registered = true;
-        if (request.action === 'router_stop') window.__zvram.router = { ...window.__zvram.router, running: false, healthy: false, state: 'stopped', models: [] };
+        if (request.action === 'router_stop') window.__zvram.router = { ...window.__zvram.router, running: false, healthy: false, state: 'stopped', recovery_enabled: false, models: [] };
         if (request.action === 'stop') window.__zvram.profiles = window.__zvram.profiles.map(profile => profile.name === request.profile ? { ...profile, running: false, state: 'stopped' } : profile);
         return { available: true, message: `${request.action} completed` };
       }
@@ -243,6 +253,33 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.equal(await page.locator('#zvram-router-models').textContent(), 'No model loaded');
   assert.equal(await page.locator('#zvram-start').isDisabled(), true, 'running router cannot be started twice');
   assert.equal(await page.locator('#zvram-stop').isEnabled(), true);
+  await page.evaluate(() => { window.__holdNextStatusPoll = true; });
+  await page.waitForFunction(() => typeof window.__rejectHeldStatusPoll === 'function');
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  const refreshedStatus = await page.locator('#zvram-status').textContent();
+  await page.evaluate(() => window.__rejectHeldStatusPoll(new Error('Late synthetic poll failure')));
+  await page.waitForTimeout(50);
+  assert.equal(await page.locator('#zvram-router-state-value').textContent(), 'Provider ready');
+  assert.equal(await page.locator('#zvram-status').textContent(), refreshedStatus, 'late poll rejection cannot replace a newer refresh status');
+  const actionCountBeforePollFailure = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').length);
+  await page.evaluate(() => { window.__failStatusPoll = true; });
+  await page.waitForFunction(() => document.getElementById('zvram-router-state-value').textContent === 'Provider status unavailable');
+  assert.match(await page.locator('#zvram-status').textContent(), /Last confirmed state may be stale/);
+  assert.equal(await page.locator('#zvram-error').textContent(), '');
+  await page.evaluate(() => {
+    document.getElementById('zvram-error').textContent = 'Unrelated action error';
+    document.getElementById('zvram-error').hidden = false;
+    window.__failStatusPoll = false;
+  });
+  await page.waitForFunction(() => document.getElementById('zvram-router-state-value').textContent === 'Provider ready');
+  assert.equal(await page.locator('#zvram-error').textContent(), 'Unrelated action error', 'successful automatic retry leaves action errors untouched');
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').length), actionCountBeforePollFailure,
+    'status recovery never starts, stops, or registers a provider');
+  await page.evaluate(() => {
+    document.getElementById('zvram-error').textContent = '';
+    document.getElementById('zvram-error').hidden = true;
+  });
   await page.evaluate(() => { window.__zvram.router.models = [
     { id: 'qwen3.5:9b', status: 'unloaded' },
     { id: 'qwen3.8:27b', status: 'loaded' },
@@ -254,8 +291,24 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), false,
     'explicit opt-out survives router status refresh');
 
+  await page.evaluate(() => {
+    window.__zvram.router = { ...window.__zvram.router, running: false, healthy: false, state: 'exited', recovery_enabled: true };
+  });
+  await page.waitForFunction(() => document.getElementById('zvram-router-state-value').textContent === 'Waiting to restart provider');
+  const statusCallsWhileWaiting = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_status').length);
+  await page.evaluate(() => {
+    window.__zvram.router = { ...window.__zvram.router, running: true, healthy: true, state: 'running', recovery_enabled: true };
+  });
+  await page.waitForFunction(() => document.getElementById('zvram-router-state-value').textContent === 'Provider ready');
+  assert.ok(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_status').length) > statusCallsWhileWaiting,
+    'automatic recovery is observed without a manual refresh');
+
   await page.locator('#zvram-stop').click();
   await page.waitForFunction(() => document.getElementById('zvram-router-state-value').textContent === 'Provider stopped');
+  const statusCallsAfterManualStop = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_status').length);
+  await page.waitForTimeout(2200);
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_status').length), statusCallsAfterManualStop,
+    'manual stop disables recovery polling');
   const actions = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').map(call => call.args.request.action));
   assert.equal(actions.at(-1), 'router_stop');
   assert.equal(await page.evaluate(() => window.__calls.some(call => ['start_backend', 'stop_backend', 'save_config'].includes(call.command))), false, 'provider buttons do not trigger general manager actions');

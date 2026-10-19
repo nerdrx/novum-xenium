@@ -278,6 +278,8 @@ class EngineManager:
             self.lock.release()
 
     def _ensure_locked(self, model: Model, catalog: Catalog) -> None:
+        if self.stopping.is_set():
+            raise GatewayError("image engine is shutting down")
         if self.process and (self.process.poll() is not None or self.model != model):
             self._stop_locked()
         if self.process is None:
@@ -294,6 +296,9 @@ class EngineManager:
                 raise GatewayError("configured image engine could not be started") from exc
             self.process, self.model, self.port = proc, model, port
             self.last_used = time.monotonic()
+            if self.stopping.is_set():
+                self._stop_locked()
+                raise GatewayError("image engine is shutting down")
             deadline = self.last_used + catalog.startup_timeout
             while time.monotonic() < deadline:
                 if proc.poll() is not None:

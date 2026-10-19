@@ -85,6 +85,8 @@ class ModelHelpers(ModelHelper):
 
 
 class ManagerHelpers:
+    RAM_GUARD_CAN_DISABLE = True
+
     def read_json(self, path, default):
         try:
             return json.loads(Path(path).read_text())
@@ -315,6 +317,27 @@ class BridgeTests(unittest.TestCase):
         preset = self.home / 'router-models.ini'
         self.assertEqual(preset.stat().st_mode & 0o777, 0o600)
         self.assertIn(f'[nx-model-0]\nalias = tiny\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
+
+    def test_ram_guard_opt_out_rejects_older_manager_before_start(self):
+        with mock.patch.object(self.manager_helper, 'RAM_GUARD_CAN_DISABLE', False):
+            with self.assertRaisesRegex(ValueError, 'newer zVram manager'):
+                self.start_router(min_available_mib=0)
+        self.assertEqual(self.manager.starts, [])
+        self.assertEqual(self.manager.stops, [])
+
+    def test_router_ram_floor_opt_out_persists_and_defaults_stay_guarded(self):
+        result = self.start_router(min_available_mib=0, auto_start=False)
+        stored = json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']
+        self.assertEqual(stored['min_available_mib'], 0)
+        self.assertEqual(result['router']['min_available_mib'], 0)
+        self.assertFalse(result['router']['auto_start'])
+        state = json.loads((self.home / 'novum_profiles.json').read_text())
+        self.assertEqual(state['nx-zvram-router']['min_available_mib'], 0)
+        self.start_router()
+        self.assertEqual(json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']['min_available_mib'], 0)
+        for value in (-1, True, '0', 1048577):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.start_router(min_available_mib=value)
 
     def test_router_start_includes_completed_cached_text_models_but_not_image_gguf(self):
         cache = self.base / 'hf-cache'

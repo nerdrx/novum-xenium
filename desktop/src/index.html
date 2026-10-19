@@ -142,8 +142,10 @@
               <label class="zvram-optin"><input id="zvram-compressed" type="checkbox"><span>Enable BP16 paging</span></label>
               <label class="zvram-optin"><input id="zvram-live-control" type="checkbox" checked><span>Enable live VRAM management</span></label>
               <p class="zvram-budget-note" id="zvram-live-control-note">Live VRAM management can snapshot allocations during idle periods. Turn it off to preserve spill performance.</p>
+              <label class="zvram-optin"><input id="zvram-keepalive-low-ram" type="checkbox"><span>Keep running when system RAM is low</span></label>
+              <p class="zvram-budget-note" id="zvram-keepalive-low-ram-note">The operating system may still terminate the provider if memory is exhausted.</p>
               <label class="zvram-optin"><input id="zvram-ignore-swap-guard" type="checkbox" checked><span>Ignore system swap-growth guard</span></label>
-              <p class="zvram-budget-note" id="zvram-swap-guard-note">For this profile only. Requires zVram 0.4.2 or newer; the available-RAM guard remains active.</p>
+              <p class="zvram-budget-note" id="zvram-swap-guard-note">For this profile only. Requires zVram 0.4.2 or newer; independent of the available-RAM guard.</p>
               <p class="zvram-budget-note">These are eligible allocation budgets, not reserved physical VRAM. Native and untracked allocations remain outside the resident limit.</p>
               <details class="zvram-budget-details" id="zvram-budget-details">
                 <summary>Memory budgets (MiB)</summary>

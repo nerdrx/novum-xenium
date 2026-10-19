@@ -26,7 +26,7 @@ import uuid
 _ALLOWED_KEYS = {
     "action", "profile", "model", "alias", "port", "context", "compressed",
     "resident_mib", "cold_mib", "clean_cache_mib", "headroom_mib", "virtual_gib",
-    "ignore_swap_guard",
+    "ignore_swap_guard", "min_available_mib",
     "live_control",
     "mode", "auto_start",
 }
@@ -399,6 +399,7 @@ def _parameters(request, model_helper, backend_checkout, ignore_swap_guard_defau
         "clean_cache_mib": _integer(request, "clean_cache_mib", 1024),
         "headroom_mib": _integer(request, "headroom_mib", 1536),
         "virtual_gib": _integer(request, "virtual_gib", 96),
+        "min_available_mib": _integer(request, "min_available_mib", 16384 if compressed else 4096, 0),
     }
     if values["clean_cache_mib"] > values["cold_mib"]:
         raise ValueError("clean_cache_mib cannot exceed cold_mib")
@@ -420,6 +421,11 @@ def _model_server(model_helper):
             if path.is_file() and os.access(path, os.X_OK):
                 return str(path.resolve())
     return None
+
+
+def _validate_ram_guard(manager_helper, params):
+    if params.get("min_available_mib") == 0 and getattr(manager_helper, "RAM_GUARD_CAN_DISABLE", False) is not True:
+        raise ValueError("Keeping the provider running under low RAM requires a newer zVram manager")
 
 
 def _build_manager_profile(model_helper, name, params):
@@ -451,7 +457,7 @@ def _build_manager_profile(model_helper, name, params):
         "name": name, "priority": "normal", "mode": "native" if mode == "regular" else "wrapped", "command": command,
         "env": overrides, "resident_mib": params["resident_mib"] if params["compressed"] else None,
         "cold_mib": params["cold_mib"],
-        "min_available_mib": 16384 if params["compressed"] else 4096,
+        "min_available_mib": params.get("min_available_mib", 16384 if params["compressed"] else 4096),
         "ignore_swap_guard": params["ignore_swap_guard"] if mode == "zvram" else False,
         "live_control": params["live_control"],
     }
@@ -835,6 +841,7 @@ def _router_status(model_helper, manager_helper, manager, params_state):
     row = next((row for row in manager.list_profiles() if row.get('name') == _ROUTER_NAME), {})
     result.update(state=row.get('state', 'stopped'), lastlog=_clean_text(row.get('lastlog', '')),
                   compressed=params.get('compressed', False), ignore_swap_guard=params.get('ignore_swap_guard', False),
+                  min_available_mib=params.get('min_available_mib', 16384 if params.get('compressed') else 4096),
                   live_control=params.get('live_control', False) is True or params.get('compressed', False) is True)
     result.update(mode=params.get('mode', 'zvram'), auto_start=params.get('auto_start', True) is True)
     result['running'] = _owned_profile_running(manager_helper, manager, _ROUTER_NAME, params)
@@ -1033,6 +1040,7 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
             "name": name, "alias": alias, "port": port, "context": context,
             "compressed": compressed, "running": running, "state": state,
             "ignore_swap_guard": params.get("ignore_swap_guard", False) is True,
+            "min_available_mib": params.get("min_available_mib", 16384 if compressed else 4096),
             "live_control": params.get("live_control", False) is True or compressed,
             "healthy": False,
             "lastlog": _clean_text(row.get("lastlog", "")),
@@ -1060,6 +1068,7 @@ def _status(model_helper, manager_helper, manager, backend_checkout, params_stat
     return {
         "available": True, "installation": installation,
         "ignore_swap_guard_supported": _supports_ignore_swap_guard(installation),
+        "ram_guard_opt_out_supported": getattr(manager_helper, "RAM_GUARD_CAN_DISABLE", False) is True,
         "models": [{key: value for key, value in model.items() if key != "mmproj_path"}
                    for model in models], "profiles": profiles,
         "router": _router_status(model_helper, manager_helper, manager, params_state),
@@ -1140,6 +1149,7 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
                     ignore_swap_guard_default=_supports_ignore_swap_guard(root),
                     cached_models=cached_models,
                 )
+                _validate_ram_guard(manager_helper, params)
                 params.update(router=True, model_ids=[model['name'] for model in models],
                               auto_start=(request.get('auto_start', True) if action == 'router_start'
                                           else request.get('auto_start', previous.get('auto_start', True))))
@@ -1187,6 +1197,7 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
         if action == "save":
             params = _parameters(request, model_helper, backend_checkout,
                                  ignore_swap_guard_default=_supports_ignore_swap_guard(root))
+            _validate_ram_guard(manager_helper, params)
             if params["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
                 raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if params["port"] == backend_port:
@@ -1216,6 +1227,7 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
             saved_request.setdefault("live_control", params.get("compressed", False) is True)
             current = _parameters(saved_request, model_helper, backend_checkout,
                                   ignore_swap_guard_default=_supports_ignore_swap_guard(root))
+            _validate_ram_guard(manager_helper, current)
             if current["ignore_swap_guard"] and not _supports_ignore_swap_guard(root):
                 raise ValueError("Ignoring the swap-growth guard requires zVram 0.4.2 or newer")
             if _owned_profile_running(manager_helper, manager, name, current):

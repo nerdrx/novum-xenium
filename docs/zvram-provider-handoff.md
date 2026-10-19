@@ -133,3 +133,12 @@ that behavior clearly and preserve chat history. Show memory limits as zVram
 eligible allocation budgets, not reserved physical VRAM.
 
 CPU-only bridge checks: `python3 -m unittest -v test_zvram_model.py`.
+
+### Low-RAM keepalive
+
+The provider keeps its available-RAM stop guard by default (4 GiB, or 16 GiB
+with BP16 paging). “Keep running when system RAM is low” is a per-provider
+opt-in that saves `min_available_mib: 0`. It requires a zVram manager advertising
+`RAM_GUARD_CAN_DISABLE`; older installations keep the control disabled. The
+swap-growth guard is independent. The operating system can still terminate
+the process if memory is exhausted.

@@ -5,6 +5,7 @@ const elements = {
   gpu: $('#zvram-gpu'), memory: $('#zvram-memory'), form: $('#zvram-router-form'),
   port: $('#zvram-port'), context: $('#zvram-context'), compressed: $('#zvram-compressed'),
   liveControl: $('#zvram-live-control'),
+  keepaliveLowRam: $('#zvram-keepalive-low-ram'),
   ignoreSwapGuard: $('#zvram-ignore-swap-guard'), start: $('#zvram-start'),
   connect: $('#zvram-connect'), stop: $('#zvram-stop'), legacyList: $('#zvram-legacy-list'),
   routerState: $('#zvram-router-state-value'), routerModels: $('#zvram-router-models'),
@@ -19,6 +20,7 @@ let available = false;
 let routerSupported = false;
 let ignoreSwapGuardSupported = false;
 let liveControlSupported = false;
+let ramGuardOptOutSupported = false;
 let liveControlTouched = false;
 let router = {};
 let configurationDirty = false;
@@ -53,6 +55,7 @@ function updateControls() {
   elements.context.disabled = !usable || active;
   elements.compressed.disabled = !usable || active || !zvramSelected;
   elements.liveControl.disabled = !usable || active || !zvramSelected || !liveControlSupported || elements.compressed.checked;
+  elements.keepaliveLowRam.disabled = !usable || active || !ramGuardOptOutSupported;
   elements.ignoreSwapGuard.disabled = !usable || active || !zvramSelected || !ignoreSwapGuardSupported;
   budgetInputs.forEach(input => { input.disabled = !usable || active || !zvramSelected || !elements.compressed.checked; });
   for (const button of elements.legacyList.querySelectorAll('button[data-legacy-profile]')) {
@@ -60,8 +63,11 @@ function updateControls() {
     button.disabled = !usable || !profile || profile.running !== true;
   }
   $('#zvram-swap-guard-note').textContent = ignoreSwapGuardSupported
-    ? 'For this router only. The available-RAM guard remains active.'
-    : 'Requires zVram 0.4.2 or newer. The available-RAM guard remains active.';
+    ? 'For this router only. Independent of the available-RAM guard.'
+    : 'Requires zVram 0.4.2 or newer. Independent of the available-RAM guard.';
+  $('#zvram-keepalive-low-ram-note').textContent = ramGuardOptOutSupported
+    ? 'The operating system may still terminate the provider if memory is exhausted.'
+    : 'This installation cannot disable its available-RAM guard. Choose a newer zVram installation to enable this option.';
   $('#zvram-live-control-note').textContent = liveControlSupported
     ? elements.compressed.checked
       ? 'BP16 paging enables live VRAM management automatically.'
@@ -103,6 +109,7 @@ function renderStatus(result) {
   available = result.available === true;
   routerSupported = result.router_supported === true;
   ignoreSwapGuardSupported = result.ignore_swap_guard_supported === true;
+  ramGuardOptOutSupported = result.ram_guard_opt_out_supported === true;
   const previouslySupported = liveControlSupported;
   liveControlSupported = result.live_control_supported === true;
   router = result.router && typeof result.router === 'object' ? result.router : {};
@@ -118,6 +125,7 @@ function renderStatus(result) {
   else if (!liveControlSupported) elements.liveControl.checked = false;
   else if (!previouslySupported) elements.liveControl.checked = true;
   if (typeof router.compressed === 'boolean') elements.compressed.checked = router.compressed;
+  elements.keepaliveLowRam.checked = ramGuardOptOutSupported && router.min_available_mib === 0;
   if (typeof result.installation === 'string') elements.installation.textContent = result.installation || 'No installation selected.';
   models = Array.isArray(result.models) ? result.models.filter(model => model && typeof model.name === 'string') : [];
   legacyProfiles = Array.isArray(result.profiles)
@@ -223,6 +231,7 @@ function buildRouterRequest() {
     auto_start: elements.autoStart.checked, port, context,
     compressed: elements.modeZvram.checked && elements.compressed.checked,
     live_control: elements.modeZvram.checked && (elements.compressed.checked || elements.liveControl.checked),
+    min_available_mib: elements.keepaliveLowRam.checked ? 0 : elements.modeZvram.checked && elements.compressed.checked ? 16384 : 4096,
     ignore_swap_guard: elements.modeZvram.checked && ignoreSwapGuardSupported && elements.ignoreSwapGuard.checked,
   };
   if (request.compressed) {
@@ -270,7 +279,7 @@ elements.modeZvram.addEventListener('change', () => {
   configurationDirty = true;
   updateControls();
 });
-for (const input of [elements.modeRegular, elements.autoStart, elements.port, elements.context, elements.compressed, elements.ignoreSwapGuard, ...budgetInputs]) {
+for (const input of [elements.modeRegular, elements.autoStart, elements.port, elements.context, elements.compressed, elements.keepaliveLowRam, elements.ignoreSwapGuard, ...budgetInputs]) {
   input.addEventListener('change', () => { configurationDirty = true; updateControls(); });
 }
 elements.choose.addEventListener('click', async () => {

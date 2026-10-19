@@ -4,7 +4,7 @@ set -eu
 
 target_arch=${1:-$(uname -m)}
 out=${2:-./build/zvram}
-commit=95fed253f4937b5ee9f5a87cf4624a053a8bc7a6
+commit=c0c98434c329b39614cf92dc2e34cf053ed3a8df
 src=$(mktemp -d)
 trap 'rm -rf "$src"' EXIT HUP INT TERM
 
@@ -38,7 +38,9 @@ for file in libzvram_layer.so zvram-codecs.json bp16.spv bp16-encode-analyze.spv
 done
 sed "s|$build/libzvram_layer.so|/opt/zvram/build/libzvram_layer.so|" \
     "$build/VK_LAYER_NX_zvram.json" > "$out/build/VK_LAYER_NX_zvram.json"
-for file in zvram zvram_control.py zvram_manager.py zvram_model.py VERSION; do
+for file in zvram VERSION; do
     cp "$src/$file" "$out/$file"
 done
-printf '0.4.26+95fed25\n' > "$out/VERSION"
+for file in zvram_control.py zvram_manager.py zvram_model.py zvram_ui.py; do
+    cp "$src/src/python/$file" "$out/$file"
+done

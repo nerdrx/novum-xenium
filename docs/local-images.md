@@ -8,7 +8,8 @@ is exposed, or explicitly in the manager. Both use the same upstream server API 
 accept model weights as runtime arguments. The upstream MIT license is at
 `/usr/share/licenses/stable-diffusion.cpp/LICENSE` in the image.
 
-Linux x86_64 images also bundle zVram `95fed253f4937b5ee9f5a87cf4624a053a8bc7a6`
+Linux x86_64 images also bundle zVram 0.4.31, pinned to
+`c0c98434c329b39614cf92dc2e34cf053ed3a8df`,
 and expose `/usr/local/bin/sd-server-zvram`. The layer uses pinned Vulkan 1.4.341
 headers so newer command lookups reach its typed forwarding hooks. When selected in Cookbook alongside
 Vulkan, it launches `sd-server-vulkan` through zVram's local recovery mode,

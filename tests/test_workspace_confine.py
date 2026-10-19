@@ -726,6 +726,14 @@ async def test_glob_confined_e2e(ws, admin):
     assert ws not in r["output"]
     assert "/workspace/found.py" in r["output"]
 
+    for pattern in (os.path.join(ws, "*.py"), "/workspace/*.py"):
+        _, absolute = await execute_tool_block(
+            _block("glob", json.dumps({"pattern": pattern})), owner="a", workspace=ws,
+        )
+        assert absolute["exit_code"] == 0
+        assert "/workspace/found.py" in absolute["output"]
+        assert "No files" not in absolute["output"]
+
     # a secret outside the workspace must not be discoverable via glob.
     # realpath so this directory and os.path.realpath(ws) below sit in the same
     # resolved tree. On macOS /tmp is a symlink to /private/tmp, and mixing a

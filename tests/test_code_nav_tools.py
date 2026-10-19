@@ -1,5 +1,6 @@
 """Tests for the code-navigation tools (grep, glob, ls) + read_file line range."""
 import os
+import json
 import shutil
 import asyncio
 import tempfile
@@ -160,6 +161,15 @@ def test_glob_literal_in_subdir(repo):
     r = _run("glob", f'{{"pattern": "b.txt", "path": "{repo}"}}')
     assert r["exit_code"] == 0
     assert "b.txt" in r["output"]
+
+
+def test_absolute_glob_stays_inside_explicit_search_root(repo):
+    inside = _run("glob", json.dumps({"pattern": os.path.join(repo, "sub", "*.txt"), "path": repo}))
+    assert inside["exit_code"] == 0
+    assert "b.txt" in inside["output"]
+    outside = _run("glob", json.dumps({"pattern": os.path.join(repo, "*.py"), "path": os.path.join(repo, "sub")}))
+    assert outside["exit_code"] == 0
+    assert "No files" in outside["output"]
 
 
 def test_glob_multi_segment_single_star(repo):

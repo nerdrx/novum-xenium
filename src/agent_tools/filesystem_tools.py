@@ -13,7 +13,7 @@ import tempfile
 from contextlib import ExitStack
 from typing import Optional, Dict, Any, Tuple, List
 
-from src.constants import MAX_READ_CHARS, MAX_DIFF_LINES, MAX_OUTPUT_CHARS
+from src.constants import MAX_READ_CHARS, MAX_DIFF_LINES, MAX_OUTPUT_CHARS, WORKSPACE_MOUNT
 from src.agent_tools.syntax_feedback import syntax_feedback
 from src.path_confinement import is_inside
 
@@ -1161,6 +1161,8 @@ class GlobTool:
             _is_sensitive_path,
             _resolve_tool_path,
             _resolve_search_root,
+            _resolve_tool_path_in_workspace,
+            agent_cwd,
             _truncate,
         )
         args = {}
@@ -1196,6 +1198,22 @@ class GlobTool:
             rbase = os.path.realpath(base)
             snapshot = _control_plane_snapshot()
             norm_pat = pattern.replace("\\", "/")
+            if os.path.isabs(norm_pat):
+                parts = norm_pat.split("/")
+                first_magic = next((i for i, part in enumerate(parts)
+                                    if any(c in part for c in "*?[")), len(parts) - 1)
+                prefix = "/".join(parts[:first_magic]) or "/"
+                try:
+                    # Resolve only the existing literal prefix. A bound search
+                    # authorizes descendants, not a nonexistent wildcard path.
+                    if prefix == WORKSPACE_MOUNT or prefix.startswith(WORKSPACE_MOUNT + "/"):
+                        prefix = _resolve_tool_path_in_workspace(agent_cwd(), prefix)
+                    prefix = _resolve_tool_path(prefix)
+                    absolute_pattern = os.path.join(prefix, *parts[first_magic:])
+                except (OSError, ValueError):
+                    absolute_pattern = None
+                if absolute_pattern and is_inside(rbase, absolute_pattern):
+                    norm_pat = os.path.relpath(absolute_pattern, rbase).replace(os.sep, "/")
             # Fast path: literal pattern (no wildcards) → direct path lookup.
             if not any(c in norm_pat for c in "*?["):
                 cand = os.path.realpath(os.path.join(base, norm_pat))

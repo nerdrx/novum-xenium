@@ -129,6 +129,81 @@ def test_no_rounds_exhausted_on_normal_finish(monkeypatch):
     assert not any(e.get("type") == "rounds_exhausted" for e in events), events
 
 
+@pytest.mark.parametrize(
+    ("request_path", "proposed_path", "expected_path"),
+    [
+        (
+            "src/python/zvram_manager.py",
+            "/workspace/zVram/src/python/zvram_manager.py",
+            "/workspace/zVram/src/python/zvram_manager.py",
+        ),
+        (
+            "zVram/src/python/zvram_manager.py",
+            "/workspace/zVram/src/python/zvram_manager.py",
+            "/workspace/zVram/src/python/zvram_manager.py",
+        ),
+        (
+            "/workspace/zVram/src/python/zvram_manager.py",
+            "/workspace/old/src/python/zvram_manager.py",
+            "/workspace/zVram/src/python/zvram_manager.py",
+        ),
+    ],
+)
+def test_read_path_recovery_preserves_workspace_anchor_and_range(
+    monkeypatch, tmp_path, request_path, proposed_path, expected_path,
+):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
+    source = tmp_path / "zVram" / "src" / "python" / "zvram_manager.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    executed = []
+
+    @authoritative_executor
+    async def _fake_exec(block, *args, **kwargs):
+        executed.append(block)
+        return "read_file", {"output": "VALUE = 1\n", "exit_code": 0}
+
+    async def _fake_stream(_candidates, _messages, **kwargs):
+        if not executed:
+            request_factory = kwargs.get("candidate_request_factory")
+            if request_factory is not None:
+                request = await request_factory(0, *_candidates[0])
+                offered = request.get("kwargs", {}).get("tools") or []
+                assert any(
+                    schema.get("function", {}).get("name") == "read_file"
+                    for schema in offered
+                ), offered
+            event = {
+                "type": "tool_calls",
+                "calls": [{
+                    "id": "read-source",
+                    "name": "read_file",
+                    "arguments": json.dumps({
+                        "path": proposed_path, "offset": 11, "limit": 7,
+                    }),
+                }],
+            }
+            yield f"data: {json.dumps(event)}\n\n"
+        else:
+            yield f'data: {json.dumps({"delta": "Review complete."})}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "execute_tool_block", _fake_exec, raising=False)
+    monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+    _types(_collect(al.stream_agent_loop(
+        "http://x/v1", "gpt-4o",
+        [{"role": "user", "content": f"Read {request_path} and summarize the source."}],
+        max_rounds=3,
+        relevant_tools={"read_file"},
+        workspace=str(tmp_path),
+    )))
+
+    assert len(executed) == 1
+    dispatched = json.loads(executed[0].content)
+    assert dispatched == {"path": expected_path, "offset": 11, "limit": 7}
+
+
 @pytest.mark.parametrize("zero_cap", [0, "0"])
 def test_zero_round_cap_runs_until_normal_finish(monkeypatch, zero_cap):
     _patch_common(monkeypatch)

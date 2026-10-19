@@ -17191,6 +17191,35 @@ def _first_explicit_workspace_file(text: str) -> str:
     return _clean_file_edit_value(str(match.group("path") or "").strip().rstrip("."))
 
 
+def _stale_read_path_correction(requested_path: str, proposed_path: str, workspace: Optional[str]) -> str:
+    """Return the user-named path only when a same-name proposal resolves elsewhere."""
+    requested = str(requested_path or "").strip()
+    proposed = str(proposed_path or "").strip()
+    if (not requested or requested == proposed
+            or Path(requested).name != Path(proposed).name):
+        return ""
+    if workspace:
+        try:
+            from src.tool_execution import _resolve_tool_path_in_workspace
+            resolved_requested = _resolve_tool_path_in_workspace(workspace, requested)
+            resolved_proposed = _resolve_tool_path_in_workspace(workspace, proposed)
+            if resolved_requested == resolved_proposed:
+                return ""
+            # A user may name a file relative to a repository nested in the
+            # workspace. Preserve the model's anchored expansion when that
+            # relative path is a safe suffix of the confined proposal.
+            requested_parts = Path(requested).parts
+            if not Path(requested).is_absolute() and ".." not in requested_parts:
+                workspace_root = Path(workspace).resolve()
+                proposed_relative = Path(resolved_proposed).relative_to(workspace_root)
+                if (len(requested_parts) <= len(proposed_relative.parts)
+                        and proposed_relative.parts[-len(requested_parts):] == requested_parts):
+                    return ""
+        except (OSError, ValueError, RuntimeError):
+            pass
+    return requested
+
+
 def _read_file_block_path(content) -> str:
     """Path argument of a read_file tool block, JSON args or bare text."""
     text = str(content or "").strip()
@@ -35511,22 +35540,27 @@ async def stream_agent_loop(
 
             if block.tool_type == "read_file":
                 _requested_file = _first_explicit_workspace_file(_last_user)
+                _read_block_args = None
                 try:
                     _read_block_args = json.loads(full_command or "{}")
-                    _read_block_path = str(
-                        _read_block_args.get("path")
-                        if isinstance(_read_block_args, dict)
-                        else full_command
-                    )
+                    if not isinstance(_read_block_args, dict):
+                        _read_block_args = None
                 except (TypeError, json.JSONDecodeError):
-                    _read_block_path = full_command
-                if (
-                    _requested_file
-                    and _read_block_path != _requested_file
-                    and Path(_requested_file).name == Path(_read_block_path).name
-                ):
-                    block = type(block)(block.tool_type, _requested_file)
-                    full_command = _requested_file
+                    _read_block_args = None
+                _read_block_path = (
+                    str(_read_block_args.get("path") or "")
+                    if _read_block_args is not None else full_command
+                )
+                _corrected_read_path = _stale_read_path_correction(
+                    _requested_file, _read_block_path, workspace,
+                )
+                if _corrected_read_path:
+                    if _read_block_args is not None:
+                        _read_block_args["path"] = _corrected_read_path
+                        full_command = json.dumps(_read_block_args, ensure_ascii=False)
+                    else:
+                        full_command = _corrected_read_path
+                    block = type(block)(block.tool_type, full_command)
                     cmd_display = _requested_file
                     logger.info(
                         "Normalized stale read path to user-named file: %s",

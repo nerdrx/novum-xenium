@@ -19,10 +19,11 @@ def _use_checked_coding_workflow(text: str, workspace: str | None) -> bool:
         return False
     text = re.sub(r"https?://[^\s<>]+", " ", str(text or ""), flags=re.I)
     # Keep a positive instruction after a restriction, including comma-separated
-    # requests: "Don't rewrite everything, fix main.py".
+    # requests: "Don't rewrite everything, fix main.py". A comma followed
+    # by a final ", or" still belongs to the coordinated restriction.
     text = re.sub(
         r"\b(?:do\s+not|don't|never)\b(?:(?![;.!?\n]|\b(?:but|instead|except)\b|,\s*(?="
-        + _ACTION + r")).)*", " ", text, flags=re.I,
+        + _ACTION + r")(?![^;.!?\n]*,\s*or\b)).)*", " ", text, flags=re.I,
     )
     # Questions about making changes are explanations, not requests to edit.
     text = re.sub(

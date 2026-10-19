@@ -17,6 +17,8 @@ from src.checked_coding_intent import _use_checked_coding_workflow
     'Do not edit unrelated files; implement the function.',
     'Never change the app but fix helper.ts.',
     'Review the code and fix the bug.',
+    'Do not clone, write files, or run code; fix main.py.',
+    'Do not clone, write files, or run code, but fix main.py.',
 ])
 def test_coding_changes_are_checked(text):
     assert _use_checked_coding_workflow(text, '/workspace')
@@ -31,6 +33,13 @@ def test_coding_changes_are_checked(text):
     'Review the code for bugs.',
     'Inspect the repository and report findings.',
     'Run the tests.',
+    'Read main.py. Do not clone, write files, or run code.',
+    "Don't clone, write files, or run code.",
+    'Never clone, write files, or run code.',
+    ('In the existing zVram checkout, use file tools to read VERSION and '
+     'src/python/zvram_manager.py. Report the exact VERSION text and the literal '
+     'boolean assigned to RAM_GUARD_CAN_DISABLE. Do not clone, write files, '
+     'or run code.'),
     'Convert this video with ffmpeg.',
     'Create a movie from these clips.',
     'Write a summary of the project.',

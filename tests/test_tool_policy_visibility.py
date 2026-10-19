@@ -142,6 +142,8 @@ def test_recursive_delete_of_nested_git_project_is_blocked_during_repair(tmp_pat
         latest_user_request="Continue fixing the Git push issue.",
     )
     assert reason and "Git project root" in reason
+    assert "fetch/checkout" in reason
+    assert "without overwriting existing work" in reason
 
 
 @pytest.mark.parametrize("command", [

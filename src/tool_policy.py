@@ -408,7 +408,10 @@ def workspace_project_deletion_conflict(
                     "This recursive delete targets the workspace or a Git project root. "
                     "Preserve source and repair the existing project in place. Limit "
                     "cleanup to generated directories unless the current user request "
-                    "explicitly directs deleting the whole project."
+                    "explicitly directs deleting the whole project. If a clone destination "
+                    "already exists, inspect its HEAD, remote, and files; recover an empty, "
+                    "unborn checkout with fetch/checkout, or clone into an unused sibling "
+                    "directory without overwriting existing work."
                 )
     return None
 

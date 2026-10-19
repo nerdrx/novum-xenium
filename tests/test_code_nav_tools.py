@@ -343,6 +343,9 @@ def test_workspace_reports_existing_child_projects_without_rebinding(repo):
         assert 'linked-project' not in candidates
         assert 'node_modules' not in candidates
         assert 'cd affects only that single shell call' in result['output']
+        assert 'A .git marker alone does not prove a complete checkout' in result['output']
+        assert 'Do not delete existing projects to retry a clone' in result['output']
+        assert 'blob-filtered fetch and sparse checkout' in result['output']
         assert get_active_workspace() == repo
         missing = _run('read_file', os.path.join(repo, 'package.json'))
         assert missing['exit_code'] == 1

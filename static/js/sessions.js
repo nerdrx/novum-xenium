@@ -1340,6 +1340,33 @@ function _dateBucketLabel(value) {
   return d.toLocaleDateString([], sameYear ? { month: 'long', day: 'numeric' } : { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
+let _renderedDateBucketDay = '';
+let _dateBucketMidnightTimer = null;
+
+function _localDateBucketDay(date = new Date()) {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function _scheduleDateBucketRollover() {
+  if (_dateBucketMidnightTimer !== null) clearTimeout(_dateBucketMidnightTimer);
+  const nextMidnight = new Date();
+  nextMidnight.setHours(24, 0, 0, 0);
+  _dateBucketMidnightTimer = setTimeout(() => {
+    _dateBucketMidnightTimer = null;
+    if (_renderedDateBucketDay && _renderedDateBucketDay !== _localDateBucketDay()) renderSessionList();
+    else if (_renderedDateBucketDay) _scheduleDateBucketRollover();
+  }, Math.max(0, nextMidnight.getTime() - Date.now()));
+}
+
+function _refreshDateBucketsIfDayChanged() {
+  if (_renderedDateBucketDay && _renderedDateBucketDay !== _localDateBucketDay()) renderSessionList();
+}
+
+window.addEventListener('focus', _refreshDateBucketsIfDayChanged);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') _refreshDateBucketsIfDayChanged();
+});
+
 function _sessionBucketDate(s) {
   return s.last_message_at || s.updated_at || s.created_at || '';
 }
@@ -1775,6 +1802,8 @@ function _renderSessionListImpl() {
 
 /** Shared post-render: highlight, keyboard nav, swipe hint, drag sort */
 function _postRenderSessionList(list) {
+  _renderedDateBucketDay = _localDateBucketDay();
+  _scheduleDateBucketRollover();
   if (currentSessionId) {
     const activeEl = document.querySelector(`.list-item[data-session-id="${currentSessionId}"]`);
     if (activeEl) {

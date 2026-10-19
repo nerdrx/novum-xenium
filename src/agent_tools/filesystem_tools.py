@@ -1733,6 +1733,8 @@ def workspace_project_context(workspace=None):
         "Workspace directory: " + json.dumps(root) + ". "
         "Every shell call starts here; cd affects only that single shell call. "
         "File tools resolve relative paths here, independently of earlier shell commands. "
+        "File tools cannot read shell-created paths outside this workspace; clone repositories "
+        "inside it when file tools will inspect them. "
         "Use the existing project's full path for file tools and cd to it in each shell call. "
         "A missing manifest at the workspace root does NOT mean the project is missing. "
         "Inspect existing project folders before creating a new scaffold; when the target is "

@@ -3,6 +3,7 @@
 import contextlib
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
+import http.client
 import importlib.util
 import inspect
 import json
@@ -28,7 +29,7 @@ _ALLOWED_KEYS = {
     "resident_mib", "cold_mib", "clean_cache_mib", "headroom_mib", "virtual_gib",
     "ignore_swap_guard", "min_available_mib",
     "live_control",
-    "mode", "auto_start",
+    "mode", "auto_start", "enable_existing",
 }
 _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _ALIAS_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,128}\Z")
@@ -208,6 +209,8 @@ def _request_object(value):
     action = value.get("action")
     if action not in {"status", "save", "start", "stop", "register", "router_start", "router_stop", "router_register", "router_configure", "router_sync"}:
         raise ValueError("Unsupported zVram action")
+    if "enable_existing" in value and type(value["enable_existing"]) is not bool:
+        raise ValueError("enable_existing must be a boolean")
     return {key: item for key, item in value.items() if item is not None}
 
 
@@ -804,7 +807,8 @@ def _sync_router_models(model_helper, manager_helper, manager, params, params_st
     params.update(model_ids=expected)
     params_state[_ROUTER_NAME] = params
     _write_state(manager, params_state)
-    _register_router(model_helper, params, backend_checkout, cookie_path, backend_port)
+    _register_router(model_helper, params, backend_checkout, cookie_path, backend_port,
+                     enable_existing=False)
     return {'added': added, 'models': len(expected)}
 
 
@@ -859,7 +863,8 @@ def _router_status(model_helper, manager_helper, manager, params_state):
     return result
 
 
-def _register_router(model_helper, params, backend_checkout, cookie_path, backend_port):
+def _register_router(model_helper, params, backend_checkout, cookie_path, backend_port,
+                     enable_existing=True):
     models = _router_inventory(params)
     ids = [model['id'] for model in models]
     base = f'http://127.0.0.1:{params["port"]}/v1'
@@ -871,8 +876,11 @@ def _register_router(model_helper, params, backend_checkout, cookie_path, backen
     if existing:
         if existing.get('name') not in ('Local models', 'zVram · Local models'):
             raise ValueError('This port belongs to another provider')
+        update = {'name': name, 'pinned_models': ids}
+        if enable_existing:
+            update['is_enabled'] = True
         endpoint = model_helper._request(api + '/' + urllib.parse.quote(str(existing['id']), safe=''), cookie,
-                                        'PATCH', {'name': name, 'is_enabled': True, 'pinned_models': ids})
+                                        'PATCH', update)
     else:
         endpoint = model_helper._request(api, cookie, 'POST', {'name': name, 'base_url': base,
             'endpoint_kind': 'local', 'model_type': 'llm', 'skip_probe': 'false',
@@ -910,6 +918,8 @@ def _local_json(url, timeout=0.4):
     try:
         with opener.open(url, timeout=timeout) as response:
             payload = response.read(1024 * 1024 + 1)
+            if response.length not in (None, 0):
+                raise ValueError("Local health response is invalid")
         if len(payload) > 1024 * 1024:
             raise ValueError("Local model response is too large")
         try:
@@ -918,6 +928,8 @@ def _local_json(url, timeout=0.4):
             return payload.decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         raise ValueError(f"Local health request failed (HTTP {exc.code})") from None
+    except http.client.HTTPException:
+        raise ValueError("Local health response is invalid") from None
 
 
 def _port_is_free(port):
@@ -1190,7 +1202,10 @@ def dispatch(root, backend_checkout, cookie_path, backend_port, request, *, help
                 else:
                     if not _owned_profile_running(manager_helper, manager, _ROUTER_NAME, params):
                         raise ValueError('Start the owned model router before connecting it')
-                    _register_router(model_helper, params, backend_checkout, cookie_path, backend_port)
+                    _register_router(
+                        model_helper, params, backend_checkout, cookie_path, backend_port,
+                        enable_existing=request.get('enable_existing', True),
+                    )
             status = _status(model_helper, manager_helper, manager, backend_checkout, params_state, str(root))
             if action in ('router_start', 'router_configure'):
                 status['started' if action == 'router_start' else 'configured'] = True

@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+import socket
 import tempfile
 import subprocess
 import sys
@@ -281,6 +282,52 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(local_json.call_count, 2)
         self.assertEqual(local_json.call_args.args[0], 'http://127.0.0.1:8097/models?reload=1')
         self.assertEqual(register.call_args.args[1]['model_ids'], ['tiny', 'org/repo:Model-Q4_K_M'])
+        self.assertFalse(register.call_args.kwargs['enable_existing'])
+
+    def test_router_registration_preserves_disabled_owned_endpoint_in_background_mode(self):
+        existing = {'id': 'owned', 'name': 'zVram · Local models',
+                    'base_url': 'http://127.0.0.1:8097/v1', 'is_enabled': False}
+        params = {'mode': 'zvram', 'port': 8097, 'model_ids': ['tiny']}
+        api = 'http://127.0.0.1:8000/api/model-endpoints'
+
+        def register(endpoints, **kwargs):
+            helper = mock.Mock()
+            helper.session_cookie.return_value = 'session'
+            created = {'id': 'created', 'name': 'zVram · Local models',
+                       'base_url': 'http://127.0.0.1:8097/v1'}
+            helper._request.side_effect = [endpoints, existing if endpoints else created, {}]
+            with (mock.patch.object(bridge, '_router_inventory', return_value=[{'id': 'tiny'}]),
+                  mock.patch.object(bridge, '_local_json', return_value={'data': []})):
+                bridge._register_router(helper, params, self.checkout, self.base / 'cookie', 8000,
+                                        **kwargs)
+            return helper._request.call_args_list
+
+        background_calls = register([existing], enable_existing=False)
+        self.assertEqual(background_calls[1].args[3], {
+            'name': 'zVram · Local models', 'pinned_models': ['tiny'],
+        })
+        explicit_calls = register([existing])
+        self.assertTrue(explicit_calls[1].args[3]['is_enabled'])
+        missing_calls = register([], enable_existing=False)
+        self.assertEqual(missing_calls[1].args[2], 'POST')
+        self.assertTrue(missing_calls[1].kwargs['form'])
+
+        foreign = {'id': 'foreign', 'name': 'Custom provider',
+                   'base_url': 'http://127.0.0.1:8097/v1'}
+        helper = mock.Mock()
+        helper.session_cookie.return_value = 'session'
+        helper._request.return_value = [foreign]
+        with (mock.patch.object(bridge, '_router_inventory', return_value=[{'id': 'tiny'}]),
+              self.assertRaisesRegex(ValueError, 'belongs to another provider')):
+            bridge._register_router(helper, params, self.checkout, self.base / 'cookie', 8000,
+                                    enable_existing=False)
+        self.assertEqual(helper._request.call_count, 1)
+
+    def test_enable_existing_request_flag_is_strictly_boolean(self):
+        self.assertFalse(bridge._request_object({'action': 'router_register', 'enable_existing': False})[
+            'enable_existing'])
+        with self.assertRaisesRegex(ValueError, 'enable_existing must be a boolean'):
+            bridge._request_object({'action': 'router_register', 'enable_existing': 0})
 
     def router_command(self, model, alias, **options):
         command = ['zvram']
@@ -654,7 +701,7 @@ class BridgeTests(unittest.TestCase):
         output = io.StringIO()
         with (mock.patch.object(bridge, '_load_runtime', return_value=('model', 'manager')),
               mock.patch.object(bridge, 'dispatch', side_effect=[
-                  ValueError('router not ready'), {'router_sync': {'added': 0, 'models': 1}},
+                  ValueError('Local health response is invalid'), {'router_sync': {'added': 0, 'models': 1}},
               ]) as dispatch,
               mock.patch.object(bridge.time, 'sleep', side_effect=[None, KeyboardInterrupt]),
               redirect_stdout(output)):
@@ -665,7 +712,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(dispatch.call_args.kwargs['helpers'], ('model', 'manager'))
         lines = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(lines, [
-            {'sync': 'pending', 'error': 'router not ready'},
+            {'sync': 'pending', 'error': 'Local health response is invalid'},
             {'sync': 'ok', 'added': 0, 'models': 1},
         ])
         self.assertEqual(dispatch.call_count, 2)
@@ -800,6 +847,47 @@ class BridgeTests(unittest.TestCase):
         with mock.patch.object(bridge, "_local_json", return_value={"status": "bad"}) as request:
             self.assertFalse(bridge._health(None, "the-alias", 8097))
             request.assert_called_once()
+
+    def test_local_json_normalizes_malformed_status_and_incomplete_http_body(self):
+        for response in (
+            b"HTTP/1.1 not-a-status\r\nContent-Length: 0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{}",
+        ):
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener.settimeout(2)
+
+            def respond():
+                connection, _ = listener.accept()
+                with connection:
+                    connection.settimeout(2)
+                    connection.recv(4096)
+                    connection.sendall(response)
+                    connection.shutdown(socket.SHUT_WR)
+
+            worker = threading.Thread(target=respond)
+            worker.start()
+            try:
+                with self.subTest(response=response):
+                    with self.assertRaisesRegex(ValueError, "^Local health response is invalid$"):
+                        bridge._local_json(f"http://127.0.0.1:{listener.getsockname()[1]}/health")
+            finally:
+                listener.close()
+                worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+
+    def test_router_status_and_watch_survive_malformed_local_http_response(self):
+        params = {'nx-zvram-router': {
+            'router': True, 'mode': 'zvram', 'port': 8097, 'model_ids': ['tiny'],
+        }}
+        with (mock.patch.object(bridge, '_owned_profile_running', return_value=True),
+              mock.patch.object(bridge, '_local_json', side_effect=ValueError('Local health response is invalid'))):
+            status = bridge._router_status(
+                self.model_helper, self.manager_helper, self.manager, params,
+            )
+        self.assertTrue(status['running'])
+        self.assertFalse(status['healthy'])
 
     def test_save_then_status_exposes_typed_owned_profile(self):
         result = self.dispatch(self.save_request())

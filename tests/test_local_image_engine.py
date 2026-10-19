@@ -23,7 +23,7 @@ def test_cache_scan_does_not_block_controls_or_duplicate_scans(tmp_path, monkeyp
         return []
     engine = LocalImageEngine(tmp_path, scanner=scanner)
     monkeypatch.setattr(engine, "_binary", lambda: ("/usr/local/bin/sd-server", "cpu"))
-    monkeypatch.setattr(engine, "register_endpoint", lambda: None)
+    monkeypatch.setattr(engine, "register_endpoint", lambda **_kwargs: None)
     scan = threading.Thread(target=engine.refresh)
     scan.start()
     try:
@@ -58,7 +58,7 @@ def _patch_start_without_worker(monkeypatch, engine):
     monkeypatch.setattr(socket, "socket", FakeSocket)
     monkeypatch.setattr(engine, "_binary", lambda: ("/unused/sd-server", "cpu"))
     monkeypatch.setattr(engine, "health", lambda: {})
-    monkeypatch.setattr(engine, "register_endpoint", lambda: None)
+    monkeypatch.setattr(engine, "register_endpoint", lambda **_kwargs: None)
     monkeypatch.setattr(
         "src.local_image_engine.subprocess.Popen",
         lambda *_args, **_kwargs: launches.append(FakeProcess()) or launches[-1],
@@ -191,6 +191,111 @@ def test_auto_start_disabled_defers_without_manual_intent(tmp_path, monkeypatch)
         engine._start_if_desired()
         assert engine.desired_running is None and launches == []
     finally:
+        engine.close()
+
+
+def test_endpoint_registration_preserves_user_preference_and_explicit_lifecycle(tmp_path, monkeypatch):
+    import socket as socket_module
+    from core import database
+
+    class Column:
+        def __eq__(self, value): return ("eq", value)
+
+    class Endpoint:
+        id = Column()
+        def __init__(self, **values): self.__dict__.update(values)
+
+    class Query:
+        def __init__(self, db): self.db = db
+        def filter(self, *_args): return self
+        def first(self): return self.db.endpoint
+
+    class DB:
+        endpoint = None
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def query(self, _model): return Query(self)
+        def add(self, endpoint): self.endpoint = endpoint
+        def commit(self): pass
+
+    db = DB()
+    monkeypatch.setattr(database, "SessionLocal", lambda: db)
+    monkeypatch.setattr(database, "ModelEndpoint", Endpoint)
+
+    empty_engine = LocalImageEngine(tmp_path / "empty")
+    empty_engine.models = []
+    empty_engine._select_default = lambda *_args: pytest.fail("empty catalog must skip default selection")
+    empty_engine.register_endpoint()
+    assert db.endpoint.is_enabled is True and db.endpoint.cached_models == "[]"
+    empty_engine.close()
+    db.endpoint = None
+
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    engine._select_default = lambda *_args: None
+    monkeypatch.setattr(engine, "_binary", lambda: ("/unused/sd-server", "cpu"))
+    monkeypatch.setattr("src.local_image_engine.image_catalog", lambda *_args: ([{"id": "sd-cpp-local"}], []))
+    engine.refresh(rows=[])
+    assert db.endpoint.is_enabled is True  # A newly discovered endpoint is enabled by default.
+
+    db.endpoint.is_enabled = False  # Simulate the existing admin endpoint-toggle API.
+    engine.refresh(rows=[])
+    assert db.endpoint.is_enabled is False  # A periodic catalog refresh preserves the user's choice.
+
+    class FakeSocket:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def setsockopt(self, *_args): pass
+        def bind(self, *_args): pass
+
+    class FakeProcess:
+        def __init__(self): self.returncode = None
+        def poll(self): return self.returncode
+        def terminate(self): self.returncode = 0
+        def kill(self): self.returncode = -9
+        def wait(self, **_kwargs): return self.returncode
+
+    launches = []
+    stale_health_entered, release_stale_health = threading.Event(), threading.Event()
+    health_calls = []
+    monkeypatch.setattr(socket_module, "socket", FakeSocket)
+    monkeypatch.setattr("src.local_image_engine.subprocess.Popen",
+                        lambda *_args, **_kwargs: launches.append(FakeProcess()) or launches[-1])
+    def health():
+        health_calls.append(True)
+        if len(health_calls) == 3:
+            stale_health_entered.set()
+            assert release_stale_health.wait(3)
+        return {}
+    monkeypatch.setattr(engine, "health", health)
+    try:
+        # Background startup/recovery must retain a user-disabled endpoint.
+        engine.desired_running = True
+        engine._start_if_desired()
+        assert len(launches) == 1 and db.endpoint.is_enabled is False
+
+        # An explicit Start opts the endpoint back in, including if already running.
+        engine.start()
+        assert engine.process is launches[0] and db.endpoint.is_enabled is True
+
+        # Explicit Stop opts it out; a newer explicit Start owns the next child and opts back in.
+        engine.stop(disable_endpoint=True)
+        assert launches[0].poll() is not None and db.endpoint.is_enabled is False
+
+        stale_start = threading.Thread(target=engine.start)
+        stale_start.start()
+        assert stale_health_entered.wait(1)
+        engine.stop(disable_endpoint=True)
+        release_stale_health.set()
+        stale_start.join(2)
+        assert not stale_start.is_alive()
+        assert engine.process is None and db.endpoint.is_enabled is False
+
+        engine.start()
+        assert len(launches) == 3 and engine.process is launches[2]
+        assert launches[1].poll() is not None
+        assert launches[2].poll() is None and db.endpoint.is_enabled is True
+    finally:
+        release_stale_health.set()
         engine.close()
 
 
@@ -358,7 +463,7 @@ def test_stop_and_configure_during_readiness_do_not_block_or_publish(tmp_path, m
         return {}
 
     monkeypatch.setattr(engine, "health", health)
-    monkeypatch.setattr(engine, "register_endpoint", lambda: registered.append(True))
+    monkeypatch.setattr(engine, "register_endpoint", lambda **_kwargs: registered.append(True))
     errors = []
     start = threading.Thread(target=lambda: _capture_error(engine.start, errors))
     start.start()
@@ -738,8 +843,8 @@ class _EngineStub:
     def start(self):
         self.actions.append(("start",))
 
-    def stop(self):
-        self.actions.append(("stop",))
+    def stop(self, *, disable_endpoint=False):
+        self.actions.append(("stop", {"disable_endpoint": disable_endpoint}))
 
     def register_endpoint(self):
         self.actions.append(("register",))
@@ -819,6 +924,17 @@ def test_interactive_controls_validate_actions_and_idle_bounds(monkeypatch):
     assert admin_calls
 
 
+def test_stop_route_marks_endpoint_disabled_as_user_choice(monkeypatch):
+    client, engine, _ = _route_client(monkeypatch)
+    response = client.post("/api/local-engines/image", json={"action": "stop"},
+                           headers={"X-Novum-Engine-Token": engine.native_token})
+    assert response.status_code == 200
+    assert engine.actions == [
+        ("configure", {"auto_start": False}),
+        ("stop", {"disable_endpoint": True}),
+    ]
+
+
 def test_native_tokens_are_owned_private_files(tmp_path):
     engine = LocalImageEngine(tmp_path)
     token_dir = tmp_path / "engine-manager"
@@ -843,7 +959,7 @@ def test_empty_gateway_starts_stops_and_restarts_without_loading_a_model(tmp_pat
         sock.bind(("127.0.0.1", 0))
         engine.port = sock.getsockname()[1]
     monkeypatch.setattr(engine, "_binary", lambda: ("/bin/false", "cpu"))
-    monkeypatch.setattr(engine, "register_endpoint", lambda: None)
+    monkeypatch.setattr(engine, "register_endpoint", lambda **_kwargs: None)
     engine.refresh(rows=[])
     try:
         engine.start()

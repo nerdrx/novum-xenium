@@ -164,3 +164,10 @@ The managed image gateway similarly separates runtime Start/Stop intent from
 its startup setting, normalizes malformed health replies into startup retry and
 cleanup, and prevents a delayed child launch from surviving shutdown. These
 checks do not retry or replay inference requests.
+
+Background model registration preserves an existing endpoint’s enable toggle.
+Explicit Connect/Start can enable it again; periodic health and catalog updates
+do not override a user-disabled endpoint. The image endpoint’s enable toggle
+records routing preference separately from gateway health. Failed catalog
+refreshes retain saved models and show a retry hint; stale responses cannot
+replace a newer successful refresh.

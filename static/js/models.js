@@ -177,9 +177,13 @@ export async function refreshModels(force = false, opts = {}) {
   const needsFetch = !(cacheOnly && hasCache) && (force || _cachedItems.length === 0 || (now - _lastFetchTime) >= _FETCH_CACHE_TTL);
 
   const hadRenderedRows = !!(box && box.children && box.children.length);
+  const hadModelRows = !!(box && box.querySelector('.models-row'));
+  const priorRefreshWarning = !needsFetch && box && box.querySelector('.models-refresh-error');
   if (box && (!needsFetch || !hadRenderedRows)) box.innerHTML = '';
   if (needsFetch) {
     let _loadingSpinner = null;
+    let requestSeq = _fetchSeq;
+    let fetchSucceeded = false;
     if (box) {
       if (hadRenderedRows) {
         box.classList.add('models-refreshing');
@@ -202,26 +206,52 @@ export async function refreshModels(force = false, opts = {}) {
         const _url = `${API_BASE}/api/models` + (force
           ? `?refresh=true${opts.waitForRefresh ? '&wait_refresh=true' : ''}`
           : '?background=false');
-        _fetchInflight = fetch(_url, { credentials: 'same-origin' })
+        requestSeq = _seq;
+        let trackedRequest;
+        trackedRequest = fetch(_url, { credentials: 'same-origin' })
           .then(async (res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             return { data, seq: _seq };
           })
-          .finally(() => { _fetchInflight = null; });
+          .finally(() => {
+            if (_fetchInflight === trackedRequest) _fetchInflight = null;
+          });
+        _fetchInflight = trackedRequest;
+      } else {
+        requestSeq = _fetchSeq;
       }
       const { data, seq } = await _fetchInflight;
+      requestSeq = seq;
       if (seq < _fetchSeq) return;
       _lastFetchTime = Date.now();
       _cachedItems = data.items || [];
+      fetchSucceeded = true;
     } catch (e) {
+      if (requestSeq !== _fetchSeq) return;
       console.error(e);
-      if (box) box.textContent = '(scan failed)';
+      if (box) {
+        if (hasCache && hadModelRows) {
+          let notice = box.querySelector('.models-refresh-error');
+          if (!notice) {
+            notice = document.createElement('div');
+            notice.className = 'models-refresh-error';
+            notice.setAttribute('role', 'status');
+            notice.style.cssText = 'padding:6px 10px;font-size:11px;color:var(--muted,#888);';
+            box.appendChild(notice);
+          }
+          notice.textContent = 'Could not refresh model list. Showing saved models; try again.';
+        } else {
+          box.textContent = '(scan failed)';
+        }
+      }
       return false;
     } finally {
       try { _loadingSpinner && _loadingSpinner.stop && _loadingSpinner.stop(); } catch (_) {}
-      if (box) box.classList.remove('models-refreshing');
-      if (box) box.innerHTML = '';
+      if (requestSeq === _fetchSeq) {
+        if (box) box.classList.remove('models-refreshing');
+        if (box && fetchSucceeded) box.innerHTML = '';
+      }
     }
   }
   if (!box) return;
@@ -590,6 +620,8 @@ export async function refreshModels(force = false, opts = {}) {
       }
       box.appendChild(noModels);
     }
+
+    if (priorRefreshWarning && box) box.appendChild(priorRefreshWarning);
   } catch (e) {
     console.error(e);
     box.textContent = '(render failed: ' + e.message + ')';

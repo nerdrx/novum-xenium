@@ -64,8 +64,7 @@ def setup_local_engine_routes():
                 await asyncio.to_thread(engine.start)
             elif selected == "stop":
                 await asyncio.to_thread(engine.configure, {"auto_start": False})
-                await asyncio.to_thread(engine.stop)
-                await asyncio.to_thread(engine.register_endpoint)
+                await asyncio.to_thread(engine.stop, disable_endpoint=True)
             elif selected == "refresh":
                 await asyncio.to_thread(engine.refresh)
             else:

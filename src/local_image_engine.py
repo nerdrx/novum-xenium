@@ -335,7 +335,7 @@ class LocalImageEngine:
         finally:
             self.refresh_lock.release()
 
-    def register_endpoint(self):
+    def register_endpoint(self, *, enabled=None):
         from core.database import SessionLocal, ModelEndpoint
         ids = [m["id"] for m in self.models]
         with SessionLocal() as db:
@@ -346,15 +346,17 @@ class LocalImageEngine:
             if endpoint is None:
                 endpoint = ModelEndpoint(id=ENGINE_ID, name=ENGINE_NAME, base_url=base)
                 db.add(endpoint)
+                endpoint.is_enabled = True if enabled is None else enabled
+            elif enabled is not None:
+                endpoint.is_enabled = enabled
             endpoint.api_key = self.image_token
             endpoint.model_type = "image"
             endpoint.endpoint_kind = "local"
             endpoint.model_refresh_mode = "manual"
-            endpoint.is_enabled = bool(ids and self.process is not None and self.process.poll() is None)
             endpoint.cached_models = json.dumps(ids)
             endpoint.pinned_models = json.dumps(ids)
             db.commit()
-            if endpoint.is_enabled:
+            if endpoint.is_enabled and ids:
                 self._select_default(db, ids)
 
     def _select_default(self, db, ids):
@@ -412,15 +414,22 @@ class LocalImageEngine:
         with self.lock:
             self.desired_running = True
             generation = self.stop_generation
-        self._ensure_start(generation)
+        self._ensure_start(generation, enable_endpoint=True)
 
-    def _ensure_start(self, generation):
+    def _ensure_start(self, generation, *, enable_endpoint=False):
         with self.start_lock:
             with self.lock:
                 if self.closed.is_set() or generation != self.stop_generation:
                     return
-                if self.process is not None and self.process.poll() is None:
-                    return
+                existing = self.process if self.process is not None and self.process.poll() is None else None
+            if existing is not None:
+                if enable_endpoint:
+                    self.health()
+                    with self.lock:
+                        if (not self.closed.is_set() and generation == self.stop_generation
+                                and self.process is existing and existing.poll() is None):
+                            self.register_endpoint(enabled=True)
+                return
             if not (self.home / "image-models.json").exists():
                 if not self.refresh():
                     raise ValueError("The initial model scan is still running. Try again when it finishes.")
@@ -462,7 +471,7 @@ class LocalImageEngine:
                     with self.lock:
                         if self.closed.is_set() or generation != self.stop_generation or self.process is not proc:
                             return
-                        self.register_endpoint()
+                        self.register_endpoint(enabled=True if enable_endpoint else None)
                         if self.desired_running is None:
                             self.desired_running = True
                     return
@@ -481,7 +490,7 @@ class LocalImageEngine:
                         proc.wait(timeout=2)
             raise ValueError("The image engine did not become ready in time.")
 
-    def stop(self):
+    def stop(self, *, disable_endpoint=False):
         with self.lock:
             self.desired_running = False
             self.stop_generation += 1
@@ -493,6 +502,8 @@ class LocalImageEngine:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=2)
+            if disable_endpoint:
+                self.register_endpoint(enabled=False)
 
     def configure(self, values):
         with self.lock:

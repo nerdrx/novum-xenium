@@ -246,6 +246,8 @@ pub(super) struct ZvramRequest {
     mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_start: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enable_existing: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -757,6 +759,7 @@ pub(super) fn monitor_autostart(app: AppHandle) {
             if router_running && !registered && recovery_enabled {
                 let register = ZvramRequest {
                     action: ZvramAction::RouterRegister,
+                    enable_existing: Some(false),
                     ..ZvramRequest::status()
                 };
                 if run_bridge(&app, &installation, &register).is_ok() {
@@ -825,6 +828,7 @@ impl ZvramRequest {
             live_control: None,
             mode: None,
             auto_start: None,
+            enable_existing: None,
         }
     }
 }
@@ -1070,6 +1074,29 @@ mod tests {
         .is_err());
         let status = serde_json::to_value(ZvramRequest::status()).unwrap();
         assert!(status.get("min_available_mib").is_none());
+    }
+
+    #[test]
+    fn router_background_registration_flag_is_optional_and_typed() {
+        let default: ZvramRequest = serde_json::from_value(json!({
+            "action": "router_register"
+        }))
+        .unwrap();
+        assert_eq!(serde_json::to_value(default).unwrap().get("enable_existing"), None);
+        let background: ZvramRequest = serde_json::from_value(json!({
+            "action": "router_register",
+            "enable_existing": false
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(background).unwrap()["enable_existing"],
+            false
+        );
+        assert!(serde_json::from_value::<ZvramRequest>(json!({
+            "action": "router_register",
+            "enable_existing": 0
+        }))
+        .is_err());
     }
 
     #[test]

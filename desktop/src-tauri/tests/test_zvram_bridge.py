@@ -613,6 +613,20 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("zvram_control", json.loads(output.getvalue())["error"])
 
+    def test_one_shot_main_passes_optional_cache_root(self):
+        for cache in (None, "/host/hf"):
+            with self.subTest(cache_root=cache):
+                output = io.StringIO()
+                args = ["/install", "/backend", "/cookie", "7000", '{"action":"router_start"}']
+                if cache is not None:
+                    args.append(cache)
+                with mock.patch.object(bridge, "dispatch", return_value={"started": True}) as dispatch, redirect_stdout(output):
+                    self.assertEqual(bridge.main(args), 0)
+                dispatch.assert_called_once_with(
+                    "/install", "/backend", "/cookie", "7000", {"action": "router_start"}, cache_root=cache,
+                )
+                self.assertEqual(json.loads(output.getvalue()), {"started": True})
+
     def test_router_watch_passes_trusted_cache_root_and_retries(self):
         output = io.StringIO()
         with (mock.patch.object(bridge, '_load_runtime', return_value=('model', 'manager')),

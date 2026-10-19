@@ -1301,7 +1301,7 @@ def main(argv=None):
     if len(argv) not in (5, 6):
         print(json.dumps({"error": "Expected ROOT BACKEND_CHECKOUT COOKIE_PATH BACKEND_PORT REQUEST_JSON [CACHE_ROOT]"}))
         return 1
-    root, backend_checkout, cookie_path, backend_port, request_json = argv
+    root, backend_checkout, cookie_path, backend_port, request_json = argv[:5]
     cache_root = argv[5] if len(argv) == 6 else None
     if len(request_json) > 32768:
         print(json.dumps({"error": "Request is too large"}))

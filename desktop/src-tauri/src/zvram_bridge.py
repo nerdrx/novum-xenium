@@ -839,6 +839,11 @@ def _router_status(model_helper, manager_helper, manager, params_state):
     params = params_state.get(_ROUTER_NAME, {})
     result = {'name': _ROUTER_NAME, 'running': False, 'healthy': False, 'state': 'stopped',
               'port': params.get('port', 8097), 'context': params.get('context', 32768), 'models': []}
+    budgets = {key: params.get(key) for key in
+               ('resident_mib', 'cold_mib', 'clean_cache_mib', 'headroom_mib', 'virtual_gib')}
+    if all(type(value) is int and 1 <= value <= 1048576 for value in budgets.values()) and \
+            budgets['clean_cache_mib'] <= budgets['cold_mib']:
+        result.update(budgets)
     if params.get('router') is not True:
         result.update(mode='regular', auto_start=True)
         return result

@@ -16,6 +16,7 @@ const elements = {
 const budgetInputs = ['resident', 'cold', 'clean-cache', 'headroom', 'virtual'].map(id => $(`#zvram-${id}`));
 let invoke = null;
 let busy = false;
+let pollInFlight = false;
 let statusRevision = 0;
 let available = false;
 let routerSupported = false;
@@ -116,6 +117,15 @@ function renderStatus(result) {
   liveControlSupported = result.live_control_supported === true;
   router = result.router && typeof result.router === 'object' ? result.router : {};
   configurationDirty = false;
+  if (Number.isInteger(router.port) && router.port >= 1 && router.port <= 65535) elements.port.value = String(router.port);
+  if (Number.isInteger(router.context) && router.context >= 256 && router.context <= 1048576) elements.context.value = String(router.context);
+  for (const [field, input] of [
+    ['resident_mib', budgetInputs[0]], ['cold_mib', budgetInputs[1]],
+    ['clean_cache_mib', budgetInputs[2]], ['headroom_mib', budgetInputs[3]],
+    ['virtual_gib', budgetInputs[4]],
+  ]) {
+    if (Number.isInteger(router[field]) && router[field] >= 1 && router[field] <= 1048576) input.value = String(router[field]);
+  }
   elements.modeRegular.checked = router.mode !== 'zvram';
   elements.modeZvram.checked = router.mode === 'zvram';
   elements.ignoreSwapGuard.checked = ignoreSwapGuardSupported && (
@@ -196,9 +206,9 @@ function renderLegacyProfiles() {
   updateControls();
 }
 
-async function loadStatus() {
+async function loadStatus({ pollRevision } = {}) {
   const result = await invoke('zvram_status');
-  renderStatus(result);
+  if (pollRevision === undefined || (pollRevision === statusRevision && !busy && !configurationDirty)) renderStatus(result);
   return result;
 }
 
@@ -284,7 +294,9 @@ elements.modeZvram.addEventListener('change', () => {
   updateControls();
 });
 for (const input of [elements.modeRegular, elements.autoStart, elements.port, elements.context, elements.compressed, elements.keepaliveLowRam, elements.ignoreSwapGuard, ...budgetInputs]) {
-  input.addEventListener('change', () => { configurationDirty = true; updateControls(); });
+  const markConfigurationDirty = () => { configurationDirty = true; updateControls(); };
+  input.addEventListener('input', markConfigurationDirty);
+  input.addEventListener('change', markConfigurationDirty);
 }
 elements.choose.addEventListener('click', async () => {
   try {
@@ -366,13 +378,14 @@ elements.legacyList.addEventListener('click', async event => {
 });
 
 setInterval(() => {
-  if (invoke && !busy && !configurationDirty && (router.running === true || router.recovery_enabled === true)) {
+  if (invoke && !pollInFlight && !busy && !configurationDirty && (router.running === true || router.recovery_enabled === true)) {
     const revision = statusRevision;
-    loadStatus().catch(() => {
+    pollInFlight = true;
+    loadStatus({ pollRevision: revision }).catch(() => {
       if (revision !== statusRevision || busy || configurationDirty) return;
       elements.routerState.textContent = 'Provider status unavailable';
       setStatus('Could not verify provider status. Last confirmed state may be stale; use Refresh to retry.');
-    });
+    }).finally(() => { pollInFlight = false; });
   }
 }, 2000);
 

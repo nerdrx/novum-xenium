@@ -562,6 +562,26 @@ class BridgeTests(unittest.TestCase):
                                        {'nx-zvram-router': legacy})
         self.assertFalse(status['live_control'], 'explicit opt-out is preserved')
 
+    def test_router_status_exposes_only_valid_saved_memory_budgets(self):
+        budgets = {'resident_mib': 18000, 'cold_mib': 22000, 'clean_cache_mib': 512,
+                   'headroom_mib': 768, 'virtual_gib': 48}
+        params = {'nx-zvram-router': {'router': True, 'port': 8123, 'context': 8192, **budgets}}
+        status = bridge._router_status(self.model_helper, self.manager_helper, self.manager, params)
+        self.assertEqual({key: status[key] for key in budgets}, budgets)
+        self.assertEqual((status['port'], status['context']), (8123, 8192))
+
+        params['nx-zvram-router']['clean_cache_mib'] = 23000
+        status = bridge._router_status(self.model_helper, self.manager_helper, self.manager, params)
+        self.assertFalse(any(key in status for key in budgets), 'invalid persisted budgets are omitted as one set')
+
+    def test_router_status_omits_out_of_range_saved_memory_budgets(self):
+        budgets = {'resident_mib': 18000, 'cold_mib': 22000, 'clean_cache_mib': 512,
+                   'headroom_mib': 768, 'virtual_gib': 48}
+        budgets['headroom_mib'] = 1048577
+        status = bridge._router_status(self.model_helper, self.manager_helper, self.manager,
+                                       {'nx-zvram-router': {'router': True, **budgets}})
+        self.assertFalse(any(key in status for key in budgets), 'out-of-range persisted budgets are not restored')
+
     def test_router_stop_and_registration_require_owned_router(self):
         with self.assertRaisesRegex(ValueError, 'Start the model router'):
             self.dispatch({'action': 'router_stop'})

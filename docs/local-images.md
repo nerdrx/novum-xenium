@@ -8,8 +8,9 @@ is exposed, or explicitly in the manager. Both use the same upstream server API 
 accept model weights as runtime arguments. The upstream MIT license is at
 `/usr/share/licenses/stable-diffusion.cpp/LICENSE` in the image.
 
-Linux x86_64 images also bundle zVram `2e904b8bee5e31ca6440299480ec2f00d71f89a6`
-and expose `/usr/local/bin/sd-server-zvram`. When selected in Cookbook alongside
+Linux x86_64 images also bundle zVram `95fed253f4937b5ee9f5a87cf4624a053a8bc7a6`
+and expose `/usr/local/bin/sd-server-zvram`. The layer uses pinned Vulkan 1.4.341
+headers so newer command lookups reach its typed forwarding hooks. When selected in Cookbook alongside
 Vulkan, it launches `sd-server-vulkan` through zVram's local recovery mode,
 which can page eligible Vulkan allocations into system memory when VRAM is full. Paging
 can be slow and does not add physical VRAM or make an unsupported Vulkan queue
@@ -89,7 +90,9 @@ the Vulkan layer can report a virtual heap that overstates immediately
 available VRAM. FLUX.2 Klein also keeps its text encoder and VAE on CPU.
 Its launch recipe uses `--params-backend diffusion=cpu --max-vram 3` to stream
 weights from RAM through memory-limited GPU graph segments, leaving room for
-a resident chat model. zVram remains enabled for eligible GPU allocations;
+a resident chat model. The zVram wrapper reserves 256 MiB of Vulkan headroom for
+standalone `--diffusion-model` launches; checkpoint launches keep its default.
+zVram remains enabled for eligible GPU allocations;
 3 GiB is the engine budget, not a cap on total system or GPU memory usage.
 
 Native Linux installs can put `scripts/sd-server-zvram` on `PATH` (for example,

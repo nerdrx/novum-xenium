@@ -2,4 +2,11 @@
 # Recover locally and page Vulkan allocations to system memory when needed.
 # Host-visible ReBAR buffers cannot be paged by the Vulkan layer.
 export GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1
+for arg do
+    case "$arg" in
+        --diffusion-model|--diffusion-model=*)
+            exec zvram --vulkan-recover-local --vulkan-headroom-mib 256 -- sd-server-vulkan "$@" --auto-fit off
+            ;;
+    esac
+done
 exec zvram --vulkan-recover-local -- sd-server-vulkan "$@" --auto-fit off

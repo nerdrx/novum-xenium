@@ -91,7 +91,7 @@ def test_flux2_klein_components_and_launch_defaults():
     assert "const sdBackend = useZVram ? (f.flux2 ? 'diffusion=vulkan0,te=cpu,vae=cpu' : 'diffusion=vulkan0')" in cookbook
     assert "if (useZVram) cmd += ' --auto-fit off';" in cookbook
     assert "if (useZVram && f.flux2) cmd += ' --params-backend diffusion=cpu --max-vram 3';" in cookbook
-    assert "zvram --vulkan-recover-local -- sd-server-vulkan" in (ROOT / "scripts/sd-server-zvram").read_text(encoding="utf-8")
+    assert "--vulkan-headroom-mib 256" in (ROOT / "scripts/sd-server-zvram").read_text(encoding="utf-8")
     assert "flux2MissingAtRender.length" in serve
     assert "downloadFlux2KleinBundle(panel, variant, undefined, missingKinds)" in serve
 
@@ -126,7 +126,16 @@ def test_zvram_launcher_requests_pageable_allocations(tmp_path):
     stub.chmod(0o755)
     env = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
                GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM="0")
-    result = subprocess.run(["sh", str(ROOT / "scripts/sd-server-zvram"), "-m", "/models/a b.gguf"],
-                            env=env, capture_output=True, text=True, check=True, timeout=10)
-    assert json.loads(result.stdout) == ["1", ["--vulkan-recover-local", "--", "sd-server-vulkan",
-                                              "-m", "/models/a b.gguf", "--auto-fit", "off"]]
+    def launch(*args):
+        result = subprocess.run(["sh", str(ROOT / "scripts/sd-server-zvram"), *args],
+                                env=env, capture_output=True, text=True, check=True, timeout=10)
+        return json.loads(result.stdout)
+
+    assert launch("--diffusion-model", "/models/flux klein.safetensors", "--llm", "/models/qwen.safetensors",
+                  "--vae", "/models/vae.safetensors") == [
+        "1", ["--vulkan-recover-local", "--vulkan-headroom-mib", "256", "--", "sd-server-vulkan",
+              "--diffusion-model", "/models/flux klein.safetensors", "--llm", "/models/qwen.safetensors",
+              "--vae", "/models/vae.safetensors", "--auto-fit", "off"]]
+    assert launch("-m", "/models/a b.gguf") == [
+        "1", ["--vulkan-recover-local", "--", "sd-server-vulkan", "-m", "/models/a b.gguf",
+              "--auto-fit", "off"]]

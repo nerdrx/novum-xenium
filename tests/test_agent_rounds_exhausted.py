@@ -4273,6 +4273,58 @@ def test_eval_varied_read_only_inspections_converge_before_round_cap(monkeypatch
     assert len(rounds) < 12
 
 
+def test_read_only_repository_review_can_inspect_more_than_six_distinct_files(monkeypatch, tmp_path):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
+    rounds = []
+    executed = []
+
+    @authoritative_executor
+    async def _fake_exec(block, *args, **kwargs):
+        path = al._read_file_block_path(block.content)
+        executed.append(path)
+        return "read_file", {"output": f"Contents of {path}", "exit_code": 0}
+
+    async def _fake_stream(candidates, messages, **kwargs):
+        rounds.append(messages)
+        request = await kwargs["candidate_request_factory"](0, *candidates[0])
+        if len(rounds) <= 7:
+            assert any(
+                schema.get("function", {}).get("name") == "read_file"
+                for schema in request["kwargs"].get("tools", [])
+            )
+            event = {
+                "type": "tool_calls",
+                "calls": [{
+                    "id": f"review-read-{len(rounds)}",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": f"src/module_{len(rounds)}.py"}),
+                }],
+            }
+        else:
+            event = {"delta": "Review complete after checking seven distinct files."}
+        yield "data: " + json.dumps(event) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "execute_tool_block", _fake_exec, raising=False)
+    monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+    events = _types(_collect(al.stream_agent_loop(
+        "https://api.openai.com/v1", "gpt-4o",
+        [{"role": "user", "content": "Review the local source tree and explain its parsing flow."}],
+        max_rounds=10,
+        relevant_tools={"read_file"},
+        workspace=str(tmp_path),
+    )))
+
+    assert executed == [f"src/module_{i}.py" for i in range(1, 8)]
+    assert not any(e.get("type") == "loop_breaker_triggered" for e in events)
+    workflow = next(e for e in events if e.get("type") == "coding_workflow")
+    assert workflow["enabled"] is False
+    assert "Review complete after checking seven distinct files." in "".join(
+        str(e.get("delta") or "") for e in events
+    )
+
+
 def test_web_fetch_pagination_signature_ignores_page_args():
     sig1 = al._web_fetch_pagination_signature({
         "tool_name": "web_fetch",

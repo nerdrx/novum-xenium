@@ -22710,9 +22710,12 @@ async def stream_agent_loop(
     )
     from src.checked_coding_intent import _use_checked_coding_workflow
     _coding_work_requested = bool(get_setting("agent_milestone_workflow", True))
+    _coding_change_intent = _use_checked_coding_workflow(
+        _retrieval_query or _last_user, workspace,
+    )
     _coding_work = CodingWorkTracker(workspace=workspace, enabled=bool(
         _coding_work_requested
-        and (_use_checked_coding_workflow(_retrieval_query or _last_user, workspace) or _resume_coding_work)
+        and (_coding_change_intent or _resume_coding_work)
         and workspace and not plan_mode and not guide_only
         and not incognito and not delegated_credential and not approved_plan
         and "todowrite" not in disabled_tools
@@ -34468,7 +34471,10 @@ async def stream_agent_loop(
             _stuck_rounds >= 4
             or _runaway
             or _blocked_status_rounds >= 2
-            or _read_only_inspection_rounds >= 6
+            or (
+                _read_only_inspection_rounds >= 6
+                and (_coding_change_intent or _resume_coding_work or _artifact_creation_requested)
+            )
         ):
             _stall_evidence = EvidenceLedger.from_tool_events(
                 tool_events,

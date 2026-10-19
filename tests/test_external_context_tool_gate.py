@@ -1797,7 +1797,8 @@ def test_frontend_tool_approval_uses_opaque_id_and_fixed_decisions():
     assert "input.dispatchEvent(new Event('input'" in chat
     assert "_pendingToolApproval.draft = input.value" in chat
     assert "const approvalForSend = _pendingToolApproval" in chat
-    assert "const pendingAttachmentSnapshotForSend = !approvalForSend\n      ? fileHandlerModule.getPendingSnapshot()\n      : null;" in chat
+    assert "const pendingAttachmentSnapshotForSend = approvalForSend\n      ? null" in chat
+    assert "queuedMessageForSend !== null\n        ? { files: [], ids: [], info: [] }" in chat
     assert "snapshot: pendingAttachmentSnapshotForSend" in chat
     assert "if (!approvalForSend) _pendingRegenAttachments = null" in chat
     assert "const pendingRegenAttachmentsForSend = !approvalForSend ? _pendingRegenAttachments : null" in chat

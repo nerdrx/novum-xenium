@@ -1088,7 +1088,7 @@ import { invalidateSettings } from './appConfig.js';
     try {
       const hashId = String(window.location.hash || '').replace(/^#/, '').trim();
       if (!hashId) return '';
-      if (/^(document|note|image|email|event|task|skill|research)-/.test(hashId) || /^open=notes&note=/.test(hashId)) return '';
+      if (/^(newchat-|document-|note-|image-|email-|event-|task-|skill-|research-)/.test(hashId) || /^open=notes&note=/.test(hashId)) return '';
       return hashId;
     } catch (_) {
       return '';
@@ -1096,15 +1096,18 @@ import { invalidateSettings } from './appConfig.js';
   }
 
   async function _adoptOpenedSessionBeforeAutoCreate() {
-    if (!sessionModule || !sessionModule.getCurrentSessionId || sessionModule.getCurrentSessionId()) return true;
+    if (!sessionModule || !sessionModule.getCurrentSessionId) return '';
+    const existingId = String(sessionModule.getCurrentSessionId() || '');
+    if (existingId) return existingId;
     // Don't adopt a stale session when the user explicitly started a New Chat
     // (pending state set) — the send path must materialize the pending session.
-    if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) return false;
+    if (sessionModule.getPendingDraftId && sessionModule.getPendingDraftId()) return '';
+    if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) return '';
     const activeRowId = document.querySelector('.list-item.active-session[data-session-id], .session-item.active[data-session-id]')?.dataset?.sessionId || '';
     const hashId = _hashSessionCandidate();
     const lastSelectedId = String(window.__odysseusLastSelectedSessionId || '').trim();
     const targetId = activeRowId || hashId || lastSelectedId;
-    if (!targetId) return false;
+    if (!targetId) return '';
     try {
       window.__odysseusComposerUserEdited = true;
       if (sessionModule.selectSession) {
@@ -1112,9 +1115,10 @@ import { invalidateSettings } from './appConfig.js';
       } else if (sessionModule.setCurrentSessionId) {
         sessionModule.setCurrentSessionId(targetId);
       }
-      return !!(sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId());
+      const selectedId = String(sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId() || '');
+      return selectedId === String(targetId) ? selectedId : '';
     } catch (_) {
-      return false;
+      return '';
     }
   }
 
@@ -1929,10 +1933,18 @@ import { invalidateSettings } from './appConfig.js';
       // Navigation or a new request must leave the pending stack intact.
       const stack = queuedItem ? _consumeQueuedRequestStack() : null;
       if (queuedItem && !stack) return;
-      input.value = stack ? stack.message : message;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      if (uiModule.autoResize) uiModule.autoResize(input);
-      handleChatSubmit({ preventDefault() {}, expectedSessionId, pendingPlan }).catch(err => {
+      const sendMessage = stack ? stack.message : message;
+      if (!queuedItem) {
+        input.value = sendMessage;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        if (uiModule.autoResize) uiModule.autoResize(input);
+      }
+      handleChatSubmit({
+        preventDefault() {},
+        expectedSessionId,
+        pendingPlan,
+        ...(queuedItem ? { queuedMessage: sendMessage } : {}),
+      }).catch(err => {
         console.error('queued send failed', err);
         try { uiModule.showError && uiModule.showError('Queued send failed: ' + (err?.message || err)); } catch (_) {}
       });
@@ -1954,12 +1966,8 @@ import { invalidateSettings } from './appConfig.js';
     }
     try { uiModule.showToast && uiModule.showToast('Stopping this chat before sending the queued request'); } catch (_) {}
     if (!isStreaming) return; // The current request is still starting; it will drain when its send flag clears.
-    const input = uiModule.el('message');
     const submitBtn = document.querySelector('.send-btn');
-    if (input) {
-      input.value = '';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    }
+    window.__odysseusQueueStreamingSubmit = 0;
     if (submitBtn) submitBtn.click();
   }
 
@@ -2020,6 +2028,7 @@ import { invalidateSettings } from './appConfig.js';
   export async function handleChatSubmit(e) {
     e.preventDefault();
     const expectedSessionId = e.expectedSessionId ? String(e.expectedSessionId) : '';
+    const queuedMessageForSend = typeof e.queuedMessage === 'string' ? e.queuedMessage : null;
     if (expectedSessionId
         && (String(sessionModule.getCurrentSessionId() || '') !== expectedSessionId
             || (e.pendingPlan && _pendingApprovedPlan !== e.pendingPlan))) {
@@ -2199,7 +2208,7 @@ import { invalidateSettings } from './appConfig.js';
 
     // --- Send-path entry: block re-clicks between submit and stream start ---
     if (_sendInFlight) return;
-    if (!_pendingToolApproval && typeof fileHandlerModule.getPendingSnapshot !== 'function') {
+    if (!_pendingToolApproval && queuedMessageForSend === null && typeof fileHandlerModule.getPendingSnapshot !== 'function') {
       uiModule.showError('This page was updated. Reload before sending so newer drafts and attachments stay with the right message.');
       return;
     }
@@ -2222,7 +2231,7 @@ import { invalidateSettings } from './appConfig.js';
     };
 
     // --- Setup mode: intercept next message (but let slash commands through) ---
-    if (!approvalForSend) {
+    if (!approvalForSend && queuedMessageForSend === null) {
       const el = uiModule.el;
       const rawMsg = (el('message').value || '').trim();
       const currentSetupMode = slashCommands.getSetupMode();
@@ -2246,10 +2255,21 @@ import { invalidateSettings } from './appConfig.js';
     }
 
     const el = uiModule.el;
-    const msg = approvalForSend ? '' : el('message').value;
-    const pendingAttachmentSnapshotForSend = !approvalForSend
-      ? fileHandlerModule.getPendingSnapshot()
-      : null;
+    const msg = approvalForSend ? '' : (queuedMessageForSend ?? el('message').value);
+    const pendingAttachmentSnapshotForSend = approvalForSend
+      ? null
+      : (queuedMessageForSend !== null
+        ? { files: [], ids: [], info: [] }
+        : fileHandlerModule.getPendingSnapshot());
+    const initSessionId = String(sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId() || '');
+    const initPendingDraftId = String(sessionModule.getPendingDraftId && sessionModule.getPendingDraftId() || '');
+    const initPendingChat = sessionModule.getPendingChat && sessionModule.getPendingChat() || null;
+    const isSameInitialFreshContext = () => !sessionModule.getCurrentSessionId()
+      && String(sessionModule.getPendingDraftId && sessionModule.getPendingDraftId() || '') === initPendingDraftId
+      && (sessionModule.getPendingChat && sessionModule.getPendingChat() || null) === initPendingChat;
+    const isInitialSendContextSelected = () => initSessionId
+      ? String(sessionModule.getCurrentSessionId() || '') === initSessionId
+      : isSameInitialFreshContext();
     // Allow empty text when a regen carries over the original message's
     // attachment ids — a photo-only message still has something to send.
     if (!msg.trim() && !approvalForSend && !fileHandlerModule.getPendingCount() && !(_pendingRegenAttachments && _pendingRegenAttachments.length)) { _releaseSendFlag(); return; }
@@ -2258,19 +2278,32 @@ import { invalidateSettings } from './appConfig.js';
     if (!approvalForSend && isCommand(msg.trim())) {
       const handled = await handleSlashCommand(msg.trim());
       if (handled) {
-        el('message').value = '';
-        if (window._syncModelPickerAutohide) window._syncModelPickerAutohide();
-        if (uiModule.autoResize) uiModule.autoResize(el('message'));
+        if (queuedMessageForSend === null && el('message').value === msg && isInitialSendContextSelected()) {
+          el('message').value = '';
+          if (window._syncModelPickerAutohide) window._syncModelPickerAutohide();
+          if (uiModule.autoResize) uiModule.autoResize(el('message'));
+        }
         _releaseSendFlag();
         return;
       }
     }
 
+    if (!isInitialSendContextSelected()) { _releaseSendFlag(); return; }
+
     const incognitoChkForSend = el('incognito-toggle');
     const isIncognitoForSend = !!(incognitoChkForSend && incognitoChkForSend.checked);
 
+    let adoptedSessionId = '';
     if (!isIncognitoForSend) {
-      await _adoptOpenedSessionBeforeAutoCreate();
+      adoptedSessionId = await _adoptOpenedSessionBeforeAutoCreate();
+    }
+    if (adoptedSessionId) {
+      if (String(sessionModule.getCurrentSessionId() || '') !== adoptedSessionId) { _releaseSendFlag(); return; }
+    } else if (initSessionId) {
+      if (String(sessionModule.getCurrentSessionId() || '') !== initSessionId) { _releaseSendFlag(); return; }
+    } else if (!isSameInitialFreshContext()) {
+      _releaseSendFlag();
+      return;
     }
 
     let selectedRouteForSend = selectModelRouteForSend({
@@ -2303,6 +2336,7 @@ import { invalidateSettings } from './appConfig.js';
       // Auto-create a session using default chat config. Always fetch fresh
       // so that a recent Settings change takes effect without a page reload.
       let defaultChatLoadFailed = false;
+      let defaultCreatePendingIdentity = null;
       try {
         let dc = (typeof window !== 'undefined' && window.__odysseusDefaultChat) || null;
         if (!dc || !dc.endpoint_url || !dc.model) {
@@ -2313,13 +2347,20 @@ import { invalidateSettings } from './appConfig.js';
         try {
           if (!dc || !dc.endpoint_url || !dc.model) {
             _sendPerf.mark('default_chat_fetch_begin');
-            const dcRes = await fetch('/api/default-chat');
-            if (!dcRes.ok) {
-              defaultChatLoadFailed = true;
-              throw new Error(`Default chat configuration failed (${dcRes.status})`);
+            const defaultChatController = new AbortController();
+            const defaultChatTimeout = setTimeout(() => defaultChatController.abort(), 15000);
+            try {
+              const dcRes = await fetch('/api/default-chat', { signal: defaultChatController.signal });
+              if (!dcRes.ok) {
+                defaultChatLoadFailed = true;
+                throw new Error(`Default chat configuration failed (${dcRes.status})`);
+              }
+              dc = await dcRes.json();
+              _sendPerf.mark('default_chat_fetch_done');
+            } finally {
+              clearTimeout(defaultChatTimeout);
             }
-            dc = await dcRes.json();
-            _sendPerf.mark('default_chat_fetch_done');
+            if (!isSameInitialFreshContext()) { _releaseSendFlag(); return; }
             if (dc && dc.endpoint_url && dc.model) {
               try {
                 window.__odysseusDefaultChat = dc;
@@ -2328,12 +2369,15 @@ import { invalidateSettings } from './appConfig.js';
             }
           }
         } catch (_) {
+          if (!isSameInitialFreshContext()) { _releaseSendFlag(); return; }
           defaultChatLoadFailed = true;
           dc = (typeof window !== 'undefined' && window.__odysseusDefaultChat) || null;
         }
         if (dc && dc.endpoint_url && dc.model) {
+          if (!isSameInitialFreshContext()) { _releaseSendFlag(); return; }
           _sendPerf.mark('direct_chat_create_begin');
-          await sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id, { source: 'default' });
+          sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id, { source: 'default' });
+          defaultCreatePendingIdentity = sessionModule.getPendingChat && sessionModule.getPendingChat() || null;
           _sendPerf.mark('direct_chat_create_done');
           const ok = await sessionModule.materializePendingSession();
           _sendPerf.mark('direct_chat_materialize_done');
@@ -2350,6 +2394,11 @@ import { invalidateSettings } from './appConfig.js';
           return;
         }
       } catch (e) {
+        const stillOwnsFailedInit = defaultCreatePendingIdentity
+          ? !sessionModule.getCurrentSessionId()
+            && (sessionModule.getPendingChat && sessionModule.getPendingChat() || null) === defaultCreatePendingIdentity
+          : isSameInitialFreshContext();
+        if (!stillOwnsFailedInit) { _releaseSendFlag(); return; }
         addMessage('assistant',
           (defaultChatLoadFailed
             ? 'Could not load the default chat settings. Your message is still in the composer. Check your connection and retry, or choose a model now.\n\n'
@@ -2364,8 +2413,9 @@ import { invalidateSettings } from './appConfig.js';
 
     // Plan Execute is bound to the session selected when the button was
     // clicked. Navigation during async send setup must not retarget it.
+    const sendDestinationSessionId = String(sessionModule.getCurrentSessionId() || '');
     if (expectedSessionId
-        && String(sessionModule.getCurrentSessionId() || '') !== expectedSessionId) {
+        && sendDestinationSessionId !== expectedSessionId) {
       if (_pendingApprovedPlan === e.pendingPlan) _pendingApprovedPlan = null;
       _releaseSendFlag();
       return;
@@ -2377,6 +2427,7 @@ import { invalidateSettings } from './appConfig.js';
         _releaseSendFlag();
         return;
       }
+      if (String(sessionModule.getCurrentSessionId() || '') !== String(sendDestinationSessionId || '')) { _releaseSendFlag(); return; }
     }
 
 
@@ -2647,7 +2698,8 @@ import { invalidateSettings } from './appConfig.js';
         _userMsgEl = addMessage('user', userDisplay, null, _bubbleMeta);
       }
       _sendPerf.mark('user_bubble_visible');
-      const preserveNewerDraft = !approvalForSend && messageInput.value !== msg;
+      const preserveNewerDraft = !approvalForSend
+        && (queuedMessageForSend !== null || messageInput.value !== msg);
       if (approvalForSend) messageInput.value = approvalForSend.draft || '';
       else if (!preserveNewerDraft) messageInput.value = '';
       if (!preserveNewerDraft) messageInput.style.height = '';
@@ -2683,7 +2735,7 @@ import { invalidateSettings } from './appConfig.js';
       }
 
       let ids = [];
-      if (!approvalForSend) {
+      if (!approvalForSend && queuedMessageForSend === null) {
         try {
           _sendPerf.mark('upload_begin');
           ids = await fileHandlerModule.uploadPending({ sessionId: streamSessionId, snapshot: pendingAttachmentSnapshotForSend });

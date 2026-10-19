@@ -88,7 +88,7 @@ def test_queued_request_stays_with_origin_chat_and_stop_is_scoped():
         return node;
       }}
       function handleChatSubmit(event) {{
-        sent.push({{ message: input.value, sessionId: currentSessionId, expectedSessionId: event.expectedSessionId }});
+        sent.push({{ message: event.queuedMessage ?? input.value, sessionId: currentSessionId, expectedSessionId: event.expectedSessionId }});
         return Promise.resolve();
       }}
       {functions}

@@ -15,7 +15,9 @@ def test_queue_consumption_waits_for_session_and_stream_recheck():
     send = CHAT[CHAT.index("function _setComposerAndSend(") : CHAT.index("function _promoteQueuedRequest(id)")]
     assert send.index("expectedSessionId") < send.index("_consumeQueuedRequestStack()")
     assert send.index("_sendInFlight") < send.index("_consumeQueuedRequestStack()")
-    assert "input.value = stack ? stack.message : message" in send
+    assert "const sendMessage = stack ? stack.message : message" in send
+    assert "queuedMessage: sendMessage" in send
+    assert "if (!queuedItem)" in send
 
 
 def test_automatic_drain_and_click_use_the_guarded_sender():

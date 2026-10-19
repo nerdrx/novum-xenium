@@ -688,7 +688,7 @@ def test_route_context_agent_frontend_and_cache_bust_wire_the_contract():
     assert "approval_gate_bypassed=bool(" in agent
     assert "['approve', 'approve_task', 'deny']" in frontend
     assert "input.value = label" not in frontend
-    assert "const msg = approvalForSend ? '' : el('message').value;" in frontend
+    assert "const msg = approvalForSend ? '' : (queuedMessageForSend ?? el('message').value);" in frontend
     assert "const hideUserBubbleForSend = _hideUserBubble;" in frontend
     assert "const skipBubble = hideUserBubbleForSend || !!approvalForSend;" in frontend
     assert "fd.append('message', approvalForSend ? '' : _finalMsgWithInject);" in frontend

@@ -53,7 +53,7 @@ function updateControls() {
   elements.modeZvram.disabled = !usable;
   elements.autoStart.disabled = !invoke || busy;
   elements.connect.disabled = !usable || !routerSupported || router.healthy !== true;
-  elements.stop.disabled = !usable || !routerSupported || !active;
+  elements.stop.disabled = !usable || !active;
   elements.port.disabled = !usable || active;
   elements.context.disabled = !usable || active;
   elements.compressed.disabled = !usable || active || !zvramSelected;

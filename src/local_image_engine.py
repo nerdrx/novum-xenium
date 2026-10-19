@@ -232,6 +232,7 @@ class LocalImageEngine:
         self.scan_process = None
         self.thread = None
         self.models, self.pending = [], []
+        self._catalog_signature = None
         self.error = ""
         self.effective_mode = None
         self.scanner = scanner or self.scan
@@ -331,6 +332,7 @@ class LocalImageEngine:
                     _private_json(path, catalog)
                 self.models, self.pending, self.error = models, pending, ""
                 self.register_endpoint()
+                self._catalog_signature = (selected_mode, binary, mode, self.settings["idle_seconds"])
             return True
         finally:
             self.refresh_lock.release()
@@ -416,7 +418,7 @@ class LocalImageEngine:
             generation = self.stop_generation
         self._ensure_start(generation, enable_endpoint=True)
 
-    def _ensure_start(self, generation, *, enable_endpoint=False):
+    def _ensure_start(self, generation, *, enable_endpoint=False, expected_catalog_signature=None):
         with self.start_lock:
             with self.lock:
                 if self.closed.is_set() or generation != self.stop_generation:
@@ -436,6 +438,9 @@ class LocalImageEngine:
 
             with self.lock:
                 if self.closed.is_set() or generation != self.stop_generation:
+                    return
+                if (expected_catalog_signature is not None
+                        and not self._cached_catalog_matches(expected_catalog_signature)):
                     return
                 if self.process is not None and self.process.poll() is None:
                     return
@@ -552,20 +557,47 @@ class LocalImageEngine:
                 "models": [{k:m[k] for k in ("id", "name", "size_bytes")} for m in self.models],
                 "pending": self.pending, "error": self.error}
 
-    def _start_if_desired(self):
+    def _start_if_desired(self, *, recover_cached_catalog=False):
         with self.lock:
             generation = self.stop_generation
             desired = self.desired_running
             should_start = self.settings["auto_start"] if desired is None else desired
+            signature = self._catalog_signature
         if should_start and not self.closed.is_set():
-            self._ensure_start(generation)
+            if recover_cached_catalog:
+                if signature is not None:
+                    self._ensure_start(generation, expected_catalog_signature=signature)
+            else:
+                self._ensure_start(generation)
+
+    def _cached_catalog_matches(self, signature):
+        if signature != self._catalog_signature:
+            return False
+        requested_mode, binary, mode, idle_seconds = signature
+        if (self.settings["mode"], self.settings["idle_seconds"]) != (requested_mode, idle_seconds):
+            return False
+        if self._binary() != (binary, mode):
+            return False
+        try:
+            from scripts.managed_image_engine import load_catalog
+            catalog = load_catalog(self.home / "image-models.json")
+        except (OSError, ValueError):
+            return False
+        models = [(model.id, model.name, model.command) for model in catalog.models]
+        cached_models = [(model["id"], model["name"], tuple(model["command"])) for model in self.models]
+        return catalog.idle_seconds == idle_seconds and models == cached_models
 
     def run(self):
         def work():
             while not self.closed.is_set():
+                refreshed = False
                 try:
-                    self.refresh()
-                    self._start_if_desired()
+                    refreshed = self.refresh()
+                except Exception as exc:
+                    self.error = str(exc)[:300]
+                    logger.warning("Local image engine is pending: %s", type(exc).__name__)
+                try:
+                    self._start_if_desired(recover_cached_catalog=not refreshed)
                 except Exception as exc:
                     self.error = str(exc)[:300]
                     logger.warning("Local image engine is pending: %s", type(exc).__name__)

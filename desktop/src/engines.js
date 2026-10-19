@@ -18,6 +18,7 @@ export function initImageEngine(invoke) {
   let status = null;
   let actionBusy = false;
   let pollBusy = false;
+  let stateRevision = 0;
   let settingsDirty = false;
 
   const controls = [elements.mode, elements.idle, elements.autoStart,
@@ -32,7 +33,7 @@ export function initImageEngine(invoke) {
     const available = status?.available === true;
     elements.configure.disabled = !status || !invoke;
     elements.start.disabled = !available || status?.running === true;
-    elements.stop.disabled = !available || status?.running !== true;
+    elements.stop.disabled = status?.running !== true;
     elements.refresh.disabled = false;
   };
   const render = (value) => {
@@ -77,9 +78,12 @@ export function initImageEngine(invoke) {
   const poll = async () => {
     if (pollBusy || actionBusy || document.visibilityState === 'hidden') return;
     pollBusy = true;
+    const revision = stateRevision;
     try {
-      render(await invoke('image_engine_status'));
+      const result = await invoke('image_engine_status');
+      if (revision === stateRevision && !actionBusy) render(result);
     } catch (error) {
+      if (revision !== stateRevision || actionBusy) return;
       showError(error);
       elements.status.textContent = 'Status unavailable';
       renderButtons();
@@ -89,6 +93,7 @@ export function initImageEngine(invoke) {
   };
   const act = async (work) => {
     if (actionBusy) return;
+    stateRevision++;
     elements.error.hidden = true;
     setBusy(true);
     try { await work(); }
@@ -97,6 +102,7 @@ export function initImageEngine(invoke) {
   };
 
   for (const control of [elements.mode, elements.idle, elements.autoStart]) {
+    control.addEventListener('input', () => { settingsDirty = true; });
     control.addEventListener('change', () => { settingsDirty = true; });
   }
   elements.configure.addEventListener('click', () => act(async () => {

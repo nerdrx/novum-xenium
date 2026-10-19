@@ -179,10 +179,14 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
   await page.evaluate(() => { window.__zvram.router_supported = false; });
+  await page.evaluate(() => { window.__zvram.router = { ...window.__zvram.router, running: true, state: 'running', recovery_enabled: true }; });
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
   assert.match(await page.locator('#zvram-status').textContent(), /llama-server build needs model-router support/i);
   assert.equal(await page.locator('#zvram-start').isDisabled(), true);
+  assert.equal(await page.locator('#zvram-stop').isEnabled(), true, 'an owned running router remains stoppable when current build capability is unavailable');
+  await page.locator('#zvram-stop').click();
+  await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_action' && call.args.request.action === 'router_stop'));
   await page.evaluate(() => { window.__zvram.router_supported = true; });
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
@@ -246,7 +250,7 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.locator('#zvram-connect').click();
   await page.waitForFunction(() => document.getElementById('zvram-status').textContent.includes('Provider connected'));
   const requests = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').map(call => call.args.request));
-  assert.deepEqual(requests.map(request => request.action), ['stop', 'router_configure', 'router_configure', 'router_configure', 'router_configure', 'router_configure', 'router_start', 'router_configure', 'router_start', 'router_register', 'router_register']);
+  assert.deepEqual(requests.map(request => request.action), ['stop', 'router_stop', 'router_configure', 'router_configure', 'router_configure', 'router_configure', 'router_configure', 'router_start', 'router_configure', 'router_start', 'router_register', 'router_register']);
   assert.deepEqual(requests.find(request => request.action === 'router_configure' && request.port === 8098), {
     action: 'router_configure', mode: 'zvram', auto_start: true, port: 8098, context: 8192, compressed: true,
     live_control: true, min_available_mib: 16384, ignore_swap_guard: false, resident_mib: 12000, cold_mib: 22000,

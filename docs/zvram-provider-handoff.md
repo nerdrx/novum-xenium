@@ -171,3 +171,8 @@ do not override a user-disabled endpoint. The image endpoint’s enable toggle
 records routing preference separately from gateway health. Failed catalog
 refreshes retain saved models and show a retry hint; stale responses cannot
 replace a newer successful refresh.
+
+A transient rescan failure does not block image-gateway recovery when this
+backend already published a trusted catalog with matching mode, binary, idle
+timeout, model IDs and commands. Changed settings, an untrusted initial cache,
+Stop and shutdown still prevent that recovery. No image request is replayed.

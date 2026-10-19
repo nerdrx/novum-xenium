@@ -39,7 +39,7 @@ def test_cache_scan_does_not_block_controls_or_duplicate_scans(tmp_path, monkeyp
         engine.close()
 
 
-def _patch_start_without_worker(monkeypatch, engine):
+def _patch_start_without_worker(monkeypatch, engine, binary="/unused/sd-server"):
     launches = []
 
     class FakeSocket:
@@ -56,7 +56,7 @@ def _patch_start_without_worker(monkeypatch, engine):
         def wait(self, **_kwargs): return self.returncode
 
     monkeypatch.setattr(socket, "socket", FakeSocket)
-    monkeypatch.setattr(engine, "_binary", lambda: ("/unused/sd-server", "cpu"))
+    monkeypatch.setattr(engine, "_binary", lambda: (binary, "cpu"))
     monkeypatch.setattr(engine, "health", lambda: {})
     monkeypatch.setattr(engine, "register_endpoint", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -64,6 +64,13 @@ def _patch_start_without_worker(monkeypatch, engine):
         lambda *_args, **_kwargs: launches.append(FakeProcess()) or launches[-1],
     )
     return launches
+
+
+def _seed_trusted_catalog(monkeypatch, engine, binary="/unused/sd-server", models=None):
+    monkeypatch.setattr(engine, "_binary", lambda: (binary, "cpu"))
+    monkeypatch.setattr(engine, "register_endpoint", lambda **_kwargs: None)
+    monkeypatch.setattr("src.local_image_engine.image_catalog", lambda *_args: (models or [], []))
+    assert engine.refresh(rows=[])
 
 
 def _fake_health_response(monkeypatch, responses):
@@ -192,6 +199,143 @@ def test_auto_start_disabled_defers_without_manual_intent(tmp_path, monkeypatch)
         assert engine.desired_running is None and launches == []
     finally:
         engine.close()
+
+
+def test_background_recovery_uses_same_mode_catalog_after_transient_scan_failure(tmp_path, monkeypatch):
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    _seed_trusted_catalog(monkeypatch, engine)
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    launched = threading.Event()
+    from src import local_image_engine as engine_module
+    popen = engine_module.subprocess.Popen
+
+    def tracked_popen(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        launched.set()
+        return process
+
+    monkeypatch.setattr(engine_module.subprocess, "Popen", tracked_popen)
+    engine.desired_running = True
+    monkeypatch.setattr(engine, "scanner", lambda: (_ for _ in ()).throw(ValueError("scanner unavailable")))
+    engine.run()
+    try:
+        assert launched.wait(2), "a matching previously refreshed catalog should recover the owned gateway"
+        assert len(launches) == 1
+        assert engine.error == "scanner unavailable"
+    finally:
+        engine.close()
+
+
+def test_cached_recovery_validates_nonempty_catalog_and_preserves_model_ids(tmp_path, monkeypatch):
+    binary = tmp_path / "bin" / "sd-server"
+    binary.parent.mkdir()
+    binary.write_text("fake executable")
+    binary.chmod(0o755)
+    model = {"id": "sd-cpp-local:owner--repo:checkpoint", "name": "owner/repo · checkpoint.gguf",
+             "size_bytes": 8, "command": [str(binary), "-m", str(tmp_path / "checkpoint.gguf"),
+                                               "--backend", "cpu"]}
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    launches = _patch_start_without_worker(monkeypatch, engine, binary=str(binary))
+    _seed_trusted_catalog(monkeypatch, engine, binary=str(binary), models=[model])
+    path = engine.home / "image-models.json"
+    original = path.read_text()
+    signature = engine._catalog_signature
+
+    changed = json.loads(original)
+    changed["models"][0]["command"][1] = "-p"
+    path.write_text(json.dumps(changed))
+    with engine.lock:
+        assert not engine._cached_catalog_matches(signature)
+
+    changed = json.loads(original)
+    changed["models"][0]["id"] = "sd-cpp-local:other--repo:checkpoint"
+    changed["default_model"] = changed["models"][0]["id"]
+    path.write_text(json.dumps(changed))
+    with engine.lock:
+        assert not engine._cached_catalog_matches(signature)
+
+    path.write_text(original)
+    registered_ids = []
+    registered = threading.Event()
+
+    def capture_registration(**_kwargs):
+        registered_ids.append([row["id"] for row in engine.models])
+        registered.set()
+
+    monkeypatch.setattr(engine, "register_endpoint", capture_registration)
+    launched = threading.Event()
+    from src import local_image_engine as engine_module
+    popen = engine_module.subprocess.Popen
+
+    def tracked_popen(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        launched.set()
+        return process
+
+    monkeypatch.setattr(engine_module.subprocess, "Popen", tracked_popen)
+    engine.desired_running = True
+    monkeypatch.setattr(engine, "scanner", lambda: (_ for _ in ()).throw(ValueError("scanner unavailable")))
+    engine.run()
+    try:
+        assert launched.wait(2)
+        assert registered.wait(2)
+        assert len(launches) == 1
+        assert registered_ids == [[model["id"]]]
+    finally:
+        engine.close()
+
+
+@pytest.mark.parametrize("change", ["mode", "idle_seconds"])
+def test_background_recovery_rejects_catalog_after_settings_change(tmp_path, monkeypatch, change):
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    _seed_trusted_catalog(monkeypatch, engine)
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    engine.desired_running = True
+    engine.configure({change: "vulkan" if change == "mode" else 600})
+    engine._start_if_desired(recover_cached_catalog=True)
+    assert launches == []
+    engine.close()
+
+
+@pytest.mark.parametrize("action", ["stop", "close"])
+def test_cached_recovery_cannot_outlive_stop_or_close(tmp_path, monkeypatch, action):
+    engine = LocalImageEngine(tmp_path, scanner=lambda: [])
+    _seed_trusted_catalog(monkeypatch, engine)
+    launches = _patch_start_without_worker(monkeypatch, engine)
+    engine.desired_running = True
+    entered, release = threading.Event(), threading.Event()
+    ensure_start = engine._ensure_start
+
+    def gated_ensure(generation, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return ensure_start(generation, **kwargs)
+
+    monkeypatch.setattr(engine, "_ensure_start", gated_ensure)
+    worker = threading.Thread(target=lambda: engine._start_if_desired(recover_cached_catalog=True))
+    worker.start()
+    closer = None
+    try:
+        assert entered.wait(1)
+        if action == "stop":
+            engine.stop()
+        else:
+            closer = threading.Thread(target=engine.close)
+            closer.start()
+            assert engine.closed.wait(1)
+        release.set()
+        worker.join(2)
+        if closer:
+            closer.join(2)
+        assert not worker.is_alive()
+        assert launches == []
+    finally:
+        release.set()
+        worker.join(3)
+        if closer:
+            closer.join(3)
+        if not engine.closed.is_set():
+            engine.close()
 
 
 def test_endpoint_registration_preserves_user_preference_and_explicit_lifecycle(tmp_path, monkeypatch):

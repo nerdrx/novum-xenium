@@ -63,11 +63,32 @@ Do not add broader permissions just to bypass an unexplained error.
 A valid batch can succeed partly before a later tool returns an error.
 Inspect each result before retrying; completed actions are not rolled back.
 
+For a constrained project search, give a command such as
+`find . -maxdepth 2 -name package.json` and check that the tool result uses it.
+A supplied host-shell project search is not replaced with the generic project
+inventory; automatic inventory remains available as a recovery fallback.
+
 For repository tests, give an exact command when the target or selector matters,
 for example `Run pytest tests/test_parser.py -m 'not integration'`. Check the
 reported command and exit status. A full-suite run does not satisfy a request
 that excludes integration tests; ask Novum to inspect the project's test
 configuration if the correct command is unclear.
+
+For host-shell coding runs, a supplied Node, unittest, or package-manager
+test command is not replaced with pytest merely because it uses a different
+runner. Pytest interpreter selection preserves the supplied targets,
+selectors, timeout, and other call options. If no command is supplied, the
+automatic runner probe prefers a package's npm test script over a generic
+`tests/` directory, while a root `pyproject.toml` or `pytest.ini` takes priority.
+Use `Run all tests` or `Run the full test suite` to request the full suite
+instead of changed-file selection; give the exact command when scope matters.
+
+For inspection without execution, use **Plan mode**. A request such as
+`Do not run tests; just read main.py` suppresses the automatic test fallback,
+but text instructions do not replace read-only permissions. Inspect any
+model-proposed command and its approval card before allowing it. A command
+printed in a response, a help screen, or test collection alone is not proof
+that tests ran successfully.
 
 If the failure says containment is unavailable, the Docker runtime could not
 create required private filesystem or PID namespaces. Check supported host

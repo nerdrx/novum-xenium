@@ -36005,20 +36005,6 @@ async def stream_agent_loop(
                     block = type(block)(block.tool_type, test_content)
                     full_command = test_content
                     cmd_display = test_content
-            if (
-                block.tool_type == "host_shell"
-                and _tui_project_discovery_request
-                and "git_roots:" not in full_command
-            ):
-                discovery_command = _tui_local_fallback_shell_command(_last_user)
-                if discovery_command:
-                    logger.info(
-                        "Normalized project discovery host command to authoritative inventory"
-                    )
-                    block = type(block)(block.tool_type, discovery_command)
-                    full_command = discovery_command
-                    cmd_display = discovery_command
-
             if block.tool_type == "host_shell":
                 command_workspace = workspace
                 if not command_workspace and isinstance(client_runtime_context, dict):

@@ -298,6 +298,78 @@ def test_no_tool_fallback_leaves_a_provided_model_tool_call_untouched():
     assert namespace["tool_blocks"] == [call]
 
 
+def test_project_discovery_keeps_explicit_host_search_and_fallback_inventory():
+    prompt = "Find my local projects using find . -maxdepth 2 -name package.json"
+    runtime = {
+        "surface": "odysseus-tui",
+        "host_shell_bridge": {"url": "http://host.docker.internal:17654/run"},
+        "runtime_execution_contract": {"local_workspace_tasks": "use_host_shell_bridge"},
+    }
+    local_turn = al._tui_local_tool_constrained_turn(
+        prompt, workspace="/synthetic", client_runtime_context=runtime
+    )
+    tree = ast.parse(inspect.getsource(al.stream_agent_loop))
+    discovery_init = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name)
+                and target.id == "_tui_project_discovery_request"
+                for target in node.targets)
+    )
+    code = compile(ast.fix_missing_locations(ast.Module(body=[discovery_init], type_ignores=[])),
+                   "<actual-project-discovery-init>", "exec")
+    namespace = dict(vars(al), _last_user=prompt, _tui_local_execution_turn=local_turn)
+    exec(code, namespace)
+    assert local_turn is True
+    assert namespace["_tui_project_discovery_request"] is True
+
+    original = {
+        "command": "find . -maxdepth 2 -name package.json",
+        "timeout": 7,
+        "env": {"SYNTHETIC": "1"},
+    }
+    encoded = json.dumps(original)
+    block = al.ToolBlock("host_shell", encoded)
+    normalizers = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and any(isinstance(name, ast.Name) and name.id in {
+            "_tui_test_request", "_tui_project_discovery_request"
+        } for name in ast.walk(node.test))
+        and any(isinstance(assignment, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == "full_command"
+                        for target in assignment.targets)
+                for assignment in ast.walk(node))
+    ]
+    namespace.update(
+        block=block, full_command=encoded, cmd_display=encoded,
+        _tui_test_request=False,
+        logger=type("Logger", (), {"info": lambda *args: None})(),
+    )
+    code = compile(ast.fix_missing_locations(ast.Module(
+        body=sorted(normalizers, key=lambda node: node.lineno), type_ignores=[]
+    )), "<actual-host-command-normalizers>", "exec")
+    exec(code, namespace)
+    assert namespace["full_command"] == encoded
+    assert namespace["block"].content == encoded
+    assert al._tui_host_command_text(block.content) == original["command"]
+    assert al._tui_normalize_workspace_host_command(block.content, "/synthetic") is None
+    assert json.loads(block.content) == original
+
+    fallback = _tui_local_fallback_shell_command(
+        "Search my computer for the local project I was working on"
+    )
+    assert fallback and "git_roots:" in fallback and "project_manifests:" in fallback
+    assert al._tui_project_discovery_summary(
+        "git_roots:\n./synthetic-project\nproject_manifests:\n"
+        "./synthetic-project/package.json\n"
+    ) == (
+        "Projects found in the active workspace:\n"
+        "- ./synthetic-project\n"
+        "Select a project path and I can inspect its files or run its tests."
+    )
+
+
 def test_actual_completion_accepts_test_runner_or_exact_server_fallback_attempt():
     tree = ast.parse(inspect.getsource(al.stream_agent_loop))
     branch = next(

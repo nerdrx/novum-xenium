@@ -3309,6 +3309,7 @@ import { invalidateSettings } from './appConfig.js';
       let roundText = '';             // Text accumulated for current round
       let roundReplyText = null;      // Reply-only text after a thinking transition
       let currentToolBubble = null;   // Current tool execution bubble
+      const startedToolNodes = [];    // Tool nodes owned by this stream's tool_start events
       let lastToolThread = null;      // Visible tool timeline for tool-only turns
       let finishEditorButton = null;
       const clearFinishEditorButton = () => {
@@ -5265,6 +5266,7 @@ import { invalidateSettings } from './appConfig.js';
                 // Expand/collapse via delegated click handler (init at module bottom).
                 threadWrap.appendChild(node);
                 currentToolBubble = node;
+                startedToolNodes.push(node);
                 if (_isPrivateBrowserTool(json.tool)) {
                   _showPrivateBrowserPreview(json.command || '', node.querySelector('.agent-thread-content'));
                 }
@@ -5823,6 +5825,24 @@ import { invalidateSettings } from './appConfig.js';
       if (spinner && spinner.element) { try { spinner.destroy(); } catch (_) {} spinner = null; }
       _cancelThinkingTimer();
       _removeThinkingSpinner();
+      // A successful stream may close after tool_start without delivering a
+      // tool_output. Stop only this stream's unfinished nodes and say that no
+      // receipt arrived; completed and approval-gated nodes keep their state.
+      for (const node of startedToolNodes) {
+        if (!node.classList.contains('running')) continue;
+        if (node._waveInterval) { clearInterval(node._waveInterval); node._waveInterval = null; }
+        if (node._elapsedTicker) { clearInterval(node._elapsedTicker); node._elapsedTicker = null; }
+        node.classList.remove('running');
+        const wave = node.querySelector('.agent-thread-wave');
+        if (wave) wave.textContent = '';
+        const header = node.querySelector('.agent-thread-header');
+        if (header && !header.querySelector('.agent-thread-status')) {
+          const status = document.createElement('span');
+          status.className = 'agent-thread-status';
+          status.textContent = 'No result received';
+          header.appendChild(status);
+        }
+      }
       // Stop any thread pulse animations
       document.querySelectorAll('.agent-thread.streaming').forEach(t => t.classList.remove('streaming'));
       // --- Final render (skip if stream was ever backgrounded or currently in background) ---

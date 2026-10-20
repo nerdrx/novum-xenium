@@ -6284,6 +6284,10 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
           attachments: attachments?.length ? attachments : null,
           draft_uid: doc?._emailDraftUid || null,
           draft_folder: doc?._emailDraftFolder || null,
+          draft_account_id: doc?._emailDraftAccountId || null,
+          draft_uidvalidity: doc?._emailDraftUidValidity || null,
+          draft_mailbox_scope: doc?._emailDraftMailboxScope || null,
+          resolve_for_send: true,
         }),
       });
       let data = null;
@@ -6292,8 +6296,11 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
         throw new Error(data?.error || `Draft save failed (${res.status})`);
       }
       if (doc) {
-        doc._emailDraftUid = data.draft_uid || doc._emailDraftUid || null;
-        doc._emailDraftFolder = data.draft_folder || doc._emailDraftFolder || null;
+        doc._emailDraftUid = data.draft_uid || null;
+        doc._emailDraftFolder = data.draft_folder || null;
+        doc._emailDraftAccountId = data.account_id || null;
+        doc._emailDraftUidValidity = data.draft_uidvalidity || null;
+        doc._emailDraftMailboxScope = data.mailbox_scope || null;
       }
       return data;
     } catch (e) {
@@ -6387,11 +6394,14 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
           to, cc: cc || null, bcc: bcc || null, subject, body, body_html: bodyHtml,
           in_reply_to: inReplyTo || null, references: references || null,
           attachments: attachments.length > 0 ? attachments : null,
-          account_id: activeAccountId,
+          account_id: recoveryDraft.send_account_id || activeAccountId,
           source_uid: sourceUid || null,
           source_folder: sourceFolder || null,
           draft_uid: recoveryDraft.draft_uid || doc?._emailDraftUid || null,
           draft_folder: recoveryDraft.draft_folder || doc?._emailDraftFolder || null,
+          draft_account_id: recoveryDraft.account_id || null,
+          draft_uidvalidity: recoveryDraft.draft_uidvalidity || null,
+          draft_mailbox_scope: recoveryDraft.mailbox_scope || null,
           wait_for_delivery: true,
         }),
       });
@@ -6545,6 +6555,9 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
           attachments: (saveDoc?._composeAtts || []).map(a => a.token),
           draft_uid: saveDoc?._emailDraftUid || null,
           draft_folder: saveDoc?._emailDraftFolder || null,
+          draft_account_id: saveDoc?._emailDraftAccountId || null,
+          draft_uidvalidity: saveDoc?._emailDraftUidValidity || null,
+          draft_mailbox_scope: saveDoc?._emailDraftMailboxScope || null,
         }),
       });
       const data = await res.json();
@@ -6552,6 +6565,9 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
         if (saveDoc && docs.get(saveDocId) === saveDoc) {
           saveDoc._emailDraftUid = data.draft_uid || null;
           saveDoc._emailDraftFolder = data.draft_folder || null;
+          saveDoc._emailDraftAccountId = data.account_id || null;
+          saveDoc._emailDraftUidValidity = data.draft_uidvalidity || null;
+          saveDoc._emailDraftMailboxScope = data.mailbox_scope || null;
         }
         if (uiModule) uiModule.showToast('Draft saved to mailbox');
       } else {
@@ -12035,6 +12051,9 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
     if (!doc?.id) throw new Error('Draft open failed: missing document');
     doc._emailDraftUid = data.uid || data.draft_uid || null;
     doc._emailDraftFolder = data.folder || data.draft_folder || null;
+    doc._emailDraftAccountId = data.account_id || null;
+    doc._emailDraftUidValidity = data.uidvalidity || data.draft_uidvalidity || null;
+    doc._emailDraftMailboxScope = data.mailbox_scope || null;
     return await injectFreshDoc(doc, { isCurrent }) === false ? null : doc.id;
   }
 
@@ -12474,6 +12493,8 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
   /** Add a document to the tabs map */
   function addDocToTabs(doc, sessionId) {
     const existing = docs.get(doc.id);
+    const draftMeta = doc._emailDraftUid || doc._emailDraftFolder || doc._emailDraftAccountId || doc._emailDraftUidValidity || doc._emailDraftMailboxScope
+      ? doc : existing;
     docs.set(doc.id, {
       id: doc.id,
       title: doc.title || '',
@@ -12484,6 +12505,11 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
       userSetLanguage: !!doc.language,
       _composeAtts: existing?._composeAtts,
       _skipLocalDraftOnce: !!doc._skipLocalDraftOnce,
+      _emailDraftUid: draftMeta?._emailDraftUid || null,
+      _emailDraftFolder: draftMeta?._emailDraftFolder || null,
+      _emailDraftAccountId: draftMeta?._emailDraftAccountId || null,
+      _emailDraftUidValidity: draftMeta?._emailDraftUidValidity || null,
+      _emailDraftMailboxScope: draftMeta?._emailDraftMailboxScope || null,
       // Provenance for the "Send signed reply" flow
       sourceEmailUid:       doc.source_email_uid || null,
       sourceEmailFolder:    doc.source_email_folder || null,

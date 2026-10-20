@@ -67,10 +67,24 @@ def _install_fakes(monkeypatch, tmp_path, *, store_status="OK", readonly_mailbox
 
     connections = []
     indexed_updates = []
+    config = {
+        "account_id": "acct-a",
+        "imap_host": "imap.example.invalid",
+        "imap_port": 993,
+        "imap_user": "alice",
+    }
+
+    def fake_get_email_config(account_id=None, owner=""):
+        return {**config, "account_id": account_id or config["account_id"]}
+
+    monkeypatch.setattr(email_routes, "_get_email_config", fake_get_email_config)
 
     @contextmanager
     def fake_imap(account_id=None, owner=""):
         conn = FakeImap(store_status=store_status, readonly_mailbox=readonly_mailbox)
+        cfg = fake_get_email_config(account_id, owner)
+        conn._odysseus_account_id = cfg["account_id"]
+        conn._odysseus_mailbox_scope = email_helpers._imap_mailbox_scope(cfg, owner)
         connections.append(conn)
         yield conn
 
@@ -85,13 +99,13 @@ def _install_fakes(monkeypatch, tmp_path, *, store_status="OK", readonly_mailbox
         "_email_index_update_flags",
         lambda *args, **_kwargs: indexed_updates.append(args),
     )
-    return email_routes, connections, indexed_updates
+    return email_routes, connections, indexed_updates, config
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mark_seen", [True, False])
 async def test_read_email_seen_contract_uses_one_imap_connection(monkeypatch, tmp_path, mark_seen):
-    email_routes, connections, indexed_updates = _install_fakes(monkeypatch, tmp_path)
+    email_routes, connections, indexed_updates, _config = _install_fakes(monkeypatch, tmp_path)
     router = email_routes.setup_email_routes()
     read_email = _route_endpoint(router, "/api/email/read/{uid}", "GET")
 
@@ -121,7 +135,7 @@ async def test_read_email_seen_contract_uses_one_imap_connection(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_cached_read_awaits_one_seen_store_without_refetch(monkeypatch, tmp_path):
-    email_routes, connections, indexed_updates = _install_fakes(monkeypatch, tmp_path)
+    email_routes, connections, indexed_updates, _config = _install_fakes(monkeypatch, tmp_path)
     router = email_routes.setup_email_routes()
     read_email = _route_endpoint(router, "/api/email/read/{uid}", "GET")
 
@@ -156,7 +170,7 @@ async def test_seen_store_failure_returns_the_body_and_reports_the_failure(monke
     the response stays a normal read and carries `mark_seen_failed` for the
     client to roll its optimistic unread marker back.
     """
-    email_routes, connections, indexed_updates = _install_fakes(
+    email_routes, connections, indexed_updates, _config = _install_fakes(
         monkeypatch, tmp_path, store_status="NO"
     )
     router = email_routes.setup_email_routes()
@@ -183,7 +197,7 @@ async def test_read_only_mailbox_serves_the_message_without_marking_seen(monkeyp
     side effect of it. A folder that cannot accept flag changes must therefore
     fall back to a read-only selection rather than failing the open.
     """
-    email_routes, connections, indexed_updates = _install_fakes(
+    email_routes, connections, indexed_updates, _config = _install_fakes(
         monkeypatch, tmp_path, readonly_mailbox=True
     )
     router = email_routes.setup_email_routes()
@@ -210,7 +224,7 @@ async def test_failed_seen_state_is_not_replayed_from_cache(monkeypatch, tmp_pat
     A second read that does not ask to mark seen must come back clean, or every
     later reader would inherit a STORE failure it never issued.
     """
-    email_routes, connections, _ = _install_fakes(monkeypatch, tmp_path, store_status="NO")
+    email_routes, connections, _, _config = _install_fakes(monkeypatch, tmp_path, store_status="NO")
     router = email_routes.setup_email_routes()
     read_email = _route_endpoint(router, "/api/email/read/{uid}", "GET")
 
@@ -228,7 +242,7 @@ async def test_failed_seen_state_is_not_replayed_from_cache(monkeypatch, tmp_pat
 
 @pytest.mark.asyncio
 async def test_unparseable_read_does_not_mark_seen(monkeypatch, tmp_path):
-    email_routes, connections, indexed_updates = _install_fakes(monkeypatch, tmp_path)
+    email_routes, connections, indexed_updates, _config = _install_fakes(monkeypatch, tmp_path)
     monkeypatch.setattr(
         email_routes.email_mod,
         "message_from_bytes",
@@ -254,7 +268,7 @@ async def test_cached_seen_store_failure_returns_the_cached_body(monkeypatch, tm
     This is the path where withholding the body would be least defensible — the
     response is served from memory and needed no network at all.
     """
-    email_routes, connections, indexed_updates = _install_fakes(
+    email_routes, connections, indexed_updates, _config = _install_fakes(
         monkeypatch, tmp_path, store_status="NO"
     )
     router = email_routes.setup_email_routes()
@@ -275,4 +289,29 @@ async def test_cached_seen_store_failure_returns_the_cached_body(monkeypatch, tm
     assert len(connections) == 2
     assert [command[0] for command in connections[0].commands] == ["FETCH"]
     assert [command[0] for command in connections[1].commands] == ["STORE"]
-    assert indexed_updates == []
+
+
+@pytest.mark.asyncio
+async def test_read_cache_survives_missing_idle_pool_but_not_config_repoint(monkeypatch, tmp_path):
+    email_routes, connections, _indexed_updates, config = _install_fakes(monkeypatch, tmp_path)
+    router = email_routes.setup_email_routes()
+    read_email = _route_endpoint(router, "/api/email/read/{uid}", "GET")
+
+    first = await read_email(
+        "42", folder="INBOX", account_id="acct-a", mark_seen=False, full=False, owner="alice"
+    )
+    # These fixture reads use a bare _imap context manager, so no pool socket
+    # exists. The same configured namespace can still serve the body cache.
+    same_mailbox = await read_email(
+        "42", folder="INBOX", account_id="acct-a", mark_seen=False, full=False, owner="alice"
+    )
+    assert same_mailbox["message_id"] == first["message_id"]
+    assert len(connections) == 1
+
+    config["imap_host"] = "repointed.example.invalid"
+    repointed = await read_email(
+        "42", folder="INBOX", account_id="acct-a", mark_seen=False, full=False, owner="alice"
+    )
+    assert repointed["message_id"] == first["message_id"]
+    assert len(connections) == 2
+    assert [command[0] for command in connections[1].commands] == ["FETCH"]

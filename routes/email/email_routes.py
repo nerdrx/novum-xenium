@@ -55,7 +55,7 @@ from .email_helpers import (
     _get_valid_google_token, _xoauth2_bytes, _xoauth2_raw,
     make_oauth_state, verify_oauth_state,
     EmailNotConfiguredError,
-    _imap_connect, _imap, _decode_header, _detect_sent_folder, _detect_drafts_folder,
+    _imap_connect, _imap, _imap_mailbox_scope, _decode_header, _detect_sent_folder, _detect_drafts_folder,
     _extract_attachment_text, _list_attachments_from_msg, _has_visible_attachments, _is_likely_signature_image_attachment,
     _extract_attachment_to_disk, _extract_html, _extract_text,
     _fetch_sender_thread_context, _pre_retrieve_context,
@@ -95,6 +95,18 @@ def _google_oauth_imap_transport_allowed(port: int, starttls: bool) -> bool:
 
 def _google_oauth_smtp_transport_allowed(port: int, security: str) -> bool:
     return (port == 465 and security == "ssl") or (port == 587 and security == "starttls")
+
+
+def _imap_uidvalidity(conn) -> str | None:
+    try:
+        _kind, values = conn.response("UIDVALIDITY")
+        for value in values or []:
+            match = re.search(rb"\d+", value if isinstance(value, bytes) else str(value).encode())
+            if match:
+                return match.group().decode("ascii")
+    except Exception:
+        pass
+    return None
 
 def _email_style_key(account_id: str | None) -> str:
     return str(account_id or "").strip()
@@ -1971,6 +1983,21 @@ def setup_email_routes():
             for k in list(_READ_CACHE.keys())[:-128]:
                 _READ_CACHE.pop(k, None)
 
+    def _pooled_mailbox_identity(account_id, owner):
+        """Read immutable socket identity without probing the remote server."""
+        with _pool_lock:
+            entry = _IMAP_POOL.get((account_id, owner or ""))
+            if not entry:
+                return None
+            conn, last_used = entry
+            if (_time.monotonic() - last_used) >= _IMAP_IDLE_MAX:
+                return None
+            actual_account_id = getattr(conn, "_odysseus_account_id", None)
+            mailbox_scope = getattr(conn, "_odysseus_mailbox_scope", None)
+            if not mailbox_scope:
+                return None
+            return actual_account_id, mailbox_scope
+
     # Expose helpers in the closure to be used by handlers below
     router._email_pool = {
         "connect": _pooled_connect,
@@ -3675,6 +3702,7 @@ def setup_email_routes():
                 # read-only mailbox selection.
                 try:
                     select_status, _ = conn.select(_q(folder), readonly=not mark_seen)
+                    selected_folder = folder
                     if select_status != "OK":
                         resolved_folder = _resolve_mail_folder(
                             conn, folder, role=_mail_folder_role_hint(folder)
@@ -3683,6 +3711,8 @@ def setup_email_routes():
                             select_status, _ = conn.select(
                                 _q(resolved_folder), readonly=not mark_seen
                             )
+                            if select_status == "OK":
+                                selected_folder = resolved_folder
                         if select_status != "OK":
                             return {"error": f"Could not open email folder: {folder}"}
                 except Exception as select_exc:
@@ -3698,8 +3728,12 @@ def setup_email_routes():
                     select_status, _ = conn.select(_q(folder), readonly=True)
                     if select_status != "OK":
                         return {"error": f"Could not open email folder: {folder}"}
+                    selected_folder = folder
                     mark_seen_failed = True
                 _t_select = _t.monotonic() - _t0
+                uidvalidity = _imap_uidvalidity(conn)
+                mailbox_account_id = getattr(conn, "_odysseus_account_id", None)
+                mailbox_scope = getattr(conn, "_odysseus_mailbox_scope", None)
                 fetch_query = "(BODY.PEEK[])" if full else f"(BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.{preview_bytes}>)"
                 status, msg_data = _imap_uid_fetch(conn, uid, fetch_query)
                 _t_fetch = _t.monotonic() - _t0
@@ -3861,7 +3895,10 @@ def setup_email_routes():
 
             return {
                 "uid": uid,
-                "folder": folder,
+                "folder": selected_folder,
+                "uidvalidity": uidvalidity,
+                "account_id": mailbox_account_id,
+                "mailbox_scope": mailbox_scope,
                 "message_id": message_id.strip(),
                 "subject": subject,
                 "from_name": sender_name or sender_addr,
@@ -3891,10 +3928,15 @@ def setup_email_routes():
             logger.error(f"Failed to read email {uid}: {e}")
             return {"error": "Mail operation failed"}
 
-    def _mark_email_seen_sync(uid, folder, account_id, owner):
+    def _mark_email_seen_sync(uid, folder, account_id, owner, expected_account_id=None, expected_scope=None):
         """Synchronously mark a cached email seen and report success."""
         try:
             with _imap(account_id, owner=owner) as conn:
+                if expected_scope and (
+                    getattr(conn, "_odysseus_account_id", None) != expected_account_id
+                    or getattr(conn, "_odysseus_mailbox_scope", None) != expected_scope
+                ):
+                    return False
                 conn.select(_q(folder), readonly=False)
                 status, _ = conn.uid("STORE", _uid_bytes(uid), "+FLAGS", "(\\Seen)")
                 if status != "OK":
@@ -3926,41 +3968,63 @@ def setup_email_routes():
             if account_id and not fixture_result.get("error"):
                 fixture_result = {**fixture_result, "account_id": account_id}
             return fixture_result
-        ck = _read_cache_key(account_id, folder, uid, owner=owner) + (int(bool(full)),)
-        cached = _read_cache_get(ck)
+        # Resolve the current destination without opening a socket. This keeps
+        # the 30-minute body cache useful after the idle IMAP pool expires,
+        # while preventing a config repoint from reusing a different mailbox.
+        try:
+            current_cfg = _get_email_config(account_id, owner=owner)
+            cached_account_id = current_cfg.get("account_id")
+            cached_scope = _imap_mailbox_scope(current_cfg, owner)
+        except Exception:
+            cached_account_id, cached_scope = None, None
+        ck = (
+            _read_cache_key(cached_account_id, folder, uid, owner=owner)
+            + (int(bool(full)), cached_scope)
+            if cached_scope else None
+        )
+        cached = _read_cache_get(ck) if ck else None
+        if cached is not None and (
+            cached.get("account_id") != cached_account_id
+            or cached.get("mailbox_scope") != cached_scope
+            or cached.get("attachment_version") != EMAIL_READ_ATTACHMENT_VERSION
+        ):
+            cached = None
         if cached is not None:
-            # Older cached read responses lack the thread-attachment fallback.
-            # Fetch once so replies that reference prior attachments can show
-            # those files without waiting for cache expiry.
-            if cached.get("attachment_version") != EMAIL_READ_ATTACHMENT_VERSION:
-                cached = None
-        if cached is not None:
-            # A cache hit already holds a complete, valid message. Await the
-            # STORE so the response reports the real flag state, but never let
-            # a failed STORE withhold a body we are holding in memory.
             if mark_seen and not await _asyncio.to_thread(
-                _mark_email_seen_sync, uid, folder, account_id, owner
+                _mark_email_seen_sync, uid, folder, account_id, owner,
+                cached_account_id, cached_scope,
             ):
                 return {**cached, "mark_seen_failed": True}
             return cached
-        if not full:
-            persisted = _email_preview_cache_get(owner, account_id, folder, uid)
-            if persisted and persisted.get("attachment_version") == EMAIL_READ_ATTACHMENT_VERSION:
+        if cached_scope and not full:
+            persisted = _email_preview_cache_get(owner, cached_account_id, folder, uid)
+            if (
+                persisted
+                and persisted.get("attachment_version") == EMAIL_READ_ATTACHMENT_VERSION
+                and persisted.get("account_id") == cached_account_id
+                and persisted.get("mailbox_scope") == cached_scope
+            ):
                 _read_cache_put(ck, persisted)
                 if mark_seen and not await _asyncio.to_thread(
-                    _mark_email_seen_sync, uid, folder, account_id, owner
+                    _mark_email_seen_sync, uid, folder, account_id, owner,
+                    cached_account_id, cached_scope,
                 ):
                     return {**persisted, "mark_seen_failed": True}
                 return persisted
         result = await _asyncio.to_thread(_read_email_sync, uid, folder, account_id, owner, mark_seen, full)
         if result and not result.get("error"):
-            # `mark_seen_failed` describes this request, not the message, so it
-            # must not enter either cache — a later reader would otherwise be
-            # told a STORE failed that it never issued.
-            cacheable = {k: v for k, v in result.items() if k != "mark_seen_failed"}
-            _read_cache_put(ck, cacheable)
-            if not full:
-                _email_preview_cache_put(owner, account_id, folder, uid, cacheable)
+            actual_account_id = result.get("account_id")
+            actual_scope = result.get("mailbox_scope")
+            if actual_scope:
+                actual_ck = (
+                    _read_cache_key(actual_account_id, folder, uid, owner=owner)
+                    + (int(bool(full)), actual_scope)
+                )
+                # `mark_seen_failed` is per-request and must not be cached.
+                cacheable = {k: v for k, v in result.items() if k != "mark_seen_failed"}
+                _read_cache_put(actual_ck, cacheable)
+                if not full:
+                    _email_preview_cache_put(owner, actual_account_id, folder, uid, cacheable)
         return result
 
     def _schedule_recent_email_warm(emails: list, folder: str, account_id: str | None, owner: str):
@@ -3984,7 +4048,11 @@ def setup_email_routes():
                 size = 0
             if size > _WARM_MAX_BYTES:
                 continue
-            ck = _read_cache_key(account_id, folder, uid, owner=owner) + (0,)
+            identity = _pooled_mailbox_identity(account_id, owner)
+            if not identity:
+                return
+            actual_account_id, mailbox_scope = identity
+            ck = _read_cache_key(actual_account_id, folder, uid, owner=owner) + (0, mailbox_scope)
             if _read_cache_get(ck) is not None or ck in _WARMING_READS:
                 continue
             _WARMING_READS.add(ck)
@@ -4002,8 +4070,12 @@ def setup_email_routes():
                     continue
                 try:
                     result = await _asyncio.to_thread(_read_email_sync, uid, folder, account_id, owner, False, False)
-                    if result and not result.get("error"):
-                        _read_cache_put(ck, result)
+                    if result and not result.get("error") and result.get("mailbox_scope"):
+                        actual_ck = (
+                            _read_cache_key(result.get("account_id"), folder, uid, owner=owner)
+                            + (0, result["mailbox_scope"])
+                        )
+                        _read_cache_put(actual_ck, result)
                 except Exception as e:
                     logger.debug(f"email read warm skipped uid={uid}: {e}")
                 finally:
@@ -5761,6 +5833,9 @@ def setup_email_routes():
         _source_folder = (req.source_folder or "INBOX").strip() or "INBOX"
         _draft_uid = (req.draft_uid or "").strip()
         _draft_folder = (req.draft_folder or "").strip()
+        _draft_account_id = (req.draft_account_id or "").strip()
+        _draft_uidvalidity = (req.draft_uidvalidity or "").strip()
+        _draft_mailbox_scope = (req.draft_mailbox_scope or "").strip()
         _oauth_provider = cfg.get("oauth_provider") or ""
         _oauth_access_token = cfg.get("oauth_access_token") or ""
         _oauth_refresh_token = cfg.get("oauth_refresh_token") or ""
@@ -5864,13 +5939,25 @@ def setup_email_routes():
                                         continue
                             except Exception as e:
                                 logger.warning(f"Failed to auto-mark source as answered: {e}")
-                        if _draft_uid and _draft_folder and sent_append_ok:
+                        actual_imap_account_id = getattr(imap, "_odysseus_account_id", None)
+                        actual_mailbox_scope = getattr(imap, "_odysseus_mailbox_scope", None)
+                        if (
+                            _draft_uid and _draft_folder and sent_append_ok
+                            and actual_imap_account_id
+                            and _draft_account_id == actual_imap_account_id
+                            and _draft_uidvalidity and _draft_mailbox_scope
+                            and _draft_mailbox_scope == actual_mailbox_scope
+                        ):
                             try:
                                 st_draft, _ = imap.select(_q(_draft_folder), readonly=False)
-                                if st_draft == "OK" and _store_email_flag(imap, _draft_uid, "\\Deleted", add=True):
+                                validity_matches = (
+                                    st_draft == "OK"
+                                    and _imap_uidvalidity(imap) == _draft_uidvalidity
+                                )
+                                if validity_matches and _store_email_flag(imap, _draft_uid, "\\Deleted", add=True):
                                     imap.expunge()
                                     logger.info(f"Removed sent draft UID {_draft_uid} from {_draft_folder}")
-                                else:
+                                elif st_draft == "OK":
                                     logger.warning(f"Failed to remove sent draft UID {_draft_uid} from {_draft_folder}")
                             except Exception as e:
                                 logger.warning(f"Failed to remove sent draft UID {_draft_uid}: {e}")
@@ -5912,7 +5999,15 @@ def setup_email_routes():
         """
         if req.account_id:
             _assert_owns_account(req.account_id, owner)
-        cfg = _get_email_config(req.account_id, owner=owner)
+        try:
+            cfg = (
+                _resolve_send_config(req.account_id, owner=owner)
+                if req.resolve_for_send else _get_email_config(req.account_id, owner=owner)
+            )
+        except Exception as e:
+            logger.warning(f"No draft mailbox resolved: {e}")
+            return {"success": False, "error": str(e) or "Email account unavailable"}
+        _draft_acct = cfg.get("account_id") or None
 
         # Multipart plain+HTML when the WYSIWYG composer supplied HTML, so a
         # reopened draft keeps its formatting; plain MIMEText otherwise.
@@ -5944,45 +6039,68 @@ def setup_email_routes():
         if req.references:
             msg["References"] = req.references
 
-        _draft_acct = req.account_id
-
         def _do_append():
             try:
                 with _imap(_draft_acct, owner=owner) as imap:
+                    actual_draft_account_id = getattr(imap, "_odysseus_account_id", None)
+                    actual_draft_scope = getattr(imap, "_odysseus_mailbox_scope", None)
                     drafts_folder = _detect_drafts_folder(imap)
                     append_st, append_data = imap.append(drafts_folder, "\\Draft", None, msg.as_bytes())
                     if append_st != "OK":
-                        return (f"IMAP APPEND failed: {append_st}", None, None)
+                        return (f"IMAP APPEND failed: {append_st}", None, None, None, None, None)
                     draft_uid = None
+                    draft_uidvalidity = None
                     if append_data:
-                        m = re.search(rb"APPENDUID\s+\d+\s+(\d+)", append_data[0] or b"")
+                        m = re.search(rb"APPENDUID\s+(\d+)\s+(\d+)", append_data[0] or b"")
                         if m:
-                            draft_uid = m.group(1).decode("ascii", errors="ignore")
+                            draft_uidvalidity = m.group(1).decode("ascii", errors="ignore")
+                            draft_uid = m.group(2).decode("ascii", errors="ignore")
                     # Resaving an already-open draft creates a new IMAP
                     # message. Remove the previous copy only after the new
                     # append succeeded, so a transient IMAP failure cannot
                     # destroy the user's recovery copy.
                     old_uid = (req.draft_uid or "").strip()
                     old_folder = (req.draft_folder or "").strip()
-                    if old_uid and old_folder and old_uid != (draft_uid or ""):
+                    old_account_id = (req.draft_account_id or "").strip()
+                    old_uidvalidity = (req.draft_uidvalidity or "").strip()
+                    old_mailbox_scope = (req.draft_mailbox_scope or "").strip()
+                    if (
+                        old_uid and old_folder and old_uid != (draft_uid or "")
+                        and actual_draft_account_id and old_account_id == actual_draft_account_id
+                        and actual_draft_scope and old_mailbox_scope == actual_draft_scope
+                        and old_uidvalidity
+                    ):
                         try:
                             st_old, _ = imap.select(_q(old_folder), readonly=False)
-                            if st_old == "OK" and _store_email_flag(imap, old_uid, "\\Deleted", add=True):
+                            validity_matches = (
+                                st_old == "OK"
+                                and _imap_uidvalidity(imap) == old_uidvalidity
+                            )
+                            if validity_matches and _store_email_flag(imap, old_uid, "\\Deleted", add=True):
                                 imap.expunge()
-                            else:
+                            elif st_old == "OK":
                                 logger.warning(f"Failed to replace previous draft UID {old_uid} in {old_folder}")
                         except Exception as e:
                             logger.warning(f"Failed to replace previous draft UID {old_uid}: {e}")
-                return (None, drafts_folder, draft_uid)
+                return (None, drafts_folder, draft_uid, draft_uidvalidity, actual_draft_account_id, actual_draft_scope)
             except Exception as e:
-                return (str(e), None, None)
+                return (str(e), None, None, None, None, None)
 
-        err, draft_folder, draft_uid = await asyncio.to_thread(_do_append)
+        err, draft_folder, draft_uid, draft_uidvalidity, actual_draft_account_id, actual_draft_scope = await asyncio.to_thread(_do_append)
         if err:
             logger.error(f"Failed to save draft: {err}")
             return {"success": False, "error": err}
         logger.info(f"Draft saved: {req.subject}")
-        return {"success": True, "message": "Draft saved", "draft_folder": draft_folder, "draft_uid": draft_uid}
+        return {
+            "success": True,
+            "message": "Draft saved",
+            "draft_folder": draft_folder,
+            "draft_uid": draft_uid,
+            "account_id": actual_draft_account_id,
+            "send_account_id": _draft_acct if req.resolve_for_send else None,
+            "draft_uidvalidity": draft_uidvalidity,
+            "mailbox_scope": actual_draft_scope,
+        }
 
     @router.post("/extract-style")
     async def extract_writing_style(

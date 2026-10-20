@@ -26,6 +26,7 @@ import json
 import re
 import html
 import logging
+import hashlib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
@@ -51,6 +52,20 @@ class EmailNotConfiguredError(RuntimeError):
     keep working; callers that want to treat "no inbox" as an empty result
     rather than a failure can catch this type specifically.
     """
+
+
+def _imap_mailbox_scope(cfg: dict, owner: str = "") -> str | None:
+    """Return a nonsecret namespace token for the mailbox this config connects to."""
+    host = str(cfg.get("imap_host") or "").strip().lower().rstrip(".")
+    user = str(cfg.get("imap_user") or "")
+    try:
+        port = str(int(cfg.get("imap_port")))
+    except (TypeError, ValueError):
+        return None
+    if not host or not user:
+        return None
+    material = "\0".join((str(owner or ""), host, port, user))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def _xoauth2_raw(user: str, access_token: str) -> str:
@@ -1392,6 +1407,13 @@ def _imap_connect(account_id: str | None = None, owner: str = "",
         except Exception:
             pass
         raise
+    try:
+        conn._odysseus_account_id = cfg.get("account_id") or None
+        conn._odysseus_mailbox_scope = _imap_mailbox_scope(cfg, owner)
+    except Exception:
+        # Some custom IMAP adapters may not allow metadata attributes. Their
+        # messages remain usable, but destructive draft cleanup stays disabled.
+        pass
     return conn
 
 
@@ -2154,6 +2176,12 @@ class SendEmailRequest(BaseModel):
     # Exact IMAP draft to remove after successful delivery.
     draft_uid: Optional[str] = None
     draft_folder: Optional[str] = None
+    # A UID is mailbox- and UIDVALIDITY-scoped; missing values are unbound.
+    draft_account_id: Optional[str] = None
+    draft_uidvalidity: Optional[str] = None
+    draft_mailbox_scope: Optional[str] = None
+    # Recovery saves follow the SMTP account /send will resolve.
+    resolve_for_send: bool = False
     # Internal marker for Odysseus-generated mail (e.g. reminder, scheduled).
     odysseus_kind: Optional[str] = None
     # If true, /send waits for SMTP + Sent append and returns the sent UID.

@@ -291,6 +291,31 @@ try {
   await delay(0);
   assert.equal(storageReplies.length, 2);
   assert.ok(storageReplies.every(reply => reply.includes('Could not save workspace in browser storage')));
+  const legacyClearReplies = [];
+  const legacyClearCommand = new Function('workspaceModule', 'uiModule', 'slashReply', `return (${extractFunction(slashSource, '_cmdWorkspace')});`)(
+    { getWorkspace: () => '/synthetic/legacy', clearWorkspace: () => undefined },
+    { esc: value => value }, reply => legacyClearReplies.push(reply),
+  );
+  await legacyClearCommand(['clear'], {});
+  assert.deepEqual(legacyClearReplies, ['Workspace cleared.'], 'legacy clearWorkspace success returned undefined');
+  const requestFailureReplies = [];
+  const requestFailureCommand = new Function('workspaceModule', 'uiModule', 'slashReply', `return (${extractFunction(slashSource, '_cmdWorkspace')});`)(
+    { getWorkspace: () => '', vetAndSetWorkspace: async () => ({ ok: false, path: null, request_error: true }) },
+    { esc: value => value }, reply => requestFailureReplies.push(reply),
+  );
+  await requestFailureCommand(['set', '/synthetic/unavailable'], {});
+  await delay(0);
+  assert.equal(requestFailureReplies.length, 1);
+  assert.match(requestFailureReplies[0], /Could not check this workspace with the Novum Xenium backend/);
+  const invalidPathReplies = [];
+  const invalidPathCommand = new Function('workspaceModule', 'uiModule', 'slashReply', `return (${extractFunction(slashSource, '_cmdWorkspace')});`)(
+    { getWorkspace: () => '', vetAndSetWorkspace: async () => ({ ok: false, path: null }) },
+    { esc: value => value }, reply => invalidPathReplies.push(reply),
+  );
+  await invalidPathCommand(['set', '/synthetic/not-a-folder'], {});
+  await delay(0);
+  assert.equal(invalidPathReplies.length, 1);
+  assert.match(invalidPathReplies[0], /Not a usable workspace folder/);
   // Confirm the real caller checks stale before emitting either reply.
   const caller = slashSource.slice(slashSource.indexOf('workspaceModule.vetAndSetWorkspace(path).then'), slashSource.indexOf('});', slashSource.indexOf('workspaceModule.vetAndSetWorkspace(path).then')) + 3);
   assert.match(caller, /if \(stale\) return;/);
@@ -306,6 +331,9 @@ try {
     staleVetDoesNotBlockOrOverwriteAfterNewerFailure: defaultWithOldHeld.result.ok && lateOld.result.stale && lateOld.stored === '/canonical/default-7',
     slashCallerSuppressesStaleReply: /if \(stale\) return;/.test(caller) && replies.length === 0,
     slashCallerReportsStorageFailure: storageReplies.length === 2 && storageReplies.every(reply => reply.includes('Could not save workspace in browser storage')),
+    slashCallerAcceptsLegacyClearSuccess: legacyClearReplies.length === 1 && legacyClearReplies[0] === 'Workspace cleared.',
+    slashCallerSeparatesRequestFailure: requestFailureReplies.length === 1 && /Could not check this workspace/.test(requestFailureReplies[0]),
+    slashCallerPreservesInvalidPathMessage: invalidPathReplies.length === 1 && /Not a usable workspace folder/.test(invalidPathReplies[0]),
   } };
   assert.equal(summary.loopbackOnly, true);
   assert.deepEqual(errors, []);

@@ -31,10 +31,22 @@ let _defaultWorkspaceLoad = null;
 let _workspaceSelectionRevision = 0;
 let _pendingWorkspaceVetRevision = null;
 const _WORKSPACE_STORAGE_ERROR = 'Could not save workspace in browser storage. Your previous workspace remains selected.';
+const _WORKSPACE_REQUEST_TIMEOUT_MS = 15000;
 
 export function getWorkspace() {
-  // This local Docker installation mounts the persistent files folder here.
-  return Storage.get(KEYS.WORKSPACE, '/workspace') || '';
+  return Storage.get(KEYS.WORKSPACE, '') || '';
+}
+
+async function _fetchWorkspaceJson(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), _WORKSPACE_REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
+    if (!res.ok) throw new Error(`Workspace request failed (${res.status})`);
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function _basename(p) {
@@ -112,9 +124,7 @@ export async function vetAndSetWorkspace(path) {
   const revision = ++_workspaceSelectionRevision;
   _pendingWorkspaceVetRevision = revision;
   try {
-    const res = await fetch(`${API_BASE}/api/workspace/vet?path=${encodeURIComponent(path)}`, { credentials: 'same-origin' });
-    if (!res.ok) return revision === _workspaceSelectionRevision ? { ok: false, path: null } : { ok: false, path: null, stale: true };
-    const data = await res.json();
+    const data = await _fetchWorkspaceJson(`${API_BASE}/api/workspace/vet?path=${encodeURIComponent(path)}`);
     if (revision !== _workspaceSelectionRevision) return { ok: false, path: null, stale: true };
     if (data.ok && data.path) {
       if (!setWorkspace(data.path)) return { ok: false, path: null, storage_error: true };
@@ -122,7 +132,7 @@ export async function vetAndSetWorkspace(path) {
     }
     return { ok: false, path: null };
   } catch (e) {
-    return revision === _workspaceSelectionRevision ? { ok: false, path: null } : { ok: false, path: null, stale: true };
+    return revision === _workspaceSelectionRevision ? { ok: false, path: null, request_error: true } : { ok: false, path: null, stale: true };
   } finally {
     if (_pendingWorkspaceVetRevision === revision) _pendingWorkspaceVetRevision = null;
   }
@@ -133,10 +143,8 @@ export async function loadDefaultWorkspace() {
   if (Storage.get(KEYS.WORKSPACE, null) !== null) return { ok: false, path: null };
   const revision = _workspaceSelectionRevision;
   let loaded = false;
-  const load = fetch(`${API_BASE}/api/workspace/default`, { credentials: 'same-origin' })
-    .then(async (res) => {
-      if (!res.ok) return { ok: false, path: null };
-      const data = await res.json();
+  const load = _fetchWorkspaceJson(`${API_BASE}/api/workspace/default`)
+    .then((data) => {
       if (data.ok && data.path && revision === _workspaceSelectionRevision && _pendingWorkspaceVetRevision === null && Storage.get(KEYS.WORKSPACE, null) === null) {
         if (!setWorkspace(data.path)) return { ok: false, path: null, storage_error: true };
         loaded = true;
@@ -144,7 +152,7 @@ export async function loadDefaultWorkspace() {
       }
       return { ok: false, path: null };
     })
-    .catch(() => ({ ok: false, path: null }));
+    .catch(() => ({ ok: false, path: null, request_error: true }));
   _defaultWorkspaceLoad = load;
   load.then(() => {
     if (!loaded && _defaultWorkspaceLoad === load) _defaultWorkspaceLoad = null;

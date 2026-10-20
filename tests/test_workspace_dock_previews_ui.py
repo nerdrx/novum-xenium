@@ -9,6 +9,7 @@ import pytest
 @pytest.mark.parametrize("script", [
     "test_workspace_dock_ui.cjs",
     "test_workspace_default_load_ui.cjs",
+    "test_workspace_recovery_ui.cjs",
     "test_browser_preview_ui.cjs",
 ])
 def test_workspace_preview_history_ui(script):

@@ -31,6 +31,15 @@ are saved. A pending check must not replace a folder you select or clear later;
 the latest selection takes priority. An invalid path leaves the existing
 selection in place.
 
+A fresh browser uses the backend's explicitly configured default when one is
+available. Otherwise, choose a folder to set an explicit workspace; the UI
+does not assume that a host has a `/workspace` directory. Clearing a saved
+selection leaves it cleared.
+
+If the backend does not finish checking a path within 15 seconds, the check
+stops waiting and reports a request failure. Retry after checking backend
+availability; a failed check does not select the requested folder.
+
 Changing the selection applies to later requests. It does not move commands
 already running in another folder or undo their changes.
 

@@ -1269,10 +1269,11 @@ async function _cmdWorkspace(args, ctx) {
     // Validate server-side before persisting so the pill never claims a
     // workspace the backend will refuse to bind (typo, file path, deleted
     // folder, sensitive dir, filesystem root).
-    workspaceModule.vetAndSetWorkspace(path).then(({ ok, path: resolvedPath, stale, storage_error }) => {
+    workspaceModule.vetAndSetWorkspace(path).then(({ ok, path: resolvedPath, stale, storage_error, request_error }) => {
       if (stale) return;
       if (ok) slashReply(`Workspace set: <code>${uiModule.esc(resolvedPath)}</code>`);
       else if (storage_error) slashReply('Could not save workspace in browser storage. Your previous workspace remains selected.');
+      else if (request_error) slashReply('Could not check this workspace with the Novum Xenium backend. Check the connection and try again.');
       else slashReply(`Not a usable workspace folder on the Novum Xenium backend: <code>${uiModule.esc(path)}</code>. If Novum Xenium is running in Docker, use the container path, usually <code>/workspace</code>, or use <code>/workspace pick</code>.`);
     });
     return true;
@@ -1281,7 +1282,7 @@ async function _cmdWorkspace(args, ctx) {
     return setWorkspace(rest);
   }
   if (sub === 'clear' || sub === 'off' || sub === 'none' || sub === 'unset') {
-    if (workspaceModule.clearWorkspace()) slashReply('Workspace cleared.');
+    if (workspaceModule.clearWorkspace() !== false) slashReply('Workspace cleared.');
     else slashReply('Could not save workspace in browser storage. Your previous workspace remains selected.');
     return true;
   }

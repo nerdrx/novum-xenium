@@ -18,6 +18,14 @@ The Docker native-command containment setup requires real private filesystem and
 
 Keep authentication enabled and localhost bypass disabled for network-accessible installations. Ports bind to localhost by default in the documented setup. If you deliberately expose the service, configure HTTPS, authentication, firewalling, and any reverse proxy correctly. Secure model-provider endpoints as well; a host server bound to all interfaces may be reachable by other devices.
 
+## Dependency audit findings
+
+The Python dependency audit is advisory: a passing workflow can still contain a failed `pip-audit` job. Read that job's findings before calling security checks clear. The separate pull-request dependency-review job is currently restricted to the upstream repository and is skipped in this fork. See the [workflow conditions](https://github.com/nerdrx/novum-xenium/blob/main/.github/workflows/dependency-review.yml).
+
+As of 2026-10-20, the reviewed backend image uses Pillow 12.3.0 and FastEmbed 0.9.0. Its Python audit reports eight Pillow advisories fixed in 13.0.0, while FastEmbed 0.9.0 requires `pillow<13`. This is an unresolved dependency conflict, not a clean security result. Check [FastEmbed's released metadata](https://pypi.org/pypi/fastembed/0.9.0/json) and [Pillow's security release notes](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html) for updates.
+
+Do not force that upgrade with `--no-deps`, suppress the findings, or remove core embeddings to make an installation appear successful. When a compatible FastEmbed release is available, use normal dependency resolution in a clean build, inspect the installed versions, rerun the audit, and verify image handling and embedding integration before replacing a working installation. Preserve backups and record any remaining findings.
+
 ## Backups and logs
 
 Backups contain private application data and may contain credentials. Logs can reveal endpoint names, errors, paths, or user content. Store both privately and redact before sharing. Do not send complete databases or backups in a bug report.

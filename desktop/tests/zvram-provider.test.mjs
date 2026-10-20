@@ -39,6 +39,7 @@ test('local provider offers Regular and zVram modes and registers after health',
     window.__failStatusPoll = false;
     window.__holdNextStatusPoll = false;
     window.__rejectHeldStatusPoll = null;
+    window.__routerStartStatus = null;
     window.__imageEngine = {
       available: true, running: false, healthy: false, state: 'stopped', mode: 'auto',
       effective_mode: null, auto_start: true, idle_seconds: 300, loaded_model: null,
@@ -87,6 +88,7 @@ test('local provider offers Regular and zVram modes and registers after health',
         if (window.__failAction === request.action) { window.__failAction = ''; throw 'Fixture action failure'; }
         if (request.action === 'router_start') {
           window.__zvram.router = { ...window.__zvram.router, name: 'nx-zvram-router', mode: request.mode, auto_start: request.auto_start, min_available_mib: request.min_available_mib, running: true, healthy: true, state: 'running', recovery_enabled: true, port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, resident_mib: request.resident_mib, cold_mib: request.cold_mib, clean_cache_mib: request.clean_cache_mib, headroom_mib: request.headroom_mib, virtual_gib: request.virtual_gib, models: [] };
+          if (window.__routerStartStatus) Object.assign(window.__zvram.router, window.__routerStartStatus);
         }
         if (request.action === 'router_configure') window.__zvram.router = { ...window.__zvram.router, mode: request.mode, auto_start: request.auto_start, min_available_mib: request.min_available_mib, port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, ...Object.fromEntries(['resident_mib', 'cold_mib', 'clean_cache_mib', 'headroom_mib', 'virtual_gib'].filter(key => Number.isInteger(request[key])).map(key => [key, request[key]])) };
         if (request.action === 'router_register') window.__zvram.router.registered = true;
@@ -144,6 +146,47 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.equal(await page.locator('#zvram-keepalive-low-ram').isChecked(), false, 'RAM guard override is opt-in');
   assert.equal(await page.locator('#zvram-keepalive-low-ram').isEnabled(), true, 'installed manager advertises RAM guard override support');
   await page.locator('#zvram-advanced > summary').click();
+  await page.locator('#zvram-mode-zvram').check();
+  await page.locator('#zvram-auto-start').uncheck();
+  await page.locator('#zvram-port').fill('8120');
+  await page.locator('#zvram-context').fill('8192');
+  await page.locator('#zvram-compressed').check();
+  await page.locator('#zvram-budget-details > summary').click();
+  const draftBudgets = ['12000', '19000', '400', '600', '40'];
+  for (const [index, id] of ['resident', 'cold', 'clean-cache', 'headroom', 'virtual'].entries()) {
+    await page.locator(`#zvram-${id}`).fill(draftBudgets[index]);
+  }
+  await page.locator('#zvram-compressed').uncheck();
+  await page.locator('#zvram-live-control').uncheck();
+  await page.locator('#zvram-keepalive-low-ram').check();
+  await page.locator('#zvram-ignore-swap-guard').uncheck();
+  await page.evaluate(() => { window.__zvram.router = { ...window.__zvram.router, port: 8097, context: 32768, mode: 'regular', auto_start: true, live_control: true }; });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.locator('#zvram-port').inputValue(), '8120', 'manual refresh preserves dirty port');
+  assert.equal(await page.locator('#zvram-context').inputValue(), '8192', 'manual refresh preserves dirty context');
+  assert.equal(await page.locator('#zvram-mode-zvram').isChecked(), true, 'manual refresh preserves dirty mode');
+  assert.equal(await page.locator('#zvram-auto-start').isChecked(), false, 'manual refresh preserves dirty auto-start setting');
+  assert.equal(await page.locator('#zvram-compressed').isChecked(), false, 'manual refresh preserves dirty compression setting');
+  assert.equal(await page.locator('#zvram-live-control').isChecked(), false, 'manual refresh preserves dirty live-management setting');
+  assert.deepEqual(await page.evaluate(() => ['resident', 'cold', 'clean-cache', 'headroom', 'virtual'].map(id => document.getElementById(`zvram-${id}`).value)), draftBudgets,
+    'manual refresh preserves all dirty memory budgets');
+  assert.equal(await page.locator('#zvram-keepalive-low-ram').isChecked(), true, 'manual refresh preserves dirty RAM guard setting');
+  assert.equal(await page.locator('#zvram-ignore-swap-guard').isChecked(), false, 'manual refresh preserves dirty swap guard setting');
+  await page.locator('#zvram-compressed').check();
+  for (const [index, id] of ['resident', 'cold', 'clean-cache', 'headroom', 'virtual'].entries()) {
+    await page.locator(`#zvram-${id}`).fill(['18000', '22000', '512', '768', '48'][index]);
+  }
+  await page.locator('#zvram-compressed').uncheck();
+  await page.locator('#zvram-port').fill('8097');
+  await page.locator('#zvram-context').fill('32768');
+  await page.locator('#zvram-mode-regular').check();
+  await page.locator('#zvram-auto-start').check();
+  await page.locator('#zvram-keepalive-low-ram').uncheck();
+  await page.locator('#zvram-apply').click();
+  await page.waitForFunction(() => document.getElementById('zvram-status').textContent.includes('Settings saved'));
+  await page.locator('#zvram-budget-details > summary').click();
+  await page.evaluate(() => { window.__calls = []; });
   await page.evaluate(() => { window.__zvram.ram_guard_opt_out_supported = false; });
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
@@ -355,6 +398,9 @@ test('local provider offers Regular and zVram modes and registers after health',
   const actions = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').map(call => call.args.request.action));
   assert.equal(actions.at(-1), 'router_stop');
   assert.equal(await page.evaluate(() => window.__calls.some(call => ['start_backend', 'stop_backend', 'save_config'].includes(call.command))), false, 'provider buttons do not trigger general manager actions');
+  await page.locator('#zvram-apply').click();
+  await page.waitForFunction(() => document.getElementById('zvram-status').textContent.includes('Settings saved'));
+  await page.evaluate(() => { window.__calls = []; });
   await page.evaluate(() => {
     window.__zvram.live_control_supported = false;
     window.__zvram.router = { running: false, state: 'stopped', models: [], compressed: false };
@@ -367,6 +413,55 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.locator('#zvram-refresh').click();
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
   assert.equal(await page.locator('#zvram-live-control').isChecked(), true, 'new supported installation defaults live management on');
+  await page.evaluate(() => {
+    window.__routerStartStatus = { running: false, healthy: false, state: 'failed', lastlog: 'Fixture readiness failure' };
+  });
+  const registrationsBeforeFailedReadiness = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_register').length);
+  await page.locator('#zvram-start').click();
+  await page.waitForFunction(() => document.getElementById('zvram-error').textContent.includes('Fixture readiness failure'));
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_register').length), registrationsBeforeFailedReadiness,
+    'failed readiness never registers provider');
+  await page.evaluate(() => {
+    window.__routerStartStatus = null;
+    window.__zvram.router = { ...window.__zvram.router, running: false, healthy: false, state: 'stopped', recovery_enabled: false, registered: false };
+  });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+
+  await page.clock.install();
+  await page.evaluate(() => { window.__holdNextStatusPoll = true; });
+  const registrationsBeforeDeadline = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_register').length);
+  await page.locator('#zvram-start').click();
+  await page.waitForFunction(() => typeof window.__resolveHeldStatusPoll === 'function');
+  await page.clock.runFor(30_001);
+  await page.waitForFunction(() => document.getElementById('zvram-error').textContent.includes('did not become ready within 30 seconds'));
+  const statusAfterDeadline = await page.locator('#zvram-status').textContent();
+  const routerStateAfterDeadline = await page.locator('#zvram-router-state-value').textContent();
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_register').length), registrationsBeforeDeadline,
+    'held readiness request times out before registration');
+  await page.evaluate(() => window.__resolveHeldStatusPoll());
+  await page.evaluate(() => new Promise(resolve => queueMicrotask(resolve)));
+  assert.equal(await page.locator('#zvram-status').textContent(), statusAfterDeadline, 'late healthy reply cannot replace timeout status');
+  assert.equal(await page.locator('#zvram-router-state-value').textContent(), routerStateAfterDeadline, 'late healthy reply cannot render stale provider state');
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_register').length), registrationsBeforeDeadline,
+    'late healthy reply never registers provider');
+
+  await page.evaluate(() => {
+    window.__monotonicNow = 0;
+    Object.defineProperty(performance, 'now', { configurable: true, value: () => window.__monotonicNow });
+    window.__holdNextStatusPoll = true;
+  });
+  await page.locator('#zvram-start').click();
+  await page.waitForFunction(() => typeof window.__resolveHeldStatusPoll === 'function');
+  const routerStateBeforeOverdueReply = await page.locator('#zvram-router-state-value').textContent();
+  await page.evaluate(() => {
+    window.__monotonicNow = 30_001;
+    window.__resolveHeldStatusPoll();
+  });
+  await page.waitForFunction(() => document.getElementById('zvram-error').textContent.includes('did not become ready within 30 seconds'));
+  assert.equal(await page.locator('#zvram-router-state-value').textContent(), routerStateBeforeOverdueReply, 'overdue status reply cannot render provider state before delayed timeout callback');
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_register').length), registrationsBeforeDeadline,
+    'overdue status reply never registers provider');
   await page.setViewportSize({ width: 320, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'collapsed provider fits narrow desktop window');
   assert.deepEqual(errors, []);

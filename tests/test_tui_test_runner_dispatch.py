@@ -449,6 +449,7 @@ def test_no_tool_recovery_preserves_supported_exact_runner_commands():
         "pnpm run test selected",
         "make test", "cargo test selected", "go test ./specific/...",
         "/usr/bin/node --test tests/specific.mjs",
+        "cd ./sub && node --test tests/specific.mjs",
     ):
         prompt = "Run " + command
         assert _tui_local_fallback_shell_command(prompt) == command
@@ -470,8 +471,30 @@ def test_unsupported_exact_runner_request_never_becomes_generic_suite():
         "Run pytest tests/test_specific.py -k 'unterminated",
         "Run node --test tests/$(whoami).mjs",
         "Run npm test > /tmp/synthetic-report",
+        "Run cd ./sub && node --test tests/specific.mjs || true",
+        "Run /usr/bin/node --test tests/specific.mjs; echo done",
+        "Run /usr/bin/node --test tests/specific.mjs\nThen summarize",
+        "Run tests; then summarize",
+        "Run (node --test tests/specific.mjs)",
+        "Run uv run pytest tests/test_specific.py",
+        "Run uv run python -m unittest package.verifier",
     ):
         assert _tui_local_fallback_shell_command(prompt) is None
         assert _tui_local_test_runner_host_shell_content(prompt) is None
         namespace, _ = _run_actual_no_tool_test_fallback(prompt, True)
         assert namespace["tool_blocks"] == []
+
+
+def test_exact_runner_request_precedes_bounded_intent_and_incidental_probe_words():
+    commands = (
+        "python -m unittest package.verifier",
+        "cd ./" + "deep/" * 12 + " && npm test",
+    )
+    for command in commands:
+        prompt = "Run " + command
+        assert _actual_test_request_flag(prompt) is True
+        assert _tui_local_fallback_shell_command(prompt) == command
+        namespace, _ = _run_actual_no_tool_test_fallback(prompt, _actual_test_request_flag(prompt))
+        assert json.loads(namespace["tool_blocks"][0].content)["command"] == command
+    command = "pytest 'tests/bash block/test_case.py'"
+    assert _tui_local_fallback_shell_command("Run " + command) == al._tui_normalize_pytest_command(command)

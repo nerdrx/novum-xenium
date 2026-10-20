@@ -26,6 +26,16 @@ The manager can provide a local llama.cpp-based text endpoint on Linux. **Regula
 
 The provider starts when you choose **Start provider**. **Stop provider** also turns off launch-on-open and automatic recovery. Re-enable the launch-on-open setting before closing Novum if you want the provider to start with a later desktop session. Model loading and switching take time, and not every discovered model is guaranteed to fit. zVram manages eligible Vulkan allocations; it does not add physical VRAM or reserve all system memory. See [Providers and models](providers.md) and the [zVram integration notes](https://github.com/nerdrx/novum-xenium/blob/main/docs/zvram-provider-handoff.md).
 
+**Refresh** updates provider status while keeping unsaved configuration edits;
+it does not save those edits. Use **Apply settings** when you intend to save them.
+
+After the start command returns, the readiness stage waits up to 30 seconds.
+A timeout ends that UI wait; it does not cancel the native command or stop the
+provider. Use **Refresh** to inspect the result before starting again. If the
+provider is healthy, use **Connect provider**. Earlier configuration/start
+operations have their own time limits, so 30 seconds is not a limit on the
+entire launch sequence. Older installed desktop builds may lack these fixes.
+
 Other desktop controls manage the backend image engine. It can use CPU or supported Vulkan paths, and may offer zVram on Linux x86_64. This image-generation engine is separate from the text model provider. See [Images and audio](media.md) and the [source image runtime guide](https://github.com/nerdrx/novum-xenium/blob/main/docs/local-images.md).
 
 ## Platform notes

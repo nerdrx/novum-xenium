@@ -10055,17 +10055,19 @@ def _tui_requested_test_command(text: str) -> tuple[bool, Optional[str]]:
     runner_prefix = bool(re.match(
         r"(?:(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+(?:pytest|unittest)|"
         r"pytest|py\.test|node\s+--test|(?:npm|pnpm|yarn)\s+(?:run\s+)?test|"
-        r"(?:make|cargo|go)\s+test)\b",
+        r"(?:make|cargo|go)\s+test|uv\s+run\s+(?:pytest|python\s+-m\s+(?:pytest|unittest)))\b",
         command,
         re.IGNORECASE,
     ))
     if "\n" in command or "\r" in command:
-        return runner_prefix, None
+        return True, None
     normalized = _tui_normalize_pytest_command(command)
     if normalized:
         return True, normalized if command_is_test(normalized) else None
     if command_is_test(command):
         return True, command
+    if re.search(r"[;&|<>()`]|\$[({]", command):
+        return True, None
     return runner_prefix, None
 
 
@@ -10082,6 +10084,9 @@ def _tui_test_scope_needs_explicit_runner(text: str) -> bool:
 def _tui_test_action_requested(text: str) -> bool:
     """Recognize affirmative test actions, ignoring an explicitly negated one."""
     value = str(text or "")
+    explicit_test, test_command = _tui_requested_test_command(value)
+    if explicit_test:
+        return test_command is not None
     positive = r"\btest\s+now\b|\b(?:run|execute|rerun|re-run)\b.{0,40}\b(?:tests?|test suite|pytest)\b"
     negated = re.compile(
         r"\b(?:do\s+not|don't|dont|never)\b.{0,24}(?:" + positive + r")",
@@ -10107,6 +10112,9 @@ def _tui_local_fallback_shell_command(
     value = str(text or "")
     if _TUI_MUTATING_REQUEST_RE.search(value) and not allow_workspace_probe_for_mutation:
         return None
+    explicit_test, test_command = _tui_requested_test_command(value)
+    if explicit_test:
+        return test_command
     if re.search(
         r"\b(?:bash|shell)\s+block\b|\b(?:do|run|execute)\b.{0,20}\b(?:a\s+)?bash\s+block\b",
         value,
@@ -10114,9 +10122,6 @@ def _tui_local_fallback_shell_command(
     ):
         return "pwd; whoami; uname -srm"
     if _tui_test_action_requested(value):
-        explicit_test, test_command = _tui_requested_test_command(value)
-        if explicit_test:
-            return test_command
         if _tui_test_scope_needs_explicit_runner(value):
             return None
         if _tui_explicit_full_test_request(value):

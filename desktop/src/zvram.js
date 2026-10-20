@@ -107,7 +107,7 @@ function renderMetrics(node, value) {
   }).join(' · ') || 'Not reported';
 }
 
-function renderStatus(result) {
+function renderStatus(result, { preserveConfiguration = false } = {}) {
   if (!result || typeof result !== 'object') throw new Error('The manager returned an invalid zVram status.');
   available = result.available === true;
   routerSupported = result.router_supported === true;
@@ -116,28 +116,30 @@ function renderStatus(result) {
   const previouslySupported = liveControlSupported;
   liveControlSupported = result.live_control_supported === true;
   router = result.router && typeof result.router === 'object' ? result.router : {};
-  configurationDirty = false;
-  if (Number.isInteger(router.port) && router.port >= 1 && router.port <= 65535) elements.port.value = String(router.port);
-  if (Number.isInteger(router.context) && router.context >= 256 && router.context <= 1048576) elements.context.value = String(router.context);
-  for (const [field, input] of [
-    ['resident_mib', budgetInputs[0]], ['cold_mib', budgetInputs[1]],
-    ['clean_cache_mib', budgetInputs[2]], ['headroom_mib', budgetInputs[3]],
-    ['virtual_gib', budgetInputs[4]],
-  ]) {
-    if (Number.isInteger(router[field]) && router[field] >= 1 && router[field] <= 1048576) input.value = String(router[field]);
+  if (!preserveConfiguration) {
+    configurationDirty = false;
+    if (Number.isInteger(router.port) && router.port >= 1 && router.port <= 65535) elements.port.value = String(router.port);
+    if (Number.isInteger(router.context) && router.context >= 256 && router.context <= 1048576) elements.context.value = String(router.context);
+    for (const [field, input] of [
+      ['resident_mib', budgetInputs[0]], ['cold_mib', budgetInputs[1]],
+      ['clean_cache_mib', budgetInputs[2]], ['headroom_mib', budgetInputs[3]],
+      ['virtual_gib', budgetInputs[4]],
+    ]) {
+      if (Number.isInteger(router[field]) && router[field] >= 1 && router[field] <= 1048576) input.value = String(router[field]);
+    }
+    elements.modeRegular.checked = router.mode !== 'zvram';
+    elements.modeZvram.checked = router.mode === 'zvram';
+    elements.ignoreSwapGuard.checked = ignoreSwapGuardSupported && (
+      router.mode === 'zvram' && typeof router.ignore_swap_guard === 'boolean'
+        ? router.ignore_swap_guard : true
+    );
+    elements.autoStart.checked = typeof router.auto_start === 'boolean' ? router.auto_start : true;
+    if (typeof router.live_control === 'boolean') elements.liveControl.checked = router.live_control;
+    else if (!liveControlSupported) elements.liveControl.checked = false;
+    else if (!previouslySupported) elements.liveControl.checked = true;
+    if (typeof router.compressed === 'boolean') elements.compressed.checked = router.compressed;
+    elements.keepaliveLowRam.checked = ramGuardOptOutSupported && router.min_available_mib === 0;
   }
-  elements.modeRegular.checked = router.mode !== 'zvram';
-  elements.modeZvram.checked = router.mode === 'zvram';
-  elements.ignoreSwapGuard.checked = ignoreSwapGuardSupported && (
-    router.mode === 'zvram' && typeof router.ignore_swap_guard === 'boolean'
-      ? router.ignore_swap_guard : true
-  );
-  elements.autoStart.checked = typeof router.auto_start === 'boolean' ? router.auto_start : true;
-  if (typeof router.live_control === 'boolean') elements.liveControl.checked = router.live_control;
-  else if (!liveControlSupported) elements.liveControl.checked = false;
-  else if (!previouslySupported) elements.liveControl.checked = true;
-  if (typeof router.compressed === 'boolean') elements.compressed.checked = router.compressed;
-  elements.keepaliveLowRam.checked = ramGuardOptOutSupported && router.min_available_mib === 0;
   if (typeof result.installation === 'string') elements.installation.textContent = result.installation || 'No installation selected.';
   models = Array.isArray(result.models) ? result.models.filter(model => model && typeof model.name === 'string') : [];
   legacyProfiles = Array.isArray(result.profiles)
@@ -231,7 +233,11 @@ async function perform(label, operation) {
 }
 
 async function refreshStatus() {
-  return perform('Refresh', loadStatus);
+  return perform('Refresh', async () => {
+    const result = await invoke('zvram_status');
+    renderStatus(result, { preserveConfiguration: configurationDirty });
+    return result;
+  });
 }
 
 function buildRouterRequest() {
@@ -265,13 +271,32 @@ async function configureRouter() {
 }
 
 async function waitUntilHealthy() {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const status = await loadStatus();
+  const deadline = performance.now() + 30_000;
+  while (performance.now() < deadline) {
+    const remaining = deadline - performance.now();
+    let timer;
+    let status;
+    try {
+      // Timing out the UI wait does not cancel the native Tauri command.
+      status = await Promise.race([
+        invoke('zvram_status'),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('The model router did not become ready within 30 seconds.')), remaining);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (performance.now() >= deadline) {
+      throw new Error('The model router did not become ready within 30 seconds.');
+    }
+    renderStatus(status);
     if (status.router?.healthy === true) return status;
     if (['failed', 'exited', 'stopped'].includes(status.router?.state) && status.router?.running !== true) {
       throw new Error(status.router?.lastlog || 'The model router stopped before becoming ready.');
     }
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    const delay = Math.min(1000, deadline - performance.now());
+    if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
   }
   throw new Error('The model router did not become ready within 30 seconds.');
 }

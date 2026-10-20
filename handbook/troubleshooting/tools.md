@@ -80,8 +80,15 @@ runner. Pytest interpreter selection preserves the supplied targets,
 selectors, timeout, and other call options. If no command is supplied, the
 automatic runner probe prefers a package's npm test script over a generic
 `tests/` directory, while a root `pyproject.toml` or `pytest.ini` takes priority.
-Use `Run all tests` or `Run the full test suite` to request the full suite
+Use `Run all tests`, `Run every test`, or `Run the full test suite` for the full suite
 instead of changed-file selection; give the exact command when scope matters.
+
+If the model omits a tool call, automatic test recovery preserves supported
+exact test commands, including Node, unittest, and package-manager commands.
+A recognized but malformed, compound, or multiline command does not become a
+generic suite run. Help and collection requests do not count as running tests.
+Requests such as `Run tests, but not all tests` need a precise command or
+selector before automatic recovery can choose a suite.
 
 For inspection without execution, use **Plan mode**. A request such as
 `Do not run tests; just read main.py` suppresses the automatic test fallback,

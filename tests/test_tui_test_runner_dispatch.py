@@ -136,6 +136,16 @@ def test_explicit_full_test_fallback_uses_full_suite_command(tmp_path):
     assert log == "python -m pytest -q\n"
 
 
+def test_every_test_request_uses_full_suite_command(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='synthetic'\n")
+    prompt = "Run every test"
+    command = _tui_local_fallback_shell_command(prompt)
+    assert command == _tui_local_test_runner_command(full=True)
+    code, log = _run_runner(tmp_path, command)
+    assert code == 0
+    assert log == "python -m pytest -q\n"
+
+
 def test_explicit_pytest_target_survives_fallback_dispatch_and_host_content(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='synthetic'\n")
     prompt = "Run pytest tests/test_specific.py -k selected"
@@ -183,7 +193,14 @@ def test_generic_focused_and_full_fallbacks_remain_available(tmp_path):
 
 
 def test_unrepresentable_test_scope_does_not_synthesize_or_rewrite_broad_run():
-    for prompt in ("Run only unit tests", "Run all tests except integration"):
+    for prompt in (
+        "Run only unit tests",
+        "Run all tests except integration",
+        "Run tests, but not all of them",
+        "Run tests, but not all tests",
+        "Run tests, but not every test",
+        "Run tests, but not the full suite",
+    ):
         assert _tui_local_fallback_shell_command(prompt) is None
         assert _tui_local_test_runner_host_shell_content(prompt) is None
 
@@ -414,3 +431,47 @@ def test_actual_completion_accepts_test_runner_or_exact_server_fallback_attempt(
     exec(code, namespace)
     assert namespace["_tui_test_completed"] is False
 
+
+
+def test_full_scope_does_not_confuse_exclusion_or_every_time():
+    for prompt in ("Run tests, but not all tests", "Run tests, but not every test"):
+        assert al._tui_explicit_full_test_request(prompt) is False
+    assert al._tui_explicit_full_test_request("Run tests every time I edit") is False
+    assert al._tui_explicit_full_test_request("Run every test") is True
+
+
+def test_no_tool_recovery_preserves_supported_exact_runner_commands():
+    for command in (
+        "node --test tests/specific.mjs",
+        "python -m unittest tests.test_unit",
+        "yarn test selected",
+        "npm run test -- --runInBand",
+        "pnpm run test selected",
+        "make test", "cargo test selected", "go test ./specific/...",
+        "/usr/bin/node --test tests/specific.mjs",
+    ):
+        prompt = "Run " + command
+        assert _tui_local_fallback_shell_command(prompt) == command
+        namespace, _ = _run_actual_no_tool_test_fallback(prompt, True)
+        assert json.loads(namespace["tool_blocks"][0].content)["command"] == command
+    legacy = "Run py -m pytest tests/test_specific.py"
+    assert _tui_local_fallback_shell_command(legacy) == al._tui_normalize_pytest_command(
+        "py -m pytest tests/test_specific.py"
+    )
+
+
+def test_unsupported_exact_runner_request_never_becomes_generic_suite():
+    for prompt in (
+        "Run node --test tests/specific.mjs; echo done",
+        "Run python -m unittest tests.test_unit\nThen summarize",
+        "Run yarn test selected || true",
+        "Run node --test --help",
+        "Run pytest --collect-only", "Run pytest --help",
+        "Run pytest tests/test_specific.py -k 'unterminated",
+        "Run node --test tests/$(whoami).mjs",
+        "Run npm test > /tmp/synthetic-report",
+    ):
+        assert _tui_local_fallback_shell_command(prompt) is None
+        assert _tui_local_test_runner_host_shell_content(prompt) is None
+        namespace, _ = _run_actual_no_tool_test_fallback(prompt, True)
+        assert namespace["tool_blocks"] == []

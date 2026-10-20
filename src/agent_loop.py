@@ -9979,9 +9979,11 @@ def _tui_local_test_runner_command(*, full: bool = False) -> str:
 
 def _tui_explicit_full_test_request(text: str) -> bool:
     """True only when the user clearly asks for the whole test suite."""
+    if _tui_test_scope_needs_explicit_runner(text):
+        return False
     return bool(
         re.search(
-            r"\b(?:full|all|entire|complete|exhaustive|whole)\b.{0,50}"
+            r"\b(?:full|all|every|entire|complete|exhaustive|whole)\b.{0,50}"
             r"\b(?:tests?|test suite|pytest)\b",
             str(text or ""),
             re.IGNORECASE,
@@ -10039,26 +10041,39 @@ def _tui_normalize_pytest_command(command: str) -> Optional[str]:
     return f'{_tui_python_runner_setup()}"$runner" -m pytest{suffix}'
 
 
-def _tui_requested_pytest_command(text: str) -> tuple[bool, Optional[str]]:
-    """Recognize explicit pytest intent even when it cannot be normalized."""
+def _tui_requested_test_command(text: str) -> tuple[bool, Optional[str]]:
+    """Preserve an exact test request, or decline a broader fallback."""
     match = re.fullmatch(
         r"\s*(?:please\s+)?(?:run|execute|rerun|re-run)\s+"
-        r"(?P<command>(?:(?:python(?:3(?:\.\d+)?)?|py)\s+-m\s+)?pytest\b.*)\s*",
+        r"(?P<command>.+)\s*",
         str(text or ""),
         re.IGNORECASE | re.DOTALL,
     )
     if not match:
         return False, None
     command = match.group("command").strip()
+    runner_prefix = bool(re.match(
+        r"(?:(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+(?:pytest|unittest)|"
+        r"pytest|py\.test|node\s+--test|(?:npm|pnpm|yarn)\s+(?:run\s+)?test|"
+        r"(?:make|cargo|go)\s+test)\b",
+        command,
+        re.IGNORECASE,
+    ))
     if "\n" in command or "\r" in command:
-        return True, None
-    return True, _tui_normalize_pytest_command(command)
+        return runner_prefix, None
+    normalized = _tui_normalize_pytest_command(command)
+    if normalized:
+        return True, normalized if command_is_test(normalized) else None
+    if command_is_test(command):
+        return True, command
+    return runner_prefix, None
 
 
 def _tui_test_scope_needs_explicit_runner(text: str) -> bool:
     """Do not guess when a request narrows the suite without a command."""
     return bool(re.search(
-        r"\b(?:only|except|exclude|excluding|without|unit|integration)\b",
+        r"\b(?:only|except|exclude|excluding|without|unit|integration)\b|"
+        r"\bnot\s+(?:the\s+)?(?:all|every|full|entire|complete|exhaustive|whole)\b",
         str(text or ""),
         re.IGNORECASE,
     ))
@@ -10099,9 +10114,9 @@ def _tui_local_fallback_shell_command(
     ):
         return "pwd; whoami; uname -srm"
     if _tui_test_action_requested(value):
-        explicit_pytest, pytest_command = _tui_requested_pytest_command(value)
-        if explicit_pytest:
-            return pytest_command
+        explicit_test, test_command = _tui_requested_test_command(value)
+        if explicit_test:
+            return test_command
         if _tui_test_scope_needs_explicit_runner(value):
             return None
         if _tui_explicit_full_test_request(value):

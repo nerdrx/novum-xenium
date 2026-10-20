@@ -672,6 +672,48 @@ def _uid_has_deleted_flag(conn, uid: str) -> bool:
     return False
 
 
+def _uid_deleted_flag_state(conn, uid: str) -> bool | None:
+    """Return the exact UID's Deleted state, or None when it is unknown."""
+    try:
+        status, data = conn.uid("FETCH", _uid_bytes(uid), "(UID FLAGS)")
+        if status != "OK":
+            return None
+        expected_uid = _uid_bytes(uid)
+        for part in data or []:
+            meta = part[0] if isinstance(part, tuple) else part
+            meta_b = meta if isinstance(meta, bytes) else str(meta).encode()
+            uid_match = re.search(rb"\bUID\s+(\d+)\b", meta_b, re.IGNORECASE)
+            flags_match = re.search(rb"\bFLAGS\s+\(([^)]*)\)", meta_b, re.IGNORECASE)
+            if uid_match and uid_match.group(1) == expected_uid and flags_match:
+                return b"\\deleted" in (flag.lower() for flag in flags_match.group(1).split())
+    except Exception:
+        pass
+    return None
+
+
+def _uid_expunge_preserving_mailbox(conn, uid: str) -> bool:
+    """Expunge one UID only; restore a new Deleted flag when expunge fails."""
+    was_deleted = _uid_deleted_flag_state(conn, uid)
+    if was_deleted is None:
+        # Never mutate a message when its original flag state is unknown.
+        return False
+
+    try:
+        if _store_email_flag(conn, uid, "\\Deleted", add=True):
+            status, _ = conn.uid("EXPUNGE", _uid_bytes(uid))
+            if status == "OK":
+                return True
+    except Exception:
+        logger.debug("Selective UID EXPUNGE failed for uid=%s", uid, exc_info=True)
+
+    if not was_deleted:
+        try:
+            _store_email_flag(conn, uid, "\\Deleted", add=False)
+        except Exception:
+            logger.debug("Could not restore Deleted flag for uid=%s", uid, exc_info=True)
+    return False
+
+
 def _resolve_current_email_uid(conn, uid: str, message_id: str | None = None) -> str:
     """Resolve a stale cached UID by the message's stable RFC Message-ID."""
     uid = str(uid or "").strip()
@@ -5954,8 +5996,7 @@ def setup_email_routes():
                                     st_draft == "OK"
                                     and _imap_uidvalidity(imap) == _draft_uidvalidity
                                 )
-                                if validity_matches and _store_email_flag(imap, _draft_uid, "\\Deleted", add=True):
-                                    imap.expunge()
+                                if validity_matches and _uid_expunge_preserving_mailbox(imap, _draft_uid):
                                     logger.info(f"Removed sent draft UID {_draft_uid} from {_draft_folder}")
                                 elif st_draft == "OK":
                                     logger.warning(f"Failed to remove sent draft UID {_draft_uid} from {_draft_folder}")
@@ -6076,9 +6117,10 @@ def setup_email_routes():
                                 st_old == "OK"
                                 and _imap_uidvalidity(imap) == old_uidvalidity
                             )
-                            if validity_matches and _store_email_flag(imap, old_uid, "\\Deleted", add=True):
-                                imap.expunge()
-                            elif st_old == "OK":
+                            if st_old == "OK" and (
+                                not validity_matches
+                                or not _uid_expunge_preserving_mailbox(imap, old_uid)
+                            ):
                                 logger.warning(f"Failed to replace previous draft UID {old_uid} in {old_folder}")
                         except Exception as e:
                             logger.warning(f"Failed to replace previous draft UID {old_uid}: {e}")

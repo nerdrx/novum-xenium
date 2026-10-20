@@ -17,6 +17,7 @@ class FakeImap:
         self.deleted = []
         self.expunges = 0
         self.account_ids = []
+        self.uid_expunges = []
 
     def select(self, folder, readonly=False):
         self.folder = folder.decode() if isinstance(folder, bytes) else str(folder)
@@ -31,6 +32,13 @@ class FakeImap:
         return "OK", [b"APPENDUID 77 502"]
 
     def uid(self, command, *args):
+        query = str(args[-1]) if args else ""
+        if command == "FETCH" and "UID FLAGS" in query:
+            return "OK", [(b"1 (UID 501 FLAGS ())",)]
+        if command == "EXPUNGE":
+            uid = args[0].decode() if isinstance(args[0], bytes) else str(args[0])
+            self.uid_expunges.append(uid)
+            return "OK", []
         if command == "FETCH":
             raw = (
                 b"From: Sender <sender@example.invalid>\r\n"
@@ -117,6 +125,7 @@ async def test_draft_replacement_requires_account_and_old_folder_uidvalidity(
     assert result["draft_uidvalidity"] == "77"
     assert result["mailbox_scope"] == "scope-acct-A"
     assert bool(conn.deleted) is expected_delete
+    assert conn.uid_expunges == (["501"] if expected_delete else [])
 
 
 @pytest.mark.asyncio
@@ -185,6 +194,17 @@ async def test_actual_connected_namespace_controls_draft_cleanup(monkeypatch, sa
         def __init__(self, host):
             super().__init__()
             self.host = host
+            self.uid_expunges = []
+
+        def uid(self, command, *args):
+            query = str(args[-1]) if args else ""
+            if command == "FETCH" and "UID FLAGS" in query:
+                return "OK", [(b"1 (UID 501 FLAGS ())",)]
+            if command == "EXPUNGE":
+                uid = args[0].decode() if isinstance(args[0], bytes) else str(args[0])
+                self.uid_expunges.append(uid)
+                return "OK", []
+            return super().uid(command, *args)
 
         def login(self, *_args):
             return "OK", [b"logged in"]
@@ -224,6 +244,7 @@ async def test_actual_connected_namespace_controls_draft_cleanup(monkeypatch, sa
 
     assert result["success"] is True
     assert actual_connections[0].host == "imap-new.fixture.invalid"
+    assert actual_connections[0].uid_expunges == (["501"] if same_namespace else [])
     # Same account row ID and a coincidentally reused UIDVALIDITY are not enough
     # to identify the old server/user namespace.
     assert actual_connections[0].deleted == ([("501", "\\Deleted")] if same_namespace else [])
@@ -334,3 +355,4 @@ async def test_send_cleanup_requires_same_account_and_uidvalidity(
     ), BackgroundTasks(), owner="owner")
     assert result["success"] is True
     assert bool(conn.deleted) is expected_delete
+    assert conn.uid_expunges == (["501"] if expected_delete else [])

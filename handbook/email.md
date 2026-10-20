@@ -36,6 +36,12 @@ arrow beside **Send** and choose **Save Draft** to save a copy to the mailbox's
 Drafts folder. **Close** is not the Save Draft action; save first if you need a
 mailbox copy you can reopen later.
 
+When replacing a saved draft or cleaning it up after sending, Novum checks
+the original mailbox and folder identity before removing the previous copy.
+Older drafts with missing identity details, or drafts whose mailbox settings
+have changed, can leave an extra copy in **Drafts**. Confirm the current copy
+is saved, or check **Sent** after sending, before manually removing duplicates.
+
 ## What recovery saves
 
 When you press **Send**, Novum first tries to save the message to the mailbox
@@ -99,3 +105,6 @@ These links point to the inspected source snapshot at commit
 - [Draft mailbox opens as a compose draft](https://github.com/nerdrx/novum-xenium/blob/c5e165b5fd0be15a56ed0c3abfcb661ba7690c54/static/js/emailInbox.js#L903-L907) and [library draft loading](https://github.com/nerdrx/novum-xenium/blob/c5e165b5fd0be15a56ed0c3abfcb661ba7690c54/static/js/emailLibrary/index.js#L5589-L5598).
 - [Browser-local reply recovery and 45-day expiry](https://github.com/nerdrx/novum-xenium/blob/c5e165b5fd0be15a56ed0c3abfcb661ba7690c54/static/js/document.js#L3453-L3529), [send-account resolution](https://github.com/nerdrx/novum-xenium/blob/c5e165b5fd0be15a56ed0c3abfcb661ba7690c54/static/js/document.js#L96-L123), and [mailbox recovery before send plus error handling](https://github.com/nerdrx/novum-xenium/blob/c5e165b5fd0be15a56ed0c3abfcb661ba7690c54/static/js/document.js#L6260-L6305).
 - [Send request and recovery-draft status handling](https://github.com/nerdrx/novum-xenium/blob/c5e165b5fd0be15a56ed0c3abfcb661ba7690c54/static/js/document.js#L6361-L6411), [server SMTP result / queued-send behavior](https://github.com/nerdrx/novum-xenium/blob/c5e165b5fd0be15a56ed0c3abfcb661ba7690c54/routes/email/email_routes.py#L5670-L5683), and [SMTP account fallback plus delivery wait behavior](https://github.com/nerdrx/novum-xenium/blob/c5e165b5fd0be15a56ed0c3abfcb661ba7690c54/routes/email/email_routes.py#L1498-L1529).
+
+Draft cleanup safety was additionally checked at commit
+`78504c74b058012e3053e0c72e479d75746d2098`: [connected mailbox identity](https://github.com/nerdrx/novum-xenium/blob/78504c74b058012e3053e0c72e479d75746d2098/routes/email/email_helpers.py#L57), [cleanup after sending](https://github.com/nerdrx/novum-xenium/blob/78504c74b058012e3053e0c72e479d75746d2098/routes/email/email_routes.py#L5942), and [replacement draft cleanup](https://github.com/nerdrx/novum-xenium/blob/78504c74b058012e3053e0c72e479d75746d2098/routes/email/email_routes.py#L6066).

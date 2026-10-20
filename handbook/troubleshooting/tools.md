@@ -63,6 +63,12 @@ Do not add broader permissions just to bypass an unexplained error.
 A valid batch can succeed partly before a later tool returns an error.
 Inspect each result before retrying; completed actions are not rolled back.
 
+For repository tests, give an exact command when the target or selector matters,
+for example `Run pytest tests/test_parser.py -m 'not integration'`. Check the
+reported command and exit status. A full-suite run does not satisfy a request
+that excludes integration tests; ask Novum to inspect the project's test
+configuration if the correct command is unclear.
+
 If the failure says containment is unavailable, the Docker runtime could not
 create required private filesystem or PID namespaces. Check supported host
 security policy and use the documented setup. Do not enable privileged mode

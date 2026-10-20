@@ -10011,13 +10011,11 @@ def _tui_smoke_test_request(text: str) -> bool:
     )
 
 
-def _tui_local_test_runner_host_shell_content(text: str = "") -> str:
-    return json.dumps({
-        "command": _tui_local_test_runner_command(
-            full=_tui_explicit_full_test_request(text),
-        ),
-        "timeout": 120,
-    })
+def _tui_local_test_runner_host_shell_content(text: str = "") -> Optional[str]:
+    command = _tui_local_fallback_shell_command(text) if text.strip() else _tui_local_test_runner_command()
+    if not command:
+        return None
+    return json.dumps({"command": command, "timeout": 120})
 
 
 def _tui_normalize_pytest_command(command: str) -> Optional[str]:
@@ -10039,6 +10037,31 @@ def _tui_normalize_pytest_command(command: str) -> Optional[str]:
         return None
     suffix = f" {shlex.join(args)}" if args else ""
     return f'{_tui_python_runner_setup()}"$runner" -m pytest{suffix}'
+
+
+def _tui_requested_pytest_command(text: str) -> tuple[bool, Optional[str]]:
+    """Recognize explicit pytest intent even when it cannot be normalized."""
+    match = re.fullmatch(
+        r"\s*(?:please\s+)?(?:run|execute|rerun|re-run)\s+"
+        r"(?P<command>(?:(?:python(?:3(?:\.\d+)?)?|py)\s+-m\s+)?pytest\b.*)\s*",
+        str(text or ""),
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return False, None
+    command = match.group("command").strip()
+    if "\n" in command or "\r" in command:
+        return True, None
+    return True, _tui_normalize_pytest_command(command)
+
+
+def _tui_test_scope_needs_explicit_runner(text: str) -> bool:
+    """Do not guess when a request narrows the suite without a command."""
+    return bool(re.search(
+        r"\b(?:only|except|exclude|excluding|without|unit|integration)\b",
+        str(text or ""),
+        re.IGNORECASE,
+    ))
 
 
 def _tui_local_fallback_shell_command(
@@ -10066,6 +10089,11 @@ def _tui_local_fallback_shell_command(
         value,
         re.IGNORECASE,
     ):
+        explicit_pytest, pytest_command = _tui_requested_pytest_command(value)
+        if explicit_pytest:
+            return pytest_command
+        if _tui_test_scope_needs_explicit_runner(value):
+            return None
         if _tui_explicit_full_test_request(value):
             return _tui_local_test_runner_command(full=True)
         return _tui_local_smoke_test_runner_command()

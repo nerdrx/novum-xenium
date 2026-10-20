@@ -1,12 +1,18 @@
 """Exercise TUI fallback runner selection without running project tests."""
 
+import ast
+import inspect
+import json
 import os
 from pathlib import Path
 import subprocess
 
+import src.agent_loop as al
+
 from src.agent_loop import (
     _tui_local_fallback_shell_command,
     _tui_local_test_runner_command,
+    _tui_local_test_runner_host_shell_content,
 )
 
 
@@ -18,6 +24,7 @@ def _run_runner(tmp_path: Path, command: str, *, node_has_test: bool = False,
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "runner.log"
+    log.unlink(missing_ok=True)
     stubs = {
         "python": '#!/bin/sh\nprintf "python %s\\n" "$*" >> "$RUNNER_LOG"\nexit "${PYTHON_EXIT:-0}"\n',
         "npm": '#!/bin/sh\nprintf "npm %s\\n" "$*" >> "$RUNNER_LOG"\nexit "${NPM_EXIT:-0}"\n',
@@ -82,4 +89,94 @@ def test_explicit_full_test_fallback_uses_full_suite_command(tmp_path):
     code, log = _run_runner(tmp_path, full_command)
     assert code == 0
     assert log == "python -m pytest -q\n"
+
+
+def test_explicit_pytest_target_survives_fallback_dispatch_and_host_content(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='synthetic'\n")
+    prompt = "Run pytest tests/test_specific.py -k selected"
+    command = _tui_local_fallback_shell_command(prompt)
+    assert command is not None
+    assert '"$runner" -m pytest tests/test_specific.py -k selected' in command
+    code, log = _run_runner(tmp_path, command)
+    assert code == 0
+    assert log == "python -m pytest tests/test_specific.py -k selected\n"
+
+    content = _tui_local_test_runner_host_shell_content(prompt)
+    assert content is not None
+    host_command = json.loads(content)["command"]
+    assert host_command == command
+    code, log = _run_runner(tmp_path, host_command)
+    assert code == 0
+    assert log == "python -m pytest tests/test_specific.py -k selected\n"
+
+
+def test_explicit_selector_and_target_precede_scope_refusal(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='synthetic'\n")
+    prompt = "Run pytest -m 'not integration' tests/test_specific.py"
+    command = _tui_local_fallback_shell_command(prompt)
+    assert command is not None
+    assert "pytest -m 'not integration' tests/test_specific.py" in command
+    assert command == json.loads(
+        _tui_local_test_runner_host_shell_content(prompt)
+    )["command"]
+    code, log = _run_runner(tmp_path, command)
+    assert code == 0
+    assert log == "python -m pytest -m not integration tests/test_specific.py\n"
+
+
+def test_generic_focused_and_full_fallbacks_remain_available(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='synthetic'\n")
+    focused = _tui_local_fallback_shell_command("Run tests in this repo")
+    code, log = _run_runner(tmp_path, focused)
+    assert code == 0
+    assert log == "python -m pytest -q tests/test_focus.py\n"
+
+    full = _tui_local_fallback_shell_command("Run the full test suite")
+    code, log = _run_runner(tmp_path, full)
+    assert code == 0
+    assert log == "python -m pytest -q\n"
+
+
+def test_unrepresentable_test_scope_does_not_synthesize_or_rewrite_broad_run():
+    for prompt in ("Run only unit tests", "Run all tests except integration"):
+        assert _tui_local_fallback_shell_command(prompt) is None
+        assert _tui_local_test_runner_host_shell_content(prompt) is None
+
+
+def test_unrepresentable_explicit_command_does_not_fall_back_to_generic_runner():
+    for prompt in (
+        "Run pytest tests/test_specific.py; echo compound",
+        "Run pytest tests/test_specific.py\nThen summarize the results",
+    ):
+        assert _tui_local_fallback_shell_command(prompt) is None
+        assert _tui_local_test_runner_host_shell_content(prompt) is None
+
+
+def test_explicit_pytest_directory_arguments_are_not_stripped():
+    for target in (".", ".."):
+        command = _tui_local_fallback_shell_command(f"Run pytest {target}")
+        assert command == al._tui_normalize_pytest_command(f"pytest {target}")
+
+
+def test_actual_host_normalization_only_changes_placeholder_test_commands():
+    # Execute the actual normalization branch without executing a host command.
+    tree = ast.parse(inspect.getsource(al.stream_agent_loop))
+    branch = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
+                  and ast.unparse(node.test) == "block.tool_type == 'host_shell' and _tui_test_request")
+    code = compile(ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[])),
+                   "<actual-host-test-normalization>", "exec")
+    cases = (
+        ("Run only unit tests", "pytest -m unit tests/test_unit.py",
+         al._tui_normalize_pytest_command("pytest -m unit tests/test_unit.py")),
+        ("Run pytest tests/test_specific.py", "echo pending",
+         _tui_local_fallback_shell_command("Run pytest tests/test_specific.py")),
+        ("Run all tests except integration", "echo pending", "echo pending"),
+    )
+    for prompt, command, expected in cases:
+        original = json.dumps({"command": command, "timeout": 120})
+        namespace = dict(vars(al), block=al.ToolBlock("host_shell", original),
+                         full_command=original, cmd_display=original,
+                         _last_user=prompt, _tui_test_request=True)
+        exec(code, namespace)
+        assert json.loads(namespace["full_command"])["command"] == expected
 

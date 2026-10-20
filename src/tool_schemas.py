@@ -2218,7 +2218,7 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
             if name == "native_preview":
                 reject_native_preview("invalid_json")
                 return None
-            logger.error(f"Failed to parse function call arguments for {name}: {arguments}")
+            logger.error("Failed to parse function call arguments for %s", name)
             return None
 
     # Some models emit valid JSON that isn't an object (e.g. a bare array
@@ -2232,9 +2232,9 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
             reject_native_preview("not_object")
             return None
         if tool_type.startswith("mcp__email__") or name in BUILTIN_EMAIL_TOOLS:
-            logger.warning(f"Non-object email function call arguments for {name}: {args!r}; rejecting")
+            logger.warning("Non-object email function call arguments for %s; rejecting", name)
             return None
-        logger.warning(f"Non-object function call arguments for {name}: {args!r}; treating as empty")
+        logger.warning("Non-object function call arguments for %s; treating as empty", name)
         args = {}
 
     # The generic native normalizer repairs scalar strings for transports that
@@ -2310,7 +2310,7 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
 
     required_args = _REQUIRED_NATIVE_TOOL_ARGS.get(tool_type)
     if required_args and not any(str(args.get(key) or "").strip() for key in required_args):
-        logger.warning(f"Rejecting empty required arguments for function call {name}: {args!r}")
+        logger.warning("Rejecting empty required arguments for function call %s", name)
         return None
 
     # Allow MCP tools through (namespaced as mcp__serverid__toolname)

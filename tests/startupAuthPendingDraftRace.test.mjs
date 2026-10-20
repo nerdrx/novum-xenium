@@ -21,13 +21,14 @@ const moduleStubs = {
   '/static/js/escMenuStack.js': `export const registerEscapeLayer = () => () => {}; export const bindMenuDismiss = () => {};`,
 };
 
-async function runStartup({ browser, auth, cachedUser, draftAccount, prefetch, storageDenied = false, fastDeadline = false, freshBeforeAuth = false }) {
-  const page = await browser.newPage();
+async function runStartup({ browser, auth, cachedUser, draftAccount, prefetch, storageDenied = false, storageWriteDenied = false, fastDeadline = false, freshBeforeAuth = false, crossTabIdentity = null, externalStorageEvent = undefined }) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
   let sessionsRequests = 0;
   let authRequests = 0;
   let releaseAuth;
   const authRelease = new Promise(resolve => { releaseAuth = resolve; });
-  await page.addInitScript(({ cachedUser, draftAccount, prefetch, storageDenied, fastDeadline, holdAuthBody }) => {
+  await page.addInitScript(({ cachedUser, draftAccount, prefetch, storageDenied, storageWriteDenied, fastDeadline, holdAuthBody }) => {
     if (cachedUser !== null) localStorage.setItem('odysseus-auth-user', cachedUser);
     localStorage.setItem(`ody-composer-drafts:${encodeURIComponent(draftAccount)}:pending%3Afixture`, JSON.stringify({
       text: `${draftAccount} private draft`,
@@ -39,6 +40,13 @@ async function runStartup({ browser, auth, cachedUser, draftAccount, prefetch, s
         Object.defineProperty(Storage.prototype, method, { value() { throw new DOMException('denied', 'SecurityError'); } });
       }
       Object.defineProperty(Storage.prototype, 'length', { get() { throw new DOMException('denied', 'SecurityError'); } });
+    }
+    if (storageWriteDenied) {
+      const setItem = Storage.prototype.setItem;
+      Object.defineProperty(Storage.prototype, 'setItem', { value(key, value) {
+        if (key === 'odysseus-auth-user') throw new DOMException('denied', 'QuotaExceededError');
+        return setItem.call(this, key, value);
+      } });
     }
     if (fastDeadline) {
       const original = window.setTimeout.bind(window);
@@ -55,7 +63,7 @@ async function runStartup({ browser, auth, cachedUser, draftAccount, prefetch, s
         return originalFetch(input, init);
       };
     }
-  }, { cachedUser, draftAccount, prefetch, storageDenied, fastDeadline, holdAuthBody: auth === 'body-timeout-retry' });
+  }, { cachedUser, draftAccount, prefetch, storageDenied, storageWriteDenied, fastDeadline, holdAuthBody: auth === 'body-timeout-retry' });
   await page.route('http://auth-fixture.test/**', async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: `<!doctype html><main id="chat-history"></main><textarea id="message"></textarea><section id="session-list"></section><section id="sessions-section"></section><div id="app-loader"></div><input id="incognito-toggle" type="checkbox"><div id="current-meta"></div><script type="module">import * as sessions from '/static/js/sessions.js'; import { authStatePromise } from '/static/js/authState.js'; window.sessions = sessions; window.authStatePromise = authStatePromise;</script>` });
@@ -85,6 +93,25 @@ async function runStartup({ browser, auth, cachedUser, draftAccount, prefetch, s
       document.getElementById('message').dispatchEvent(new Event('input', { bubbles: true }));
       window.provisionalDraftId = window.sessions.getPendingDraftId();
     });
+    if (externalStorageEvent !== undefined) {
+      await page.evaluate(() => {
+        window.externalIdentityEvent = new Promise(resolve => {
+          window.addEventListener('storage', event => {
+            if (event.key === null || event.key === 'odysseus-auth-user') resolve();
+          }, { once: true });
+        });
+      });
+      const other = await page.context().newPage();
+      await other.route('http://auth-fixture.test/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>second tab</title>' }));
+      await other.goto('http://auth-fixture.test/');
+      await other.evaluate(identity => {
+        if (identity === null) localStorage.clear();
+        else localStorage.setItem('odysseus-auth-user', identity);
+        localStorage.setItem('newtab-state', 'preserve-me');
+      }, externalStorageEvent);
+      await page.evaluate(async () => window.externalIdentityEvent);
+      await other.close();
+    }
     releaseAuth();
   }
   if (auth === 'hold') {
@@ -95,10 +122,12 @@ async function runStartup({ browser, auth, cachedUser, draftAccount, prefetch, s
       return { restored, text: document.getElementById('message').value, pending: window.sessions.getPendingChat(), draftId: window.sessions.getPendingDraftId() };
     });
     await page.close();
+    await context.close();
     return early;
   }
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(async crossTabIdentity => {
     await window.authStatePromise;
+    if (crossTabIdentity !== null) localStorage.setItem('odysseus-auth-user', crossTabIdentity);
     const loaded = await window.sessions.loadSessions();
     const read = key => { try { return localStorage.getItem(key); } catch { return null; } };
     return {
@@ -108,15 +137,17 @@ async function runStartup({ browser, auth, cachedUser, draftAccount, prefetch, s
       pendingId: window.sessions.getPendingDraftId(),
       provisionalDraftId: window.provisionalDraftId,
       identity: read('odysseus-auth-user'),
+      newTabMarker: read('newtab-state'),
       aliceDraft: read('ody-composer-drafts:alice:pending%3Afixture'),
       anonymousDraft: read('ody-composer-drafts::pending%3Afixture'),
       prefetch: (() => { try { return sessionStorage.getItem('ody-prefetch-sessions'); } catch { return null; } })(),
       authStatus: await window.authStatePromise,
     };
-  });
+  }, crossTabIdentity);
   result.sessionsRequests = sessionsRequests;
   result.authRequests = authRequests;
   await page.close();
+  await context.close();
   return result;
 }
 
@@ -130,6 +161,55 @@ test('verified account switch clears old draft before production sessions module
     assert.equal(state.pending, null);
     assert.equal(state.aliceDraft, null);
     assert.equal(state.sessionsRequests, 1);
+  } finally { await browser.close(); }
+});
+
+test('cross-tab identity mismatch blocks private draft and prefetch hydration without rewriting the marker', async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || undefined, args: ['--no-sandbox'] });
+  try {
+    const state = await runStartup({
+      browser, cachedUser: 'alice', draftAccount: 'alice', prefetch: true,
+      crossTabIdentity: 'bob',
+      auth: { body: { configured: true, authenticated: true, username: 'alice' } },
+    });
+    assert.equal(state.authStatus.switched, true);
+    assert.equal(state.identity, 'bob', 'old tab must not overwrite the newer shared identity marker');
+    assert.equal(state.text, '');
+    assert.equal(state.pending, null);
+    assert.ok(state.aliceDraft, 'the old draft remains stored and untouched');
+    assert.equal(state.prefetch, '[{"id":"private-prefetch"}]');
+  } finally { await browser.close(); }
+});
+
+test('held auth response cannot overwrite a newer cross-tab identity or clear marker', async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || undefined, args: ['--no-sandbox'] });
+  try {
+    for (const identity of ['bob', null]) {
+      const state = await runStartup({
+        browser, cachedUser: 'alice', draftAccount: 'alice', freshBeforeAuth: true,
+        externalStorageEvent: identity,
+        auth: { body: { configured: true, authenticated: true, username: 'alice' } },
+      });
+      assert.equal(state.authStatus.switched, true, `external ${identity ?? 'clear'} event must latch`);
+      assert.equal(state.identity, identity, 'late Alice response must not rewrite the newer marker');
+      assert.equal(state.newTabMarker, 'preserve-me', 'late response must not clear newer tab storage');
+      assert.equal(state.text, 'New text typed before verification');
+    }
+  } finally { await browser.close(); }
+});
+
+test('write-denied identity storage does not turn a missing marker into an account switch', async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || undefined, args: ['--no-sandbox'] });
+  try {
+    const state = await runStartup({
+      browser, cachedUser: null, draftAccount: '', storageWriteDenied: true,
+      auth: { body: { configured: true, authenticated: true, username: 'alice' } },
+    });
+    assert.equal(state.authStatus.verified, true);
+    assert.equal(state.authStatus.storageAvailable, false);
+    assert.equal(state.authStatus.switched, false);
+    assert.equal(state.authStatus.identity, 'alice');
+    assert.equal(state.identity, null, 'write denial leaves the marker absent');
   } finally { await browser.close(); }
 });
 

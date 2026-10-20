@@ -14,6 +14,7 @@ function clearPrivateState() {
 }
 
 async function reconcileAuthState() {
+  const startingStorageRevision = externalStorageRevision;
   const controller = new AbortController();
   let resolveDeadline;
   const deadline = new Promise(resolve => { resolveDeadline = resolve; });
@@ -41,13 +42,17 @@ async function reconcileAuthState() {
     try { cached = localStorage.getItem(USER_KEY); }
     catch (_) { return { verified: true, switched: false, storageAvailable: false, data: response, identity }; }
     const switched = !!cached && cached !== identity;
+    const changedDuringRequest = externalStorageRevision !== startingStorageRevision
+      && externalStorageIdentity !== identity;
     let storageAvailable = true;
-    if (switched) {
+    if (switched && !changedDuringRequest) {
       try { clearPrivateState(); } catch (_) { storageAvailable = false; }
     }
-    try { localStorage.setItem(USER_KEY, identity); } catch (_) { storageAvailable = false; }
+    if (!changedDuringRequest) {
+      try { localStorage.setItem(USER_KEY, identity); } catch (_) { storageAvailable = false; }
+    }
     try { void sessionStorage.length; } catch (_) { storageAvailable = false; }
-    return { verified: true, switched, storageAvailable, data: response, identity };
+    return { verified: true, switched: switched || changedDuringRequest, storageAvailable, data: response, identity };
   } catch (_) {
     return { verified: false, switched: false, data: null };
   } finally {
@@ -57,11 +62,36 @@ async function reconcileAuthState() {
 
 let verifiedState = null;
 let inflight = null;
+let externalStorageRevision = 0;
+let externalStorageIdentity = null;
+
+window.addEventListener('storage', event => {
+  if (event.key !== USER_KEY && event.key !== null) return;
+  externalStorageRevision++;
+  externalStorageIdentity = event.newValue ?? '';
+  if (verifiedState?.verified && externalStorageIdentity !== verifiedState.identity) verifiedState.switched = true;
+});
+
+function latchChangedIdentity() {
+  if (!verifiedState?.verified || verifiedState.switched) return verifiedState;
+  try {
+    const cachedIdentity = localStorage.getItem(USER_KEY);
+    if (cachedIdentity !== verifiedState.identity
+      && !(verifiedState.storageAvailable === false && cachedIdentity === null)) verifiedState.switched = true;
+  } catch (_) {}
+  return verifiedState;
+}
+
 function requestAuthState() {
+  latchChangedIdentity();
   if (verifiedState) return Promise.resolve(verifiedState);
   if (inflight) return inflight;
   const request = reconcileAuthState().then(state => {
-    if (state.verified) verifiedState = state;
+    if (state.verified) {
+      if (externalStorageRevision && externalStorageIdentity !== state.identity) state.switched = true;
+      verifiedState = state;
+      latchChangedIdentity();
+    }
     return state;
   }).finally(() => {
     if (inflight === request) inflight = null;
@@ -72,4 +102,4 @@ function requestAuthState() {
 
 export const authStatePromise = requestAuthState();
 export function getAuthState() { return requestAuthState(); }
-export function getKnownAuthState() { return verifiedState; }
+export function getKnownAuthState() { return latchChangedIdentity(); }

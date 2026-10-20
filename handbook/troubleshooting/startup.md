@@ -70,6 +70,20 @@ checking whether the prior request produced a result. Older builds may not
 include these recovery changes; compare the installed version with the
 [current source](https://github.com/nerdrx/novum-xenium/blob/main/static/js/chat.js).
 
+## Sending says the account cannot be verified or has changed
+
+**Cannot verify your account:** the account-status request failed, returned an
+unexpected response, or exceeded its 15-second deadline. Your current message
+and attachments remain in the page. Check the backend connection, then retry;
+the next send checks again. This blocked attempt does not upload files or post
+the chat request.
+
+**Your account changed:** copy any newly typed text you need, then reload the
+page and confirm the signed-in account before sending. Old tabs must not send
+using another account's saved drafts or model choices. Reload can discard
+unsaved input and selected local files, so do not use it before saving anything
+you need from the current page.
+
 ## Safe next step
 
 If the issue remains, record the Novum version, platform, install method,

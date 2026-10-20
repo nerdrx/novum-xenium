@@ -34,6 +34,21 @@ continue. Check server status and logs before changing transport settings.
 
 ## A command failed
 
+### The model returned an invalid tool request
+
+A missing tool argument is different from a denied permission. Novum rejects
+the invalid batch before running any of its calls and gives the model up to
+two correction attempts. For an offered tool with a missing required field,
+the retry names that field, such as `read_file` requiring `path`. It does not
+enable a disabled tool or approve an action. Read-only requests should not be
+turned into file-writing work to repair an invalid read call.
+
+If correction still fails, inspect the last completed result before retrying
+the task. Earlier rounds may already have changed files or external services;
+the rejected batch itself was not executed.
+
+### A tool ran and returned an error
+
 Read its exit status and output. Confirm the active shell boundary: the main
 application container, optional separate executor, and native desktop bridge
 have different filesystems and environment. A file visible to one may not be

@@ -19,7 +19,13 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); return res.end(html); }
   if (url.pathname === '/api/auth/status') {
     authCount++;
-    if (authMode === 'stop-hang' && authCount === 1) return;
+    if (authMode === 'stop-hang' && authCount === 1) {
+      releaseHeldAuth = () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ configured: true, authenticated: true, username: 'alice' }));
+      };
+      return;
+    }
     if (authMode === 'delayed-same') {
       releaseHeldAuth = () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -47,18 +53,14 @@ const server = createServer(async (req, res) => {
   } catch { res.writeHead(404); res.end('Not found'); }
 });
 
-async function openPage(browser, mode, { storageDenied = false, accelerateDeadline = false } = {}) {
+async function openPage(browser, mode, { storageDenied = false } = {}, context = browser) {
   authMode = storageDenied ? 'delayed-same' : mode;
   authCount = 0;
-  const page = await browser.newPage();
+  const page = await context.newPage();
   page.setDefaultTimeout(5000);
-  await page.addInitScript(({ accelerateDeadline, mode }) => {
+  await page.addInitScript(({ mode }) => {
     if (mode !== 'anonymous') localStorage.setItem('odysseus-auth-user', 'alice');
-    if (accelerateDeadline) {
-      const nativeTimeout = window.setTimeout.bind(window);
-      window.setTimeout = (fn, ms, ...args) => nativeTimeout(fn, ms === 15000 ? 35 : ms, ...args);
-    }
-  }, { accelerateDeadline, mode });
+  }, { mode });
   const errors = [];
   page.on('pageerror', e => errors.push(e.stack || e.message));
   page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
@@ -113,7 +115,7 @@ async function openPage(browser, mode, { storageDenied = false, accelerateDeadli
           ? { configured: false, authenticated: false, username: null }
           : { configured: true, authenticated: true, username: 'alice' } };
   }, mode);
-  return { page, errors, releaseAuth: storageDenied ? () => releaseHeldAuth?.() : null };
+  return { page, errors, releaseAuth: storageDenied || mode === 'stop-hang' ? () => releaseHeldAuth?.() : null };
 }
 
 test('production chat send gates unknown and switched ownership before upload/post, preserves same-user send, and honors Stop', async () => {
@@ -161,13 +163,49 @@ test('production chat send gates unknown and switched ownership before upload/po
       await page.close();
     }
 
-    const held = await openPage(browser, 'stop-hang', { accelerateDeadline: true });
+    for (const [secondTabMode, blocked] of [['switch', true], ['same', false]]) {
+      const context = await browser.newContext();
+      try {
+        const first = await openPage(browser, 'same', {}, context);
+        await first.page.evaluate(async () => (await import('/js/authState.js')).getAuthState());
+        authMode = secondTabMode;
+        const second = await context.newPage();
+        second.setDefaultTimeout(5000);
+        await second.goto(`http://127.0.0.1:${server.address().port}/`);
+        await second.waitForFunction(() => window.testModules);
+        await second.evaluate(async () => (await import('/js/authState.js')).getAuthState());
+        await first.page.evaluate(async () => {
+          window.sendSettled = false;
+          window.sendPromise = window.testModules.chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.sendSettled = true; });
+        });
+        await first.page.waitForFunction(() => window.sendSettled);
+        const state = await first.page.evaluate(async () => ({
+          auth: await (await import('/js/authState.js')).getAuthState(),
+          posts: window.chatPosts,
+          uploads: window.uploadRequests,
+          draft: document.getElementById('message').value,
+          files: window.testModules.files.getPendingInfo().map(file => file.name),
+        }));
+        assert.equal(state.auth.switched, blocked, `${secondTabMode} second tab auth state`);
+        assert.deepEqual(state.posts.length, blocked ? 0 : 1, `${secondTabMode} cross-tab POST behavior`);
+        assert.deepEqual(state.uploads.length, blocked ? 0 : 1, `${secondTabMode} cross-tab upload behavior`);
+        if (blocked) {
+          assert.equal(state.draft, 'Private composer text');
+          assert.deepEqual(state.files, ['secret.txt']);
+        }
+        await first.page.close();
+        await second.close();
+      } finally { await context.close(); }
+    }
+
+    const held = await openPage(browser, 'stop-hang');
     await held.page.evaluate(async () => {
       window.sendSettled = false;
       window.sendPromise = window.testModules.chat.handleChatSubmit({ preventDefault() {} }).finally(() => { window.sendSettled = true; });
     });
     await held.page.waitForFunction(() => window.__odysseusChatBusy === true);
     await held.page.evaluate(() => window.testModules.chat.abortCurrentRequest(true));
+    held.releaseAuth?.();
     await held.page.waitForFunction(() => window.sendSettled);
     const stopped = await held.page.evaluate(() => ({
       posts: window.chatPosts,

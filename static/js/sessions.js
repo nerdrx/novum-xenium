@@ -2098,7 +2098,7 @@ function _animateSessionRowsRemoving(ids, selector) {
 export async function loadSessions() {
   try {
     const authState = await getAuthState();
-    const mayReadPrivateState = authState.verified && authState.storageAvailable !== false;
+    const mayReadPrivateState = authState.verified && !authState.switched && authState.storageAvailable !== false;
     _bindComposerDraftInput(document.getElementById('message'));
     // Do not touch browser-cached session IDs until the current account is known.
     if (mayReadPrivateState) await _cleanupIncognitoSessions();

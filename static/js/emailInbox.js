@@ -11,6 +11,7 @@ import { applyEdgeDock } from './modalSnap.js';
 import { buildReplyAllCc, extractEmail } from './emailLibrary/replyRecipients.js';
 import { emailApiUrl, emailAccountQuery } from './emailShared.js';
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
+import { state as emailLibraryState } from './emailLibrary/state.js';
 
 const API_BASE = window.location.origin;
 const _acct = () => emailAccountQuery('&');
@@ -832,12 +833,14 @@ async function _openEmail(em, itemEl, preloadedData = null, mode = 'reply', note
   const openRequestSeq = ++_openEmailRequestSeq;
   const folderAtStart = mailboxContext?.messageFolder || _currentFolder;
   const accountAtStart = mailboxContext?.accountId ?? (window.__odysseusActiveEmailAccount || '');
+  const mailboxGenerationAtStart = emailLibraryState._mailboxGeneration;
   const accountQueryAtStart = accountAtStart ? `&account_id=${encodeURIComponent(accountAtStart)}` : '';
   const mailboxContextIsCurrent = typeof mailboxContext?.isCurrent === 'function'
     ? mailboxContext.isCurrent
     : () => (
         folderAtStart === _currentFolder &&
-        accountAtStart === (window.__odysseusActiveEmailAccount || '')
+        accountAtStart === (window.__odysseusActiveEmailAccount || '') &&
+        mailboxGenerationAtStart === emailLibraryState._mailboxGeneration
       );
   const isCurrentOpen = () => (
     openRequestSeq === _openEmailRequestSeq &&
@@ -903,7 +906,7 @@ async function _openEmail(em, itemEl, preloadedData = null, mode = 'reply', note
     // A Drafts mailbox item is already a composed message. Opening it should
     // load that message into the composer, never create a reply to the draft.
     if (/draft/i.test(String(folderAtStart || '')) && _docModule?.openEmailDraft) {
-      await _docModule.openEmailDraft(data);
+      await _docModule.openEmailDraft(data, { isCurrent: isCurrentOpen });
       return;
     }
     if (wantsAiReply && _docModule?.generateEmailReply) {

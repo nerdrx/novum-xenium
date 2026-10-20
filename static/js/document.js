@@ -11985,11 +11985,13 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
 
   // Open an IMAP draft in the email composer instead of treating the draft
   // itself as a message to reply to.
-  export async function openEmailDraft(data = {}) {
+  export async function openEmailDraft(data = {}, { isCurrent = () => true } = {}) {
+    if (!isCurrent()) return null;
     let sessionId = _lastSessionId || (sessionModule && sessionModule.getCurrentSessionId());
     if (!sessionId) {
       try { sessionId = await _autoCreateSession(); } catch (_) {}
     }
+    if (!isCurrent()) return null;
     if (!sessionId) throw new Error('Could not open draft: no session');
     const content = _buildEmailContent(
       data.to || '',
@@ -12002,24 +12004,37 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
       data.cc || '',
       data.bcc || '',
     );
-    const res = await fetch(`${API_BASE}/api/document`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({
-        session_id: sessionId,
-        title: data.subject || 'Email draft',
-        content,
-        language: 'email',
-      }),
-    });
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/document`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          session_id: sessionId,
+          title: data.subject || 'Email draft',
+          content,
+          language: 'email',
+        }),
+      });
+    } catch (err) {
+      if (!isCurrent()) return null;
+      throw err;
+    }
+    if (!isCurrent()) return null;
     if (!res.ok) throw new Error(`Draft open failed: HTTP ${res.status}`);
-    const doc = await res.json();
+    let doc;
+    try {
+      doc = await res.json();
+    } catch (err) {
+      if (!isCurrent()) return null;
+      throw err;
+    }
+    if (!isCurrent()) return null;
     if (!doc?.id) throw new Error('Draft open failed: missing document');
     doc._emailDraftUid = data.uid || data.draft_uid || null;
     doc._emailDraftFolder = data.folder || data.draft_folder || null;
-    injectFreshDoc(doc);
-    return doc.id;
+    return await injectFreshDoc(doc, { isCurrent }) === false ? null : doc.id;
   }
 
   export async function createDocument(sessionId) {
@@ -12086,9 +12101,28 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
    * /api/document/{id} can 404 right after a successful POST — we already
    * have the full doc payload from the create response, no need to round-trip.
    */
-  export function injectFreshDoc(doc) {
+  export function injectFreshDoc(doc, { isCurrent } = {}) {
     if (!doc || !doc.id) return;
+    if (isCurrent && !isCurrent()) return Promise.resolve(false);
     const sessionId = doc.session_id || _lastSessionId || null;
+    if (isCurrent) {
+      // Guard again on the frame that activates the editor. Keep local draft
+      // recovery untouched when the mailbox context goes stale in between.
+      return new Promise(resolve => requestAnimationFrame(() => {
+        if (!isCurrent()) return resolve(false);
+        if (doc.language === 'email') {
+          doc._skipLocalDraftOnce = true;
+          try {
+            const fields = _parseEmailHeader(doc.current_content || doc.content || '');
+            _clearEmailLocalDraft(fields.sourceUid, fields.sourceFolder, fields.inReplyTo);
+          } catch (_) {}
+        }
+        addDocToTabs(doc, sessionId);
+        _ensureDocPaneMounted();
+        if (docs.has(doc.id)) switchToDoc(doc.id);
+        resolve(true);
+      }));
+    }
     if (doc.language === 'email') {
       doc._skipLocalDraftOnce = true;
       try {

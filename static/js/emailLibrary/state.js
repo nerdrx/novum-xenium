@@ -17,6 +17,7 @@ export const state = {
   _libTotal: 0,
   _libOffset: 0,
   _libFolder: 'INBOX',
+  _mailboxGeneration: 0,
   _libFolders: [],
   _libAccountId: null,           // null = backend default account
   _libAccounts: [],              // list of accounts for the chip strip

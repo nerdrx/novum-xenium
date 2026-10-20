@@ -1517,6 +1517,7 @@ export function _resetEmailListForFreshLoad({ useCache = true, refreshAfterCache
   _resetBulkSelectionForContextChange();
   state._libOffset = 0;
   _emailMailboxGeneration += 1;
+  state._mailboxGeneration = _emailMailboxGeneration;
   _libLoadSeq += 1;
   const ck = _libCacheKey();
   const cached = useCache ? _libCacheGet(ck) : null;
@@ -2138,6 +2139,7 @@ export function openEmailLibrary(opts = {}) {
     state._libInnerEscHandler = null;
   }
   _emailMailboxGeneration += 1;
+  state._mailboxGeneration = _emailMailboxGeneration;
   state._libOpen = true;
   // On mobile the sidebar overlays content — close it so the email view isn't
   // opened behind it (same pattern as session-switch/delete).
@@ -3128,6 +3130,7 @@ export async function mountEmailSettings(host) {
         state._libAccountId = ev.currentTarget.value || null;
         _publishActiveAccount();
         _renderAccountsStrip();
+        _resetEmailListForFreshLoad();
         await render();
       });
     } catch (_) {
@@ -5588,14 +5591,39 @@ function _syncCardNavArrows(card) {
 
 async function _openDraftInComposer(em) {
   if (!state._docModule?.openEmailDraft) return false;
+  const accountAtStart = String(state._libAccountId || '');
+  const folderAtStart = String(state._libFolder || 'INBOX');
+  const mailboxGeneration = _emailMailboxGeneration;
+  const openGeneration = ++_emailCardOpenSeq;
+  const mailboxContext = { accountId: accountAtStart, libraryFolder: folderAtStart, mailboxGeneration };
+  const isCurrentOpen = () => (
+    openGeneration === _emailCardOpenSeq &&
+    _emailReadContextIsCurrent(mailboxContext) &&
+    accountAtStart === String(state._libAccountId || '') &&
+    folderAtStart === String(state._libFolder || 'INBOX')
+  );
+  if (!isCurrentOpen()) return false;
   const folder = em?.folder || state._libFolder || 'Drafts';
-  const account = state._libAccountId ? `&account_id=${encodeURIComponent(state._libAccountId)}` : '';
-  const res = await fetch(`${API_BASE}/api/email/read/${encodeURIComponent(em.uid)}?folder=${encodeURIComponent(folder)}${account}&mark_seen=false`);
+  const account = accountAtStart ? `&account_id=${encodeURIComponent(accountAtStart)}` : '';
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/api/email/read/${encodeURIComponent(em.uid)}?folder=${encodeURIComponent(folder)}${account}&mark_seen=false`);
+  } catch (err) {
+    if (!isCurrentOpen()) return false;
+    throw err;
+  }
+  if (!isCurrentOpen()) return false;
   if (!res.ok) throw new Error(`Draft load failed: HTTP ${res.status}`);
-  const data = await res.json();
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    if (!isCurrentOpen()) return false;
+    throw err;
+  }
+  if (!isCurrentOpen()) return false;
   if (data.error) throw new Error(data.error);
-  await state._docModule.openEmailDraft({ ...em, ...data });
-  return true;
+  return Boolean(await state._docModule.openEmailDraft({ ...em, ...data }, { isCurrent: isCurrentOpen }));
 }
 
 const _emailReadPrefetching = new Set();

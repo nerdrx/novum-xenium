@@ -156,6 +156,7 @@ const window = {{ __odysseusActiveEmailAccount: 'acct-a' }};
 let _currentFolder = 'INBOX';
 const _acct = () => '&account_id=acct-a';
 let _openEmailRequestSeq = 0;
+const emailLibraryState = {{ _mailboxGeneration: 0 }};
 let _docModule = null;
 const spinnerModule = {{ createWhirlpool() {{ throw new Error('spinner should not run'); }} }};
 const sessionModule = null;
@@ -222,6 +223,7 @@ const window = {{ __odysseusActiveEmailAccount: 'acct-a' }};
 let _currentFolder = 'INBOX';
 const _acct = () => '&account_id=acct-a';
 let _openEmailRequestSeq = 0;
+const emailLibraryState = {{ _mailboxGeneration: 0 }};
 let libraryCurrent = true;
 const mailboxContext = {{
   accountId: 'acct-a',

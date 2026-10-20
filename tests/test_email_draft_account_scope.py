@@ -174,7 +174,8 @@ async def test_draft_cleanup_does_not_trust_config_resolved_before_imap_connect(
 
 
 @pytest.mark.asyncio
-async def test_repointed_same_account_id_and_colliding_uidvalidity_are_not_a_scope_match(monkeypatch):
+@pytest.mark.parametrize("same_namespace", [False, True])
+async def test_actual_connected_namespace_controls_draft_cleanup(monkeypatch, same_namespace):
     import routes.email_helpers as helpers
     import routes.email_routes as routes
     from routes.email_helpers import SendEmailRequest
@@ -214,13 +215,18 @@ async def test_repointed_same_account_id_and_colliding_uidvalidity_are_not_a_sco
         to="to@example.invalid", subject="fixture", body="fixture", account_id="acct-A",
         draft_uid="501", draft_folder="Drafts", draft_account_id="acct-A",
         draft_uidvalidity="77",
+        draft_mailbox_scope=helpers._imap_mailbox_scope({
+            "imap_host": "imap-new.fixture.invalid" if same_namespace else "imap-old.fixture.invalid",
+            "imap_port": 143,
+            "imap_user": "new-user" if same_namespace else "old-user",
+        }, owner="owner"),
     ), owner="owner")
 
     assert result["success"] is True
     assert actual_connections[0].host == "imap-new.fixture.invalid"
     # Same account row ID and a coincidentally reused UIDVALIDITY are not enough
     # to identify the old server/user namespace.
-    assert actual_connections[0].deleted == []
+    assert actual_connections[0].deleted == ([("501", "\\Deleted")] if same_namespace else [])
 
 
 def test_pooled_socket_keeps_its_original_namespace_stamp_after_row_repoint(monkeypatch):

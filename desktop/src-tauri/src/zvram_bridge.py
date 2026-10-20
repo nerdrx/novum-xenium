@@ -873,20 +873,22 @@ def _register_router(model_helper, params, backend_checkout, cookie_path, backen
     models = _router_inventory(params)
     ids = [model['id'] for model in models]
     base = f'http://127.0.0.1:{params["port"]}/v1'
+    cookie = model_helper.session_cookie(cookie_path)
+    api = f'http://127.0.0.1:{backend_port}/api/model-endpoints'
+    endpoints = model_helper._request(api, cookie)
+    existing = next((ep for ep in endpoints if ep.get('base_url', '').rstrip('/') == base), None)
+    name = 'Local models' if params.get('mode') == 'regular' else 'zVram · Local models'
+    if existing and existing.get('name') not in ('Local models', 'zVram · Local models'):
+        raise ValueError('This port belongs to another provider')
+    # Reject a foreign provider before further router reads; validate the
+    # registration inventory before creating or changing an owned endpoint.
     inventory = _local_json(base + '/models')
     if not isinstance(inventory, dict) or not isinstance(inventory.get('data'), list):
         raise ValueError('The model router returned an invalid registration inventory')
     rows = inventory['data']
     if any(not isinstance(row, dict) for row in rows):
         raise ValueError('The model router returned an invalid registration inventory')
-    cookie = model_helper.session_cookie(cookie_path)
-    api = f'http://127.0.0.1:{backend_port}/api/model-endpoints'
-    endpoints = model_helper._request(api, cookie)
-    existing = next((ep for ep in endpoints if ep.get('base_url', '').rstrip('/') == base), None)
-    name = 'Local models' if params.get('mode') == 'regular' else 'zVram · Local models'
     if existing:
-        if existing.get('name') not in ('Local models', 'zVram · Local models'):
-            raise ValueError('This port belongs to another provider')
         update = {'name': name, 'pinned_models': ids}
         if enable_existing:
             update['is_enabled'] = True

@@ -11,7 +11,7 @@ Novum Xenium brings your models, tools, projects and chats together. The lightwe
 
 This started with [Odysseus](https://github.com/odysseus-dev/odysseus), then NX-Odysseus. We kept using it, fixing what got in the way and adding what was missing. Now it has its own desktop app, interface and way of working. The original history, credits and AGPL license stay with it.
 
-**[Get started](#get-started)** · [Desktop app](#the-desktop-app) · [Android](#android-companion) · [See it work](#give-it-a-real-job) · [Workflow guide](docs/nx-workflows.md) · [What changed](FORK-CHANGES.md)
+**[Handbook](https://nerdrx.github.io/novum-xenium/)** · **[Get started](#get-started)** · [Desktop app](#the-desktop-app) · [Android](#android-companion) · [See it work](#give-it-a-real-job) · [Workflow guide](docs/nx-workflows.md) · [What changed](FORK-CHANGES.md)
 
 ![Novum Xenium home dashboard](assets/branding/workspace-home.png)
 
@@ -42,7 +42,7 @@ Connect a provider in **Settings**, choose **Agent** for tools, and select your 
 
 That's the setup: clone, copy the environment file, run Compose. Authentication is on. Ports bind to localhost by default. Your application data lives in `data/`; project files live in `data/agent_workspace/workspace/`, mounted as `/workspace` in the container.
 
-[Full setup guide](website/setup.md) covers native installs, GPU options, Windows/macOS, HTTPS and configuration.
+[Read the handbook](https://nerdrx.github.io/novum-xenium/) for setup, providers, tools, permissions, backups, troubleshooting, and configuration.
 
 ## The desktop app
 

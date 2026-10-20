@@ -1,0 +1,70 @@
+site_name: Novum Xenium Handbook
+site_description: User guide for installing, using, and maintaining Novum Xenium.
+site_url: https://nerdrx.github.io/novum-xenium/
+repo_url: https://github.com/nerdrx/novum-xenium
+use_directory_urls: true
+docs_dir: .
+site_dir: ../_site
+exclude_docs: |
+  mkdocs.yml
+  requirements.txt
+
+theme:
+  name: material
+  font: false
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: purple
+    - scheme: slate
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Install and first chat: getting-started.md
+      - Desktop manager: desktop.md
+      - Providers and models: providers.md
+  - Features:
+      - Chats and workspaces: chats-workspaces.md
+      - Tools, modes, and approvals: tools-safety.md
+      - Documents, notes, and memory: knowledge.md
+      - Tasks and notifications: tasks.md
+      - Images and audio: media.md
+      - Connected services: features-connected-services.md
+  - Tutorials:
+      - Safe coding session: tutorials/coding.md
+      - Add a model provider: tutorials/provider.md
+      - Back up before an update: tutorials/backup-update.md
+  - Troubleshooting:
+      - First checks: troubleshooting/index.md
+      - Startup and loading: troubleshooting/startup.md
+      - Models and memory: troubleshooting/models.md
+      - Tools and stopped runs: troubleshooting/tools.md
+  - Reference:
+      - Configuration and administration: reference/configuration.md
+      - Complete environment variables: reference/environment.md
+      - API reference: reference/api.md
+      - Runtime overview: reference/admin.md
+      - Trust and data boundaries: reference/security.md
+      - Feature and source index: reference/index.md
+      - Glossary: reference/glossary.md
+      - Handbook coverage: reference/coverage.md
+  - FAQ: faq.md

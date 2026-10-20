@@ -318,6 +318,7 @@ class BridgeTests(unittest.TestCase):
         helper.session_cookie.return_value = 'session'
         helper._request.return_value = [foreign]
         with (mock.patch.object(bridge, '_router_inventory', return_value=[{'id': 'tiny'}]),
+              mock.patch.object(bridge, '_local_json', side_effect=AssertionError('Foreign inventory must not be read')),
               self.assertRaisesRegex(ValueError, 'belongs to another provider')):
             bridge._register_router(helper, params, self.checkout, self.base / 'cookie', 8000,
                                     enable_existing=False)
@@ -642,11 +643,12 @@ class BridgeTests(unittest.TestCase):
                       mock.patch.object(bridge, '_local_json', return_value=response),
                       mock.patch.object(self.model_helper, 'session_cookie', return_value='session', create=True),
                       mock.patch.object(self.model_helper, '_request', create=True) as request):
+                    request.return_value = []
                     with self.assertRaisesRegex(ValueError, 'invalid registration inventory'):
                         bridge._register_router(
                             self.model_helper, params, self.checkout, self.base / 'cookie', 8000,
                         )
-                    request.assert_not_called()
+                    request.assert_called_once_with('http://127.0.0.1:8000/api/model-endpoints', 'session')
 
     def test_port_check_allows_time_wait_but_rejects_a_listener(self):
         import socket

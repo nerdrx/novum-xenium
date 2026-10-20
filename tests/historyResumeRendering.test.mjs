@@ -44,7 +44,7 @@ async function setup() {
       buildFindingsBox: () => '<div class="sources-section">Findings</div>',
       buildRagSourcesBox: () => '<details class="rag-sources"><summary>Documents</summary></details>',
       API_BASE: '', hasActiveStream: () => false,
-      _streamRunIds: new Map(), _resumingStreams: new Set(), _resumeStreams: new Map(), _backgroundStreams: new Map(),
+      _streamRunIds: new Map(), _streamGenerations: new Map([['s', 0]]), _resumingStreams: new Set(), _resumeStreams: new Map(), _backgroundStreams: new Map(),
       updateBrowserPreview: noop, updateRunStatus: noop, updateWorkspaceDock: noop, recordCodingWorkToolActivity: noop, renderCodingWorkPacketStatus: noop,
       updateSubmitButton: noop, _shortModel: x => x, _applyModelColor: noop,
       _streamDisplayText: x => x, createTerminalStreamError: x => Error(x.message || 'Stream error'),

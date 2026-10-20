@@ -20,6 +20,8 @@ const API_BASE = window.location.origin;
 
 let sessions = [];
 let _sessionsLoaded = false;
+let _sessionLoadRevision = 0;
+let _latestSessionLoad = null;
 let currentSessionId = null;
 let _activePendingDraftId = '';
 const _incognitoPendingDraftIds = new Set();
@@ -2095,13 +2097,30 @@ function _animateSessionRowsRemoving(ids, selector) {
   return new Promise(resolve => setTimeout(resolve, 520));
 }
 
-export async function loadSessions() {
+function _supersededSessionLoad(revision) {
+  return revision === _sessionLoadRevision ? null : (_latestSessionLoad || Promise.resolve(false));
+}
+
+export function loadSessions() {
+  const revision = ++_sessionLoadRevision;
+  const pending = _loadSessions(revision);
+  _latestSessionLoad = pending;
+  return pending;
+}
+
+async function _loadSessions(revision) {
   try {
     const authState = await getAuthState();
+    const supersededAfterAuth = _supersededSessionLoad(revision);
+    if (supersededAfterAuth) return supersededAfterAuth;
     const mayReadPrivateState = authState.verified && !authState.switched && authState.storageAvailable !== false;
     _bindComposerDraftInput(document.getElementById('message'));
     // Do not touch browser-cached session IDs until the current account is known.
-    if (mayReadPrivateState) await _cleanupIncognitoSessions();
+    if (mayReadPrivateState) {
+      await _cleanupIncognitoSessions();
+      const supersededAfterCleanup = _supersededSessionLoad(revision);
+      if (supersededAfterCleanup) return supersededAfterCleanup;
+    }
 
     // Use prefetched data from login page if available (first load only)
     let prefetched = null;
@@ -2132,12 +2151,18 @@ export async function loadSessions() {
       const timeout = setTimeout(() => controller.abort(), 15000);
       try {
         const res = await fetch(url, { signal: controller.signal });
+        const supersededAfterFetch = _supersededSessionLoad(revision);
+        if (supersededAfterFetch) return supersededAfterFetch;
         if (!res.ok) {
           let detail = '';
           try {
             const payload = await res.json();
+            const supersededAfterErrorBody = _supersededSessionLoad(revision);
+            if (supersededAfterErrorBody) return supersededAfterErrorBody;
             detail = payload?.detail || payload?.error || '';
           } catch (error) {
+            const supersededAfterErrorBodyFailure = _supersededSessionLoad(revision);
+            if (supersededAfterErrorBodyFailure) return supersededAfterErrorBodyFailure;
             if (controller.signal.aborted) throw error;
           }
           const error = new Error(detail || `Session request failed (HTTP ${res.status})`);
@@ -2145,7 +2170,11 @@ export async function loadSessions() {
           throw error;
         }
         fetched = await res.json();
+        const supersededAfterBody = _supersededSessionLoad(revision);
+        if (supersededAfterBody) return supersededAfterBody;
       } catch (error) {
+        const supersededAfterFetchFailure = _supersededSessionLoad(revision);
+        if (supersededAfterFetchFailure) return supersededAfterFetchFailure;
         if (controller.signal.aborted) throw new Error('Session request timed out');
         throw error;
       } finally {
@@ -2155,6 +2184,8 @@ export async function loadSessions() {
     if (!Array.isArray(fetched)) {
       throw new Error('Session request returned an invalid response');
     }
+    const supersededBeforeApply = _supersededSessionLoad(revision);
+    if (supersededBeforeApply) return supersededBeforeApply;
     sessions = _normalizeSessionsList(fetched);
     _sessionsLoaded = true;
     renderSessionList();
@@ -2270,8 +2301,12 @@ export async function loadSessions() {
       }
       updateModelPicker();
     }
+    const supersededBeforeReturn = _supersededSessionLoad(revision);
+    if (supersededBeforeReturn) return supersededBeforeReturn;
     return true;
   } catch (error) {
+    const supersededAfterFailure = _supersededSessionLoad(revision);
+    if (supersededAfterFailure) return supersededAfterFailure;
     console.error('Error in loadSessions:', error);
     // app.js's global fetch wrapper owns expired-auth navigation. Avoid
     // flashing a redundant session error while that 401 redirect is pending.

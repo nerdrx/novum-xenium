@@ -4,6 +4,7 @@ import httpx as real_httpx
 import pytest
 
 import src.tool_execution as te
+from src.agent_loop import _is_host_bridge_failure_result
 
 
 def test_tui_host_bridge_patch_url_replaces_run_endpoint():
@@ -100,7 +101,7 @@ def test_apply_patch_via_tui_host_bridge_rejects_malformed_exit_code(monkeypatch
     ))
 
     assert result == {
-        "error": "apply_patch: host bridge returned an invalid exit_code",
+        "error": "apply_patch: host bridge returned invalid exit_code",
         "exit_code": 1,
     }
 
@@ -184,7 +185,7 @@ def test_apply_patch_via_tui_host_bridge_rejects_invalid_success_payload(monkeyp
     ))
 
     assert result == {
-        "error": "apply_patch: host bridge returned an invalid payload",
+        "error": "apply_patch: host bridge returned invalid payload",
         "exit_code": 1,
     }
 
@@ -257,3 +258,75 @@ def test_apply_patch_bridge_error_overrides_false_success_code(monkeypatch):
     ))
 
     assert result == {"error": "host failed", "exit_code": 1}
+
+
+@pytest.mark.parametrize(
+    ("helper", "status", "payload", "text", "expected_error", "exit_code", "terminal"),
+    [
+        ("patch", 200, [], "", "bridge returned invalid payload", 1, True),
+        ("patch", 200, {"exit_code": "zero"}, "", "bridge returned invalid exit_code", 1, True),
+        ("post", 200, [], "", "bridge returned invalid payload", 1, True),
+        ("post", 200, {}, "", "bridge returned invalid payload", 1, True),
+        ("post", 200, {"exit_code": "zero"}, "", "bridge returned invalid exit_code", 1, True),
+        ("post", 200, None, "unexpected upstream reply", "bridge returned invalid JSON: unexpected upstream reply", 1, True),
+        ("post", 200, None, "", "bridge returned invalid JSON", 1, True),
+        ("post", 502, {"detail": "proxy failure"}, "", "bridge returned HTTP 502", 1, True),
+        ("post", 200, {"error": "File not found: example.txt", "exit_code": 1}, "", "File not found", 1, False),
+        ("post", 200, {"output": "printed: host bridge unavailable", "exit_code": 0}, "", "printed", 0, False),
+    ],
+)
+def test_malformed_bridge_protocol_results_stop_turn_without_stopping_application_errors(
+    monkeypatch, helper, status, payload, text, expected_error, exit_code, terminal,
+):
+    class Response:
+        status_code = status
+
+        def __init__(self):
+            self.text = text
+
+        def json(self):
+            if payload is None:
+                raise ValueError("invalid JSON")
+            return payload
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return Response()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+
+    async def call():
+        if helper == "patch":
+            return await te._apply_patch_via_tui_host_bridge(
+                "synthetic patch",
+                {
+                    "surface": "odysseus-tui",
+                    "host_shell_bridge": {
+                        "url": "http://127.0.0.1:17654/run",
+                        "token": "fake-token",
+                    },
+                },
+            )
+        return await te._bridge_post(
+            {"url": "http://127.0.0.1:17654/run", "token": "fake-token"},
+            "/read_file",
+            {"path": "example.txt"},
+            timeout_s=5,
+            err_prefix="read_file",
+        )
+
+    result = asyncio.run(call())
+    assert expected_error in result.get("error", result.get("output", ""))
+    assert result["exit_code"] == exit_code
+    assert _is_host_bridge_failure_result(result) is terminal

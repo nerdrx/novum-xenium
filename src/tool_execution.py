@@ -192,7 +192,7 @@ async def _apply_patch_via_tui_host_bridge(
             payload = None
         if not isinstance(payload, dict) or not payload:
             return {
-                "error": "apply_patch: host bridge returned an invalid payload",
+                "error": "apply_patch: host bridge returned invalid payload",
                 "exit_code": 1,
             }
         if response.status_code >= 400:
@@ -210,7 +210,7 @@ async def _apply_patch_via_tui_host_bridge(
             isinstance(exit_code, bool) or not isinstance(exit_code, int)
         ):
             return {
-                "error": "apply_patch: host bridge returned an invalid exit_code",
+                "error": "apply_patch: host bridge returned invalid exit_code",
                 "exit_code": 1,
             }
         return payload
@@ -260,13 +260,20 @@ async def _bridge_post(bridge: Dict, path: str, payload: Dict, *, timeout_s: flo
         except Exception:
             detail = str(response.text or "")[:500].strip()
             result = {
-                "error": detail or f"{err_prefix}: bridge returned invalid JSON",
+                "error": f"{err_prefix}: bridge returned invalid JSON"
+                + (f": {detail}" if detail else ""),
                 "exit_code": 1,
             }
         if not isinstance(result, dict):
-            result = {"error": f"{err_prefix}: bridge returned non-object response", "exit_code": 1}
+            result = {
+                "error": f"{err_prefix}: bridge returned invalid payload (expected object)",
+                "exit_code": 1,
+            }
         elif not result:
-            result = {"error": f"{err_prefix}: bridge returned an empty response", "exit_code": 1}
+            result = {
+                "error": f"{err_prefix}: bridge returned invalid payload (empty object)",
+                "exit_code": 1,
+            }
         elif response.status_code >= 400:
             result.setdefault("error", f"{err_prefix}: bridge returned HTTP {response.status_code}")
             result["exit_code"] = 1
@@ -279,7 +286,7 @@ async def _bridge_post(bridge: Dict, path: str, payload: Dict, *, timeout_s: flo
             isinstance(exit_code, bool) or not isinstance(exit_code, int)
         ):
             return {
-                "error": f"{err_prefix}: bridge returned an invalid exit_code",
+                "error": f"{err_prefix}: bridge returned invalid exit_code",
                 "exit_code": 1,
             }
         return result

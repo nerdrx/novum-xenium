@@ -277,6 +277,9 @@ function _renderSearchResults(data) {
 
 /** Run synthesis for a search pane — sends search results to an LLM for analysis. */
 async function _runSynthForPane(modelToUse, synthPrompt, synthBody, spinner, hist) {
+  const synthAbortController = new AbortController();
+  const synthControllers = state._abortControllers;
+  synthControllers.push(synthAbortController);
   try {
     const initialAuth = getKnownAuthState();
     if (!initialAuth?.verified) throw new Error('Cannot verify your account; synthesis was not started.');
@@ -291,24 +294,27 @@ async function _runSynthForPane(modelToUse, synthPrompt, synthBody, spinner, his
       fd.append('endpoint_id', modelToUse.endpointId);
       fd.append('skip_validation', 'true');
     }
-    const createRes = await fetch(`${state.API_BASE}/api/session`, { method: 'POST', body: fd });
+    const createRes = await fetch(`${state.API_BASE}/api/session`, { method: 'POST', body: fd, signal: synthAbortController.signal });
     if (!createRes.ok) {
       const errData = await createRes.json().catch(() => ({}));
       throw new Error(errData.detail || 'Failed to create session');
     }
     const createData = await createRes.json();
+    if (synthAbortController.signal.aborted) {
+      const abortError = new Error('Synthesis was stopped.');
+      abortError.name = 'AbortError';
+      throw abortError;
+    }
 
     const beforeStreamAuth = getKnownAuthState();
     if (!beforeStreamAuth?.verified) throw new Error('Cannot verify your account; synthesis request was not sent.');
     if (beforeStreamAuth.switched) throw new Error('Your account changed; reload before starting synthesis.');
 
-    const synthAc = new AbortController();
-    state._abortControllers.push(synthAc);
     const streamRes = await fetch(`${state.API_BASE}/api/chat_stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session: createData.id, message: synthPrompt }),
-      signal: synthAc.signal,
+      signal: synthAbortController.signal,
     });
 
     if (spinner) spinner.stop();
@@ -349,7 +355,10 @@ async function _runSynthForPane(modelToUse, synthPrompt, synthBody, spinner, his
     fetch(`${state.API_BASE}/api/session/${createData.id}`, { method: 'DELETE' }).catch(() => {});
   } catch (e) {
     if (spinner) spinner.stop();
-    synthBody.innerHTML = '<div style="color:var(--color-error);font-size:0.85em;">Synthesis failed: ' + escapeHtml(e.message) + '</div>';
+    synthBody.innerHTML = '<div style="color:var(--color-error);font-size:0.85em;">' + escapeHtml(e.name === 'AbortError' ? 'Synthesis was stopped.' : 'Synthesis failed: ' + e.message) + '</div>';
+  } finally {
+    const controllerIndex = synthControllers.indexOf(synthAbortController);
+    if (controllerIndex !== -1) synthControllers.splice(controllerIndex, 1);
   }
 }
 
@@ -960,11 +969,17 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
       }
     } else {
       console.error('Compare stream error:', error);
-      if (aiMsgEl._spinner?.element) aiMsgEl._spinner.destroy();
-      aiMsgEl._spinner = null;
       aiBody.innerHTML = '<span style="color:var(--color-error);">Error: ' + escapeHtml(error.message) + '</span>';
     }
   } finally {
+    if (aiMsgEl._spinner) aiMsgEl._spinner.destroy();
+    aiMsgEl._spinner = null;
+    if (aiMsgEl._imgSpinner) aiMsgEl._imgSpinner.destroy();
+    aiMsgEl._imgSpinner = null;
+    if (currentToolBlock?._waveInterval) {
+      clearInterval(currentToolBlock._waveInterval);
+      currentToolBlock._waveInterval = null;
+    }
     clearTimeout(timeoutId);
     _timerDone = true;
     cancelAnimationFrame(_rafId);

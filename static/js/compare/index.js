@@ -798,6 +798,8 @@ async function _executeCompare(message) {
 
   // ── Search mode: direct API calls, no SSE streaming ──
   if (state._compareMode === 'search') {
+    const searchControllers = state._selectedModels.map(() => new AbortController());
+    state._abortControllers = searchControllers;
     try {
       const n = state._selectedModels.length;
 
@@ -830,7 +832,6 @@ async function _executeCompare(message) {
 
       // Fire searches — parallel or sequential based on _parallel setting
       const t0 = performance.now();
-      state._abortControllers = state._selectedModels.map(() => new AbortController());
 
       async function _searchOne(m, i) {
         const fd = new FormData();
@@ -838,7 +839,7 @@ async function _executeCompare(message) {
         fd.append('provider', m.model);
         fd.append('count', '10');
         try {
-          const res = await fetch(`${state.API_BASE}/api/search/query`, { method: 'POST', body: fd, signal: state._abortControllers[i].signal });
+          const res = await fetch(`${state.API_BASE}/api/search/query`, { method: 'POST', body: fd, signal: searchControllers[i].signal });
           const data = await res.json();
           return { idx: i, data };
         } catch (err) {
@@ -850,6 +851,7 @@ async function _executeCompare(message) {
       const _seqSynthDone = new Set();
       if (state._parallel) {
         results = await Promise.all(state._selectedModels.map((m, i) => _searchOne(m, i)));
+        if (state._abortControllers !== searchControllers) return;
       } else {
         // Sequential — run one at a time, dim waiting panes
         results = [];
@@ -859,6 +861,7 @@ async function _executeCompare(message) {
           const pane = panes[i];
           if (pane) pane.style.opacity = '1';
           results.push(await _searchOne(state._selectedModels[i], i));
+          if (state._abortControllers !== searchControllers) return;
           // Render this result immediately
           const { idx, data } = results[results.length - 1];
           const hist = document.getElementById('cmp-history-' + idx);
@@ -903,6 +906,7 @@ async function _executeCompare(message) {
                 const resultsText = data.results.map((r, ri) => `[${ri + 1}] ${r.title}\n${r.snippet || ''}\nURL: ${r.url}`).join('\n\n');
                 const synthPrompt = `Analyze these search results for the query "${message}". Summarize the key findings, note any consensus or conflicting information, and provide a brief synthesis.\n\nSearch Results:\n${resultsText}`;
                 await _runSynthForPane(modelToUse, synthPrompt, synthBody, spinner, seqHist);
+                if (state._abortControllers !== searchControllers) return;
               }
             }
           }
@@ -993,9 +997,12 @@ async function _executeCompare(message) {
           await Promise.all(synthTasks.map(runSynthesis));
         } else {
           for (const task of synthTasks) {
+            if (state._abortControllers !== searchControllers) return;
             await runSynthesis(task);
+            if (state._abortControllers !== searchControllers) return;
           }
         }
+        if (state._abortControllers !== searchControllers) return;
       }
 
       buildVoteBar(n);
@@ -1003,8 +1010,10 @@ async function _executeCompare(message) {
       console.error('Search compare error:', err);
       if (uiModule) uiModule.showError('Search compare failed: ' + err.message);
     } finally {
-      state._streaming = false;
-      _setSendBtn('send');
+      if (state._abortControllers === searchControllers) {
+        state._streaming = false;
+        _setSendBtn('send');
+      }
     }
     return;
   }

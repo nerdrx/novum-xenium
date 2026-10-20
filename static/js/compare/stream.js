@@ -6,6 +6,7 @@ import markdownModule from '../markdown.js';
 import spinnerModule from '../spinner.js';
 import uiModule from '../ui.js?v=20260916largetoolscroll1';
 import presetsModule from '../presets.js?v=20260908personaname1';
+import { getKnownAuthState } from '../authState.js';
 
 var escapeHtml = uiModule.esc;
 
@@ -276,23 +277,30 @@ function _renderSearchResults(data) {
 
 /** Run synthesis for a search pane — sends search results to an LLM for analysis. */
 async function _runSynthForPane(modelToUse, synthPrompt, synthBody, spinner, hist) {
-  // Create temp session for synthesis
-  const fd = new FormData();
-  fd.append('name', 'Synthesis');
-  fd.append('endpoint_url', modelToUse.endpoint || '');
-  fd.append('model', modelToUse.model || '');
-  if (modelToUse.endpointId) {
-    fd.append('endpoint_id', modelToUse.endpointId);
-    fd.append('skip_validation', 'true');
-  }
-
   try {
+    const initialAuth = getKnownAuthState();
+    if (!initialAuth?.verified) throw new Error('Cannot verify your account; synthesis was not started.');
+    if (initialAuth.switched) throw new Error('Your account changed; reload before starting synthesis.');
+
+    // Create temp session for synthesis
+    const fd = new FormData();
+    fd.append('name', 'Synthesis');
+    fd.append('endpoint_url', modelToUse.endpoint || '');
+    fd.append('model', modelToUse.model || '');
+    if (modelToUse.endpointId) {
+      fd.append('endpoint_id', modelToUse.endpointId);
+      fd.append('skip_validation', 'true');
+    }
     const createRes = await fetch(`${state.API_BASE}/api/session`, { method: 'POST', body: fd });
     if (!createRes.ok) {
       const errData = await createRes.json().catch(() => ({}));
       throw new Error(errData.detail || 'Failed to create session');
     }
     const createData = await createRes.json();
+
+    const beforeStreamAuth = getKnownAuthState();
+    if (!beforeStreamAuth?.verified) throw new Error('Cannot verify your account; synthesis request was not sent.');
+    if (beforeStreamAuth.switched) throw new Error('Your account changed; reload before starting synthesis.');
 
     const synthAc = new AbortController();
     state._abortControllers.push(synthAc);
@@ -464,6 +472,10 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
     if (presetsModule && presetsModule.getSelectedPreset()) {
       fd.append('preset_id', presetsModule.getSelectedPreset());
     }
+
+    const auth = getKnownAuthState();
+    if (!auth?.verified) throw new Error('Cannot verify your account; this compare request was not sent.');
+    if (auth.switched) throw new Error('Your account changed; reload before sending.');
 
     const response = await fetch(`${state.API_BASE}/api/chat_stream`, {
       method: 'POST',
@@ -948,6 +960,8 @@ async function streamToPane(paneIdx, sessionId, message, aiMsgEl, opts) {
       }
     } else {
       console.error('Compare stream error:', error);
+      if (aiMsgEl._spinner?.element) aiMsgEl._spinner.destroy();
+      aiMsgEl._spinner = null;
       aiBody.innerHTML = '<span style="color:var(--color-error);">Error: ' + escapeHtml(error.message) + '</span>';
     }
   } finally {

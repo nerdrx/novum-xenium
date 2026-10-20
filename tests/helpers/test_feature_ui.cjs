@@ -10,9 +10,11 @@ const { withAppStyles } = require('./app_styles.cjs');
 const html = `<!doctype html><html><head><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS --></head>
 <body style="padding:24px;overflow:auto"><div id="toast"></div><button id="workspace-open">Workspace</button>
 <div class="group-conversation-panel" style="position:relative;bottom:auto;right:auto;width:280px"><div id="team"></div></div>
+<script>localStorage.setItem('odysseus-workspace','/workspace');</script>
 <script type="module">
 import {createGroupTeam} from '/static/js/groupTeam.js';
 import workspace from '/static/js/workspace.js';
+import {getAuthState} from '/static/js/authState.js';
 window.sessionModule={getCurrentSessionId:()=> 'fixture-chat'};
 window.teamCalls=[];
 const team=createGroupTeam({apiBase:'',getParentSessionId:()=> 'fixture-chat',
@@ -26,6 +28,7 @@ window.fetch=(url,options={})=>{
 };
 await team.mount(document.getElementById('team'));team.setEnabled(true);
 document.getElementById('workspace-open').onclick=()=>workspace.openWorkspaceBrowser();
+await getAuthState();
 window.fixtureReady=true;
 </script></body></html>`;
 let savedBoard = null;
@@ -38,6 +41,7 @@ const json = (res, data) => {res.setHeader('Content-Type','application/json');re
 const server = http.createServer(async(req,res)=>{
   const url = new URL(req.url,'http://localhost');
   if(url.pathname==='/') return withAppStyles(html).then(styled => res.end(styled));
+  if(url.pathname==='/api/auth/status') return json(res,{configured:false,authenticated:false,username:null});
   if(url.pathname.startsWith('/api/groups/')) {
     if(url.pathname.endsWith('/team/run')&&req.method==='POST') {
       let body='';for await(const part of req)body+=part;

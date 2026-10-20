@@ -23,6 +23,15 @@ If skill suggestions are missing after a temporary connection failure, focus
 the composer or type again after a few seconds. Autocomplete retries the
 skill catalog while keeping built-in commands available.
 
+## Account verification stops a send
+
+If a send cannot verify your account, keep the draft, check your connection or
+sign-in, and try again shortly. In Compare, retrying requests another account
+check without automatically sending the draft. If the account changed, copy
+any new draft text and reload before sending. **Stop** remains available for a
+running comparison. If verification changes after a round starts, inspect
+which panes finished before retrying the remaining requests.
+
 ## Approval is pending or a tool is blocked
 
 Read the exact operation, target, and command in the approval card. Approve

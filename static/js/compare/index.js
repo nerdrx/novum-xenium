@@ -36,6 +36,7 @@ import { showScoreboard } from './scoreboard.js?v=20260909voteconfirmalign1';
 
 // ── External dependency imports ──
 import Storage from '../storage.js';
+import { getAuthState, getKnownAuthState } from '../authState.js';
 import uiModule from '../ui.js?v=20260916largetoolscroll1';
 import sessionModule from '../sessions.js';
 import spinnerModule from '../spinner.js';
@@ -699,6 +700,16 @@ function handleCompareSubmit(e) {
   const input = document.getElementById('message');
   const message = input ? input.value.trim() : '';
   if (!message) return;
+  const auth = getKnownAuthState();
+  if (!auth?.verified) {
+    void getAuthState().catch(() => {});
+    uiModule?.showToast?.('Cannot verify your account right now. Your message is still here; try again shortly.');
+    return;
+  }
+  if (auth.switched) {
+    uiModule?.showToast?.('Your account changed. Copy any new draft text, then reload before sending.');
+    return;
+  }
   input.value = '';
   // Reset textarea height
   input.style.height = '';

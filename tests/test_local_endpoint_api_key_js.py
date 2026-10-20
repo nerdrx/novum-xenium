@@ -58,16 +58,21 @@ _HARNESS = """
 let appended = [];
 class FormData {{ append(k, v) {{ appended.push([k, String(v)]); }} }}
 const FIELDS = {fields};
+const NODES = {{}};
 function el(id) {{
   if (!(id in FIELDS)) return null;
-  return {{
+  if (!NODES[id]) NODES[id] = {{
+    isConnected: true,
     get value() {{ return FIELDS[id]; }},
     set value(x) {{ FIELDS[id] = x; }},
-    disabled: false, textContent: '',
+    disabled: false, textContent: '', innerHTML: '',
     classList: {{ add() {{}}, remove() {{}} }},
   }};
+  return NODES[id];
 }}
-function _endpointMsg() {{ return {{ textContent: '', className: '' }}; }}
+const MESSAGES = {{ local: {{ isConnected: true, textContent: '', className: '' }} }};
+function _endpointMsg(kind) {{ return MESSAGES[kind]; }}
+function _endpointTestStillOwns(kind, ids, msg) {{ __OWNER_HELPER__ }}
 function _normalizeBaseUrl(u) {{ return u; }}
 function _renderEndpointTestResult() {{}}
 async function loadEndpoints() {{}}
@@ -85,7 +90,11 @@ run().then(() => console.log(JSON.stringify(appended)))
 
 
 def _run_handler(body: str, fields: dict) -> list:
-    js = _HARNESS.format(fields=json.dumps(fields), body=body)
+    helper = _extract_handler_body(
+        _ADMIN_JS.read_text(encoding="utf-8"),
+        "function _endpointTestStillOwns(kind, ids, msg) ",
+    )
+    js = _HARNESS.format(fields=json.dumps(fields), body=body).replace("__OWNER_HELPER__", helper)
     proc = subprocess.run(
         ["node", "--input-type=module"],
         input=js, capture_output=True, text=True, cwd=str(_REPO), timeout=30,

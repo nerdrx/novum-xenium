@@ -9394,8 +9394,8 @@ def _normalize_incomplete_shell_artifact_result(
 def _host_bridge_failure_response() -> str:
     """Return the concise user-facing terminal response for bridge outages."""
     return (
-        "The host shell bridge is unavailable, so I couldn't access the local machine. "
-        "Restart or reconnect the TUI host bridge, then resend the request."
+        "The host shell bridge could not confirm completion. Check results and local changes "
+        "before retrying. Restart or reconnect the TUI host bridge if unavailable."
     )
 
 

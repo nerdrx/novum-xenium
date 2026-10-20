@@ -82,6 +82,9 @@ def test_bridge_transport_failure_response_is_concise_and_actionable():
     response = _host_bridge_failure_response()
     assert "unavailable" in response
     assert "Restart or reconnect" in response
+    assert "could not confirm completion" in response
+    assert "local changes before retrying" in response
+    assert "couldn't access" not in response
     assert len(response) < 180
 
 

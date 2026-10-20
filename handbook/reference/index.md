@@ -6,6 +6,8 @@ This index points from user questions to the maintained source documents. The ha
 | --- | --- | --- |
 | Docker setup and product overview | [Getting started](../getting-started.md) | [README](https://github.com/nerdrx/novum-xenium#readme), `.env.example` |
 | Desktop manager and Linux provider | [Desktop](../desktop.md) | [`docs/desktop.md`](https://github.com/nerdrx/novum-xenium/blob/main/docs/desktop.md) |
+| Local model downloads and launches | [Cookbook and local models](../cookbook.md) | [`static/js/cookbook.js`](https://github.com/nerdrx/novum-xenium/blob/main/static/js/cookbook.js), [`static/js/cookbookServe.js`](https://github.com/nerdrx/novum-xenium/blob/main/static/js/cookbookServe.js) |
+| Model comparisons | [Compare models](../compare.md) | [`static/js/compare/`](https://github.com/nerdrx/novum-xenium/tree/main/static/js/compare) |
 | Chats and project coding | [Chats and workspaces](../chats-workspaces.md) | [`docs/coding-work-packets.md`](https://github.com/nerdrx/novum-xenium/blob/main/docs/coding-work-packets.md), [`docs/nx-workflows.md`](https://github.com/nerdrx/novum-xenium/blob/main/docs/nx-workflows.md) |
 | Calendar, email, Library, Notes, memory, MCP and modules | [Connected services](../features-connected-services.md) | [`specs/`](https://github.com/nerdrx/novum-xenium/tree/main/specs), [`docs/modules.md`](https://github.com/nerdrx/novum-xenium/blob/main/docs/modules.md) |
 | Tool containment | [Tools and approvals](../tools-safety.md) | [`docs/native-containment-docker.md`](https://github.com/nerdrx/novum-xenium/blob/main/docs/native-containment-docker.md), [`docs/AGENT_TURN_CONTRACT.md`](https://github.com/nerdrx/novum-xenium/blob/main/docs/AGENT_TURN_CONTRACT.md) |

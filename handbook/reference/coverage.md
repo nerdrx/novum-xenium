@@ -6,9 +6,9 @@ This handbook aims to let an operator complete documented Novum workflows withou
 
 - Install the standard Docker Compose app, sign in, connect a model endpoint, and run a first prompt.
 - Use browser, desktop, and Android clients against the same backend; understand which client can manage host processes.
-- Add local/hosted model endpoints, diagnose an offline provider, select models, understand context limits, and follow Linux AMD/ROCm, Vulkan, and zVram boundaries.
+- Add local/hosted model endpoints, manage Cookbook downloads and launches, diagnose an offline provider, select models, understand context limits, and follow Linux AMD/ROCm, Vulkan, and zVram boundaries.
 - Save and recover browser composer drafts; use chats, projects, managed worktrees, workspace search/previews, snapshots, Stop, and Continue.
-- Choose Chat/Agent/Plan modes, manage tool approvals, run verified coding work packets, connect MCP servers/modules, and understand containment limits.
+- Choose Chat/Agent/Plan modes, compare chat models and search providers, manage tool approvals, run verified coding work packets, connect MCP servers/modules, and understand containment limits.
 - Operate calendar, CalDAV, email, Library/documents, Notes/reminders, memory, skills, local/hosted images, notifications, and the desktop alarm where supported.
 - Configure Compose settings, all source-inventoried environment variables, Settings keys, accounts, API tokens, network binds, storage, backups, updates, rollback, and common API routes.
 

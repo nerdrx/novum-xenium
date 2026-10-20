@@ -1269,9 +1269,10 @@ async function _cmdWorkspace(args, ctx) {
     // Validate server-side before persisting so the pill never claims a
     // workspace the backend will refuse to bind (typo, file path, deleted
     // folder, sensitive dir, filesystem root).
-    workspaceModule.vetAndSetWorkspace(path).then(({ ok, path: resolvedPath, stale, storage_error, request_error }) => {
+    workspaceModule.vetAndSetWorkspace(path).then(({ ok, path: resolvedPath, stale, storage_error, request_error, auth_unavailable, auth_switched, storage_unavailable }) => {
       if (stale) return;
       if (ok) slashReply(`Workspace set: <code>${uiModule.esc(resolvedPath)}</code>`);
+      else if (auth_unavailable || storage_unavailable) slashReply(workspaceModule.getWorkspaceAvailabilityError?.() || (auth_switched ? 'Your account changed. Reload before choosing a workspace.' : 'Workspace is unavailable until your account is verified. Check your sign-in and try again.'));
       else if (storage_error) slashReply('Could not save workspace in browser storage. Your previous workspace remains selected.');
       else if (request_error) slashReply('Could not check this workspace with the Novum Xenium backend. Check the connection and try again.');
       else slashReply(`Not a usable workspace folder on the Novum Xenium backend: <code>${uiModule.esc(path)}</code>. If Novum Xenium is running in Docker, use the container path, usually <code>/workspace</code>, or use <code>/workspace pick</code>.`);
@@ -1283,7 +1284,7 @@ async function _cmdWorkspace(args, ctx) {
   }
   if (sub === 'clear' || sub === 'off' || sub === 'none' || sub === 'unset') {
     if (workspaceModule.clearWorkspace() !== false) slashReply('Workspace cleared.');
-    else slashReply('Could not save workspace in browser storage. Your previous workspace remains selected.');
+    else slashReply(workspaceModule.getWorkspaceAvailabilityError?.() || 'Could not save workspace in browser storage. Your previous workspace remains selected.');
     return true;
   }
   if (sub === 'pick' || sub === 'browse' || sub === 'open') {

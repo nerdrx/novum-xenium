@@ -26,15 +26,25 @@ After an agent reply, open the context indicator in the chat header to inspect t
 
 Files in the standard Docker workspace persist at `data/agent_workspace/workspace/` on the host and appear as `/workspace` in the app container. Agent file tools and repository shell commands may have different boundaries; select a workspace deliberately.
 
+Each browser tab keeps its own active workspace. Changing a folder in another
+tab does not retarget this tab's later chat or group requests. Newly opened
+tabs remember the last saved browser preference; open tabs keep their current
+selection. After an update, reload all open Novum tabs before relying on this
+behavior.
+
+Saved workspace choices are restored after the app verifies the current
+account. If verification fails, retry when the connection recovers; if your
+account changed, reload before selecting a workspace or sending a message.
+
 Paths entered with `/workspace <path>` are checked by the backend before they
-are saved. A pending check must not replace a folder you select or clear later;
+are saved. A pending check must not replace a folder you select or clear later in this tab;
 the latest selection takes priority. An invalid path leaves the existing
 selection in place.
 
 A fresh browser uses the backend's explicitly configured default when one is
 available. Otherwise, choose a folder to set an explicit workspace; the UI
 does not assume that a host has a `/workspace` directory. Clearing a saved
-selection leaves it cleared.
+selection leaves it cleared in this tab.
 
 If the backend does not finish checking a path within 15 seconds, the check
 stops waiting and reports a request failure. Retry after checking backend

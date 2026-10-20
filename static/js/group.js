@@ -9,6 +9,7 @@ import { providerLogo } from './providers.js';
 import { PROMPT_TEMPLATES, getUserTemplates } from './presets.js?v=20260908personaname1';
 import { sortModelObjects } from './modelSort.js';
 import Storage from './storage.js';
+import workspaceModule from './workspace.js';
 import { createGroupTeam } from './groupTeam.js';
 
 let API_BASE = '';
@@ -80,7 +81,7 @@ export function init(apiBase) {
     apiBase: API_BASE,
     getParentSessionId: () => _parentSessionId,
     getModels: () => _models,
-    getRequestContext: board => _requestContext([board.plan, ...board.tasks.map(task => task.title)].join('\n')),
+    getRequestContext: board => (workspaceModule.getWorkspaceAvailabilityError?.() || '') ? null : _requestContext([board.plan, ...board.tasks.map(task => task.title)].join('\n')),
     getParticipantSessions: () => {
       const sessions = Object.fromEntries(_models.map((model, i) => [groupModelKey(model), _participantSessions[i]]));
       const counts = new Map();
@@ -477,6 +478,8 @@ export function setMode(m) { _mode = m; }
 export function isRunning() { return _running; }
 
 export async function runTeamAssignment(participantId, prompt, readOnly = false) {
+  const workspaceAuthError = (workspaceModule.getWorkspaceAvailabilityError?.() || '');
+  if (workspaceAuthError) { uiModule.showToast(workspaceAuthError); return null; }
   if (!_active || _running || !prompt) return null;
   let modelIdx = _models.findIndex(m => groupModelKey(m) === String(participantId));
   if (modelIdx < 0) {
@@ -945,12 +948,14 @@ function _requestContext(msg) {
   else if (checked('web-toggle')) fields.use_web = 'true';
   if (document.getElementById('rag-toggle') && !checked('rag-toggle')) fields.use_rag = 'false';
   if (incognito) fields.incognito = 'true';
-  const workspace = Storage.get(Storage.KEYS.WORKSPACE, '');
+  const workspace = workspaceModule.getWorkspace();
   if (workspace) fields.workspace = workspace;
   return Object.freeze(fields);
 }
 
 export async function sendMessage(msg) {
+  const workspaceAuthError = (workspaceModule.getWorkspaceAvailabilityError?.() || '');
+  if (workspaceAuthError) { uiModule.showToast(workspaceAuthError); return; }
   if (!_active || !_models.length || _running) return;
 
   const box = document.getElementById('chat-history');
@@ -976,6 +981,8 @@ export async function sendMessage(msg) {
       window.sessionModule?.loadSessions?.();
     }
     if (run !== _runId || ac.signal.aborted) return;
+    const currentWorkspaceAuthError = (workspaceModule.getWorkspaceAvailabilityError?.() || '');
+    if (currentWorkspaceAuthError) { uiModule.showToast(currentWorkspaceAuthError); return; }
 
     if (_mode === 'parallel' && !_autoConversation) {
       await _sendParallel(msg, box, run, ac);
@@ -1152,6 +1159,14 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl, ch
   const bodyEl = holderEl.querySelector('.body');
   const textEl = document.createElement('div');
   bodyEl.appendChild(textEl);
+
+  const workspaceAuthError = (workspaceModule.getWorkspaceAvailabilityError?.() || '');
+  if (workspaceAuthError) {
+    uiModule.showToast(workspaceAuthError);
+    holderEl._spinner?.destroy();
+    delete holderEl._spinner;
+    return false;
+  }
 
   try {
     const res = await fetch(`${API_BASE}/api/chat_stream`, {

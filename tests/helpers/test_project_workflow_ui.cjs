@@ -7,14 +7,20 @@ const {chromium} = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
 const repo = path.resolve(__dirname, '../..');
 const { withAppStyles } = require('./app_styles.cjs');
+const callbackOnly = process.argv.includes('callback-only');
 const html = `<!doctype html><html><head><meta charset="utf-8"><!-- APP_STYLESHEET_LINKS --></head>
-<body><button id="workspace-open">Workspace</button><button id="mode-agent-btn" class="mode-toggle-btn">Agent</button><button id="mode-chat-btn" class="mode-toggle-btn">Chat</button><script type="module">
+<body><button id="workspace-open">Workspace</button><button id="mode-agent-btn" class="mode-toggle-btn">Agent</button><button id="mode-chat-btn" class="mode-toggle-btn">Chat</button><script>localStorage.setItem('odysseus-workspace', '${callbackOnly ? '/other-tab-choice' : '/workspace'}');</script><script type="module">
 localStorage.setItem('odysseus-workspace','/workspace');
 localStorage.setItem('currentSessionId','fixture-session');
 window.sessionModule={getCurrentSessionId:()=> 'fixture-session',getSessions:()=>[{id:'fixture-session',model:'model-a',endpoint_id:'endpoint-1',endpoint_url:'http://model.local/v1'}],createDirectChat:(url,model,endpoint)=>{window.createdProjectChat={url,model,endpoint};window.createdProjectChatCount=(window.createdProjectChatCount||0)+1;}};
 window._userPrivileges={can_use_agent:true};
 document.getElementById('mode-chat-btn').addEventListener('click',event=>{event.currentTarget.dataset.clicked='true';});
 import workspace from '/static/js/workspace.js';
+import { getAuthState } from '/static/js/authState.js';
+await getAuthState();
+workspace.initWorkspace();
+localStorage.setItem('odysseus-workspace','/workspace');
+window.workspaceModule = workspace;
 document.getElementById('workspace-open').onclick=()=>workspace.openWorkspaceBrowser();
 window.fixtureReady=true;
 </script></body></html>`;
@@ -31,6 +37,7 @@ const json = (res, data, status = 200) => {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/') return withAppStyles(html).then(styled => res.end(styled));
+  if (url.pathname === '/api/auth/status') return json(res, { configured: false, authenticated: false, username: null });
   if (url.pathname === '/api/workspace/browse') {
     return json(res, {path: '/workspace', parent: '/', dirs: [], selectable: true});
   }
@@ -100,13 +107,37 @@ const server = http.createServer(async (req, res) => {
     page.on('pageerror', error => errors.push(error.stack));
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(() => window.fixtureReady);
+    if (callbackOnly) {
+      const initialChoice = await page.evaluate(() => ({ workspace: window.workspaceModule.getWorkspace(), stored: localStorage.getItem('odysseus-workspace') }));
+      await page.locator('#workspace-open').click();
+      await page.locator('.workspace-project-tools > summary').click();
+      await page.locator('.project-workflow-panel').getByRole('button', {name: 'Start new chat with project preferences'}).click();
+      await page.waitForFunction(() => window.createdProjectChatCount === 1);
+      assert.equal(await page.evaluate(() => window.workspaceModule.getWorkspace()), '/workspace', 'project callback updates page-local choice when saved preference already matches');
+      assert.equal(await page.evaluate(() => localStorage.getItem('odysseus-workspace')), '/workspace');
+      const finalChoice = await page.evaluate(() => ({ workspace: window.workspaceModule.getWorkspace(), stored: localStorage.getItem('odysseus-workspace') }));
+      assert.deepEqual(initialChoice, { workspace: '/workspace', stored: '/workspace' });
+      assert.deepEqual(finalChoice, initialChoice, 'project callback preserves the already matching workspace');
+      assert.equal(await page.locator('#workspace-modal').evaluate(el => el.style.display), 'flex', 'picker stays open when the page choice already matches');
+      assert.deepEqual(errors, []);
+      console.log('PASS: project start selects its workspace when shared preference already matches');
+      return;
+    }
     await page.locator('#workspace-open').click();
-    await page.locator('.workspace-project-tools > summary').click();
+    if (!await page.locator('.workspace-project-tools').evaluate(el => el.open)) await page.locator('.workspace-project-tools > summary').click();
     const panel = page.locator('.project-workflow-panel');
     await panel.getByRole('button', {name: 'Start new chat with project preferences'}).click();
-    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [role="status"]')?.textContent.includes('message was not sent'));
+    await page.waitForFunction(() => window.createdProjectChatCount === 1, null, { timeout: 5000 }).catch(async error => {
+      console.error(JSON.stringify({ state: await page.evaluate(() => ({ count: window.createdProjectChatCount, workspace: window.workspaceModule.getWorkspace(), stored: localStorage.getItem('odysseus-workspace'), status: document.querySelector('.project-workflow-panel [role="status"]')?.textContent })), errors }));
+      throw error;
+    });
     assert.deepEqual(await page.evaluate(() => window.createdProjectChat), {url: 'http://model.local/v1', model: 'model-a', endpoint: 'endpoint-1'}, 'can apply defaults from the entered workspace without Inspect first');
+    assert.equal(await page.evaluate(() => window.workspaceModule.getWorkspace()), '/workspace', 'provided project selection callback updates page-local choice even when saved preference matches the project');
     assert.equal(await page.evaluate(() => localStorage.getItem('odysseus-workspace')), '/workspace', 'no-inspect apply keeps the matching active workspace');
+    if (await page.locator('#workspace-modal').evaluate(el => el.style.display === 'none')) {
+      await page.locator('#workspace-open').click();
+      await page.locator('.workspace-project-tools > summary').click();
+    }
     await panel.getByRole('button', {name: 'Inspect project'}).click();
     const report = panel.getByLabel('Project workflow results');
     await page.waitForFunction(() => document.querySelector('.project-workflow-panel [aria-label="Project workflow results"]')?.textContent.includes('AGENTS.md'));
@@ -128,9 +159,11 @@ const server = http.createServer(async (req, res) => {
     assert.equal(savedPreferences.preferred_endpoint_id, 'endpoint-1');
     assert.equal(savedPreferences.instructions, 'Keep changes small.');
     await panel.getByRole('button', {name: 'Start new chat with project preferences'}).click();
-    await page.waitForFunction(() => document.querySelector('.project-workflow-panel [role="status"]')?.textContent.includes('message was not sent'));
+    await page.waitForFunction(() => window.createdProjectChatCount === 2);
     assert.deepEqual(await page.evaluate(() => window.createdProjectChat), {url: 'http://model.local/v1', model: 'model-a', endpoint: 'endpoint-1'});
     assert.equal(await page.locator('#mode-chat-btn').getAttribute('data-clicked'), 'true');
+    if (await page.locator('#workspace-modal').evaluate(el => el.style.display === 'none')) await page.locator('#workspace-open').click();
+    if (!await page.locator('.workspace-project-tools').evaluate(el => el.open)) await page.locator('.workspace-project-tools > summary').click();
 
     await panel.getByRole('button', {name: 'Create worktree'}).click();
     await panel.getByRole('button', {name: 'Use this worktree'}).waitFor();

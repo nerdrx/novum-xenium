@@ -10,7 +10,11 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/') {
     res.setHeader('Content-Type', 'text/html');
-    return res.end('<!doctype html><button id="type">Type</button><script type="module">import workspace from "/static/js/workspace.js";window.workspace=workspace;window.ready=true;</script>');
+    return res.end('<!doctype html><button id="type">Type</button><script type="module">import workspace from "/static/js/workspace.js";import {getAuthState} from "/static/js/authState.js";window.workspace=workspace;await getAuthState();window.ready=true;</script>');
+  }
+  if (url.pathname === '/api/auth/status') {
+    res.setHeader('Content-Type', 'application/json');
+    return res.end(JSON.stringify({ configured: false, authenticated: false, username: null }));
   }
   if (url.pathname === '/api/workspace/default') {
     defaultRequests++;
@@ -57,11 +61,16 @@ const server = http.createServer((req, res) => {
 
     await page.reload();
     await page.waitForFunction(() => window.ready);
-    await page.evaluate(async () => {
+    await page.evaluate(() => {
       localStorage.removeItem('odysseus-workspace');
-      const pending = workspace.loadDefaultWorkspace();
+      window.__pendingDefault = workspace.loadDefaultWorkspace();
+    });
+    const requestDeadline = Date.now() + 3000;
+    while (defaultRequests < 3 && Date.now() < requestDeadline) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(defaultRequests, 3, 'default request is active before explicit selection');
+    await page.evaluate(async () => {
       workspace.setWorkspace('/chosen-during-load');
-      const result = await pending;
+      const result = await window.__pendingDefault;
       window.concurrentChoice = { result, stored: localStorage.getItem('odysseus-workspace') };
     });
     assert.equal(await page.evaluate(() => window.concurrentChoice.stored), '/chosen-during-load', 'selection made during request wins');

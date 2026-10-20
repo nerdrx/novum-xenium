@@ -4058,6 +4058,8 @@ function startOdysseusApp() {
 
     // Group chat: route to group module
     if (groupModule && groupModule.isActive()) {
+      const workspaceAuthError = workspaceModule.getWorkspaceAvailabilityError?.() || '';
+      if (workspaceAuthError) { uiModule.showToast(workspaceAuthError); return; }
       if (groupModule.isRunning()) { uiModule.showToast('Press Stop conversation before sending another message'); return; }
       console.log('[group] Submit intercepted');
       const msgInput = document.getElementById('message');

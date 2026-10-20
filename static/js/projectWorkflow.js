@@ -512,7 +512,7 @@ export function mountProjectWorkflow(container, initialWorkspace = "", { fetcher
           throw new Error("The preferred chat mode is unavailable in this view.");
         }
       }
-      if (activeWorkspace !== projectWorkspace) onSelectWorkspace(projectWorkspace);
+      if (onSelectWorkspace) onSelectWorkspace(projectWorkspace);
       if (preferredModeButton && !preferredModeButton.classList.contains("active")) preferredModeButton.click();
       session.createDirectChat(selectedModel.url, selectedModel.id, selectedModel.endpointId);
       status("Started a new chat with project preferences. The message was not sent.");

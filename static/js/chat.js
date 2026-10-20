@@ -6,6 +6,7 @@
 // ES6 module — IIFE removed
 
 import Storage from './storage.js';
+import { getWorkspace } from './workspace.js';
 import { getAuthState } from './authState.js';
 import uiModule from './ui.js?v=20260916largetoolscroll1';
 import sessionModule from './sessions.js';
@@ -3051,7 +3052,7 @@ import { invalidateSettings } from './appConfig.js';
       if (isIncognito) {
         fd.append('incognito', 'true');
       }
-      const _ws = (Storage.KEYS && Storage.get(Storage.KEYS.WORKSPACE, '')) || '';
+      const _ws = getWorkspace();
       if (_ws) {
         fd.append('workspace', _ws);
       }

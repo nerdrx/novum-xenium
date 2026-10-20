@@ -9,6 +9,7 @@ import Storage, { KEYS } from './storage.js';
 import { mountProjectWorkflow } from './projectWorkflow.js';
 import uiModule from './ui.js?v=20260916largetoolscroll1';
 import { makeWindowDraggable } from './windowDrag.js';
+import { getAuthState, getKnownAuthState } from './authState.js';
 
 const API_BASE = window.location.origin;
 // Same folder glyph as the overflow menu item + pill (not an emoji).
@@ -30,11 +31,73 @@ let _projectCleanup = null;
 let _defaultWorkspaceLoad = null;
 let _workspaceSelectionRevision = 0;
 let _pendingWorkspaceVetRevision = null;
+let _workspace = '';
+let _workspaceHydrated = false;
+let _workspaceAuthInvalidated = false;
+let _workspaceAvailabilityError = '';
 const _WORKSPACE_STORAGE_ERROR = 'Could not save workspace in browser storage. Your previous workspace remains selected.';
+const _WORKSPACE_AUTH_ERROR = 'Workspace is unavailable until your account is verified. Check your sign-in and try again.';
+const _WORKSPACE_ACCOUNT_CHANGED = 'Your account changed. Reload before choosing a workspace.';
 const _WORKSPACE_REQUEST_TIMEOUT_MS = 15000;
 
 export function getWorkspace() {
-  return Storage.get(KEYS.WORKSPACE, '') || '';
+  return _syncKnownWorkspaceAuth().ok && _workspaceHydrated ? _workspace : '';
+}
+
+function _invalidateWorkspaceForAuth() {
+  if (_workspaceAuthInvalidated) return;
+  _workspaceAuthInvalidated = true;
+  _workspaceHydrated = false;
+  _workspaceSelectionRevision++;
+  _pendingWorkspaceVetRevision = null;
+  _defaultWorkspaceLoad = null;
+  _workspace = '';
+  syncWorkspaceIndicator('');
+}
+
+function _acceptWorkspaceAuth(state) {
+  if (state?.verified && state.switched) {
+    _invalidateWorkspaceForAuth();
+    _workspaceAvailabilityError = _WORKSPACE_ACCOUNT_CHANGED;
+    return { ok: false, auth_unavailable: true, auth_switched: true };
+  }
+  if (!state?.verified) {
+    _workspaceAvailabilityError = _WORKSPACE_AUTH_ERROR;
+    return { ok: false, auth_unavailable: true };
+  }
+  _workspaceAuthInvalidated = false;
+  _workspaceAvailabilityError = '';
+  if (!_workspaceHydrated) {
+    _workspace = Storage.get(KEYS.WORKSPACE, '') || '';
+    _workspaceHydrated = true;
+    syncWorkspaceIndicator(_workspace);
+  }
+  return { ok: true };
+}
+
+function _syncKnownWorkspaceAuth() {
+  const state = getKnownAuthState();
+  if (state?.verified) return _acceptWorkspaceAuth(state);
+  _workspaceAvailabilityError = _WORKSPACE_AUTH_ERROR;
+  return { ok: false, auth_unavailable: true };
+}
+
+window.addEventListener('storage', event => {
+  if (event.key === 'odysseus-auth-user' || event.key === null) _syncKnownWorkspaceAuth();
+});
+
+async function _ensureWorkspaceAuth() {
+  return _acceptWorkspaceAuth(await getAuthState());
+}
+
+function _showWorkspaceAuthError(result = _syncKnownWorkspaceAuth()) {
+  const message = result.auth_switched ? _WORKSPACE_ACCOUNT_CHANGED : _WORKSPACE_AUTH_ERROR;
+  if (uiModule && uiModule.showToast) uiModule.showToast(message);
+}
+
+export function getWorkspaceAvailabilityError() {
+  _syncKnownWorkspaceAuth();
+  return _workspaceAvailabilityError;
 }
 
 async function _fetchWorkspaceJson(url) {
@@ -90,8 +153,12 @@ export function applyMode(_mode) {
 export function setWorkspace(path) {
   _workspaceSelectionRevision++;
   _pendingWorkspaceVetRevision = null;
-  if (!_persistWorkspace(path || '')) return false;
-  syncWorkspaceIndicator(path || '');
+  const auth = _syncKnownWorkspaceAuth();
+  if (!auth.ok) return false;
+  const selected = path || '';
+  if (!_persistWorkspace(selected)) return false;
+  _workspace = selected;
+  syncWorkspaceIndicator(selected);
   return true;
 }
 
@@ -105,10 +172,12 @@ function clearRejectedWorkspace(path) {
   if (!path || getWorkspace() !== path) return false;
   // Automatic rejection cleanup must not supersede an explicit workspace vet
   // that is still pending for a newer selection.
-  if (!_persistWorkspace('')) {
+  const saved = Storage.get(KEYS.WORKSPACE, null);
+  if (saved === path && !_persistWorkspace('')) {
     if (uiModule && uiModule.showToast) uiModule.showToast(_WORKSPACE_STORAGE_ERROR);
     return false;
   }
+  _workspace = '';
   syncWorkspaceIndicator('');
   return true;
 }
@@ -124,10 +193,18 @@ export async function vetAndSetWorkspace(path) {
   const revision = ++_workspaceSelectionRevision;
   _pendingWorkspaceVetRevision = revision;
   try {
+    const auth = await _ensureWorkspaceAuth();
+    if (!auth.ok) return { ok: false, path: null, ...auth };
+    if (revision !== _workspaceSelectionRevision) return { ok: false, path: null, stale: true };
     const data = await _fetchWorkspaceJson(`${API_BASE}/api/workspace/vet?path=${encodeURIComponent(path)}`);
+    const currentAuth = _syncKnownWorkspaceAuth();
+    if (!currentAuth.ok) return { ok: false, path: null, ...currentAuth };
     if (revision !== _workspaceSelectionRevision) return { ok: false, path: null, stale: true };
     if (data.ok && data.path) {
-      if (!setWorkspace(data.path)) return { ok: false, path: null, storage_error: true };
+      if (!setWorkspace(data.path)) {
+        const latestAuth = _syncKnownWorkspaceAuth();
+        return { ok: false, path: null, ...(latestAuth.ok ? { storage_error: true } : latestAuth) };
+      }
       return { ok: true, path: data.path };
     }
     return { ok: false, path: null };
@@ -140,19 +217,30 @@ export async function vetAndSetWorkspace(path) {
 
 export async function loadDefaultWorkspace() {
   if (_defaultWorkspaceLoad) return _defaultWorkspaceLoad;
-  if (Storage.get(KEYS.WORKSPACE, null) !== null) return { ok: false, path: null };
   const revision = _workspaceSelectionRevision;
   let loaded = false;
-  const load = _fetchWorkspaceJson(`${API_BASE}/api/workspace/default`)
-    .then((data) => {
+  const load = (async () => {
+    const auth = await _ensureWorkspaceAuth();
+    if (!auth.ok) return { ok: false, path: null, ...auth };
+    if (revision !== _workspaceSelectionRevision) return { ok: false, path: null, stale: true };
+    if (Storage.get(KEYS.WORKSPACE, null) !== null) return { ok: false, path: null };
+    try {
+      const data = await _fetchWorkspaceJson(`${API_BASE}/api/workspace/default`);
+      const currentAuth = _syncKnownWorkspaceAuth();
+      if (!currentAuth.ok) return { ok: false, path: null, ...currentAuth };
       if (data.ok && data.path && revision === _workspaceSelectionRevision && _pendingWorkspaceVetRevision === null && Storage.get(KEYS.WORKSPACE, null) === null) {
-        if (!setWorkspace(data.path)) return { ok: false, path: null, storage_error: true };
+        if (!setWorkspace(data.path)) {
+          const latestAuth = _syncKnownWorkspaceAuth();
+          return { ok: false, path: null, ...(latestAuth.ok ? { storage_error: true } : latestAuth) };
+        }
         loaded = true;
         return { ok: true, path: data.path };
       }
       return { ok: false, path: null };
-    })
-    .catch(() => ({ ok: false, path: null, request_error: true }));
+    } catch (_) {
+      return { ok: false, path: null, request_error: true };
+    }
+  })();
   _defaultWorkspaceLoad = load;
   load.then(() => {
     if (!loaded && _defaultWorkspaceLoad === load) _defaultWorkspaceLoad = null;
@@ -161,6 +249,13 @@ export async function loadDefaultWorkspace() {
 }
 
 export function clearWorkspace() {
+  _workspaceSelectionRevision++;
+  _pendingWorkspaceVetRevision = null;
+  const auth = _syncKnownWorkspaceAuth();
+  if (!auth.ok) {
+    _showWorkspaceAuthError(auth);
+    return false;
+  }
   const cleared = setWorkspace('');
   if (uiModule && uiModule.showToast) uiModule.showToast(cleared ? 'Workspace cleared' : _WORKSPACE_STORAGE_ERROR);
   return cleared;
@@ -545,8 +640,11 @@ function _getModal() {
       _modal.querySelector('#workspace-project-tools'), getWorkspace(), {
         fetcher: fetch,
         onSelectWorkspace: path => {
-          if (!setWorkspace(path)) throw new Error(_WORKSPACE_STORAGE_ERROR);
-          closeWorkspaceBrowser();
+          const alreadySelected = getWorkspace() === path;
+          if (!setWorkspace(path)) {
+            throw new Error(_syncKnownWorkspaceAuth().ok ? _WORKSPACE_STORAGE_ERROR : _workspaceAvailabilityError);
+          }
+          if (!alreadySelected) closeWorkspaceBrowser();
         },
         getSessionId: () => Storage.get(KEYS.CURRENT_SESSION, '')
       }
@@ -580,7 +678,9 @@ function _getModal() {
   _modal.querySelector('#workspace-use').addEventListener('click', () => {
     if (_modal.querySelector('#workspace-use').disabled || !_curPath) return;
     if (!setWorkspace(_curPath)) {
-      if (uiModule && uiModule.showToast) uiModule.showToast(_WORKSPACE_STORAGE_ERROR);
+      const auth = _syncKnownWorkspaceAuth();
+      if (!auth.ok) _showWorkspaceAuthError(auth);
+      else if (uiModule && uiModule.showToast) uiModule.showToast(_WORKSPACE_STORAGE_ERROR);
       return;
     }
     if (uiModule && uiModule.showToast) uiModule.showToast(`Workspace set: ${_basename(_curPath)}`);
@@ -593,6 +693,8 @@ function _getModal() {
 }
 
 export async function openWorkspaceBrowser() {
+  const auth = await _ensureWorkspaceAuth();
+  if (!auth.ok) { _showWorkspaceAuthError(auth); return; }
   ++_snapshotViewVersion;
   _opener = document.activeElement;
   const modal = _getModal();
@@ -616,12 +718,18 @@ export function closeWorkspaceBrowser() {
 }
 
 export function initWorkspace() {
-  // Restore persisted workspace into the pill on load.
-  const current = getWorkspace();
-  syncWorkspaceIndicator(current);
-  // A browser has no trustworthy local launch directory. Let a deployment
-  // provide one explicitly, and only use it when the user has no saved choice.
-  if (!current) loadDefaultWorkspace();
+  // Keep prior-account preferences hidden until auth reconciliation verifies
+  // that this page still belongs to the same identity.
+  syncWorkspaceIndicator(getWorkspace());
+  _ensureWorkspaceAuth().then(auth => {
+    if (!auth.ok) {
+      _showWorkspaceAuthError(auth);
+      return;
+    }
+    // A browser has no trustworthy local launch directory. Let a deployment
+    // provide one explicitly, and only use it when the user has no saved choice.
+    if (!getWorkspace()) loadDefaultWorkspace();
+  });
   const overflow = document.getElementById('overflow-workspace-btn');
   if (overflow) overflow.addEventListener('click', openWorkspaceBrowser);
   const pill = document.getElementById('workspace-indicator-btn');
@@ -637,4 +745,4 @@ export function initWorkspace() {
   }
 }
 
-export default { initWorkspace, openWorkspaceBrowser, getWorkspace, setWorkspace, vetAndSetWorkspace, loadDefaultWorkspace, clearWorkspace, clearRejectedWorkspace, syncWorkspaceIndicator, applyMode };
+export default { initWorkspace, openWorkspaceBrowser, getWorkspace, getWorkspaceAvailabilityError, setWorkspace, vetAndSetWorkspace, loadDefaultWorkspace, clearWorkspace, clearRejectedWorkspace, syncWorkspaceIndicator, applyMode };

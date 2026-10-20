@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
 const scenario = process.argv[2];
+globalThis.__workspaceChoice = scenario === 'workspace-local' ? '/page-local-workspace' : (scenario === 'auth-empty' ? '' : '/workspace');
+globalThis.__workspaceAvailabilityError = ['auth-unknown', 'auth-switched', 'auth-run-team'].includes(scenario) ? 'Account verification required' : '';
 const elements = new Map();
 const storage = new Map();
 const notices = [];
@@ -44,7 +46,7 @@ Math.random = () => 0.999;
 const state = { active: true, mode: 'round-robin', models: [{ mid: 'a', display: 'A' }, { mid: 'b', display: 'B' }],
   participantSessions: ['a-session', 'b-session'], parentSessionId: 'parent', autoConversation: true, replyLimit: 0 };
 if (['limit', 'concurrent'].includes(scenario)) state.replyLimit = 20;
-if (['single', 'parallel', 'toggle', 'approval', 'deny', 'ask-stop', 'ask-stale', 'question', 'tool-events', 'context'].includes(scenario)) state.autoConversation = false;
+if (['single', 'parallel', 'toggle', 'approval', 'deny', 'ask-stop', 'ask-stale', 'question', 'tool-events', 'context', 'workspace-local', 'auth-empty', 'auth-unknown', 'auth-switched', 'auth-run-team', 'auth-changed-before-post', 'auth-change-between-participants'].includes(scenario)) state.autoConversation = false;
 if (['parallel', 'toggle'].includes(scenario)) state.mode = 'parallel';
 storage.set('odysseus-group-state', JSON.stringify(state));
 
@@ -55,6 +57,7 @@ const chatRenderer = { shortModel: s => s, applyModelColor() {}, createMsgFooter
   renderAskUserCard: (payload, options) => globalThis.__card(payload, options) };
 const spinnerModule = { create: () => globalThis.__spinner() };
 const providerLogo = () => ''; const PROMPT_TEMPLATES = []; const getUserTemplates = () => []; const sortModelObjects = x => x;
+const workspaceModule = { getWorkspace: () => globalThis.__workspaceChoice, getWorkspaceAvailabilityError: () => globalThis.__workspaceAvailabilityError };
 const Storage = { KEYS: { WORKSPACE: 'workspace' }, get: () => '/workspace', loadToggleState: () => ({ mode: 'agent' }), getJSON: (key, fallback) => JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)) };
 `;
 globalThis.__notices = notices;
@@ -86,6 +89,10 @@ globalThis.fetch = async (url, options = {}) => {
   if (options.signal?.aborted) throw new DOMException('Stopped', 'AbortError');
   if (!url.endsWith('/api/chat_stream')) {
     injections.push({ url, ...JSON.parse(options.body) });
+    if (scenario === 'auth-changed-before-post' && url.includes('/parent/')) globalThis.__workspaceAvailabilityError = 'Account changed';
+    if (scenario === 'auth-change-between-participants' && url.includes('/parent/') && JSON.parse(options.body).messages?.[0]?.role === 'assistant') globalThis.__workspaceAvailabilityError = 'Account changed';
+    if (scenario === 'auth-changed-before-post' && url.includes('/parent/')) globalThis.__workspaceAvailabilityError = 'Account changed';
+    if (scenario === 'auth-change-between-participants' && url.includes('/parent/') && JSON.parse(options.body).messages?.[0]?.role === 'assistant') globalThis.__workspaceAvailabilityError = 'Account changed';
     if (scenario === 'sync-error' && url.includes('b-session')) return { ok: false, status: 500 };
     return { ok: true };
   }
@@ -130,13 +137,30 @@ if (scenario === 'toggle') {
   checkbox.checked = true;
   checkbox.listeners.change({ target: checkbox });
 }
-if (scenario === 'concurrent') await Promise.all([group.sendMessage('Topic'), group.sendMessage('Duplicate')]);
+if (scenario === 'auth-run-team') await group.runTeamAssignment('a', 'Run task');
+else if (scenario === 'concurrent') await Promise.all([group.sendMessage('Topic'), group.sendMessage('Duplicate')]);
 else await group.sendMessage('Topic');
+if (['auth-unknown', 'auth-switched', 'auth-run-team', 'auth-changed-before-post'].includes(scenario)) {
+  assert.equal(streams, 0, 'Unavailable auth must block group chat POST');
+  assert.equal(group.isRunning(), false);
+  assert.ok(notices.some(x => x.includes('Account')));
+  assert.equal(injections.length, scenario === 'auth-changed-before-post' ? 1 : 0);
+  console.log(JSON.stringify({ scenario, streams, injections: injections.length, blocked: true }));
+  process.exit(0);
+}
+if (scenario === 'auth-change-between-participants') {
+  assert.equal(streams, 1, 'Identity change must block the next participant POST');
+  assert.ok(notices.some(x => x.includes('Account')));
+  console.log(JSON.stringify({ scenario, streams, blocked: true }));
+  process.exit(0);
+}
 
 assert.equal(group.isRunning(), false);
 assert.equal(spinners, destroyed, 'All spinners must stop');
 for (const prompt of prompts) {
-  assert.equal(prompt.mode, 'agent'); assert.equal(prompt.workspace, '/workspace');
+  assert.equal(prompt.mode, 'agent');
+  if (scenario === 'auth-empty') assert.equal(Object.hasOwn(prompt, 'workspace'), false);
+  else assert.equal(prompt.workspace, globalThis.__workspaceChoice);
   assert.equal(prompt.allow_bash, 'true'); assert.equal(prompt.allow_web_search, 'false');
   assert.equal(prompt.use_rag, 'false'); assert.equal(prompt.plan_mode, 'false');
 }
@@ -160,7 +184,7 @@ if (['limit', 'concurrent'].includes(scenario)) {
   else { assert.equal(prompts[1].message, ''); assert.equal(prompts[1].tool_approval_id, 'approval-1');
     assert.equal(prompts[1].tool_approval_decision, scenario === 'deny' ? 'deny' : 'approve_task'); }
 } else if (['ask-stop', 'ask-stale'].includes(scenario)) assert.equal(streams, 1);
-else if (['single', 'parallel', 'context', 'tool-events'].includes(scenario)) {
+else if (['single', 'parallel', 'context', 'workspace-local', 'tool-events', 'auth-empty'].includes(scenario)) {
   assert.equal(streams, 2);
   if (scenario === 'tool-events') assert.ok(box.children.every(x => x.querySelector('.body').children.some(c => c.className === 'agent-tool-event')), 'Text updates must retain tool events');
 }

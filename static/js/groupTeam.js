@@ -344,7 +344,11 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
       message = 'A task has an uncertain result. Retry it explicitly or remove it before continuing.';
       render(); return;
     }
-    const requestContext = getRequestContext(board) || {};
+    const suppliedRequestContext = getRequestContext(board);
+    if (suppliedRequestContext === null) {
+      message = 'Verify your account before running team tasks'; render(); return;
+    }
+    const requestContext = suppliedRequestContext || {};
     if (isolateWorktrees && !requestContext.workspace) {
       message = 'Choose a Git workspace before isolating team tasks'; render(); return;
     }
@@ -360,6 +364,9 @@ export function createGroupTeam({ apiBase, getParentSessionId, getModels, getPar
     try {
       await saveChain.catch(() => {});
       if (parentId !== id || generation !== loadGeneration) return;
+      if (getRequestContext(board) === null) {
+        message = 'Verify your account before running team tasks'; busy = false; render(); return;
+      }
       const response = await fetch(`${apiBase}/api/groups/${encodeURIComponent(id)}/team/run`, {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ board, participant_sessions: getParticipantSessions(), request_context: requestContext,

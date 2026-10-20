@@ -50,6 +50,7 @@ nav:
       - Images and audio: media.md
       - Cookbook and local models: cookbook.md
       - Compare models: compare.md
+      - Deep Research: research.md
       - Connected services: features-connected-services.md
   - Tutorials:
       - Safe coding session: tutorials/coding.md

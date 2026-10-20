@@ -11,6 +11,7 @@ Start with [Install and first chat](getting-started.md) if you are new. If somet
 | Install the server and send a first message | [Install and first chat](getting-started.md) |
 | Add a hosted or local model | [Providers and models](providers.md) |
 | Download, resume, and launch local models | [Cookbook and local models](cookbook.md) |
+| Research a question and follow a saved report | [Deep Research](research.md) |
 | Compare model and search-provider responses | [Compare models](compare.md) |
 | Understand chat modes, tools, and approvals | [Tools, modes, and approvals](tools-safety.md) |
 | Keep files and coding work organized | [Chats and workspaces](chats-workspaces.md) |

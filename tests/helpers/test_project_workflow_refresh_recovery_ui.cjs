@@ -51,6 +51,10 @@ const html = `<!doctype html><body>
       if (url.startsWith('/api/project-workflows/verification?')) {
         return jsonResponse({ checks: [], auto_run_on_completion: false });
       }
+      if (url.startsWith('/api/project-workflows/preferences?')) {
+        return jsonResponse({ preferred_model_id: '', preferred_endpoint_id: '', preferred_mode: '', tool_preferences: '', instructions: '' });
+      }
+      if (url === '/api/models?background=false') return jsonResponse({ items: [] });
       if (url === '/api/project-workflows/worktrees') return jsonResponse({ worktrees: [] });
       throw new Error('Unexpected inspection request: ' + url);
     };

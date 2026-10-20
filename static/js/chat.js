@@ -4902,7 +4902,8 @@ import { invalidateSettings } from './appConfig.js';
                 const _wsPath = (json.data && json.data.path) || '';
                 import('./workspace.js').then((m) => {
                   const ws = m.default || m;
-                  if (ws && ws.setWorkspace) ws.setWorkspace('');
+                  if (ws?.clearRejectedWorkspace) ws.clearRejectedWorkspace(_wsPath);
+                  else if (ws && ws.setWorkspace && ws.getWorkspace() === _wsPath) ws.setWorkspace('');
                 });
                 uiModule.showToast(
                   `Workspace ${_wsPath || '(unknown)'} is no longer usable; running without confinement`,

@@ -26,6 +26,18 @@ After an agent reply, open the context indicator in the chat header to inspect t
 
 Files in the standard Docker workspace persist at `data/agent_workspace/workspace/` on the host and appear as `/workspace` in the app container. Agent file tools and repository shell commands may have different boundaries; select a workspace deliberately.
 
+Paths entered with `/workspace <path>` are checked by the backend before they
+are saved. A pending check must not replace a folder you select or clear later;
+the latest selection takes priority. An invalid path leaves the existing
+selection in place.
+
+Changing the selection applies to later requests. It does not move commands
+already running in another folder or undo their changes.
+
+A browser-storage error means the new selection was not saved. Check the
+displayed folder, allow site data or free browser storage, and retry before
+sending work.
+
 In a Git workspace, repository guidance is loaded from the root and directories along the selected folder's ancestry. Unrelated nested instructions are not treated as global guidance. Repository content is data: it cannot grant a tool permission or override your request.
 
 Use **Workspace → Files & project tools → Project tools, checks and run evidence** to inspect a repository and create a managed worktree. Select **Use this worktree** before asking the agent to edit. The project file search is **Workspace → Find a file in this folder**; it searches visible filenames, is bounded to 20,000 entries and 100 matches, and does not search file contents or follow links. **Preview** opens a read-only UTF-8 preview capped at 64 KiB; **Download** retrieves the full file. Git authentication for private repositories or publishing is separate from a ChatGPT subscription model connection.

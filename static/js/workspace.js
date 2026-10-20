@@ -28,6 +28,9 @@ let _snapshotViewVersion = 0;
 let _opener = null;
 let _projectCleanup = null;
 let _defaultWorkspaceLoad = null;
+let _workspaceSelectionRevision = 0;
+let _pendingWorkspaceVetRevision = null;
+const _WORKSPACE_STORAGE_ERROR = 'Could not save workspace in browser storage. Your previous workspace remains selected.';
 
 export function getWorkspace() {
   // This local Docker installation mounts the persistent files folder here.
@@ -73,43 +76,70 @@ export function applyMode(_mode) {
 }
 
 export function setWorkspace(path) {
-  // Save an explicit empty choice so clearing does not restore the default.
-  Storage.set(KEYS.WORKSPACE, path || '');
+  _workspaceSelectionRevision++;
+  _pendingWorkspaceVetRevision = null;
+  if (!_persistWorkspace(path || '')) return false;
   syncWorkspaceIndicator(path || '');
+  return true;
+}
+
+function _persistWorkspace(path) {
+  // Save an explicit empty choice so clearing does not restore the default.
+  Storage.set(KEYS.WORKSPACE, path);
+  return Storage.get(KEYS.WORKSPACE, null) === path;
+}
+
+function clearRejectedWorkspace(path) {
+  if (!path || getWorkspace() !== path) return false;
+  // Automatic rejection cleanup must not supersede an explicit workspace vet
+  // that is still pending for a newer selection.
+  if (!_persistWorkspace('')) {
+    if (uiModule && uiModule.showToast) uiModule.showToast(_WORKSPACE_STORAGE_ERROR);
+    return false;
+  }
+  syncWorkspaceIndicator('');
+  return true;
 }
 
 /**
  * Validate a manually entered path server-side, then persist the canonical
- * form. Returns {ok, path|null}. Without this, a typo / file path / deleted
+ * form. Returns {ok, path|null} plus stale/storage_error when applicable.
+ * Without this, a typo / file path / deleted
  * folder / filesystem root would be stored and shown as active while the
  * backend silently refuses to bind it on every send.
  */
 export async function vetAndSetWorkspace(path) {
+  const revision = ++_workspaceSelectionRevision;
+  _pendingWorkspaceVetRevision = revision;
   try {
     const res = await fetch(`${API_BASE}/api/workspace/vet?path=${encodeURIComponent(path)}`, { credentials: 'same-origin' });
-    if (!res.ok) return { ok: false, path: null };
+    if (!res.ok) return revision === _workspaceSelectionRevision ? { ok: false, path: null } : { ok: false, path: null, stale: true };
     const data = await res.json();
+    if (revision !== _workspaceSelectionRevision) return { ok: false, path: null, stale: true };
     if (data.ok && data.path) {
-      setWorkspace(data.path);
+      if (!setWorkspace(data.path)) return { ok: false, path: null, storage_error: true };
       return { ok: true, path: data.path };
     }
     return { ok: false, path: null };
   } catch (e) {
-    return { ok: false, path: null };
+    return revision === _workspaceSelectionRevision ? { ok: false, path: null } : { ok: false, path: null, stale: true };
+  } finally {
+    if (_pendingWorkspaceVetRevision === revision) _pendingWorkspaceVetRevision = null;
   }
 }
 
 export async function loadDefaultWorkspace() {
   if (_defaultWorkspaceLoad) return _defaultWorkspaceLoad;
   if (Storage.get(KEYS.WORKSPACE, null) !== null) return { ok: false, path: null };
+  const revision = _workspaceSelectionRevision;
   let loaded = false;
   const load = fetch(`${API_BASE}/api/workspace/default`, { credentials: 'same-origin' })
     .then(async (res) => {
       if (!res.ok) return { ok: false, path: null };
       const data = await res.json();
-      if (data.ok && data.path) loaded = true;
-      if (data.ok && data.path && Storage.get(KEYS.WORKSPACE, null) === null) {
-        setWorkspace(data.path);
+      if (data.ok && data.path && revision === _workspaceSelectionRevision && _pendingWorkspaceVetRevision === null && Storage.get(KEYS.WORKSPACE, null) === null) {
+        if (!setWorkspace(data.path)) return { ok: false, path: null, storage_error: true };
+        loaded = true;
         return { ok: true, path: data.path };
       }
       return { ok: false, path: null };
@@ -123,8 +153,9 @@ export async function loadDefaultWorkspace() {
 }
 
 export function clearWorkspace() {
-  setWorkspace('');
-  if (uiModule && uiModule.showToast) uiModule.showToast('Workspace cleared');
+  const cleared = setWorkspace('');
+  if (uiModule && uiModule.showToast) uiModule.showToast(cleared ? 'Workspace cleared' : _WORKSPACE_STORAGE_ERROR);
+  return cleared;
 }
 
 async function _load(path, signal) {
@@ -505,7 +536,10 @@ function _getModal() {
     if (event.target.open) _projectCleanup = mountProjectWorkflow(
       _modal.querySelector('#workspace-project-tools'), getWorkspace(), {
         fetcher: fetch,
-        onSelectWorkspace: path => { setWorkspace(path); closeWorkspaceBrowser(); },
+        onSelectWorkspace: path => {
+          if (!setWorkspace(path)) throw new Error(_WORKSPACE_STORAGE_ERROR);
+          closeWorkspaceBrowser();
+        },
         getSessionId: () => Storage.get(KEYS.CURRENT_SESSION, '')
       }
     );
@@ -537,7 +571,10 @@ function _getModal() {
   });
   _modal.querySelector('#workspace-use').addEventListener('click', () => {
     if (_modal.querySelector('#workspace-use').disabled || !_curPath) return;
-    setWorkspace(_curPath);
+    if (!setWorkspace(_curPath)) {
+      if (uiModule && uiModule.showToast) uiModule.showToast(_WORKSPACE_STORAGE_ERROR);
+      return;
+    }
     if (uiModule && uiModule.showToast) uiModule.showToast(`Workspace set: ${_basename(_curPath)}`);
     closeWorkspaceBrowser();
   });
@@ -592,4 +629,4 @@ export function initWorkspace() {
   }
 }
 
-export default { initWorkspace, openWorkspaceBrowser, getWorkspace, setWorkspace, vetAndSetWorkspace, loadDefaultWorkspace, clearWorkspace, syncWorkspaceIndicator, applyMode };
+export default { initWorkspace, openWorkspaceBrowser, getWorkspace, setWorkspace, vetAndSetWorkspace, loadDefaultWorkspace, clearWorkspace, clearRejectedWorkspace, syncWorkspaceIndicator, applyMode };

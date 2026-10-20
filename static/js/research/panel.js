@@ -50,6 +50,8 @@ let _markdownModule = null;
 let _sessionModule = null;
 let _settingsCollapsed = false;
 let _researchTab = 'research';
+let _researchSettingsIntentRevision = 0;
+let _pendingEditedResearchSelection = null;
 let _historySearch = '';
 let _historySort = 'recent';
 let _historyFilter = 'all';
@@ -327,7 +329,8 @@ export function openPanel(focusJobId) {
   }
 
   _wireEvents(pane);
-  _loadEndpoints().then(_restoreSavedSettings);
+  const settingsIntentRevision = _researchSettingsIntentRevision;
+  _loadEndpoints(pane).then(() => _restoreSavedSettings(settingsIntentRevision, pane));
   _clearBadge();
   _updateResearchCount();
   jobs.refreshLibrary?.({ force: true });
@@ -584,9 +587,15 @@ function _wireEvents(pane) {
   });
 
   const endpointSelect = pane.querySelector('#research-endpoint');
-  endpointSelect.addEventListener('change', () => _populateModels(endpointSelect.value));
+  endpointSelect.addEventListener('change', () => {
+    _researchSettingsIntentRevision++;
+    _pendingEditedResearchSelection = null;
+    _populateModels(endpointSelect.value);
+  });
   const modelSelect = pane.querySelector('#research-model');
   modelSelect.addEventListener('change', () => {
+    _researchSettingsIntentRevision++;
+    _pendingEditedResearchSelection = null;
     // The model menu is deliberately cross-endpoint. Selecting a model must
     // therefore carry its owning endpoint along with it instead of sending a
     // model name to whichever endpoint happened to be selected before.
@@ -650,6 +659,11 @@ function _readSettings() {
     model: document.getElementById('research-model')?.value || undefined,
     category: category || undefined,
   };
+  const pending = _currentPendingEditedResearchSelection();
+  if (pending) {
+    if (!settings.endpoint_id && pending.endpointId) settings.endpoint_id = pending.endpointId;
+    if (!settings.model && pending.modelId) settings.model = pending.modelId;
+  }
   const epSel = document.getElementById('research-endpoint');
   if (epSel && epSel.value) {
     const opt = epSel.options[epSel.selectedIndex];
@@ -659,6 +673,15 @@ function _readSettings() {
   if (modelSel && modelSel.value) settings._modelName = modelSel.value;
   Object.keys(settings).forEach(k => { if (!settings[k]) delete settings[k]; });
   return settings;
+}
+
+function _currentPendingEditedResearchSelection() {
+  const pending = _pendingEditedResearchSelection;
+  return pending
+    && pending.pane === document.getElementById('research-pane')
+    && pending.intentRevision === _researchSettingsIntentRevision
+    ? pending
+    : null;
 }
 
 function _handleAdd() {
@@ -674,6 +697,8 @@ function _handleAdd() {
 
 // Move a job's data back into the compose form so user can edit and re-queue
 function _editJob(job) {
+  const intentRevision = ++_researchSettingsIntentRevision;
+  const pane = document.getElementById('research-pane');
   const queryEl = document.getElementById('research-query');
   if (queryEl) {
     queryEl.value = job.query || '';
@@ -686,6 +711,9 @@ function _editJob(job) {
   if (catSel) catSel.value = cat;
   // Restore settings
   const s = job.settings || {};
+  _pendingEditedResearchSelection = (s.endpoint_id || s.model)
+    ? { pane, intentRevision, endpointId: s.endpoint_id || '', modelId: s.model || '' }
+    : null;
   const roundsEl = document.getElementById('research-rounds');
   if (roundsEl && s.max_rounds) roundsEl.value = s.max_rounds;
   const spEl = document.getElementById('research-search-provider');
@@ -697,6 +725,7 @@ function _editJob(job) {
   }
   const mEl = document.getElementById('research-model');
   if (mEl && s.model) mEl.value = s.model;
+  _applyPendingEditedResearchSelection(pane);
   _syncAllResearchPickers();
   // Remove the old job so clicking Start/Queue makes a fresh one
   jobs.removeJob(job.id);
@@ -790,15 +819,19 @@ async function _handleStart() {
   });
 }
 
-async function _restoreSavedSettings() {
+async function _restoreSavedSettings(settingsIntentRevision, pane) {
+  if (
+    settingsIntentRevision !== _researchSettingsIntentRevision
+    || document.getElementById('research-pane') !== pane
+  ) return;
   const saved = _loadSettingsFromStorage() || {};
   if (saved.category !== undefined) {
-    const catSel = document.getElementById('research-category');
+    const catSel = pane.querySelector('#research-category');
     if (catSel) catSel.value = saved.category;
   }
   // Rounds intentionally defaults to "Auto" on every open — don't restore.
   // Users can pick a specific cap each time if needed.
-  const search = document.getElementById('research-search-provider');
+  const search = pane.querySelector('#research-search-provider');
   if (search && saved.search_provider !== undefined) search.value = saved.search_provider;
 
   // The compose panel must start from the Deep Research default configured in
@@ -811,13 +844,17 @@ async function _restoreSavedSettings() {
       if (response.ok) configured = await response.json() || {};
     } catch (_) { /* The endpoint list remains usable without this preference. */ }
   }
-  const ep = document.getElementById('research-endpoint');
+  if (
+    settingsIntentRevision !== _researchSettingsIntentRevision
+    || document.getElementById('research-pane') !== pane
+  ) return;
+  const ep = pane.querySelector('#research-endpoint');
   const endpointId = saved.endpoint_id || configured.research_endpoint_id || '';
   const modelId = saved.model || configured.research_model || '';
   if (ep && endpointId && Array.from(ep.options).some(option => option.value === endpointId)) {
     ep.value = endpointId;
     _populateModels(endpointId);
-    const model = document.getElementById('research-model');
+    const model = pane.querySelector('#research-model');
     if (model && modelId && Array.from(model.options).some(option => option.value === modelId)) {
       model.value = modelId;
     }
@@ -825,12 +862,14 @@ async function _restoreSavedSettings() {
   _syncAllResearchPickers();
 }
 
-async function _loadEndpoints() {
+async function _loadEndpoints(pane) {
   try {
     const res = await fetch(`${_apiBase}/api/model-endpoints`, { credentials: 'same-origin' });
-    if (!res.ok) return;
-    _endpoints = await res.json();
-    const sel = document.getElementById('research-endpoint');
+    if (!res.ok || document.getElementById('research-pane') !== pane) return;
+    const endpoints = await res.json();
+    if (document.getElementById('research-pane') !== pane) return;
+    _endpoints = endpoints;
+    const sel = pane.querySelector('#research-endpoint');
     if (!sel) return;
     _endpoints.filter(e => e.is_enabled && String(e.model_type || 'llm').toLowerCase() === 'llm').forEach(ep => {
       const opt = document.createElement('option');
@@ -841,8 +880,40 @@ async function _loadEndpoints() {
     // Populate the model menu immediately. It should remain useful even when
     // the optional Settings default has not loaded yet.
     _populateModels();
+    _applyPendingEditedResearchSelection(pane, true);
     _refreshResearchPicker(sel.id);
   } catch {}
+}
+
+function _applyPendingEditedResearchSelection(pane, endpointLoadComplete = false) {
+  const pending = _pendingEditedResearchSelection;
+  if (!pending) return;
+  if (
+    pending.pane !== pane
+    || pending.intentRevision !== _researchSettingsIntentRevision
+    || document.getElementById('research-pane') !== pane
+  ) {
+    if (_pendingEditedResearchSelection === pending) _pendingEditedResearchSelection = null;
+    return;
+  }
+  const endpoint = pane.querySelector('#research-endpoint');
+  const endpointAvailable = !pending.endpointId
+    || Array.from(endpoint?.options || []).some(option => option.value === pending.endpointId);
+  if (pending.endpointId && endpointAvailable) {
+    endpoint.value = pending.endpointId;
+    _populateModels(pending.endpointId);
+  }
+  const model = pane.querySelector('#research-model');
+  const modelAvailable = !pending.modelId
+    || (endpointAvailable && Array.from(model?.options || []).some(option => (
+      option.value === pending.modelId
+      && (!pending.endpointId || option.dataset.endpointId === pending.endpointId)
+    )));
+  if (pending.modelId && modelAvailable) model.value = pending.modelId;
+  if ((endpointAvailable && modelAvailable) || endpointLoadComplete) {
+    _pendingEditedResearchSelection = null;
+  }
+  _syncAllResearchPickers();
 }
 
 function _populateModels(endpointId = '') {

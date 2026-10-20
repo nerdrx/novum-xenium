@@ -78,6 +78,23 @@ def test_bridge_transport_failure_is_terminal_for_the_turn():
     )
 
 
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"output": "host bridge unavailable", "exit_code": 0}, False),
+        ({"stdout": "host bridge unavailable", "exit_code": 0}, False),
+        ({"stderr": "host shell bridge failed", "exit_code": 0}, False),
+        ({"error": "host bridge unavailable", "exit_code": 0}, True),
+        ({"output": "host bridge unavailable", "exit_code": 1}, True),
+        ({"output": "host bridge unavailable"}, True),
+        ({"output": "host bridge unavailable", "exit_code": False}, True),
+        ({"output": "host bridge unavailable", "exit_code": 0, "blocked": True}, True),
+    ],
+)
+def test_bridge_failure_phrases_only_in_success_output_do_not_stop_turn(result, expected):
+    assert _is_host_bridge_failure_result(result) is expected
+
+
 def test_bridge_transport_failure_response_is_concise_and_actionable():
     response = _host_bridge_failure_response()
     assert "unavailable" in response

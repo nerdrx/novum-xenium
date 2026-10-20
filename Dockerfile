@@ -100,7 +100,7 @@ RUN npm install -g agent-browser@0.35.0 --omit=dev --loglevel=error
 # /var/run/docker.sock mount). The Debian `docker.io` package ships
 # dockerd but not the client binary on slim, so grab the static client
 # tarball from download.docker.com instead.
-ARG DOCKER_CLI_VERSION=29.6.2
+ARG DOCKER_CLI_VERSION=29.9.1
 RUN ARCH="$(dpkg --print-architecture)" \
     && case "$ARCH" in \
          amd64) DARCH=x86_64 ;; \

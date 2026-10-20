@@ -9341,6 +9341,11 @@ def _is_host_bridge_failure_result(result: object) -> bool:
     """Detect a transport failure that cannot improve by retrying the same call."""
     if not isinstance(result, dict):
         return False
+    if (
+        type(result.get("exit_code")) is int and result["exit_code"] == 0
+        and not result.get("error") and not result.get("blocked")
+    ):
+        return False
     text = " ".join(
         str(result.get(key) or "")
         for key in ("error", "output", "stderr", "stdout")

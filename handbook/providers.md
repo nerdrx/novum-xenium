@@ -27,6 +27,10 @@ Models**. Its late completion preserves the newer form draft and does not
 automatically select that old flow's model. Select the intended saved model
 explicitly before sending a prompt.
 
+A failed sign-in names its original provider. If you change providers, use
+**Add** for the newly selected provider; a stale **Try again** action will not
+restart the old provider behind that selection.
+
 ## Local providers
 
 The README documents Ollama and OpenAI-compatible provider endpoints. In Docker, a host service must be reachable from inside the container; `localhost` inside the container refers to the container itself. The example environment file includes optional endpoint settings and examples. Change a bind address only when you understand who can reach it and have suitable firewall controls.

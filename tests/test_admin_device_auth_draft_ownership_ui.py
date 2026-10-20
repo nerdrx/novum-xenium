@@ -27,6 +27,10 @@ def test_device_auth_completion_preserves_newer_form_ui():
         "changedDuringModelRefreshPreserved",
         "changedDuringModelRefreshPreserved",
         "endpointRefreshStillRan",
+        "staleFailureShowsNoWrongProviderRetry",
+        "staleRenderedRetryStartsNoWrongProvider",
+        "sameProviderRetryStillWorks",
+        "replacedProviderControlBlocksStaleRetry",
         "loopbackOnly",
     ):
         assert f'"{control}":true' in result.stdout

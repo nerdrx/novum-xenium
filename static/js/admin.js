@@ -2112,6 +2112,7 @@ function initEndpointForm() {
       node && node.isConnected && el(formIds[index]) === node);
     const ownsForm = () => hasCurrentFormNodes() &&
       formNodes.every((node, index) => node.value === formValues[index]);
+    const ownsProvider = () => hasCurrentFormNodes() && _selectedDeviceAuthProvider() === providerKey;
     const status = el('adm-deviceAuthStatus') || _endpointMsg('api');
     if (!status) return;
     const triggerText = triggerEl ? triggerEl.textContent : '';
@@ -2120,12 +2121,23 @@ function initEndpointForm() {
     // innerHTML. Call reset() first so the deviceAuthPolling guard is cleared.
     const showAuthError = (text) => {
       status.className = 'admin-error';
-      status.textContent = text + ' ';
+      status.textContent = config.label + ': ' + text + ' ';
+      if (!ownsProvider()) {
+        status.appendChild(document.createTextNode('Provider changed. Select Add to start the selected provider.'));
+        return;
+      }
       const retry = document.createElement('button');
       retry.type = 'button';
       retry.className = 'admin-btn-sm';
       retry.textContent = 'Try again';
-      retry.addEventListener('click', () => { _startProviderDeviceAuth(providerKey, triggerEl); });
+      retry.addEventListener('click', () => {
+        if (!ownsProvider()) {
+          retry.remove();
+          status.appendChild(document.createTextNode(' Provider changed. Select Add to start the selected provider.'));
+          return;
+        }
+        _startProviderDeviceAuth(providerKey, triggerEl);
+      });
       status.appendChild(retry);
     };
     const reset = () => {

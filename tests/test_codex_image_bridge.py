@@ -331,7 +331,7 @@ print(json.dumps({{"type": "thread.started", "thread_id": thread_id}}), flush=Tr
                     for _ in range(200):
                         try:
                             state = Path(f"/proc/{child_pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-                        except FileNotFoundError:
+                        except (FileNotFoundError, ProcessLookupError):
                             break
                         if state == "Z":
                             break

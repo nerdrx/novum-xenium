@@ -19,12 +19,15 @@ const html = `<!doctype html><meta charset="utf-8"><style>.hidden{display:none}<
 <script type="module">import '/static/js/admin.js';window.fixtureReady=true;</script></body>`;
 let pollCount = 0, pollResponses = 0, releaseRequests = 0, releaseFound = false, lastReleaseId = null;
 let endpointLoads = 0, holdNextEndpointLoad = false;
+let failNextPoll = false;
+const startPaths = [];
 const pendingPolls = new Map();
 const pendingEndpointLoads = new Map();
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
   if (u.pathname === '/') { res.setHeader('Content-Type','text/html'); return res.end(html); }
-  if (u.pathname === '/__state') { res.setHeader('Content-Type','application/json'); return res.end(JSON.stringify({pending:[...pendingPolls.keys()],pendingEndpointLoads:[...pendingEndpointLoads.keys()],endpointLoads,pollCount,pollResponses,releaseRequests,releaseFound,lastReleaseId})); }
+  if (u.pathname === '/__state') { res.setHeader('Content-Type','application/json'); return res.end(JSON.stringify({pending:[...pendingPolls.keys()],pendingEndpointLoads:[...pendingEndpointLoads.keys()],endpointLoads,pollCount,pollResponses,releaseRequests,releaseFound,lastReleaseId,startPaths})); }
+  if (u.pathname === '/__fail-next-poll') { failNextPoll = true; res.writeHead(204); return res.end(); }
   if (u.pathname === '/__hold-endpoint-load') { holdNextEndpointLoad = true; res.writeHead(204); return res.end(); }
   if (u.pathname === '/__release') {
     releaseRequests++;
@@ -36,14 +39,17 @@ const server = http.createServer((req, res) => {
     res.writeHead(204); return res.end();
   }
   if (u.pathname === '/api/copilot/device/start' || u.pathname === '/api/chatgpt-subscription/device/start') {
+    startPaths.push(u.pathname);
     res.setHeader('Content-Type','application/json');
     return res.end(JSON.stringify({poll_id:`synthetic-poll-${pollCount + 1}`,interval:2,expires_in:120,verification_uri:'/synthetic-verify'}));
   }
   if (u.pathname === '/api/copilot/device/poll' || u.pathname === '/api/chatgpt-subscription/device/poll') {
     const id = ++pollCount;
+    const shouldFail = failNextPoll;
+    failNextPoll = false;
     pendingPolls.set(id, () => {
       res.setHeader('Content-Type','application/json');
-      res.end(JSON.stringify({status:'authorized',endpoint:{id:`synthetic-endpoint-${id}`,name:'Synthetic endpoint',base_url:'http://127.0.0.1/synthetic',models:[`synthetic-model-${id}`]}}));
+      res.end(JSON.stringify(shouldFail ? {status:'failed',error:'synthetic-denied'} : {status:'authorized',endpoint:{id:`synthetic-endpoint-${id}`,name:'Synthetic endpoint',base_url:'http://127.0.0.1/synthetic',models:[`synthetic-model-${id}`]}}));
     });
     return;
   }
@@ -205,20 +211,104 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(duringModelRefresh, {label:'edited-during-model-refresh',selected:[]});
     await page.evaluate(() => { window.modelsModule = undefined; });
 
-    // Replaced controls belong to the new form even while the old request completes.
-    await page.locator('#adm-epUrl').fill('replace-this-label');
+    // An old Copilot failure after a provider switch must not expose a Copilot retry under ChatGPT.
+    await choose('copilot');
+    await page.evaluate(() => fetch('/__fail-next-poll'));
     await page.locator('#adm-epAddBtn').click();
     await waitPending(6);
+    await choose('chatgpt-subscription');
+    await page.locator('#adm-epUrl').fill('failure-after-switch-label');
+    await release(6);
+    await page.waitForFunction(() => document.querySelector('#adm-deviceAuthStatus').textContent.includes('Provider changed. Select Add'));
+    const staleFailure = await page.evaluate(() => ({
+      text:document.querySelector('#adm-deviceAuthStatus').textContent,
+      retry:!!document.querySelector('#adm-deviceAuthStatus button'),
+      provider:document.querySelector('#adm-epProvider').value,
+      label:document.querySelector('#adm-epUrl').value,
+    }));
+    assert.match(staleFailure.text, /GitHub Copilot/);
+    assert.equal(staleFailure.retry, false);
+    assert.equal(staleFailure.provider, 'chatgpt-subscription');
+    assert.equal(staleFailure.label, 'failure-after-switch-label');
+
+    // If the picker changes after retry is rendered, clicking the stale button removes it and starts no flow.
+    await choose('copilot');
+    await page.evaluate(() => fetch('/__fail-next-poll'));
+    await page.locator('#adm-epAddBtn').click();
+    await waitPending(7);
+    await release(7);
+    await page.getByRole('button', {name:'Try again', exact:true}).waitFor();
+    const routesBeforeStaleRetry = (await (await fetch(`${origin}/__state`)).json()).startPaths.length;
+    await choose('chatgpt-subscription');
+    await page.locator('#adm-epUrl').fill('changed-before-stale-retry-label');
+    await page.getByRole('button', {name:'Try again', exact:true}).click();
+    await page.waitForFunction(() => !document.querySelector('#adm-deviceAuthStatus button') && document.querySelector('#adm-deviceAuthStatus').textContent.includes('Provider changed. Select Add'));
+    const staleRetryState = await page.evaluate(() => ({text:document.querySelector('#adm-deviceAuthStatus').textContent, retry:!!document.querySelector('#adm-deviceAuthStatus button')}));
+    const routesAfterStaleRetry = (await (await fetch(`${origin}/__state`)).json()).startPaths.length;
+    assert.equal(routesAfterStaleRetry, routesBeforeStaleRetry);
+    assert.equal(await page.locator('#adm-epProvider').inputValue(), 'chatgpt-subscription');
+    assert.equal(await page.locator('#adm-epUrl').inputValue(), 'changed-before-stale-retry-label');
+
+    // Same-provider retry keeps its normal behavior and can complete successfully.
+    await choose('copilot');
+    await page.evaluate(() => fetch('/__fail-next-poll'));
+    await page.locator('#adm-epAddBtn').click();
+    await waitPending(8);
+    await release(8);
+    await page.getByRole('button', {name:'Try again', exact:true}).waitFor();
+    await page.getByRole('button', {name:'Try again', exact:true}).click();
+    await waitPending(9);
+    await release(9);
+    await waitCompleted(9);
+    const sameProviderRetry = await page.evaluate(() => ({
+      text:document.querySelector('#adm-deviceAuthStatus').textContent,
+      starts:window.__selected.map(x=>x.endpointId),
+      paths:document.querySelector('#adm-epProvider').value,
+    }));
+    assert.match(sameProviderRetry.text, /Connected Synthetic endpoint/);
+    assert.equal(sameProviderRetry.paths, 'copilot');
+
+    // Replaced controls belong to the new form even while the old request completes.
+    await page.evaluate(() => { window.__selected.length = 0; });
+    await choose('chatgpt-subscription');
+    await page.locator('#adm-epUrl').fill('replace-this-label');
+    await page.locator('#adm-epAddBtn').click();
+    await waitPending(10);
     await page.evaluate(() => {
       for (const [id, value] of [['adm-epUrl','replacement-label'],['adm-epApiKey','replacement-key'],['adm-epKind','proxy'],['adm-epType','image']]) {
         const old = document.getElementById(id), fresh = old.cloneNode(true);
         fresh.value = value; old.replaceWith(fresh);
       }
     });
-    await release(6);
-    await waitCompleted(6);
+    await release(10);
+    await waitCompleted(10);
     const replaced = await page.evaluate(() => ({label:document.querySelector('#adm-epUrl').value,key:document.querySelector('#adm-epApiKey').value,kind:document.querySelector('#adm-epKind').value,type:document.querySelector('#adm-epType').value,selected:window.__selected.map(x=>x.endpointId)}));
     assert.deepEqual(replaced, {label:'replacement-label',key:'replacement-key',kind:'proxy',type:'image',selected:[]});
+
+    // Replacing the provider control invalidates an old retry even if its old node still says Copilot.
+    await page.goto(origin);
+    await page.waitForFunction(() => window.fixtureReady && window.__testInitEndpointForm);
+    await page.evaluate(() => window.__testInitEndpointForm());
+    await choose('copilot');
+    await page.evaluate(() => fetch('/__fail-next-poll'));
+    await page.locator('#adm-epAddBtn').click();
+    await waitPending(11);
+    await release(11);
+    await page.getByRole('button', {name:'Try again', exact:true}).waitFor();
+    const routesBeforeReplacementRetry = (await (await fetch(`${origin}/__state`)).json()).startPaths.length;
+    await page.evaluate(() => {
+      const old = document.querySelector('#adm-epProvider');
+      const replacement = old.cloneNode(true);
+      replacement.value = 'copilot';
+      old.replaceWith(replacement);
+    });
+    await page.getByRole('button', {name:'Try again', exact:true}).click();
+    await page.waitForFunction(() => !document.querySelector('#adm-deviceAuthStatus button') && document.querySelector('#adm-deviceAuthStatus').textContent.includes('Provider changed. Select Add'));
+    const replacementRetryRoutes = (await (await fetch(`${origin}/__state`)).json()).startPaths.length;
+    const replacementRetryGuidance = await page.locator('#adm-deviceAuthStatus').textContent();
+    assert.equal(replacementRetryRoutes, routesBeforeReplacementRetry);
+    assert.match(replacementRetryGuidance, /Provider changed. Select Add/);
+
     assert.equal(loopbackOnly, true);
     assert.deepEqual(pageErrors, []);
     process.stdout.write(JSON.stringify({
@@ -230,6 +320,10 @@ const server = http.createServer((req, res) => {
       changedDuringLoadPreserved: duringLoad.label === 'edited-during-endpoint-load' && duringLoad.selected.length === 0,
       changedDuringModelRefreshPreserved: duringModelRefresh.label === 'edited-during-model-refresh' && duringModelRefresh.selected.length === 0,
       endpointRefreshStillRan: afterLoad.endpointLoads > beforeLoad.endpointLoads,
+      staleFailureShowsNoWrongProviderRetry: !staleFailure.retry && staleFailure.text.includes('GitHub Copilot') && staleFailure.text.includes('Provider changed. Select Add'),
+      staleRenderedRetryStartsNoWrongProvider: routesAfterStaleRetry === routesBeforeStaleRetry && !staleRetryState.retry && staleRetryState.text.includes('Provider changed. Select Add'),
+      sameProviderRetryStillWorks: sameProviderRetry.text.includes('Connected Synthetic endpoint') && sameProviderRetry.paths === 'copilot',
+      replacedProviderControlBlocksStaleRetry: replacementRetryRoutes === routesBeforeReplacementRetry && replacementRetryGuidance.includes('Provider changed. Select Add'),
       loopbackOnly, pageErrors: pageErrors.length,
     }) + '\n');
   } finally {

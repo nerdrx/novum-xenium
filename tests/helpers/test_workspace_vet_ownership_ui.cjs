@@ -13,7 +13,11 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   if (url.pathname === '/') {
     res.setHeader('Content-Type', 'text/html');
-    return res.end('<!doctype html><button id="workspace-indicator-btn"><span id="workspace-indicator-name"></span></button><div id="overflow-workspace-btn"></div><div id="toast"></div><script type="module">import workspace from "/static/js/workspace.js";window.workspace=workspace;window.ready=true;</script>');
+    return res.end('<!doctype html><button id="workspace-indicator-btn"><span id="workspace-indicator-name"></span></button><div id="overflow-workspace-btn"></div><div id="toast"></div><script type="module">import workspace from "/static/js/workspace.js";import {getAuthState} from "/static/js/authState.js";window.workspace=workspace;await getAuthState();window.ready=true;</script>');
+  }
+  if (url.pathname === '/api/auth/status') {
+    res.setHeader('Content-Type', 'application/json');
+    return res.end(JSON.stringify({ configured: false, authenticated: false, username: null }));
   }
   if (url.pathname === '/__state') {
     res.setHeader('Content-Type', 'application/json');
@@ -54,12 +58,13 @@ async function state() { return (await (await fetch(`${origin}/__state`)).json()
 let origin;
 async function waitUntil(predicate) {
   const end = Date.now() + 3000;
+  let last;
   while (Date.now() < end) {
-    const value = await state();
-    if (predicate(value)) return value;
+    last = await state();
+    if (predicate(last)) return last;
     await delay(10);
   }
-  throw new Error('timed out waiting for synthetic request');
+  throw new Error(`timed out waiting for synthetic request; last state: ${JSON.stringify(last)}`);
 }
 async function release(key, ok) {
   const response = await fetch(`${origin}/__release?key=${encodeURIComponent(key)}&ok=${ok}`);
@@ -100,11 +105,10 @@ try {
   assert.equal(clearResult.result.stale, true);
 
   await page.evaluate(() => window.workspace.setWorkspace('/synthetic/seed-overlap'));
-  await page.evaluate(() => {
-    window.__oldVet = window.workspace.vetAndSetWorkspace('/synthetic/old-A');
-    window.__newVet = window.workspace.vetAndSetWorkspace('/synthetic/new-B');
-  });
-  await waitUntil(s => s.requests.includes('/synthetic/old-A') && s.requests.includes('/synthetic/new-B'));
+  await page.evaluate(() => { window.__oldVet = window.workspace.vetAndSetWorkspace('/synthetic/old-A'); });
+  await waitUntil(s => s.requests.includes('/synthetic/old-A'));
+  await page.evaluate(() => { window.__newVet = window.workspace.vetAndSetWorkspace('/synthetic/new-B'); });
+  await waitUntil(s => s.requests.includes('/synthetic/new-B'));
   await release('/synthetic/new-B', true);
   const newVet = await page.evaluate(async () => ({ result: await window.__newVet, stored: localStorage.getItem('odysseus-workspace') }));
   await release('/synthetic/old-A', true);
@@ -126,9 +130,10 @@ try {
   await page.evaluate(() => {
     localStorage.removeItem('odysseus-workspace');
     window.__defaultDuringVet = window.workspace.loadDefaultWorkspace();
-    window.__vetDuringDefault = window.workspace.vetAndSetWorkspace('/synthetic/pending-explicit');
   });
-  await waitUntil(s => s.defaultCount === 1 && s.requests.includes('/synthetic/pending-explicit'));
+  await waitUntil(s => s.defaultCount === 1);
+  await page.evaluate(() => { window.__vetDuringDefault = window.workspace.vetAndSetWorkspace('/synthetic/pending-explicit'); });
+  await waitUntil(s => s.requests.includes('/synthetic/pending-explicit'));
   await release('default-1', true);
   const defaultHeld = await page.evaluate(async () => ({ result: await window.__defaultDuringVet, stored: localStorage.getItem('odysseus-workspace') }));
   assert.equal(defaultHeld.stored, null, 'default must wait behind pending explicit vet intent');

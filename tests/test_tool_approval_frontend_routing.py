@@ -108,13 +108,14 @@ def test_app_submit_debounce_only_yields_for_control_plane_and_keeps_special_rou
         querySelector() {{ return null; }},
       }};
       const handleSubmit = new Function(
-        'document', '_bumpChatPriority', 'compareModule', 'groupModule',
+        'document', '_bumpChatPriority', 'compareModule', 'groupModule', 'workspaceModule',
         'chatRenderer', 'uiModule', 'chatModule', 'originalSubmit', 'setTimeout',
         {handle_submit_source}
       )(
         document, () => {{}},
         {{ isActive: () => compareActive, handleCompareSubmit: () => calls.compare++ }},
         {{ isActive: () => groupActive, isRunning: () => false, sendMessage: () => calls.group++ }},
+        {{ getWorkspaceAvailabilityError: () => '' }},
         {{ hideWelcomeScreen() {{ calls.hidden++; }}, addMessage() {{}} }},
         {{ showToast() {{}} }}, {{ handleChatSubmit() {{ calls.chat++; }} }},
         () => calls.chat++, (fn, delay) => timers.push({{ fn, delay }}),

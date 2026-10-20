@@ -11,6 +11,8 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><!-- APP_STYLESHE
 <body><button id="workspace-open">Workspace</button><button id="mode-chat-btn"></button>
 <script type="module">localStorage.setItem('odysseus-workspace','/workspace');
 import workspace from '/static/js/workspace.js';
+import { getAuthState } from '/static/js/authState.js';
+await getAuthState();
 document.getElementById('workspace-open').onclick=()=>workspace.openWorkspaceBrowser();
 window.fixtureReady=true;</script></body></html>`;
 const calls = [];
@@ -18,6 +20,7 @@ const json = (res, body) => { res.setHeader('Content-Type', 'application/json');
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/') return withAppStyles(html).then(styled => res.end(styled));
+  if (url.pathname === '/api/auth/status') return json(res, { configured: false, authenticated: false, username: null });
   if (url.pathname === '/api/workspace/browse') return json(res, {
     path: '/workspace', parent: null, dirs: [], selectable: true,
   });

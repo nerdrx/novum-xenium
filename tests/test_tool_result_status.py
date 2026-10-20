@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from src.agent_runtime.authority import OperationGrant, RequestAuthority
-from src.agent_tools import TOOL_HANDLERS, ToolBlock
+from src.agent_tools import ToolBlock
 from src.tool_capabilities import tool_result_is_successful
 from src.tool_execution import NO_TOOL_SECURITY_CONTEXT, execute_tool_block
 
@@ -26,7 +26,8 @@ def test_registry_result_status_matches_tool_error(monkeypatch, result, expected
     async def handler(_content, _ctx):
         return dict(result)
 
-    monkeypatch.setitem(TOOL_HANDLERS, "synthetic_status_probe", handler)
+    registry = __import__("src.agent_tools", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS
+    monkeypatch.setitem(registry, "synthetic_status_probe", handler)
     authority = RequestAuthority(
         "status-probe", "fixture-owner", "fixture-session", "",
         grants=(OperationGrant("synthetic_status_probe"),),

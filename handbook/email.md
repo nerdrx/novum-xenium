@@ -39,8 +39,10 @@ mailbox copy you can reopen later.
 When replacing a saved draft or cleaning it up after sending, Novum checks
 the original mailbox and folder identity before removing the previous copy.
 Older drafts with missing identity details, or drafts whose mailbox settings
-have changed, can leave an extra copy in **Drafts**. Confirm the current copy
-is saved, or check **Sent** after sending, before manually removing duplicates.
+have changed, can leave an extra copy in **Drafts**. A server that cannot
+complete selective cleanup can also leave the previous copy in place. Confirm
+the current copy is saved, or check **Sent** after sending, before manually
+removing duplicates.
 
 ## What recovery saves
 
@@ -108,3 +110,5 @@ These links point to the inspected source snapshot at commit
 
 Draft cleanup safety was additionally checked at commit
 `78504c74b058012e3053e0c72e479d75746d2098`: [connected mailbox identity](https://github.com/nerdrx/novum-xenium/blob/78504c74b058012e3053e0c72e479d75746d2098/routes/email/email_helpers.py#L57), [cleanup after sending](https://github.com/nerdrx/novum-xenium/blob/78504c74b058012e3053e0c72e479d75746d2098/routes/email/email_routes.py#L5942), and [replacement draft cleanup](https://github.com/nerdrx/novum-xenium/blob/78504c74b058012e3053e0c72e479d75746d2098/routes/email/email_routes.py#L6066).
+
+[Single-message cleanup and failure preservation](https://github.com/nerdrx/novum-xenium/blob/3911dd7c0e72d9d4e22ab36afc278b27c7d1b2cc/routes/email/email_routes.py#L694) were checked at commit `3911dd7c0e72d9d4e22ab36afc278b27c7d1b2cc`.

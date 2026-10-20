@@ -714,7 +714,7 @@ def test_bridge_post_treats_empty_or_error_payload_as_failure():
         empty = _run(_bridge_post(BRIDGE_CTX["host_shell_bridge"], "/run", {}, timeout_s=1, err_prefix="bash"))
         errored = _run(_bridge_post(BRIDGE_CTX["host_shell_bridge"], "/run", {}, timeout_s=1, err_prefix="bash"))
 
-    assert empty == {"error": "bash: bridge returned an empty response", "exit_code": 1}
+    assert empty == {"error": "bash: bridge returned invalid payload (empty object)", "exit_code": 1}
     assert errored == {"error": "token rejected", "exit_code": 1}
 
 
@@ -791,7 +791,7 @@ def test_bridge_post_rejects_malformed_exit_code():
         ))
 
     assert result == {
-        "error": "bash: bridge returned an invalid exit_code",
+        "error": "bash: bridge returned invalid exit_code",
         "exit_code": 1,
     }
 

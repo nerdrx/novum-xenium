@@ -28137,7 +28137,7 @@ async def stream_agent_loop(
                 or f"exit code {approved_result.get('exit_code')}"
             ).strip()
             _approval_response = (
-                f"The approved {approved.tool_name} action could not run: "
+                f"The approved {approved.tool_name} action did not complete successfully: "
                 f"{_approval_error}"
             )
             full_response = _approval_response

@@ -25,6 +25,7 @@ def run_fallback(blocks, contract):
         "_qwen_explicit_tool": "web_search",
         "_qwen_explicit_args": "Search IANA. Return one link. Do not send messages.",
         "_caller_relevant_tools": None, "tool_events": [], "_call_freq": {},
+        "explicitly_denied_tools": set(),
         "_has_successful_tool_evidence": lambda *a: False,
         "ToolBlock": ToolBlock, "converted_calls": converted,
         "native_tool_calls": native, "used_native": True,

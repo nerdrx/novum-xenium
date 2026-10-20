@@ -1950,6 +1950,13 @@ function initEndpointForm() {
     return el(kind === 'local' ? 'adm-epLocalMsg' : 'adm-epApiMsg') || el('adm-epMsg');
   }
 
+  function _endpointTestStillOwns(kind, ids, msg) {
+    const snapshot = ids.map(id => [id, el(id), el(id)?.value ?? '']);
+    return () => !!(msg && msg.isConnected && _endpointMsg(kind) === msg && snapshot.every(([id, node, value]) => (
+      el(id) === node && (!node || (node.isConnected && node.value === value))
+    )));
+  }
+
   let apiTestController = null;
   const apiTestBtn = el('adm-epApiTestBtn');
   const apiCancelTestBtn = el('adm-epApiCancelTestBtn');
@@ -1963,12 +1970,16 @@ function initEndpointForm() {
       }
       const msg = _endpointMsg('api');
       msg.textContent = ''; msg.className = '';
+      const ownsTest = _endpointTestStillOwns('api', [
+        'adm-epUrl', 'adm-epApiKey', 'adm-epProvider', 'adm-epKind', 'adm-epType',
+      ], msg);
       const rawUrl = (urlInput.value || provider.value).trim();
       const apiKey = el('adm-epApiKey').value.trim();
       if (!rawUrl) { msg.textContent = 'Select a provider or enter a base URL'; msg.className = 'admin-error'; return; }
       if (provider.value && !apiKey) { msg.textContent = 'API key is required for cloud providers'; msg.className = 'admin-error'; return; }
       const url = provider.value && rawUrl === provider.value ? rawUrl : _normalizeBaseUrl(rawUrl);
-      apiTestController = new AbortController();
+      const testController = new AbortController();
+      apiTestController = testController;
       apiTestBtn.disabled = true;
       apiTestBtn.textContent = 'Testing...';
       if (apiCancelTestBtn) apiCancelTestBtn.classList.remove('hidden');
@@ -1982,23 +1993,28 @@ function initEndpointForm() {
           method: 'POST',
           body: fd,
           credentials: 'same-origin',
-          signal: apiTestController.signal,
+          signal: testController.signal,
         });
         const d = await res.json();
-        _renderEndpointTestResult(msg, res, d);
+        if (apiTestController === testController && ownsTest()) _renderEndpointTestResult(msg, res, d);
       } catch (e) {
-        if (e && e.name === 'AbortError') {
-          msg.textContent = 'Test canceled';
-          msg.className = '';
-        } else {
-          msg.textContent = 'Test failed: ' + (e && e.message ? e.message : 'request failed');
-          msg.className = 'admin-error';
+        if (apiTestController === testController && ownsTest()) {
+          if (e && e.name === 'AbortError') {
+            msg.textContent = 'Test canceled';
+            msg.className = '';
+          } else {
+            msg.textContent = 'Test failed: ' + (e && e.message ? e.message : 'request failed');
+            msg.className = 'admin-error';
+          }
+        }
+      } finally {
+        if (apiTestController === testController) {
+          apiTestController = null;
+          apiTestBtn.disabled = _isDeviceAuthSelected();
+          apiTestBtn.textContent = 'Test';
+          if (apiCancelTestBtn) apiCancelTestBtn.classList.add('hidden');
         }
       }
-      apiTestController = null;
-      apiTestBtn.disabled = false;
-      apiTestBtn.textContent = 'Test';
-      if (apiCancelTestBtn) apiCancelTestBtn.classList.add('hidden');
     });
   }
   if (apiCancelTestBtn) {
@@ -2492,6 +2508,9 @@ function initEndpointForm() {
       const testOriginalHtml = localTestBtn.innerHTML || '>Test';
       const msg = _endpointMsg('local');
       msg.textContent = ''; msg.className = 'adm-ep-inline-msg';
+      const ownsTest = _endpointTestStillOwns('local', [
+        'adm-epLocalUrl', 'adm-epLocalApiKey', 'adm-epLocalType',
+      ], msg);
       const raw = (el('adm-epLocalUrl').value || '').trim();
       if (!raw) { msg.textContent = 'Enter a base URL to test'; msg.className = 'admin-error'; return; }
       const url = _normalizeBaseUrl(raw);
@@ -2505,13 +2524,16 @@ function initEndpointForm() {
         if (apiKey) fd.append('api_key', apiKey);
         const res = await fetch('/api/model-endpoints/test', { method: 'POST', body: fd, credentials: 'same-origin' });
         const d = await res.json();
-        _renderEndpointTestResult(msg, res, d);
+        if (ownsTest()) _renderEndpointTestResult(msg, res, d);
       } catch (e) {
-        msg.textContent = 'Test failed: ' + (e && e.message ? e.message : 'request failed');
-        msg.className = 'admin-error';
+        if (ownsTest()) {
+          msg.textContent = 'Test failed: ' + (e && e.message ? e.message : 'request failed');
+          msg.className = 'admin-error';
+        }
+      } finally {
+        localTestBtn.disabled = false;
+        localTestBtn.innerHTML = testOriginalHtml;
       }
-      localTestBtn.disabled = false;
-      localTestBtn.innerHTML = testOriginalHtml;
     });
   }
   if (localAddBtn) {

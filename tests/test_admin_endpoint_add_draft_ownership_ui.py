@@ -19,6 +19,16 @@ def test_admin_endpoint_add_preserves_newer_drafts_ui():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     for control in (
+        "apiTestStaleResultDiscarded",
+        "apiTestStaleErrorDiscarded",
+        "apiTestInvalidJsonCatchDiscarded",
+        "apiTestCurrentResultRendered",
+        "apiTestCancelPreserved",
+        "apiOverlappingSameSnapshotOlderResponseDiscarded",
+        "apiOverlappingNewerResponseRendered",
+        "localTestStaleResultDiscarded",
+        "localTestReplacementNodeDiscarded",
+        "localTestCurrentResultRendered",
         "apiAllFieldsChangedPreserved",
         "apiUrlOnlyPreservedCoherentForm",
         "apiUnchangedWhitespaceCleared",

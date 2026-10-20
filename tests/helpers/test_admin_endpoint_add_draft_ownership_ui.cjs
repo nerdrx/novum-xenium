@@ -16,8 +16,8 @@ const html = `<!doctype html><meta charset="utf-8"><body>
 <div id="adm-epLocalMsg"></div>
 <div id="adm-epList-local"></div><div id="adm-epList-api"></div>
 <script type="module">import '/static/js/admin.js'; window.fixtureReady = true;</script></body>`;
-let postCount = 0, nextHold = false;
-const bodies = [], pending = new Map();
+let postCount = 0, nextHold = false, testCount = 0, nextTestHold = false, nextTestFailure = false, nextTestInvalidJson = false;
+const bodies = [], testBodies = [], pending = new Map(), pendingTests = new Map();
 function formValue(body, name) {
   const match = body.match(new RegExp(`name="${name}"\\r\\n\\r\\n([\\s\\S]*?)\\r\\n--`));
   return match ? match[1] : null;
@@ -25,9 +25,22 @@ function formValue(body, name) {
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
   if (u.pathname === '/') return res.end(html);
-  if (u.pathname === '/__state') { res.setHeader('Content-Type','application/json'); return res.end(JSON.stringify({postCount,pending:[...pending.keys()]})); }
+  if (u.pathname === '/__state') { res.setHeader('Content-Type','application/json'); return res.end(JSON.stringify({postCount,testCount,pending:[...pending.keys()],pendingTests:[...pendingTests.keys()]})); }
   if (u.pathname === '/__hold-next') { nextHold = true; res.writeHead(204); return res.end(); }
+  if (u.pathname === '/__hold-test') { nextTestHold = true; res.writeHead(204); return res.end(); }
+  if (u.pathname === '/__fail-test') { nextTestFailure = true; res.writeHead(204); return res.end(); }
+  if (u.pathname === '/__invalid-json-test') { nextTestInvalidJson = true; res.writeHead(204); return res.end(); }
   if (u.pathname === '/__release') { const id=Number(u.searchParams.get('id')); pending.get(id)?.(); pending.delete(id); res.writeHead(204); return res.end(); }
+  if (u.pathname === '/__release-test') { const id=Number(u.searchParams.get('id')); pendingTests.get(id)?.(); pendingTests.delete(id); res.writeHead(204); return res.end(); }
+  if (u.pathname === '/api/model-endpoints/test' && req.method === 'POST') {
+    const id=++testCount; let body=''; req.on('data', c => body += c); req.on('end', () => {
+      testBodies[id]=body;
+      const failed=nextTestFailure; nextTestFailure=false;
+      const invalidJson=nextTestInvalidJson; nextTestInvalidJson=false;
+      const send=()=>{res.writeHead(failed?500:200,{'Content-Type':'application/json'});res.end(invalidJson?'synthetic invalid json':JSON.stringify(failed?{detail:'synthetic-old-error'}:{online:true,status:'ok',models:['synthetic-current-model']}));};
+      if (nextTestHold) { nextTestHold=false; pendingTests.set(id,send); } else send();
+    }); return;
+  }
   if (u.pathname === '/api/model-endpoints' && req.method === 'GET') { res.setHeader('Content-Type','application/json'); return res.end('[]'); }
   if (u.pathname === '/api/model-endpoints' && req.method === 'POST') {
     const id=++postCount; let body=''; req.on('data', c => body += c); req.on('end', () => {
@@ -74,11 +87,113 @@ const server = http.createServer((req, res) => {
     };
     const state=async()=>page.evaluate(()=>({url:document.querySelector('#adm-epUrl').value,key:document.querySelector('#adm-epApiKey').value,provider:document.querySelector('#adm-epProvider').value,kind:document.querySelector('#adm-epKind').value,type:document.querySelector('#adm-epType').value}));
     const localState=async()=>page.evaluate(()=>({url:document.querySelector('#adm-epLocalUrl').value,key:document.querySelector('#adm-epLocalApiKey').value,type:document.querySelector('#adm-epLocalType').value}));
+    const waitHeldTest=async id=>page.waitForFunction(async id=>(await(await fetch('/__state')).json()).pendingTests.includes(id),id);
     const holdAndClick=async n=>{await page.evaluate(()=>fetch('/__hold-next'));await $('adm-epAddBtn').click();await page.waitForFunction(async n=>(await(await fetch('/__state')).json()).postCount===n,n);};
     const release=async n=>{await page.evaluate(n=>fetch(`/__release?id=${n}`),n);await page.waitForFunction(()=>!document.querySelector('#adm-epAddBtn').disabled);};
     const fillLocal=async(url,key,type)=>{await $('adm-epLocalUrl').fill(url);await $('adm-epLocalApiKey').fill(key);await $('adm-epLocalType').selectOption(type);};
     const holdAndClickLocal=async n=>{await page.evaluate(()=>fetch('/__hold-next'));await $('adm-epLocalAddBtn').click();await page.waitForFunction(async n=>(await(await fetch('/__state')).json()).postCount===n,n);};
     const releaseLocal=async n=>{await page.evaluate(n=>fetch(`/__release?id=${n}`),n);await page.waitForFunction(()=>!document.querySelector('#adm-epLocalAddBtn').disabled);};
+
+    // Test results belong to the form snapshot that submitted them.
+    await $('adm-epUrl').fill('http://127.0.0.1:9091/v1');
+    await page.evaluate(()=>fetch('/__hold-test'));
+    await $('adm-epApiTestBtn').click();
+    await waitHeldTest(1);
+    await $('adm-epUrl').fill('http://127.0.0.1:9092/v1');
+    await page.evaluate(()=>fetch('/__release-test?id=1'));
+    await page.waitForFunction(()=>!document.querySelector('#adm-epApiTestBtn').disabled);
+    const apiEditedResult=await page.locator('#adm-epApiMsg').textContent();
+    assert.equal(apiEditedResult.includes('synthetic-current-model'),false,'stale API Test response discarded');
+    assert.equal(await $('adm-epApiTestBtn').isDisabled(),false,'API Test button restored after stale result');
+
+    await $('adm-epApiTestBtn').click();
+    await page.waitForFunction(()=>document.querySelector('#adm-epApiMsg').textContent.includes('synthetic-current-model'));
+    const apiCurrentResult=await page.locator('#adm-epApiMsg').textContent();
+    assert.equal(apiCurrentResult.includes('synthetic-current-model'),true,'unchanged API Test result rendered');
+
+    await $('adm-epUrl').fill('http://127.0.0.1:9093/v1');
+    await page.evaluate(()=>fetch('/__hold-test'));
+    await $('adm-epApiTestBtn').click();
+    await waitHeldTest(3);
+    await $('adm-epApiCancelTestBtn').click();
+    await page.waitForFunction(()=>document.querySelector('#adm-epApiMsg').textContent.includes('Test canceled'));
+    assert.equal(await $('adm-epApiTestBtn').isDisabled(),false,'API Test button restored after explicit cancel');
+
+    await $('adm-epUrl').fill('http://127.0.0.1:9096/v1');
+    await page.evaluate(async()=>{await fetch('/__hold-test');await fetch('/__fail-test');});
+    await $('adm-epApiTestBtn').click();
+    await waitHeldTest(4);
+    await $('adm-epUrl').fill('http://127.0.0.1:9097/v1');
+    await page.evaluate(()=>fetch('/__release-test?id=4'));
+    await page.waitForFunction(()=>!document.querySelector('#adm-epApiTestBtn').disabled);
+    const apiEditedError=await page.locator('#adm-epApiMsg').textContent();
+    assert.equal(apiEditedError.includes('synthetic-old-error'),false,'stale API Test error discarded');
+
+    await $('adm-epUrl').fill('http://127.0.0.1:9096/v1');
+    await page.evaluate(async()=>{await fetch('/__hold-test');await fetch('/__invalid-json-test');});
+    await $('adm-epApiTestBtn').click();
+    await waitHeldTest(5);
+    await $('adm-epUrl').fill('http://127.0.0.1:9097/v1');
+    await page.evaluate(()=>fetch('/__release-test?id=5'));
+    await page.waitForFunction(()=>!document.querySelector('#adm-epApiTestBtn').disabled);
+    const apiInvalidJson=await page.locator('#adm-epApiMsg').textContent();
+    assert.equal(apiInvalidJson.includes('Test failed'),false,'stale API invalid-JSON error discarded');
+
+    // Provider changes re-enable Test while A1 is pending. Reproduce A2 with
+    // the exact same values so only request identity distinguishes ownership.
+    await $('adm-epProvider').selectOption('http://127.0.0.1:9123/v1');
+    await $('adm-epApiKey').fill('synthetic-overlap-key');
+    await $('adm-epType').selectOption('image');
+    await page.evaluate(()=>fetch('/__hold-test'));
+    await $('adm-epApiTestBtn').click();
+    await waitHeldTest(6);
+    await $('adm-epProvider').selectOption('');
+    await $('adm-epProvider').selectOption('http://127.0.0.1:9123/v1');
+    await $('adm-epApiKey').fill('synthetic-overlap-key');
+    await $('adm-epType').selectOption('image');
+    await page.evaluate(()=>fetch('/__hold-test'));
+    await $('adm-epApiTestBtn').click();
+    await waitHeldTest(7);
+    assert.equal(formValue(testBodies[6], 'base_url'),formValue(testBodies[7], 'base_url'),'overlap uses same URL');
+    assert.equal(formValue(testBodies[6], 'api_key'),formValue(testBodies[7], 'api_key'),'overlap uses same synthetic key');
+    assert.equal(formValue(testBodies[6], 'model_type'),formValue(testBodies[7], 'model_type'),'overlap uses same model type');
+    const oldOverlapResponse=page.waitForResponse(r=>r.url().endsWith('/api/model-endpoints/test'));
+    await page.evaluate(()=>fetch('/__release-test?id=6'));
+    await oldOverlapResponse;
+    await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,0)));
+    assert.equal((await page.locator('#adm-epApiMsg').textContent()).includes('synthetic-current-model'),false,'older overlap response discarded');
+    assert.equal(await $('adm-epApiTestBtn').isDisabled(),true,'older completion keeps newer Test disabled');
+    await page.evaluate(()=>fetch('/__release-test?id=7'));
+    await page.waitForFunction(()=>document.querySelector('#adm-epApiMsg').textContent.includes('synthetic-current-model'));
+    assert.equal(await $('adm-epApiTestBtn').isDisabled(),false,'newest overlap completion restores Test');
+    assert.equal(await $('adm-epApiTestBtn').textContent(),'Test','newest overlap completion restores Test label');
+
+    await $('adm-epLocalUrl').fill('http://127.0.0.1:9094/v1');
+    await page.evaluate(()=>fetch('/__hold-test'));
+    await $('adm-epLocalTestBtn').click();
+    await waitHeldTest(8);
+    await $('adm-epLocalUrl').fill('http://127.0.0.1:9095/v1');
+    await page.evaluate(()=>fetch('/__release-test?id=8'));
+    await page.waitForFunction(()=>!document.querySelector('#adm-epLocalTestBtn').disabled);
+    const localEditedResult=await page.locator('#adm-epLocalMsg').textContent();
+    assert.equal(localEditedResult.includes('synthetic-current-model'),false,'stale local Test response discarded');
+    assert.equal(await $('adm-epLocalTestBtn').isDisabled(),false,'local Test button restored after stale result');
+
+    await $('adm-epLocalUrl').fill('http://127.0.0.1:9098/v1');
+    await page.evaluate(()=>fetch('/__hold-test'));
+    await $('adm-epLocalTestBtn').click();
+    await waitHeldTest(9);
+    await page.evaluate(()=>{const old=document.querySelector('#adm-epLocalUrl');const fresh=old.cloneNode(false);fresh.value='http://127.0.0.1:9099/v1';old.replaceWith(fresh);});
+    await page.evaluate(()=>fetch('/__release-test?id=9'));
+    await page.waitForFunction(()=>!document.querySelector('#adm-epLocalTestBtn').disabled);
+    const localReplacement=await page.evaluate(()=>({url:document.querySelector('#adm-epLocalUrl').value,msg:document.querySelector('#adm-epLocalMsg').textContent}));
+    assert.equal(localReplacement.url,'http://127.0.0.1:9099/v1','replacement local URL retained');
+    assert.equal(localReplacement.msg.includes('synthetic-current-model'),false,'replacement local field suppresses old result');
+
+    await $('adm-epLocalTestBtn').click();
+    await page.waitForFunction(()=>document.querySelector('#adm-epLocalMsg').textContent.includes('synthetic-current-model'));
+    const localCurrentResult=await page.locator('#adm-epLocalMsg').textContent();
+    assert.equal(localCurrentResult.includes('synthetic-current-model'),true,'unchanged local Test result rendered');
 
     // All fields change while the original API request is pending.
     await fillOld(1,'http://127.0.0.1:9011/v1','synthetic-old-all','proxy','llm');
@@ -168,13 +283,17 @@ const server = http.createServer((req, res) => {
     assert.equal(localUrlOnly.url === 'http://127.0.0.1:9062/v1' && localUrlOnly.key === 'synthetic-local-reused' && localUrlOnly.type === 'embedding', true, 'local URL-only draft preserved');
     assert.equal(localWhitespace.url === '' && localWhitespace.key === '' && localWhitespace.type === 'llm', true, 'local unchanged form cleared');
     assert.equal(localReplaced.url === 'http://127.0.0.1:9082/v1' && localReplaced.key === 'synthetic-local-replacement' && localReplaced.type === 'llm', true, 'local replacement controls preserved');
-    assert.deepEqual(errors,[]);assert.equal(loopbackOnly,true);assert.equal(postCount,8);
-    console.log(JSON.stringify({apiAllFieldsChangedPreserved:true,apiUrlOnlyPreservedCoherentForm:true,apiUnchangedWhitespaceCleared:true,apiReplacementNodePreserved:true,localAllFieldsChangedPreserved:true,localUrlOnlyPreservedCoherentForm:true,localUnchangedWhitespaceCleared:true,localReplacementNodePreserved:true,submittedPayloadsStayedOld:true,pageErrors:errors.length,loopbackOnly,syntheticPosts:postCount}));
+    assert.deepEqual(errors,[]);assert.equal(loopbackOnly,true);assert.equal(postCount,8);assert.equal(testCount,10);
+    console.log(JSON.stringify({apiTestStaleResultDiscarded:true,apiTestStaleErrorDiscarded:true,apiTestInvalidJsonCatchDiscarded:true,apiTestCurrentResultRendered:true,apiTestCancelPreserved:true,apiOverlappingSameSnapshotOlderResponseDiscarded:true,apiOverlappingNewerResponseRendered:true,localTestStaleResultDiscarded:true,localTestReplacementNodeDiscarded:true,localTestCurrentResultRendered:true,apiAllFieldsChangedPreserved:true,apiUrlOnlyPreservedCoherentForm:true,apiUnchangedWhitespaceCleared:true,apiReplacementNodePreserved:true,localAllFieldsChangedPreserved:true,localUrlOnlyPreservedCoherentForm:true,localUnchangedWhitespaceCleared:true,localReplacementNodePreserved:true,submittedPayloadsStayedOld:true,pageErrors:errors.length,loopbackOnly,syntheticPosts:postCount,testRequests:testCount}));
   } finally {
     try {
       for (const [id, send] of pending) {
         try { send(); } catch (_) {}
         pending.delete(id);
+      }
+      for (const [id, send] of pendingTests) {
+        try { send(); } catch (_) {}
+        pendingTests.delete(id);
       }
       if (browser) await browser.close();
     } finally {

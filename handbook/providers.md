@@ -14,6 +14,19 @@ Provider forms differ. Do not reuse a URL from another endpoint type without con
 
 Do not paste API keys into chat or public logs. Hosted providers receive request content, attachments, and any context sent with the request. Consult that provider's data and retention terms.
 
+## Connect an account with sign-in
+
+For **GitHub Copilot** or **ChatGPT Subscription**, choose the account provider
+and select **Add**. Follow the displayed sign-in link and code, then wait for
+the connection result. ChatGPT accepts an optional account label so multiple
+accounts remain distinguishable. Keep sign-in codes out of chat and logs.
+
+Changing the provider or editing the label does not cancel an already started
+sign-in. If that flow succeeds, its saved endpoint still appears in **Added
+Models**. Its late completion preserves the newer form draft and does not
+automatically select that old flow's model. Select the intended saved model
+explicitly before sending a prompt.
+
 ## Local providers
 
 The README documents Ollama and OpenAI-compatible provider endpoints. In Docker, a host service must be reachable from inside the container; `localhost` inside the container refers to the container itself. The example environment file includes optional endpoint settings and examples. Change a bind address only when you understand who can reach it and have suitable firewall controls.

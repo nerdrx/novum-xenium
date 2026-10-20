@@ -512,7 +512,7 @@ async function _refreshAfterEndpointChange(deletedEndpointId) {
   } catch (_) {}
 }
 
-async function _selectAddedModelInChat(endpoint) {
+async function _selectAddedModelInChat(endpoint, ownsRequest = () => true) {
   const modelId = endpoint && Array.isArray(endpoint.models) ? endpoint.models[0] : '';
   if (!modelId) return;
   try {
@@ -520,6 +520,7 @@ async function _selectAddedModelInChat(endpoint) {
       await window.modelsModule.refreshModels(true);
     }
   } catch (_) {}
+  if (!ownsRequest()) return;
   try {
     document.dispatchEvent(new CustomEvent('odysseus:auto-select-model', {
       detail: {
@@ -2104,6 +2105,13 @@ function initEndpointForm() {
     if (deviceAuthPolling) return;
     const config = PROVIDER_DEVICE_FLOWS[providerKey];
     if (!config) return;
+    const formNodes = [provider, urlInput, el('adm-epApiKey'), kindSel, el('adm-epType')];
+    const formIds = ['adm-epProvider', 'adm-epUrl', 'adm-epApiKey', 'adm-epKind', 'adm-epType'];
+    const formValues = formNodes.map(node => node ? node.value : null);
+    const hasCurrentFormNodes = () => formNodes.every((node, index) =>
+      node && node.isConnected && el(formIds[index]) === node);
+    const ownsForm = () => hasCurrentFormNodes() &&
+      formNodes.every((node, index) => node.value === formValues[index]);
     const status = el('adm-deviceAuthStatus') || _endpointMsg('api');
     if (!status) return;
     const triggerText = triggerEl ? triggerEl.textContent : '';
@@ -2126,7 +2134,7 @@ function initEndpointForm() {
         triggerEl.textContent = triggerText || 'Add';
       }
       deviceAuthPolling = false;
-      _setApiFormForProvider();
+      if (hasCurrentFormNodes()) _setApiFormForProvider();
     };
     status.textContent = '';
     status.className = 'adm-ep-inline-msg';
@@ -2161,10 +2169,12 @@ function initEndpointForm() {
         status.className = 'admin-success';
         const connectedName = endpoint && endpoint.name ? endpoint.name : config.label;
         status.textContent = 'Connected ' + connectedName + ' - ' + n + ' model' + (n !== 1 ? 's' : '') + ' available.';
-        if (endpoint && endpoint.id) _recentlyAddedEpId = String(endpoint.id);
-        if (_chatgptLabelMode) urlInput.value = '';
+        if (ownsForm() && endpoint && endpoint.id) _recentlyAddedEpId = String(endpoint.id);
         await loadEndpoints();
-        await _selectAddedModelInChat(endpoint || {});
+        if (ownsForm()) {
+          await _selectAddedModelInChat(endpoint, ownsForm);
+          if (ownsForm() && providerKey === 'chatgpt-subscription' && _chatgptLabelMode) urlInput.value = '';
+        }
         reset();
         return;
       }
@@ -2518,19 +2528,25 @@ function initEndpointForm() {
       const apiKey = keyEl ? keyEl.value.trim() : '';
       localTestBtn.disabled = true;
       localTestBtn.innerHTML = testOriginalHtml.replace(/>Test\s*$/, '>Testing...');
+      const testController = new AbortController();
+      let testTimedOut = false;
+      const testTimer = setTimeout(() => { testTimedOut = true; testController.abort(); }, 60000);
       try {
         const fd = new FormData();
         fd.append('base_url', url);
         if (apiKey) fd.append('api_key', apiKey);
-        const res = await fetch('/api/model-endpoints/test', { method: 'POST', body: fd, credentials: 'same-origin' });
+        const res = await fetch('/api/model-endpoints/test', { method: 'POST', body: fd, credentials: 'same-origin', signal: testController.signal });
         const d = await res.json();
         if (ownsTest()) _renderEndpointTestResult(msg, res, d);
       } catch (e) {
         if (ownsTest()) {
-          msg.textContent = 'Test failed: ' + (e && e.message ? e.message : 'request failed');
+          msg.textContent = testTimedOut
+            ? 'Test timed out. Check the provider and try again.'
+            : 'Test failed: ' + (e && e.message ? e.message : 'request failed');
           msg.className = 'admin-error';
         }
       } finally {
+        clearTimeout(testTimer);
         localTestBtn.disabled = false;
         localTestBtn.innerHTML = testOriginalHtml;
       }

@@ -40,6 +40,11 @@ If the address is correct but the provider is on a different host, ensure its
 listener and firewall allow only the intended connection. Do not bind it to
 all interfaces as a discovery workaround.
 
+In **Add Local Models**, **Test** stops waiting after 60 seconds, including a
+stalled response body, and restores the button. Check the provider connection
+before retrying. This stops the browser from waiting; it does not stop or
+restart the provider. A late result does not overwrite a changed form draft.
+
 ## Model appears but request fails
 
 Record the provider, model ID, time, and exact visible error. Check provider

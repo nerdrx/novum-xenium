@@ -2016,7 +2016,8 @@ function initEndpointForm() {
     const msg = _endpointMsg('api');
     msg.textContent = ''; msg.className = '';
     const rawUrl = (urlInput.value || provider.value).trim();
-    const apiKey = el('adm-epApiKey').value.trim();
+    const apiKeyInput = el('adm-epApiKey');
+    const apiKey = apiKeyInput.value.trim();
     if (!rawUrl) { msg.textContent = 'Select a provider or enter a base URL'; msg.className = 'admin-error'; return; }
     if (provider.value && !apiKey) { msg.textContent = 'API key is required for cloud providers'; msg.className = 'admin-error'; return; }
     // Normalize URL (fix typos, add /v1, strip wrong paths)
@@ -2039,14 +2040,27 @@ function initEndpointForm() {
       if (epType) fd.append('model_type', epType.value);
       if (provider.value && /openrouter\.ai|ollama\.com/i.test(provider.value)) fd.append('require_models', 'true');
       else fd.append('skip_probe', 'false');
+      const formSnapshot = [
+        ['adm-epUrl', urlInput, urlInput.value],
+        ['adm-epApiKey', apiKeyInput, apiKeyInput.value],
+        ['adm-epProvider', provider, provider.value],
+        ['adm-epKind', kindSel, kindSel ? kindSel.value : ''],
+        ['adm-epType', epType, epType ? epType.value : ''],
+      ];
       const res = await fetch('/api/model-endpoints', { method: 'POST', body: fd, credentials: 'same-origin' });
       const d = await res.json();
       if (res.ok) {
         const count = d.models ? d.models.length : 0;
-        urlInput.value = ''; urlInput.style.display = '';
-        el('adm-epApiKey').value = ''; provider.value = '';
-        if (kindSel) kindSel.value = 'proxy';
-        if (epType) epType.value = 'llm';
+        const formDraftUnchanged = formSnapshot.every(([id, node, value]) => {
+          const current = el(id);
+          return current === node && (!node || (node.isConnected && node.value === value));
+        });
+        if (formDraftUnchanged) {
+          urlInput.value = ''; urlInput.style.display = '';
+          apiKeyInput.value = ''; provider.value = '';
+          if (kindSel) kindSel.value = 'proxy';
+          if (epType) epType.value = 'llm';
+        }
         if (d.id) _recentlyAddedEpId = String(d.id);
         await loadEndpoints();
         await _selectAddedModelInChat(d);
@@ -2505,11 +2519,16 @@ function initEndpointForm() {
       const addOriginalHtml = localAddBtn.innerHTML || '>Add';
       const msg = _endpointMsg('local');
       msg.textContent = ''; msg.className = 'adm-ep-inline-msg';
-      const raw = (el('adm-epLocalUrl').value || '').trim();
+      const urlInput = el('adm-epLocalUrl');
+      const rawUrlValue = urlInput.value || '';
+      const raw = rawUrlValue.trim();
       if (!raw) { msg.textContent = 'Enter a base URL (e.g. http://localhost:8002/v1)'; msg.className = 'admin-error'; return; }
       const url = _normalizeBaseUrl(raw);
       const keyEl = el('adm-epLocalApiKey');
-      const apiKey = keyEl ? keyEl.value.trim() : '';
+      const apiKeyValue = keyEl ? keyEl.value : '';
+      const apiKey = apiKeyValue.trim();
+      const lt = el('adm-epLocalType');
+      const modelTypeValue = lt ? lt.value : '';
       localAddBtn.disabled = true;
       localAddBtn.innerHTML = addOriginalHtml.replace(/>Add\s*$/, '>Adding...');
       try {
@@ -2518,15 +2537,23 @@ function initEndpointForm() {
         if (apiKey) fd.append('api_key', apiKey);
         fd.append('endpoint_kind', 'local');
         fd.append('model_refresh_mode', 'auto');
-        const lt = el('adm-epLocalType');
-        if (lt) fd.append('model_type', lt.value);
+        if (lt) fd.append('model_type', modelTypeValue);
         fd.append('skip_probe', 'false');
         const res = await fetch('/api/model-endpoints', { method: 'POST', body: fd, credentials: 'same-origin' });
         const d = await res.json();
         if (res.ok) {
-          el('adm-epLocalUrl').value = '';
-          if (keyEl) keyEl.value = '';
-          if (lt) lt.value = 'llm';
+          const formDraftUnchanged = urlInput.isConnected
+            && el('adm-epLocalUrl') === urlInput
+            && urlInput.value === rawUrlValue
+            && el('adm-epLocalApiKey') === keyEl
+            && (!keyEl || keyEl.value === apiKeyValue)
+            && el('adm-epLocalType') === lt
+            && (!lt || lt.value === modelTypeValue);
+          if (formDraftUnchanged) {
+            urlInput.value = '';
+            if (keyEl) keyEl.value = '';
+            if (lt) lt.value = 'llm';
+          }
           if (d.id) _recentlyAddedEpId = String(d.id);
           await loadEndpoints();
           await _selectAddedModelInChat(d);

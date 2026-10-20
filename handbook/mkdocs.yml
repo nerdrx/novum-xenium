@@ -51,6 +51,7 @@ nav:
       - Cookbook and local models: cookbook.md
       - Compare models: compare.md
       - Deep Research: research.md
+      - Email drafts and recovery: email.md
       - Connected services: features-connected-services.md
   - Tutorials:
       - Safe coding session: tutorials/coding.md

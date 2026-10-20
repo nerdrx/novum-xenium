@@ -10,6 +10,7 @@ This handbook aims to let an operator complete documented Novum workflows withou
 - Save and recover browser composer drafts; use chats, projects, managed worktrees, workspace search/previews, snapshots, Stop, and Continue.
 - Choose Chat/Agent/Plan modes, compare chat models and search providers, run and recover Deep Research reports, manage tool approvals, run verified coding work packets, connect MCP servers/modules, and understand containment limits.
 - Operate calendar, CalDAV, email, Library/documents, Notes/reminders, memory, skills, local/hosted images, notifications, and the desktop alarm where supported.
+- Choose an email mailbox, compose/reply, save mailbox drafts, understand browser-local recovery and sender fallback, and check ambiguous send results before retrying.
 - Configure Compose settings, all source-inventoried environment variables, Settings keys, accounts, API tokens, network binds, storage, backups, updates, rollback, and common API routes.
 
 See [Feature and source index](index.md) for the source file behind each guide. Deployment values live in [Configuration and administration](configuration.md), the complete variable list is in the [environment reference](environment.md), and route groups are in the [HTTP API reference](api.md).

@@ -38,6 +38,8 @@ unless the operator explicitly enables `ODYSSEUS_ALLOW_PRIVATE_CALDAV=1`.
 
 ## Email
 
+For composing, mailbox drafts, sender choice and recovery after an unclear send result, see [Email drafts and recovery](email.md).
+
 1. Open **Email** from the navigation rail or `/email`.
 2. If no mailbox is listed, an administrator must add an account in **Settings
    → Integrations**. Configure the account's IMAP/SMTP details or complete its

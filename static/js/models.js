@@ -214,6 +214,7 @@ export async function refreshModels(force = false, opts = {}) {
           .then(async (res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
+            if (!Array.isArray(data?.items)) throw new Error('Invalid model list response');
             return { data, seq: _seq };
           })
           .finally(() => {

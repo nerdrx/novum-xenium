@@ -16,6 +16,11 @@ probe, or visible model name does not prove that model generation will work.
    from inside the app container. Use `host.docker.internal` or a Compose
    service name when that address matches your setup.
 
+Current builds stop a model-catalog refresh after 30 seconds, including a
+stalled response body. A failed refresh keeps the last catalog and clears the
+loading state; retry the refresh after checking the provider connection. A
+cached list can therefore remain visible while its provider is offline.
+
 **Clear offline** removes saved offline endpoint records. Use it only after
 confirming the record is obsolete. It does not repair the provider or retry
 inference.

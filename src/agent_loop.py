@@ -27327,6 +27327,7 @@ async def stream_agent_loop(
     time_to_first_token = None
     first_token_received = False
     tool_events = []   # Persist tool executions for history reload
+    explicitly_denied_tools = set()
     _inline_page_media_urls = set()
     round_texts = []   # Cleaned text per round for history reload
     round_models = []  # Actual model for each corresponding round
@@ -31565,6 +31566,7 @@ async def stream_agent_loop(
         elif (
             _qwen_explicit_tool
             and not _has_accepted_contract_tool_call(turn_contract, tool_blocks)
+            and _qwen_explicit_tool not in explicitly_denied_tools
             and (
                 _caller_relevant_tools is None
                 or _qwen_explicit_tool in _caller_relevant_tools
@@ -33612,6 +33614,7 @@ async def stream_agent_loop(
                 continue
             if (
                 _false_missing_tool
+                and _false_missing_tool not in explicitly_denied_tools
                 and not _force_answer
                 and _intent_nudge_count < _MAX_INTENT_NUDGES
                 and not guide_only
@@ -33670,6 +33673,7 @@ async def stream_agent_loop(
                     )
             if (
                 _forced_state_block
+                and _forced_state_block.tool_type not in explicitly_denied_tools
                 and not _has_successful_state_manager_evidence(
                     tool_events,
                     _forced_state_block.tool_type,
@@ -33699,6 +33703,7 @@ async def stream_agent_loop(
                 # Fall through to the normal tool execution path below.
             elif (
                 _state_tool
+                and _state_tool not in explicitly_denied_tools
                 and not _has_successful_state_manager_evidence(
                     tool_events,
                     _state_tool,
@@ -36865,6 +36870,8 @@ async def stream_agent_loop(
                         except (asyncio.CancelledError, Exception):
                             pass
 
+            if isinstance(result, dict) and result.get("error") == "Access denied":
+                explicitly_denied_tools.add(block.tool_type)
             _milestone_checkpoint.observe(block.tool_type, result)
             _previous_packet = _coding_work.state.packet if _coding_work.state else None
             _previous_packet_stage = _coding_work.state.stage if _coding_work.state else None

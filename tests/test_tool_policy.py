@@ -3258,6 +3258,174 @@ def test_false_unavailable_tool_claim_ignores_unselected_calendar_tool():
     ) == ""
 
 
+def _run_unavailable_tool_feedback_case(
+    monkeypatch, *, first_tool=None, tool_error=None, explanation,
+    explicit_followup_tool=None,
+    initial_answer=None,
+    user_text="Give me a status summary.",
+    selected_tools=frozenset({"manage_tasks"}),
+):
+    from tests.test_agent_rounds_exhausted import _patch_common, _native_call
+    from src.tool_policy import ToolPolicy
+    from src.tool_schemas import FUNCTION_TOOL_SCHEMAS
+    from src.turn_contract import resolve_turn_contract
+
+    _patch_common(monkeypatch)
+    requests = []
+    executions = []
+    commands = []
+
+    async def fake_execute(block, *args, **kwargs):
+        executions.append(block.tool_type)
+        commands.append(block.content)
+        if len(executions) == 1 and tool_error:
+            return block.tool_type, {"error": tool_error, "exit_code": 1}
+        return block.tool_type, {"output": "completed synthetic operation", "exit_code": 0}
+
+    async def fake_stream(_candidates, messages, **kwargs):
+        requests.append(messages)
+        round_num = len(requests)
+        if first_tool and round_num == 1:
+            arguments = (
+                {"action": "delete", "task_id": "synthetic-ownerless"}
+                if first_tool == "manage_tasks"
+                else {"action": "delete_event", "uid": "synthetic-event"}
+            )
+            payload = {"type": "tool_calls", "calls": [
+                _native_call(first_tool, arguments)
+            ]}
+            yield "data: " + json.dumps(payload) + "\n\n"
+        elif first_tool and explicit_followup_tool and round_num == 2:
+            payload = {"type": "tool_calls", "calls": [
+                _native_call(explicit_followup_tool, {
+                    "action": "delete", "task_id": "synthetic-corrected-target"
+                })
+            ]}
+            yield "data: " + json.dumps(payload) + "\n\n"
+        elif initial_answer and round_num == 1:
+            yield _delta_chunk(initial_answer)
+        elif round_num == (2 if first_tool or initial_answer else 1):
+            yield _delta_chunk(explanation)
+        else:
+            yield _delta_chunk("Stopping after the synthetic check.")
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "execute_tool_block", server_authorized_executor(fake_execute), raising=False)
+    monkeypatch.setattr(al, "stream_llm_with_fallback", fake_stream, raising=False)
+    families = {"tasks" if name == "manage_tasks" else "calendar"
+                for name in selected_tools if name in {"manage_tasks", "manage_calendar"}}
+    contract = resolve_turn_contract(
+        capabilities=families,
+        schemas=FUNCTION_TOOL_SCHEMAS,
+        policy=ToolPolicy(),
+        selected_tools=selected_tools,
+    )
+    events = _events(_collect(al.stream_agent_loop(
+        "http://synthetic.invalid/v1", "synthetic-model",
+        [{"role": "user", "content": user_text}],
+        max_rounds=4,
+        relevant_tools=set(selected_tools),
+        turn_contract=contract if first_tool or initial_answer else None,
+    )))
+    nudge = any(
+        message.get("role") == "system"
+        and "available in this turn's selected tool surface" in message.get("content", "")
+        for request in requests for message in request
+    )
+    final = ""
+    for event in events:
+        if event.get("type") == "final_response":
+            final = event.get("content", "")
+        elif isinstance(event.get("delta"), str):
+            final += event["delta"]
+    return requests, executions, commands, nudge, final, events
+
+
+def test_denied_matching_tool_explanation_is_not_overridden_by_unavailable_nudge(monkeypatch):
+    requests, executions, _commands, nudge, final, events = _run_unavailable_tool_feedback_case(
+        monkeypatch,
+        first_tool="manage_tasks",
+        tool_error="Access denied",
+        explanation="I cannot access that task because access was denied.",
+        user_text="Delete task synthetic-ownerless",
+    )
+
+    assert executions == ["manage_tasks"]
+    assert len(requests) == 2
+    assert not nudge
+    assert "I cannot access that task" in final
+    assert any(event.get("type") == "tool_output" and event.get("output") == "Access denied"
+               for event in events)
+
+
+def test_matching_denial_after_generic_call_preserves_explanation(monkeypatch):
+    requests, executions, _commands, nudge, final, _events_seen = _run_unavailable_tool_feedback_case(
+        monkeypatch,
+        first_tool="manage_tasks",
+        tool_error="Access denied",
+        explanation="I cannot access that task because access was denied.",
+    )
+
+    assert executions == ["manage_tasks"]
+    assert len(requests) == 2
+    assert not nudge
+    assert "I cannot access that task" in final
+
+
+def test_unavailable_tool_claim_without_prior_attempt_still_nudges(monkeypatch):
+    requests, executions, _commands, nudge, _final, _events_seen = _run_unavailable_tool_feedback_case(
+        monkeypatch,
+        explanation="I cannot access that task with the tools available this turn.",
+    )
+
+    assert executions == []
+    assert len(requests) == 2
+    assert nudge
+
+
+def test_transient_matching_tool_error_still_allows_recovery_nudge(monkeypatch):
+    requests, executions, _commands, nudge, _final, _events_seen = _run_unavailable_tool_feedback_case(
+        monkeypatch,
+        first_tool="manage_tasks",
+        tool_error="Temporary database unavailable",
+        explanation="I cannot access that task while the task service is unavailable.",
+    )
+
+    assert executions == ["manage_tasks"]
+    assert len(requests) == 3
+    assert nudge
+
+
+def test_unrelated_tool_denial_does_not_suppress_task_recovery_nudge(monkeypatch):
+    requests, executions, _commands, nudge, _final, _events_seen = _run_unavailable_tool_feedback_case(
+        monkeypatch,
+        first_tool="manage_calendar",
+        tool_error="Access denied",
+        explanation="I cannot access tasks with the task tools available this turn.",
+        selected_tools={"manage_calendar", "manage_tasks"},
+    )
+
+    assert executions == ["manage_calendar"]
+    assert len(requests) == 3
+    assert nudge
+
+
+def test_corrected_explicit_tool_call_remains_permitted_after_denial(monkeypatch):
+    requests, executions, commands, nudge, _final, _events_seen = _run_unavailable_tool_feedback_case(
+        monkeypatch,
+        first_tool="manage_tasks",
+        tool_error="Access denied",
+        explanation="",
+        explicit_followup_tool="manage_tasks",
+        user_text="Delete task synthetic-ownerless",
+    )
+
+    assert executions == ["manage_tasks", "manage_tasks"]
+    assert json.loads(commands[1])["task_id"] == "synthetic-corrected-target"
+    assert len(requests) == 2
+    assert not nudge
+
+
 def test_qwen_router_selects_admin_inventory_tools():
     assert "manage_settings" in al._qwen38_router_tool_names("show which agent tools are currently disabled")
     assert "manage_settings" in al._qwen38_router_tool_names("turn image generation back on now")

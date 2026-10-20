@@ -36,6 +36,8 @@ Admin account routes are `GET /api/auth/users`, `POST /api/auth/users`,
 `DELETE /api/auth/users`. `PUT /api/auth/open-signup` changes registration
 policy. These routes require the administrator session; do not expose them
 through a proxy without preserving the app's authentication boundary.
+The password-reset route accepts only existing **non-admin** target accounts.
+It is not a forgotten-password or admin-recovery endpoint.
 
 `GET /api/auth/settings` returns app settings. Non-admin responses scrub secret
 values; `POST /api/auth/settings` and `POST /api/auth/features` are

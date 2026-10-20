@@ -88,6 +88,7 @@ const server = http.createServer((req, res) => {
         window.catalogState = () => ({
           rows: [...document.querySelectorAll('#models .models-row')].map(row => row.dataset.modelId),
           cache: modelsModule.getCachedItems().flatMap(item => item.models),
+          warning: !!document.querySelector('#models .models-refresh-error'),
           refreshing: document.getElementById('models').classList.contains('models-refreshing'),
           text: document.getElementById('models').textContent.trim(),
           timers: audit.timers.size,
@@ -155,9 +156,43 @@ const server = http.createServer((req, res) => {
       assert.equal(finalState.refreshing, false);
       assert.equal(finalState.timers, 0);
       assert.doesNotMatch(finalState.text, /Could not refresh model list/);
+
+      // Malformed successful JSON must preserve cached rows and permit retry.
+      const catalogValidation = await page.evaluate(async () => {
+        const cases = [];
+        for (const [name, data] of [
+          ['missing-items', {detail:'service unavailable'}],
+          ['non-array-items', {items:{unexpected:'object'}}],
+        ]) {
+          const expectedRows = catalogState().rows;
+          audit.offset += 31000;
+          audit.mode = 'success'; audit.data = data;
+          const rejected = await modelsModule.refreshModels(true);
+          const preserved = catalogState();
+          audit.data = catalogData(`retry-${name}`);
+          await modelsModule.refreshModels(true);
+          cases.push({name, expectedRows, rejected, preserved, retried:catalogState()});
+        }
+        audit.data = {items:[]};
+        const emptyResult = await modelsModule.refreshModels(true);
+        return {cases, emptyResult, empty:catalogState()};
+      });
+      for (const item of catalogValidation.cases) {
+        assert.equal(item.rejected, false, `${item.name} rejected`);
+        assert.deepEqual(item.preserved.rows, item.expectedRows);
+        assert.deepEqual(item.preserved.cache, item.expectedRows);
+        assert.equal(item.preserved.warning, true);
+        assert.deepEqual(item.retried.rows, [`retry-${item.name}`]);
+        assert.deepEqual(item.retried.cache, [`retry-${item.name}`]);
+        assert.equal(item.retried.warning, false);
+      }
+      assert.notEqual(catalogValidation.emptyResult, false, 'empty array is valid catalog');
+      assert.deepEqual(catalogValidation.empty.rows, []);
+      assert.deepEqual(catalogValidation.empty.cache, []);
+      assert.equal(catalogValidation.empty.warning, false);
       assert.equal(await page.evaluate(() => audit.records.every(record => !!record.signal)), true);
       assert.deepEqual(pageErrors, []);
-      evidence.push({phase, coldBefore, coldResults, coldAfter, cachedAfter, pendingNewer, finalState, pageErrors});
+      evidence.push({phase, coldBefore, coldResults, coldAfter, cachedAfter, pendingNewer, finalState, catalogValidation, pageErrors});
       await page.close();
     }
     if (process.env.EVIDENCE_DIR) {

@@ -27,6 +27,11 @@ do not recognize; ask for a narrower explanation or action. The
 `ODYSSEUS_TOOL_APPROVAL_GATE` setting is enabled by default and should stay
 enabled. A pending approval is a safety boundary, not a service failure.
 
+An **Access denied** result from the task manager concerns access to that
+target; it does not mean the task tool is missing. Confirm the signed-in
+account and intended task. Novum's automatic recovery must not repeat that
+denied operation or replace its explanation with a missing-tool correction.
+
 If an MCP server shows disconnected or `needs_auth`, open **Settings →
 Integrations → MCP**, reconnect or complete authorization, then retry once.
 Startup times out an individual MCP server after 20 seconds; other servers

@@ -37,6 +37,18 @@ docker compose logs --tail=150 odysseus
 Review logs before sharing them. They can contain credentials, addresses, and
 private request data.
 
+## An existing account's password is lost
+
+Ask a signed-in instance administrator to reset a **non-admin** account's
+password through user management. The reset route refuses admin accounts;
+there is no self-service forgotten-password flow. Changing the first-run
+`ODYSSEUS_ADMIN_PASSWORD` seed does not reset an existing account.
+
+For a locked-out admin, preserve the complete data directory and contact the
+instance operator for account recovery. The app has no admin-password reset
+screen. Do not delete account files, rerun first-run setup, or disable
+authentication to bypass the login; that can expose data or break ownership.
+
 ## The desktop manager cannot open the workspace
 
 Confirm the manager selected the intended checkout and Compose project. Check

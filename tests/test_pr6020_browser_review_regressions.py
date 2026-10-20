@@ -754,6 +754,9 @@ def test_stop_during_replacement_preflight_never_borrows_old_controller():
     abort_current = _extract_source(
         _CHAT, "export function abortCurrentRequest", "// ── Stall watchdog"
     ).replace("export function", "function")
+    auth_preflight_state = _extract_source(
+        _CHAT, "let _authPreflightSend =", "let _displayOverride ="
+    )
     reservation = _extract_source(
         _CHAT,
         "const streamGeneration = (_streamGenerations.get(streamSessionId) || 0) + 1;",
@@ -764,6 +767,7 @@ def test_stop_during_replacement_preflight_never_borrows_old_controller():
       let isStreaming = false;
       let currentHolder = null;
       let _sendInFlight = false;
+      {auth_preflight_state}
       function _setForegroundChatBusy() {{}}
       const calls = [];
       const fetch = async (url, options) => {{ calls.push({{ url, options }}); return {{ ok: true }}; }};

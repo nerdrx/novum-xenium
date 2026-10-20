@@ -902,10 +902,20 @@ class HostShellTool:
         if raw_exit_code is None:
             raw_exit_code = data.get("returncode")
         if raw_exit_code is None:
+            pending_job = str(data.get("job_id") or "").strip() and (
+                data.get("detached") is True or data.get("status") in ("running", "unknown")
+            )
+            if not pending_job:
+                return {
+                    "error": "host_shell: bridge returned invalid payload: missing exit_code or returncode",
+                    "exit_code": 1,
+                    "host_bridge": "tui",
+                    "containment": boundary,
+                }
             raw_exit_code = 0
         if isinstance(raw_exit_code, bool) or not isinstance(raw_exit_code, int):
             return {
-                "error": "host_shell: bridge returned an invalid exit_code",
+                "error": "host_shell: bridge returned invalid exit_code",
                 "exit_code": 1,
                 "host_bridge": "tui",
                 "containment": boundary,

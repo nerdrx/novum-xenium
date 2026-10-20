@@ -63,6 +63,13 @@ Do not add broader permissions just to bypass an unexplained error.
 A valid batch can succeed partly before a later tool returns an error.
 Inspect each result before retrying; completed actions are not rolled back.
 
+If the host bridge returns a result without `exit_code` or `returncode`, Novum
+cannot confirm command completion. Inspect the workspace and bridge connection
+before retrying, since the command may already have changed files. Reconnect
+the TUI bridge if needed; an empty reply is not a successful result.
+A background-job acknowledgement with a `job_id` still needs polling to obtain
+the completed result. It does not prove that the command finished successfully.
+
 For a constrained project search, give a command such as
 `find . -maxdepth 2 -name package.json` and check that the tool result uses it.
 A supplied host-shell project search is not replaced with the generic project

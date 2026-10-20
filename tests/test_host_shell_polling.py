@@ -111,18 +111,7 @@ async def test_host_shell_auto_polls_implicit_long_job(monkeypatch):
     ]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("payload", "expected_error"),
-    [
-        ({"error": "request rejected", "exit_code": 1}, "request rejected"),
-        ({"output": "looks fine", "exit_code": "zero"}, "invalid exit_code"),
-        ({"output": "looks fine", "exit_code": False}, "invalid exit_code"),
-    ],
-)
-async def test_host_shell_turns_malformed_bridge_results_into_tool_failures(
-    monkeypatch, payload, expected_error,
-):
+async def _execute_fake_bridge_payload(monkeypatch, payload):
     from src.agent_tools import subprocess_tools
 
     class Client:
@@ -139,7 +128,7 @@ async def test_host_shell_turns_malformed_bridge_results_into_tool_failures(
             return _FakeResponse(payload)
 
     monkeypatch.setattr(subprocess_tools.httpx, "AsyncClient", Client)
-    result = await subprocess_tools.HostShellTool().execute(
+    return await subprocess_tools.HostShellTool().execute(
         '{"command":"printf ready"}',
         {
             "client_runtime_context": {
@@ -151,9 +140,50 @@ async def test_host_shell_turns_malformed_bridge_results_into_tool_failures(
         },
     )
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected_error"),
+    [
+        ({}, "missing exit_code or returncode"),
+        ({"output": "looks fine"}, "missing exit_code or returncode"),
+        ({"status": "completed", "job_id": "job-1"}, "missing exit_code or returncode"),
+        ({"status": "running"}, "missing exit_code or returncode"),
+        ({"job_id": "job-1"}, "missing exit_code or returncode"),
+        ({"error": "request rejected", "exit_code": 1}, "request rejected"),
+        ({"output": "looks fine", "exit_code": "zero"}, "invalid exit_code"),
+        ({"output": "looks fine", "exit_code": False}, "invalid exit_code"),
+    ],
+)
+async def test_host_shell_turns_malformed_bridge_results_into_tool_failures(
+    monkeypatch, payload, expected_error,
+):
+    result = await _execute_fake_bridge_payload(monkeypatch, payload)
+
     assert expected_error in result["error"]
     assert result["exit_code"] == 1
     assert result["host_bridge"] == "tui"
+    assert result["containment"]["executed"] is False
+    if expected_error != "request rejected":
+        assert _is_host_bridge_failure_result(result), "malformed bridge replies must not retry the same command"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {"output": "", "exit_code": 0},
+    {"stdout": "checked", "returncode": 7},
+    {"job_id": "job-1", "detached": True},
+    {"job_id": "job-1", "status": "running"},
+    {"job_id": "job-1", "status": "unknown"},
+])
+async def test_host_shell_preserves_completion_and_pending_job_contract(monkeypatch, payload):
+    result = await _execute_fake_bridge_payload(monkeypatch, payload)
+    assert "error" not in result
+    assert result["exit_code"] == payload.get("exit_code", payload.get("returncode", 0))
+    assert result["containment"]["executed"] is True
+    for name in ("job_id", "status", "detached"):
+        if name in payload:
+            assert result[name] == payload[name]
 
 
 @pytest.mark.asyncio

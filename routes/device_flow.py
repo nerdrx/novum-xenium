@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import threading
 import time
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from fastapi import APIRouter, Form, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from core.middleware import require_admin
 
@@ -96,7 +98,51 @@ class PendingDeviceFlowStore:
     def is_throttled(self, poll_id: str) -> bool:
         with self._lock:
             entry = self._pending.get(poll_id)
-            return bool(entry and self._now() < float(entry.get("next_poll_at") or 0))
+            return bool(
+                entry
+                and (
+                    entry.get("in_flight")
+                    or self._now() < float(entry.get("next_poll_at") or 0)
+                )
+            )
+
+    def begin_poll(self, poll_id: str) -> tuple[str, Optional[dict[str, Any]]]:
+        """Atomically claim a poll and return its provider-owned payload."""
+        self.prune_expired()
+        now = self._now()
+        with self._lock:
+            entry = self._pending.get(poll_id)
+            if entry is None:
+                return "missing", None
+            if float(entry.get("expires_at") or 0) < now:
+                self._pending.pop(poll_id, None)
+                return "missing", None
+            if entry.get("in_flight") or now < float(entry.get("next_poll_at") or 0):
+                return "pending", None
+            entry["in_flight"] = True
+            return "claimed", dict(entry.get("payload") or {})
+
+    def finish_poll(self, poll_id: str, outcome: DeviceFlowPoll) -> dict[str, Any]:
+        """Apply provider outcome and release the claim under one lock."""
+        now = self._now()
+        with self._lock:
+            entry = self._pending.get(poll_id)
+            if entry is not None:
+                entry.pop("in_flight", None)
+                if outcome.status in {"authorized", "failed"}:
+                    self._pending.pop(poll_id, None)
+                elif outcome.status == "slow_down":
+                    interval = int(outcome.interval or (int(entry.get("interval") or 5) + 5))
+                    entry["interval"] = max(interval, 1)
+                    entry["next_poll_at"] = now + entry["interval"]
+                else:
+                    entry["next_poll_at"] = now + int(entry.get("interval") or 5)
+
+        if outcome.status == "authorized":
+            return {"status": "authorized", "endpoint": dict(outcome.endpoint or {})}
+        if outcome.status == "failed":
+            return {"status": "failed", "error": outcome.error or "denied"}
+        return _pending_response(outcome.detail)
 
     def schedule_next(self, poll_id: str) -> None:
         now = self._now()
@@ -125,6 +171,13 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
+async def _run_flow_callback(callback: Callable, *args: Any) -> Any:
+    """Run sync provider I/O off-loop while keeping async callbacks supported."""
+    if inspect.iscoroutinefunction(callback):
+        return await _maybe_await(callback(*args))
+    return await _maybe_await(await run_in_threadpool(callback, *args))
+
+
 def _pending_response(detail: Optional[str] = None) -> dict[str, Any]:
     response: dict[str, Any] = {"status": "pending"}
     if detail:
@@ -143,12 +196,18 @@ def create_device_flow_router(
     """Create standard `/device/start|poll|cancel` routes for a provider."""
 
     router = APIRouter(prefix=prefix, tags=list(tags))
+    poll_tasks: set[asyncio.Task] = set()
+
+    def _finish_poll_task(task: asyncio.Task) -> None:
+        poll_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
 
     @router.post("/device/start")
     async def device_start(request: Request):
         require_admin(request)
         form = await request.form()
-        start = await _maybe_await(start_flow(request, form))
+        start = await _run_flow_callback(start_flow, request, form)
         interval = int(start.interval or 5)
         expires_in = int(start.expires_in or 900)
         poll_id = store.add(start.pending, interval=interval, expires_in=expires_in)
@@ -159,30 +218,24 @@ def create_device_flow_router(
     @router.post("/device/poll")
     async def device_poll(request: Request, poll_id: str = Form(...)):
         require_admin(request)
-        payload = store.get_payload(poll_id)
-        if payload is None:
+        claim, payload = store.begin_poll(poll_id)
+        if claim == "missing":
             raise HTTPException(404, "Unknown or expired login session")
-        if store.is_throttled(poll_id):
+        if claim == "pending":
             return {"status": "pending"}
 
-        try:
-            outcome = await _maybe_await(poll_flow(request, payload))
-        except Exception:
-            store.pop(poll_id)
-            raise
+        async def _poll_and_finish() -> dict[str, Any]:
+            try:
+                outcome = await _run_flow_callback(poll_flow, request, payload or {})
+                return store.finish_poll(poll_id, outcome)
+            except BaseException:
+                store.pop(poll_id)
+                raise
 
-        if outcome.status == "authorized":
-            store.pop(poll_id)
-            return {"status": "authorized", "endpoint": dict(outcome.endpoint or {})}
-        if outcome.status == "failed":
-            store.pop(poll_id)
-            return {"status": "failed", "error": outcome.error or "denied"}
-        if outcome.status == "slow_down":
-            store.slow_down(poll_id, outcome.interval)
-            return _pending_response(outcome.detail)
-
-        store.schedule_next(poll_id)
-        return _pending_response(outcome.detail)
+        task = asyncio.create_task(_poll_and_finish())
+        poll_tasks.add(task)
+        task.add_done_callback(_finish_poll_task)
+        return await asyncio.shield(task)
 
     @router.post("/device/cancel")
     def device_cancel(request: Request, poll_id: str = Form(...)):

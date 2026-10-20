@@ -202,10 +202,10 @@ async def send_to_session(content: str, session_id: Optional[str] = None, owner:
     try:
         sess = _session_manager.get_session(target_sid)
     except KeyError:
-        return {"error": f"Session '{target_sid}' not found"}
+        return _tool_error(f"Session '{target_sid}' not found")
     except Exception as e:
         logger.warning("send_to_session failed to load session %s: %s", target_sid, e)
-        return {"error": f"Session '{target_sid}' could not be loaded"}
+        return _tool_error(f"Session '{target_sid}' could not be loaded")
     if not sess:
         return _tool_error(f"Session '{target_sid}' not found")
 

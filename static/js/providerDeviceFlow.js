@@ -1,5 +1,8 @@
 // Shared DOM-free provider device-flow runner.
 
+const DEVICE_FLOW_REQUEST_TIMEOUT_MS = 60_000;
+const DEVICE_FLOW_REQUEST_TIMEOUT_MESSAGE = 'Sign-in request timed out. Check Added Models before trying again; the connection may still complete.';
+
 export const PROVIDER_DEVICE_FLOWS = {
   copilot: {
     label: 'GitHub Copilot',
@@ -54,12 +57,26 @@ export function formatDeviceFlowError(error, fallback = 'Request failed') {
 }
 
 async function _fetchJson(fetchImpl, url, options, fallback) {
-  const response = await fetchImpl(url, options);
-  const payload = await _jsonOrEmpty(response);
-  if (!response.ok) {
-    throw new Error(_messageFromPayload(payload, fallback || `Request failed (HTTP ${response.status})`));
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, DEVICE_FLOW_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(url, { ...options, signal: controller.signal });
+    const payload = await _jsonOrEmpty(response);
+    if (timedOut || controller.signal.aborted) throw new Error(DEVICE_FLOW_REQUEST_TIMEOUT_MESSAGE);
+    if (!response.ok) {
+      throw new Error(_messageFromPayload(payload, fallback || `Request failed (HTTP ${response.status})`));
+    }
+    return payload;
+  } catch (error) {
+    if (timedOut || controller.signal.aborted) throw new Error(DEVICE_FLOW_REQUEST_TIMEOUT_MESSAGE);
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return payload;
 }
 
 function _defaultSleep(ms) {

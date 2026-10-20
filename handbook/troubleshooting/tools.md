@@ -63,6 +63,11 @@ Do not add broader permissions just to bypass an unexplained error.
 A valid batch can succeed partly before a later tool returns an error.
 Inspect each result before retrying; completed actions are not rolled back.
 
+For chat-to-chat messages, list the visible chats and use the exact returned
+ID. A `not found` or `could not be loaded` lookup error means that tool attempt
+did not send a new message. Check the selected chat and account access before
+retrying; a lookup failure does not grant access to another user's chat.
+
 If the host-shell bridge returns a result without `exit_code` or `returncode`,
 Novum cannot confirm command completion. Inspect the workspace and bridge
 connection before retrying, since the command may already have changed files.

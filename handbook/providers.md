@@ -31,6 +31,11 @@ A failed sign-in names its original provider. If you change providers, use
 **Add** for the newly selected provider; a stale **Try again** action will not
 restart the old provider behind that selection.
 
+Each sign-in start or poll request stops waiting after 60 seconds, including
+a stalled response body. This stops the browser from waiting; the backend
+connection may still complete. Check **Added Models** before starting another
+sign-in after a timeout.
+
 ## Local providers
 
 The README documents Ollama and OpenAI-compatible provider endpoints. In Docker, a host service must be reachable from inside the container; `localhost` inside the container refers to the container itself. The example environment file includes optional endpoint settings and examples. Change a bind address only when you understand who can reach it and have suitable firewall controls.

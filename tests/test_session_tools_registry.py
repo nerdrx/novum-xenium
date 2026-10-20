@@ -13,6 +13,7 @@ from pathlib import Path
 
 import src.ai_interaction as ai_interaction
 import src.database as database
+import src.llm_core as llm_core
 from src.agent_tools import TOOL_HANDLERS
 from src.agent_tools import session_tools as st
 
@@ -253,7 +254,26 @@ def test_send_to_session_missing_session_returns_error_instead_of_raising(monkey
 
     result = asyncio.run(st.send_to_session("search\nfind traffic monitor emails", owner="alice"))
 
-    assert result == {"error": "Session 'search' not found"}
+    assert result == {"error": "Session 'search' not found", "exit_code": 1}
+
+
+def test_send_to_session_loader_error_is_failed_tool_without_sending(monkeypatch):
+    class BrokenMgr:
+        def get_session(self, sid):
+            raise RuntimeError("synthetic lookup failure")
+
+    def unexpected_llm_call(*_args, **_kwargs):
+        raise AssertionError("lookup failure must not call the model")
+
+    monkeypatch.setattr(st, "get_session_manager", lambda: BrokenMgr())
+    monkeypatch.setattr(llm_core, "llm_call_async", unexpected_llm_call)
+
+    result = asyncio.run(st.send_to_session("search\nhello", owner="alice"))
+
+    assert result == {
+        "error": "Session 'search' could not be loaded",
+        "exit_code": 1,
+    }
 
 
 def test_dispatched_via_registry_not_dispatch_ai_tool():

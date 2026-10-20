@@ -9,6 +9,7 @@ import pytest
 
 _REPO = Path(__file__).resolve().parent.parent
 _HELPER = _REPO / "static" / "js" / "providerDeviceFlow.js"
+_DEADLINE_HELPER = _REPO / "tests" / "helpers" / "test_provider_device_flow_request_deadline.mjs"
 pytestmark = pytest.mark.skipif(not shutil.which("node"), reason="node not on PATH")
 
 
@@ -155,3 +156,27 @@ def test_expired_flow_returns_expired_status():
     """
     out = _run_node(js)
     assert out == {"status": "expired"}
+
+
+def test_request_deadline_covers_headers_and_response_body():
+    proc = subprocess.run(
+        ["node", str(_DEADLINE_HELPER)],
+        capture_output=True,
+        text=True,
+        cwd=str(_REPO),
+        timeout=20,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout.strip())
+    assert out["timeouts"] == {
+        "start-headers": True,
+        "start-body": True,
+        "poll-headers": True,
+        "poll-body": True,
+    }
+    assert out["successPreserved"] is True
+    assert out["httpDetailPreserved"] == "synthetic backend detail"
+    assert out["networkErrorPreserved"] == "network offline"
+    assert out["existingExpiryPreserved"] is True
+    assert out["activeDeadlineTimers"] == 0
+    assert out["loopbackOnly"] is True

@@ -9968,10 +9968,10 @@ def _tui_local_test_runner_command(*, full: bool = False) -> str:
             "else \"$runner\" -m pytest -q; fi"
         )
     return (
-        "if [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -d tests ]; then "
+        "if [ ! -f pyproject.toml ] && [ ! -f pytest.ini ] && [ -f package.json ] && node -e \"const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)\"; then npm test; "
+        "elif [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -d tests ]; then "
         f"{_tui_python_runner_setup()}"
         f"{pytest_command}; "
-        "elif [ -f package.json ] && node -e \"const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)\"; then npm test; "
         "elif [ -f Makefile ]; then make test; "
         "else printf '%s\\n' 'No supported test runner found in the active workspace root'; exit 0; fi"
     )
@@ -10067,7 +10067,7 @@ def _tui_local_fallback_shell_command(
         re.IGNORECASE,
     ):
         if _tui_explicit_full_test_request(value):
-            return _tui_local_test_runner_command()
+            return _tui_local_test_runner_command(full=True)
         return _tui_local_smoke_test_runner_command()
     if re.search(
         r"\b(?:search|scan|find|look(?:\s+for|\s+up)?)\b.{0,40}"

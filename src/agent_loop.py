@@ -6007,6 +6007,8 @@ def _collapse_repeated_email_singletons(
     if len(actions) != 1:
         return tool_blocks
     action = next(iter(actions))
+    if action == "delete" and len({bool(args.get("permanent", False)) for args in parsed}) > 1:
+        return tool_blocks
     if action == "mark_read":
         read_values = {bool(args.get("read", True)) for args in parsed}
         if len(read_values) != 1:
@@ -16018,11 +16020,6 @@ def _resolve_tool_blocks(
             else:
                 logger.warning("  -> FAILED to convert native call: %s", tc_name)
         if tool_blocks:
-            collapsed_blocks = _collapse_repeated_email_singletons(tool_blocks)
-            if len(collapsed_blocks) != len(tool_blocks) or collapsed_blocks != tool_blocks:
-                tool_blocks = collapsed_blocks
-                converted_calls = []
-                logger.info("[agent-intent] collapsed repeated email singleton native calls into bulk_email")
             tool_blocks = [
                 _browser_search_navigation_to_web_search(block, last_user)
                 for block in tool_blocks
@@ -30470,7 +30467,10 @@ async def stream_agent_loop(
                         + _feedback_hint
                         + " Close the JSON completely before stopping. "
                         "Do not repeat successful calls from earlier rounds."
-                        + _native_preview_retry_schema(native_tool_calls)
+                        + (
+                            _native_preview_retry_schema(native_tool_calls)
+                            if "native_preview" in _rejected_offered_names else ""
+                        )
                     ),
                 })
             else:

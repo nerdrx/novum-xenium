@@ -60,6 +60,9 @@ have different filesystems and environment. A file visible to one may not be
 available to another. Inspect the target path before repeating the command.
 Do not add broader permissions just to bypass an unexplained error.
 
+A valid batch can succeed partly before a later tool returns an error.
+Inspect each result before retrying; completed actions are not rolled back.
+
 If the failure says containment is unavailable, the Docker runtime could not
 create required private filesystem or PID namespaces. Check supported host
 security policy and use the documented setup. Do not enable privileged mode

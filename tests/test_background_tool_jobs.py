@@ -1,10 +1,29 @@
 import json
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core import database
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node not on PATH')
+def test_background_poll_recovers_after_stalled_headers_and_body():
+    repo = Path(__file__).resolve().parent.parent
+    result = subprocess.run(
+        ['node', str(repo / 'tests/helpers/test_background_tool_poll_recovery.mjs')],
+        cwd=repo, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    checks = json.loads(result.stdout.strip())
+    assert checks == {
+        'headersAndBodyRetry': True, 'cleanupAborts': True,
+        'ownershipPreserved': True, 'deduplicated': True,
+        'loopbackOnly': True, 'activeTimers': 0,
+    }
 
 
 @pytest.fixture

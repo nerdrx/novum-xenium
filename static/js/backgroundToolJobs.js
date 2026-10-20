@@ -100,16 +100,21 @@ export function renderResearchCards(box, jobs) {
 
 export function startBackgroundToolJobs({ getSessionId, addMessage, base = '' }) {
   let inFlight = false;
+  let stopped = false;
+  let activeRequest = null;
   const busy = () => Boolean(document.querySelector('#chat-history .msg-ai.streaming'));
   const tick = async () => {
     const sid = getSessionId();
-    if (inFlight || !sid || document.hidden || window.__odysseusSessionReadyId !== sid) return;
+    if (stopped || inFlight || !sid || document.hidden || window.__odysseusSessionReadyId !== sid) return;
     inFlight = true;
+    const controller = new AbortController();
+    activeRequest = controller;
+    const deadline = setTimeout(() => controller.abort(), 15000);
     try {
-      const response = await fetch(`${base}/api/research/chat-jobs/${encodeURIComponent(sid)}`, { credentials: 'same-origin' });
+      const response = await fetch(`${base}/api/research/chat-jobs/${encodeURIComponent(sid)}`, { credentials: 'same-origin', signal: controller.signal });
       if (!response.ok) return;
       const { jobs = [] } = await response.json();
-      if (getSessionId() !== sid || window.__odysseusSessionReadyId !== sid) return;
+      if (stopped || controller.signal.aborted || getSessionId() !== sid || window.__odysseusSessionReadyId !== sid) return;
       const box = document.querySelector('#chat-history');
       if (!box) return;
       renderResearchCards(box, jobs);
@@ -119,11 +124,20 @@ export function startBackgroundToolJobs({ getSessionId, addMessage, base = '' })
         addMessage(message.role, message.content, message.metadata?.model, message.metadata);
       }
     } catch { /* A transient poll error must not disrupt foreground chat. */ }
-    finally { inFlight = false; }
+    finally {
+      clearTimeout(deadline);
+      activeRequest = null;
+      inFlight = false;
+    }
   };
   const timer = setInterval(tick, 3000);
   const onVisible = () => { if (!document.hidden) void tick(); };
   document.addEventListener('visibilitychange', onVisible);
   void tick();
-  return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  return () => {
+    stopped = true;
+    activeRequest?.abort();
+    clearInterval(timer);
+    document.removeEventListener('visibilitychange', onVisible);
+  };
 }

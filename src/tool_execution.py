@@ -2673,6 +2673,8 @@ async def _execute_tool_block_impl(
             "exit_code": 1
         }
 
+    if result.get("error") and result.get("exit_code") in (None, 0):
+        result["exit_code"] = 1
     logger.info(f"Tool executed: {desc} -> exit_code={result.get('exit_code', 'n/a')}")
     return desc, result
 

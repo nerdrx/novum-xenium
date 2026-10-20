@@ -84,7 +84,7 @@ function _flatten() {
 async function _loadSkillEntries() {
   try {
     const res = await fetch('/api/skills/slash-catalog', { credentials: 'same-origin' });
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = await res.json();
     return (Array.isArray(data.skills) ? data.skills : []).map(s => ({
       token: s.token || `/${s.name}`,
@@ -94,7 +94,7 @@ async function _loadSkillEntries() {
       usage: s.usage || `${s.token || `/${s.name}`} <request>`,
     })).filter(e => e.token && e.token.startsWith('/'));
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -197,6 +197,29 @@ export function initSlashAutocomplete(textarea) {
   let visible = false;
   let items = [];
   let selectedIdx = 0;
+  let skillEntriesLoaded = false;
+  let skillEntriesLoading = null;
+  let skillEntriesRetryAt = 0;
+
+  const loadSkillEntries = () => {
+    if (skillEntriesLoaded || skillEntriesLoading || Date.now() < skillEntriesRetryAt) return;
+    skillEntriesLoading = _loadSkillEntries().then(skillEntries => {
+      if (skillEntries === null) {
+        skillEntriesRetryAt = Date.now() + 2000;
+        return;
+      }
+      skillEntriesLoaded = true;
+      const seen = new Set(all.map(e => e.token));
+      const merged = all.slice();
+      for (const entry of skillEntries) {
+        if (seen.has(entry.token)) continue;
+        seen.add(entry.token);
+        merged.push(entry);
+      }
+      all = merged;
+      if (visible) refresh();
+    }).finally(() => { skillEntriesLoading = null; });
+  };
 
   const hide = () => {
     if (!visible) return;
@@ -212,6 +235,7 @@ export function initSlashAutocomplete(textarea) {
   };
 
   const refresh = () => {
+    loadSkillEntries();
     const v = textarea.value;
     // Only trigger when the message starts with "/" (no leading space) and
     // contains at most one space after the command (so subcommands work).
@@ -240,18 +264,7 @@ export function initSlashAutocomplete(textarea) {
     _render(popup, items, selectedIdx, query);
   };
 
-  _loadSkillEntries().then(skillEntries => {
-    if (!skillEntries.length) return;
-    const seen = new Set(all.map(e => e.token));
-    const merged = all.slice();
-    for (const entry of skillEntries) {
-      if (seen.has(entry.token)) continue;
-      seen.add(entry.token);
-      merged.push(entry);
-    }
-    all = merged;
-    if (visible) refresh();
-  });
+  loadSkillEntries();
 
   const insert = (token) => {
     textarea.value = token + ' ';

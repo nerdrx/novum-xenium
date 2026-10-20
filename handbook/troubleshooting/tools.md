@@ -19,6 +19,10 @@ before changing configuration. A tool may be intentionally unavailable.
 For read-only repository inspection, choose **More tools → Plan mode**. Plan
 mode stays read-only regardless of approval settings.
 
+If skill suggestions are missing after a temporary connection failure, focus
+the composer or type again after a few seconds. Autocomplete retries the
+skill catalog while keeping built-in commands available.
+
 ## Approval is pending or a tool is blocked
 
 Read the exact operation, target, and command in the approval card. Approve
@@ -136,6 +140,10 @@ or unconfined seccomp as a workaround. See [native Docker containment](https://g
 Current chat streaming checks the specific session after inactivity; this is
 diagnostic and does not send the prompt again. Older builds may not include
 these timeouts. See the current [chat implementation](https://github.com/nerdrx/novum-xenium/blob/main/static/js/chat.js).
+
+Research status polling stops waiting after 15 seconds if a request stalls
+and retries on a later poll. This only reloads status; it does not restart
+research or send your prompt again.
 
 ## The run paused or scheduled work did not happen
 

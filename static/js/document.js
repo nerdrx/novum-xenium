@@ -6508,6 +6508,8 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
   }
 
   async function _saveDraft() {
+    const saveDocId = activeDocId;
+    const saveDoc = saveDocId ? docs.get(saveDocId) : null;
     const to = document.getElementById('doc-email-to')?.value?.trim();
     const cc = document.getElementById('doc-email-cc')?.value?.trim() || '';
     const bcc = document.getElementById('doc-email-bcc')?.value?.trim() || '';
@@ -6540,17 +6542,16 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
           in_reply_to: inReplyTo || null,
           references: references || null,
           account_id: window.__odysseusActiveEmailAccount || null,
-          attachments: (docs.get(activeDocId)?._composeAtts || []).map(a => a.token),
-          draft_uid: docs.get(activeDocId)?._emailDraftUid || null,
-          draft_folder: docs.get(activeDocId)?._emailDraftFolder || null,
+          attachments: (saveDoc?._composeAtts || []).map(a => a.token),
+          draft_uid: saveDoc?._emailDraftUid || null,
+          draft_folder: saveDoc?._emailDraftFolder || null,
         }),
       });
       const data = await res.json();
       if (data.success) {
-        const savedDoc = docs.get(activeDocId);
-        if (savedDoc) {
-          savedDoc._emailDraftUid = data.draft_uid || null;
-          savedDoc._emailDraftFolder = data.draft_folder || null;
+        if (saveDoc && docs.get(saveDocId) === saveDoc) {
+          saveDoc._emailDraftUid = data.draft_uid || null;
+          saveDoc._emailDraftFolder = data.draft_folder || null;
         }
         if (uiModule) uiModule.showToast('Draft saved to mailbox');
       } else {

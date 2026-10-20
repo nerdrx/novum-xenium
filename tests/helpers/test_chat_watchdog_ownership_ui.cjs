@@ -21,6 +21,10 @@ export const watchdogFixture = {
 };`;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/api/auth/status') {
+    res.setHeader('Content-Type', 'application/json');
+    return res.end(JSON.stringify({ configured: false, authenticated: false, username: null }));
+  }
   if (url.pathname === '/') {
     res.setHeader('Content-Type', 'text/html');
     return res.end('<textarea id="message"></textarea><button class="send-btn"></button><script type="module">import { watchdogFixture } from "/js/chat.js"; import sessions from "/js/sessions.js"; window.fixture = { watchdogFixture, sessions };</script>');

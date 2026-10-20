@@ -46,7 +46,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
                 max_tool_calls=0, baseline_blocked=False, max_rounds=10, extra_tools=False,
                 schema_details=None, repeated_failed_checks=False, batch_retry=False,
                 extra_shell_after_acceptance=False, extra_shell_exit=0, user_request=None,
-                verifier_calls=None, distinct_read_stall=False, native_context=None):
+                verifier_calls=None, distinct_read_stall=False, native_context=None, prior_request=None):
     _patch_common(monkeypatch)
     monkeypatch.setenv("ODYSSEUS_RUN_CHECKPOINTS_DB", str(tmp_path / "runs.db"))
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda _owner: set())
@@ -246,7 +246,7 @@ def _run_packet(monkeypatch, tmp_path, *, acceptance_exit=0, verifier_issues=Non
     monkeypatch.setattr(al, "stream_llm_with_fallback", stream)
     chunks = _collect(al.stream_agent_loop(
         "http://x/v1", "gpt-4o",
-        [{"role": "user", "content": "Preserve keyboard support"},
+        [{"role": "user", "content": prior_request or "Preserve keyboard support"},
          {"role": "assistant", "content": "obsolete implementation chatter"},
          {"role": "user", "content": user_request or request_text}],
         workspace=str(tmp_path), owner="alice", session_id="coding-packet-test",
@@ -1005,3 +1005,71 @@ def test_checked_default_keeps_non_coding_turns_lightweight(monkeypatch, tmp_pat
     status = [event for event in events if event.get("type") == "coding_workflow"]
     assert status == [{"type": "coding_workflow", "requested": True, "enabled": False}]
     assert not any(event.get("type") == "coding_work_packet" for event in events)
+
+
+@pytest.mark.parametrize('restriction', [
+    'Do not clone, write files, or run code.',
+    'Do not clone, write files or run code.',
+    'Do not edit main.py, write files, or run code.',
+])
+@pytest.mark.parametrize('with_coding_history', [False, True])
+def test_explicit_read_only_request_can_answer_after_read(monkeypatch, tmp_path, restriction, with_coding_history):
+    _patch_common(monkeypatch)
+    monkeypatch.setenv('ODYSSEUS_RUN_CHECKPOINTS_DB', str(tmp_path / 'runs.db'))
+    monkeypatch.setattr(al, 'blocked_tools_for_owner', lambda _owner: set())
+    monkeypatch.setattr(al, 'get_setting', lambda key, default=None: True if key == 'agent_milestone_workflow' else default)
+    monkeypatch.setattr(coding_tools, 'read_todos', lambda _ctx: [])
+    dispatched = []
+    requests = []
+
+    async def execute(block, **kwargs):
+        assert block.tool_type == 'read_file'
+        mark_dispatch()
+        dispatched.append(block.tool_type)
+        return 'read_file', {'exit_code': 0, 'output': 'VALUE = 1'}
+
+    async def provider(candidates, messages, **kwargs):
+        request = await kwargs['candidate_request_factory'](0, *candidates[0])
+        requests.append(request)
+        if len(requests) == 1:
+            assert 'read_file' in {tool['function']['name'] for tool in request['kwargs']['tools']}
+            yield 'data: ' + json.dumps({'type': 'tool_calls', 'calls': [
+                {'id': 'read-audit', 'name': 'read_file', 'arguments': json.dumps({'path': 'main.py'})},
+            ]}) + '\n\n'
+        else:
+            yield 'data: ' + json.dumps({'delta': 'The value is 1.'}) + '\n\n'
+        yield 'data: [DONE]\n\n'
+
+    monkeypatch.setattr(al, 'execute_tool_block', execute)
+    monkeypatch.setattr(al, 'stream_llm_with_fallback', provider)
+    messages = ([{'role': 'user', 'content': 'Build the app and add tests.'},
+                 {'role': 'assistant', 'content': 'I will inspect the source.'}]
+                if with_coding_history else [])
+    messages.append({'role': 'user', 'content': 'Read main.py and report VALUE. Only report the value. ' + restriction})
+    events = _types(_collect(al.stream_agent_loop(
+        'http://x/v1', 'gpt-4o', messages,
+        workspace=str(tmp_path), owner='alice', session_id='readonly-intent-audit',
+        relevant_tools={'read_file', 'todowrite', 'ask_user'}, approval_mode='auto', max_rounds=5,
+        client_runtime_context={'model_context_window': 32768},
+    )))
+    text = ' '.join(str(event.get('delta') or event.get('content') or '') for event in events)
+    assert dispatched == ['read_file']
+    assert 'The value is 1.' in text
+    assert 'Stopped: the current coding slice' not in text
+    assert len(requests) == 2
+    assert next(event for event in events if event.get('type') == 'coding_workflow')['enabled'] is False
+
+
+@pytest.mark.parametrize('latest', [
+    'Continue.',
+    'Do not edit unrelated files; only review and fix main.py.',
+])
+def test_coding_followup_still_requires_packet(monkeypatch, tmp_path, latest):
+    events, _executed, requested = _run_packet(
+        monkeypatch, tmp_path, checked_workflow=True, no_packet_start=True,
+        user_request=latest, prior_request='Fix the app and add tests. Preserve keyboard support.',
+        max_rounds=1,
+    )
+    assert next(event for event in events if event.get('type') == 'coding_workflow')['enabled'] is True
+    assert 'todowrite' in requested[0]
+    assert not ({'write_file', 'edit_file', 'apply_patch', 'bash', 'python'} & requested[0])

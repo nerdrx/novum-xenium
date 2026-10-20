@@ -20,6 +20,9 @@ _SHELL_URL = (_REPO / "static" / "js" / "startupShell.js").as_uri()
 _HAS_NODE = shutil.which("node") is not None
 
 _IMPORT_REWRITES = {
+    "import { getAuthState, getKnownAuthState } from './authState.js';": (
+        "import { getAuthState, getKnownAuthState } from './authState.mjs';"
+    ),
     "import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from './sessionHistory.js';": (
         "import { installSessionHistory, pendingChatRouteId, setPendingChatHistory, setSessionHistory } from './sessionHistory.mjs';"
     ),
@@ -35,6 +38,11 @@ _IMPORT_REWRITES = {
 }
 
 _STUBS = {
+    "authState.mjs": (
+        "const state = { verified: true, switched: false, storageAvailable: true, identity: 'fixture' };\n"
+        "export const getAuthState = async () => state;\n"
+        "export const getKnownAuthState = () => state;\n"
+    ),
     "storage.mjs": r"""
 const Storage = {
   get: (key, fallback = null) => localStorage.getItem(key) ?? fallback,

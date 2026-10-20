@@ -14,6 +14,7 @@ import { resetBrowserPreview } from './browserPreview.js';
 import { deleteComposerDraft, getComposerDraft, getPendingChatMetadata, saveComposerDraft, transferComposerDraft } from './composerDrafts.js';
 import { actionMenuRank, orderActionMenuItems, SELECT_MENU_ICON } from './actionMenuOrder.js';
 import { registerEscapeLayer, bindMenuDismiss } from './escMenuStack.js';
+import { getAuthState, getKnownAuthState } from './authState.js';
 
 const API_BASE = window.location.origin;
 
@@ -62,9 +63,11 @@ function _setShowAllSessionsForViewport(value) {
 }
 
 function _composerDraftOptions(sessionId) {
-  let currentAccountId = '';
-  try { currentAccountId = localStorage.getItem('odysseus-auth-user') || ''; } catch {}
-  const accountId = _pendingDraftAccounts.get(sessionId) ?? currentAccountId;
+  const authState = getKnownAuthState();
+  const currentAccountId = _currentComposerAccountId();
+  const mappedAccountId = _pendingDraftAccounts.get(sessionId);
+  const accountId = !authState?.verified || authState.switched || (mappedAccountId && mappedAccountId !== currentAccountId)
+    ? '' : currentAccountId;
   const toggle = document.getElementById('incognito-toggle');
   return { accountId, incognito: _isIncognitoSession(sessionId) || (!!sessionId && (_memoryOnlyPendingDraftIds.has(sessionId) || _incognitoPendingDraftIds.has(sessionId) || (sessionId === _activePendingDraftId && !!toggle?.checked))) };
 }
@@ -135,7 +138,8 @@ function _ensurePendingDraftId({ fresh = false, replaceRoute = false } = {}) {
 }
 
 function _currentComposerAccountId() {
-  try { return localStorage.getItem('odysseus-auth-user') || ''; } catch { return ''; }
+  const authState = getKnownAuthState();
+  return authState?.verified ? authState.identity || '' : '';
 }
 
 function _setPendingChat(value) {
@@ -2092,16 +2096,20 @@ function _animateSessionRowsRemoving(ids, selector) {
 }
 
 export async function loadSessions() {
-  _bindComposerDraftInput(document.getElementById('message'));
   try {
-    // Delete incognito sessions left over from a previous page load
-    await _cleanupIncognitoSessions();
+    const authState = await getAuthState();
+    const mayReadPrivateState = authState.verified && authState.storageAvailable !== false;
+    _bindComposerDraftInput(document.getElementById('message'));
+    // Do not touch browser-cached session IDs until the current account is known.
+    if (mayReadPrivateState) await _cleanupIncognitoSessions();
 
     // Use prefetched data from login page if available (first load only)
     let prefetched = null;
     try {
-      prefetched = sessionStorage.getItem('ody-prefetch-sessions');
-      if (prefetched) sessionStorage.removeItem('ody-prefetch-sessions');
+      if (mayReadPrivateState) {
+        prefetched = sessionStorage.getItem('ody-prefetch-sessions');
+        if (prefetched) sessionStorage.removeItem('ody-prefetch-sessions');
+      }
     } catch (_) {
       // Session storage can be unavailable in privacy-restricted contexts.
       prefetched = null;
@@ -2171,14 +2179,14 @@ export async function loadSessions() {
     if (hashId === 'tasks' || /^(document|note|image|email|event|task|skill|research|notification)-/.test(hashId) || /^open=notes&note=/.test(hashId)) {
       hashId = '';
     }
-    const invalidPendingRoute = !!pendingRouteId && !restorePendingChatDraft(pendingRouteId);
-    const _isFirstLoad = !sessionStorage.getItem('ody-session-active');
-    const _freshRootLoad = !_rootFreshChatApplied && !hashId && !currentSessionId && !_pendingChat;
+    const invalidPendingRoute = mayReadPrivateState && !!pendingRouteId && !restorePendingChatDraft(pendingRouteId);
+    const _isFirstLoad = mayReadPrivateState && !sessionStorage.getItem('ody-session-active');
+    const _freshRootLoad = mayReadPrivateState && !_rootFreshChatApplied && !hashId && !currentSessionId && !_pendingChat;
     if (_freshRootLoad) {
       _rootFreshChatApplied = true;
       Storage.remove('lastSessionId');
     }
-    let savedId = _freshRootLoad ? null : Storage.get('lastSessionId');
+    let savedId = !mayReadPrivateState || _freshRootLoad ? null : Storage.get('lastSessionId');
     // If the persisted lastSessionId points to a transient session (legacy
     // state from before the persistence-guard was added), drop it.
     if (savedId) {
@@ -2188,7 +2196,7 @@ export async function loadSessions() {
         savedId = null;
       }
     }
-    const hasPendingChat = !!_pendingChat || (!!pendingRouteId && !invalidPendingRoute) || invalidPendingRoute;
+    const hasPendingChat = !!_pendingChat || (!!pendingRouteId && (!mayReadPrivateState || !invalidPendingRoute)) || invalidPendingRoute;
     let targetId = null;
     if (hasPendingChat) {
       // A model was picked and the UI is showing a fresh New Chat, but the
@@ -2857,12 +2865,24 @@ export function getPendingDraftId() { return _activePendingDraftId; }
 
 export function restorePendingChatDraft(draftId) {
   if (!draftId) return false;
+  const authState = getKnownAuthState();
+  if (!authState?.verified) return false;
   const accountId = _currentComposerAccountId();
-  if (_pendingDraftAccounts.has(draftId) && _pendingDraftAccounts.get(draftId) !== accountId) {
+  const mappedAccountId = _pendingDraftAccounts.get(draftId);
+  if (mappedAccountId && mappedAccountId !== accountId) {
     _activePendingDraftId = '';
     _pendingChat = null;
     _showHomeFromHistory();
     return false;
+  }
+  // A fresh draft created while identity was pending belongs to this page,
+  // not to the previous account's persisted cache. Keep its current input.
+  if (mappedAccountId === '' && draftId === _activePendingDraftId && !currentSessionId) {
+    if (!authState.switched) {
+      _pendingDraftAccounts.set(draftId, accountId);
+      _saveComposerDraft(draftId);
+    }
+    return true;
   }
   const options = _composerDraftOptions(draftId);
   const draft = getComposerDraft(draftId, options);
@@ -3570,6 +3590,7 @@ function _initAllDropdowns() {
     getCurrentSessionId: () => currentSessionId,
     getSessions: () => sessions,
     getPendingChat: () => _pendingChat,
+    getPendingDraftId: () => _activePendingDraftId,
     setPendingChat: _setPendingChat,
     createDirectChat,
   });

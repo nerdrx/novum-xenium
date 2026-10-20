@@ -22,6 +22,10 @@ const html = `<!doctype html><meta charset="utf-8">
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/api/auth/status') {
+    res.setHeader('Content-Type', 'application/json');
+    return res.end(JSON.stringify({ configured: false, authenticated: false, username: null }));
+  }
   if (url.pathname === '/fixture') {
     res.setHeader('Content-Type', 'text/html');
     return res.end(html);

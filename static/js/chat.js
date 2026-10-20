@@ -6,6 +6,7 @@
 // ES6 module — IIFE removed
 
 import Storage from './storage.js';
+import { getAuthState } from './authState.js';
 import uiModule from './ui.js?v=20260916largetoolscroll1';
 import sessionModule from './sessions.js';
 import * as modelPickerModule from './modelPicker.js?v=20260909routeidentity1';
@@ -104,6 +105,7 @@ import { invalidateSettings } from './appConfig.js';
   let _stallBannerShown = false;
   const STALL_THRESHOLD_MS = 60000;
   let _sendInFlight = false;   // covers the window from click → streaming start
+  let _authPreflightSend = null;
   let _displayOverride = null; // Override visible user bubble text (hides injected prompts)
   let _hideUserBubble = false; // Skip user bubble entirely (e.g. continue after stop)
   let _contextHeaderSeq = 0;
@@ -2236,8 +2238,10 @@ import { invalidateSettings } from './appConfig.js';
     const _earlyMessageInput = uiModule.el('message');
     if (_earlyMessageInput) _earlyMessageInput.disabled = true;
     if (submitBtn) submitBtn.classList.add('send-pending');
+    let authPreflightSend = null;
     const _releaseSendFlag = () => {
       _sendInFlight = false;
+      if (authPreflightSend && _authPreflightSend === authPreflightSend) _authPreflightSend = null;
       _syncForegroundStreamGlobals();
       if (_earlyMessageInput) _earlyMessageInput.disabled = false;
       if (submitBtn) submitBtn.classList.remove('send-pending');
@@ -2287,6 +2291,29 @@ import { invalidateSettings } from './appConfig.js';
     // Allow empty text when a regen carries over the original message's
     // attachment ids — a photo-only message still has something to send.
     if (!msg.trim() && !approvalForSend && !fileHandlerModule.getPendingCount() && !(_pendingRegenAttachments && _pendingRegenAttachments.length)) { _releaseSendFlag(); return; }
+
+    // Verify account ownership before materializing sessions or uploading/posting.
+    authPreflightSend = {
+      sessionId: initSessionId,
+      pendingDraftId: initPendingDraftId,
+      cancelled: false,
+    };
+    _authPreflightSend = authPreflightSend;
+    let sendAuthState;
+    try { sendAuthState = await getAuthState(); }
+    finally { if (_authPreflightSend === authPreflightSend) _authPreflightSend = null; }
+    if (authPreflightSend.cancelled) { _releaseSendFlag(); return; }
+    if (!isInitialSendContextSelected()) { _releaseSendFlag(); return; }
+    if (!sendAuthState.verified) {
+      uiModule.showToast?.('Cannot verify your account right now. Your message and attachments are still here; try again shortly.');
+      _releaseSendFlag();
+      return;
+    }
+    if (sendAuthState.switched) {
+      uiModule.showToast?.('Your account changed. Copy any new draft text, then reload before sending.');
+      _releaseSendFlag();
+      return;
+    }
 
     // --- Slash commands: execute directly without AI (no session needed) ---
     if (!approvalForSend && isCommand(msg.trim())) {
@@ -6577,6 +6604,15 @@ import { invalidateSettings } from './appConfig.js';
     // channel able to name the old run. A send waiting on its model switch has
     // no server run yet, so explicit Stop cancels only that pending send.
     const _sendStateNow = _sid ? _sendStates.get(_sid) : null;
+    const _authSend = _authPreflightSend;
+    const _authSendOwnsCurrent = _authSend && (_authSend.sessionId
+      ? String(_sid || '') === _authSend.sessionId
+      : !sessionModule.getCurrentSessionId()
+        && String(sessionModule.getPendingDraftId?.() || '') === _authSend.pendingDraftId);
+    if (stopServer && _authSendOwnsCurrent) {
+      _authSend.cancelled = true;
+      return;
+    }
     if (stopServer && _sendStateNow?.waitingForModelSwitch) {
       _sendStateNow.cancelled = true;
       return;

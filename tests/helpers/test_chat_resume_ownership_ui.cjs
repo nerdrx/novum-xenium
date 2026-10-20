@@ -14,6 +14,10 @@ const html = `<!doctype html><meta charset="utf-8">
 window.modulesReady = Promise.all([chat, sessions, files]).then(() => { window.testModules = { chat, sessions, files }; }).catch(e => { window.moduleError = String(e.stack || e); });</script>`;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/api/auth/status') {
+    res.setHeader('Content-Type', 'application/json');
+    return res.end(JSON.stringify({ configured: false, authenticated: false, username: null }));
+  }
   if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); return res.end(html); }
   const file = path.resolve(staticRoot, `.${decodeURIComponent(url.pathname)}`);
   if (!file.startsWith(`${staticRoot}${path.sep}`) || !fs.existsSync(file)) { res.writeHead(404); return res.end('Not found'); }

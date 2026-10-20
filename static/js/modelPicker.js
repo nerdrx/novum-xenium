@@ -137,8 +137,13 @@ async function _ensureDefaultPendingChat() {
   if (_deps.getCurrentSessionId && _deps.getCurrentSessionId()) return;
   const pending = _deps.getPendingChat && _deps.getPendingChat();
   if (pending && pending.modelId) return;
+  const draftId = _deps.getPendingDraftId?.() || null;
   _defaultChatPickInFlight = true;
   const seq = ++_defaultPendingSeq;
+  const stillOwnsDraft = () => seq === _defaultPendingSeq
+    && !_deps.getCurrentSessionId?.()
+    && (_deps.getPendingDraftId?.() || null) === draftId
+    && (_deps.getPendingChat?.() || null) === (pending || null);
   try {
     let dc = null;
     try {
@@ -146,10 +151,19 @@ async function _ensureDefaultPendingChat() {
     } catch (_) {}
     if (!dc || !dc.endpoint_url || !dc.model) {
       try {
-        const res = await fetch(`${API_BASE}/api/default-chat`, { credentials: 'same-origin' });
-        if (res.ok) dc = await res.json();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        try {
+          const res = await fetch(`${API_BASE}/api/default-chat`, {
+            credentials: 'same-origin', signal: controller.signal,
+          });
+          if (res.ok) dc = await res.json();
+        } finally {
+          clearTimeout(timeout);
+        }
       } catch (_) {}
     }
+    if (!stillOwnsDraft()) return;
     if (dc && dc.endpoint_url && dc.model) {
       if (seq !== _defaultPendingSeq) return;
       const latest = _deps.getPendingChat && _deps.getPendingChat();
@@ -173,6 +187,7 @@ async function _ensureDefaultPendingChat() {
     }
     if (pending && pending.modelId) return;
     await _ensureModelCacheForFallback();
+    if (!stillOwnsDraft()) return;
     // No configured default, or the configured default is gone/offline:
     // preserve the convenience fallback and keep the picker usable.
     const fallback = _firstAvailableModel();

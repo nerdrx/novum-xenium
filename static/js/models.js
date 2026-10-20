@@ -207,14 +207,17 @@ export async function refreshModels(force = false, opts = {}) {
           ? `?refresh=true${opts.waitForRefresh ? '&wait_refresh=true' : ''}`
           : '?background=false');
         requestSeq = _seq;
+        const controller = new AbortController();
+        const deadline = setTimeout(() => controller.abort(), 30000);
         let trackedRequest;
-        trackedRequest = fetch(_url, { credentials: 'same-origin' })
+        trackedRequest = fetch(_url, { credentials: 'same-origin', signal: controller.signal })
           .then(async (res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             return { data, seq: _seq };
           })
           .finally(() => {
+            clearTimeout(deadline);
             if (_fetchInflight === trackedRequest) _fetchInflight = null;
           });
         _fetchInflight = trackedRequest;

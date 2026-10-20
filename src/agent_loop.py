@@ -11378,9 +11378,14 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
         refinement = bool(active_domains & domains) or (
             "files" in active_domains and domains <= {"documents", "ui"}
         )
-        inherit = bool(anchor) and not independent and (explicit or not domains or refinement)
+        from src.checked_coding_intent import _explicit_read_only_coding_followup
+        read_only_override = _explicit_read_only_coding_followup(text)
+        inherit = bool(anchor) and not independent and (explicit or not domains or refinement or read_only_override)
         if inherit:
-            query = anchor[:4000] + "\nLatest user instruction: " + text[:2000]
+            # Keep the task anchor for context and later continuations, but an
+            # explicit read-only turn must not inherit its old mutation verbs.
+            query = (text if read_only_override else
+                     anchor[:4000] + "\nLatest user instruction: " + text[:2000])
             result = {
                 "low_signal": False, "continuation": True,
                 "domains": active_domains | domains, "retrieval_query": query,
@@ -30391,20 +30396,78 @@ async def stream_agent_loop(
         # Never mistake an incomplete native call for a completed answer. Reject
         # the entire batch before execution so retries cannot duplicate siblings.
         if native_tool_calls and len(converted_calls) != len(native_tool_calls) and not _force_answer:
+            # Feedback may name only schemas sent on the request that produced
+            # this response. In particular, a rejected/disabled tool must not
+            # gain authority merely because it exists in the global catalog.
+            _offered_state = _candidate_request_states.get(candidate_index) or {}
+            _offered_schema_rows = _offered_state.get("tools") or ()
+            _offered_names = {
+                str(name) for name in _tool_names_sent if isinstance(name, str) and name
+            }
+            _offered_schemas = {
+                schema.get("function", {}).get("name"): schema.get("function", {})
+                for schema in (_offered_schema_rows or ())
+                if isinstance(schema, dict)
+                and isinstance(schema.get("function"), dict)
+                and schema.get("function", {}).get("name") in _offered_names
+            }
+            _converted_ids = {id(call) for call in converted_calls}
+            _rejected_offered_names = set()
+            _missing_argument_hints = []
+            for _call in native_tool_calls:
+                if not isinstance(_call, dict) or id(_call) in _converted_ids:
+                    continue
+                _raw_name = str(_call.get("name") or "").strip()
+                _canonical_name = _canonical_native_tool_name_for_offered(
+                    _raw_name, _offered_names
+                )
+                if (
+                    _canonical_name not in _offered_schemas
+                    or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}", _canonical_name)
+                ):
+                    continue
+                _rejected_offered_names.add(_canonical_name)
+                try:
+                    _arguments = _call.get("arguments", "{}")
+                    _arguments = json.loads(_arguments) if isinstance(_arguments, str) else _arguments
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(_arguments, dict):
+                    continue
+                _parameters = _offered_schemas[_canonical_name].get("parameters") or {}
+                _properties = _parameters.get("properties") or {}
+                _required = _parameters.get("required") or ()
+                _missing = [
+                    key for key in _required
+                    if isinstance(key, str)
+                    and key in _properties
+                    and key not in _arguments
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}", key)
+                ] if isinstance(_required, (list, tuple)) and isinstance(_properties, dict) else []
+                if _missing:
+                    _missing_argument_hints.append(
+                        f"For the offered `{_canonical_name}` tool, include required argument(s): "
+                        + ", ".join(f"`{key}`" for key in _missing[:8])
+                        + "."
+                    )
+            _feedback_hint = " ".join(dict.fromkeys(_missing_argument_hints[:3]))
             _invalid_tool_rounds += 1
             if _invalid_tool_rounds <= 2:
                 notice = "\n\nA tool request was incomplete or invalid. Retrying with smaller requests.\n\n"
+                _file_write_retry = bool(_rejected_offered_names & {"write_file", "edit_file"})
                 messages.append({
                     "role": "system",
                     "_protected": True,
                     "content": (
                         "Your last native tool-call batch contained invalid or incomplete arguments. "
                         "NONE of that batch was executed. Retry using valid tool names and complete JSON. "
-                        f"Emit exactly ONE tool call next, with at most {2000 // _invalid_tool_rounds} "
-                        "characters of new file content. Do not regenerate the whole file. "
-                        "For a new file, write only its first section with write_file. Then use "
-                        "edit_file to replace a unique existing ending with that ending plus the "
-                        "next section. Close the JSON completely before stopping. "
+                        "Emit exactly ONE tool call next. "
+                        + (f"Keep new file content under {2000 // _invalid_tool_rounds} characters. "
+                           "Do not regenerate the whole file. For a new file, write its first "
+                           "section with write_file, then use edit_file to append later sections. "
+                           if _file_write_retry else "")
+                        + _feedback_hint
+                        + " Close the JSON completely before stopping. "
                         "Do not repeat successful calls from earlier rounds."
                         + _native_preview_retry_schema(native_tool_calls)
                     ),

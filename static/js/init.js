@@ -4,6 +4,7 @@
 import Storage from './storage.js';
 import { applyInitialSectionCollapse } from './section-management.js';
 import { syncRailSide } from './sidebar-layout.js?v=20261017mobilework1';
+import { authStatePromise } from './authState.js';
 
 function markComposerUserEdited() {
   const msgInput = document.getElementById('message');
@@ -48,62 +49,37 @@ clearFreshComposerRestore();
 window.addEventListener('pageshow', clearFreshComposerRestore);
 document.addEventListener('DOMContentLoaded', markComposerUserEdited, { once: true });
 
-// SECURITY: defense-in-depth state wipe on user switch. If the authenticated
-// user is different from the one whose state is cached in this browser,
-// wipe localStorage + sessionStorage so the new account doesn't inherit
-// the previous user's last session id, last-used model, draft chat input,
-// or cached lists. The settings-tab Logout button already wipes on
-// explicit logout; this catches the cases where a different user signs
-// in without the previous one logging out cleanly.
-(async () => {
+// Shared bounded reconciliation completes before session/draft/send consumers.
+authStatePromise.then(({ switched, data }) => {
+  if (!data) return;
+  if (switched) clearFreshComposerRestore();
+  // Apply per-user privilege gates to the UI. The backend enforces these
+  // independently — this is purely cosmetic / "don't dangle controls the
+  // user can't actually use." Privileges come from /api/auth/status; admins
+  // always get the full set so this is a no-op for them.
   try {
-    const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
-    if (!res.ok) return;
-    const data = await res.json().catch(() => ({}));
-    const liveUser = (data && data.username) || '';
-    if (!liveUser) return;
-    const KEY = 'odysseus-auth-user';
-    const cachedUser = localStorage.getItem(KEY);
-    if (cachedUser && cachedUser !== liveUser) {
-      const _keepKeys = new Set(['odysseus-last-user', KEY]);
-      const toRemove = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && !_keepKeys.has(k)) toRemove.push(k);
-      }
-      toRemove.forEach(k => localStorage.removeItem(k));
-      sessionStorage.clear();
-      clearFreshComposerRestore();
+    const privs = data.privileges || {};
+    const hideOn = (selector, allowed) => {
+      if (allowed === undefined || allowed === true) return;
+      document.querySelectorAll(selector).forEach(el => {
+        el.style.display = 'none';
+      });
+    };
+    // Document editor — overflow menu button + the docs panel rail/tool button.
+    hideOn('#overflow-doc-btn, #tool-doc-btn', privs.can_use_documents);
+    // Research — sidebar tool + the in-input deep-research toggle.
+    hideOn('#tool-research-btn, #research-toggle-btn', privs.can_use_research);
+    // Memory & skills (rail/tool button only — UI/API entry).
+    hideOn('#tool-memory-btn, #rail-memory, #tool-skills-btn, #rail-skills', privs.can_manage_memory);
+    // Agent mode toggle — force chat mode by hiding the Agent toggle button.
+    if (privs.can_use_agent === false) {
+      const _agent = document.getElementById('mode-agent-btn');
+      const _chat = document.getElementById('mode-chat-btn');
+      if (_agent) _agent.style.display = 'none';
+      if (_chat) { _chat.classList.add('active'); _chat.click?.(); }
     }
-    localStorage.setItem(KEY, liveUser);
-    // Apply per-user privilege gates to the UI. The backend enforces these
-    // independently — this is purely cosmetic / "don't dangle controls the
-    // user can't actually use." Privileges come from /api/auth/status; admins
-    // always get the full set so this is a no-op for them.
-    try {
-      const privs = (data && data.privileges) || {};
-      const hideOn = (selector, allowed) => {
-        if (allowed === undefined || allowed === true) return;
-        document.querySelectorAll(selector).forEach(el => {
-          el.style.display = 'none';
-        });
-      };
-      // Document editor — overflow menu button + the docs panel rail/tool button.
-      hideOn('#overflow-doc-btn, #tool-doc-btn', privs.can_use_documents);
-      // Research — sidebar tool + the in-input deep-research toggle.
-      hideOn('#tool-research-btn, #research-toggle-btn', privs.can_use_research);
-      // Memory & skills (rail/tool button only — UI/API entry).
-      hideOn('#tool-memory-btn, #rail-memory, #tool-skills-btn, #rail-skills', privs.can_manage_memory);
-      // Agent mode toggle — force chat mode by hiding the Agent toggle button.
-      if (privs.can_use_agent === false) {
-        const _agent = document.getElementById('mode-agent-btn');
-        const _chat = document.getElementById('mode-chat-btn');
-        if (_agent) _agent.style.display = 'none';
-        if (_chat) { _chat.classList.add('active'); _chat.click?.(); }
-      }
-    } catch (_) { /* DOM not ready or unexpected shape — UI gates are non-fatal */ }
-  } catch (_) { /* anonymous / loopback mode — nothing to do */ }
-})();
+  } catch (_) { /* DOM not ready or unexpected shape — UI gates are non-fatal */ }
+}).catch(() => {});
 
 /* Sidebar section default-collapsed setup. The click-to-toggle handlers
    themselves live in js/section-management.js — attaching them in BOTH

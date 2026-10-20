@@ -109,6 +109,75 @@ def _run_loop(
     return _types(_collect(gen))
 
 
+def _native_call(name, arguments, call_id="synthetic"):
+    return {
+        "id": call_id,
+        "name": name,
+        "arguments": json.dumps(arguments),
+    }
+
+
+def test_invalid_native_batch_executes_no_valid_sibling(monkeypatch):
+    _patch_common(monkeypatch)
+    executed = []
+    request_messages = []
+
+    async def _fake_exec(block, *args, **kwargs):
+        executed.append(block.tool_type)
+        return block.tool_type, {"output": "ok", "exit_code": 0}
+
+    async def _fake_stream(_candidates, messages, **kwargs):
+        request_messages.append(messages)
+        if len(request_messages) == 1:
+            calls = [
+                _native_call("get_workspace", {}, "valid-sibling"),
+                _native_call("read_file", {}, "invalid-sibling"),
+            ]
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
+        else:
+            yield 'data: ' + json.dumps({"delta": "Stopped and recovered."}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "execute_tool_block", _fake_exec, raising=False)
+    monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+    _collect(al.stream_agent_loop(
+        "http://x/v1", "gpt-4o", [{"role": "user", "content": "Read a file"}],
+        max_rounds=3, relevant_tools={"get_workspace", "read_file"}, turn_contract=None,
+    ))
+
+    assert executed == []
+    assert any("NONE of that batch was executed" in m.get("content", "") for m in request_messages[1])
+
+
+def test_unoffered_tool_does_not_receive_schema_or_file_chunk_hint(monkeypatch):
+    _patch_common(monkeypatch)
+    request_messages = []
+
+    async def _fake_stream(_candidates, messages, **kwargs):
+        request_messages.append(messages)
+        if len(request_messages) == 1:
+            calls = [
+                _native_call("write_file", {}, "disabled"),
+                _native_call("unknown_tool", {}, "unknown"),
+            ]
+            yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
+        else:
+            yield 'data: ' + json.dumps({"delta": "Continuing safely."}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+    _collect(al.stream_agent_loop(
+        "http://x/v1", "gpt-4o", [{"role": "user", "content": "Continue"}],
+        max_rounds=3, relevant_tools={"read_file"}, disabled_tools={"write_file"}, turn_contract=None,
+    ))
+
+    recovery = [m for m in request_messages[1] if m.get("_protected") and "last native tool-call" in m.get("content", "")]
+    assert recovery
+    assert "`read_file`" not in recovery[-1]["content"]
+    assert "write_file" not in recovery[-1]["content"]
+    assert "characters of new file content" not in recovery[-1]["content"]
+
+
 def test_emits_rounds_exhausted_when_cap_hit_mid_task(monkeypatch):
     _patch_common(monkeypatch)
     # Use a system-owned interaction result so this remains a loop-control test:
@@ -158,22 +227,32 @@ def test_read_path_recovery_preserves_workspace_anchor_and_range(
     source.parent.mkdir(parents=True)
     source.write_text("VALUE = 1\n", encoding="utf-8")
     executed = []
+    request_messages = []
+    executions_at_retry = []
 
     @authoritative_executor
     async def _fake_exec(block, *args, **kwargs):
         executed.append(block)
         return "read_file", {"output": "VALUE = 1\n", "exit_code": 0}
 
-    async def _fake_stream(_candidates, _messages, **kwargs):
-        if not executed:
-            request_factory = kwargs.get("candidate_request_factory")
-            if request_factory is not None:
-                request = await request_factory(0, *_candidates[0])
-                offered = request.get("kwargs", {}).get("tools") or []
-                assert any(
-                    schema.get("function", {}).get("name") == "read_file"
-                    for schema in offered
-                ), offered
+    async def _fake_stream(_candidates, messages, **kwargs):
+        request_messages.append(messages)
+        request_factory = kwargs.get("candidate_request_factory")
+        request = await request_factory(0, *_candidates[0]) if request_factory else {}
+        offered = request.get("kwargs", {}).get("tools") or []
+        offered_names = {schema.get("function", {}).get("name") for schema in offered}
+        assert {"read_file", "get_workspace"} <= offered_names, offered_names
+        if len(request_messages) == 1:
+            event = {
+                "type": "tool_calls",
+                "calls": [
+                    {"id": "valid-sibling", "name": "get_workspace", "arguments": "{}"},
+                    {"id": "missing-path", "name": "read_file", "arguments": "{}"},
+                ],
+            }
+            yield f"data: {json.dumps(event)}\n\n"
+        elif len(request_messages) == 2:
+            executions_at_retry.append(len(executed))
             event = {
                 "type": "tool_calls",
                 "calls": [{
@@ -195,11 +274,18 @@ def test_read_path_recovery_preserves_workspace_anchor_and_range(
         "http://x/v1", "gpt-4o",
         [{"role": "user", "content": f"Read {request_path} and summarize the source."}],
         max_rounds=3,
-        relevant_tools={"read_file"},
+        relevant_tools={"read_file", "get_workspace"},
         workspace=str(tmp_path),
     )))
 
     assert len(executed) == 1
+    assert executions_at_retry == [0]
+    recovery = [
+        message for message in request_messages[1]
+        if message.get("_protected") and "last native tool-call batch" in message.get("content", "")
+    ]
+    assert recovery and "`read_file`" in recovery[-1]["content"]
+    assert "`path`" in recovery[-1]["content"]
     dispatched = json.loads(executed[0].content)
     assert dispatched == {"path": expected_path, "offset": 11, "limit": 7}
 

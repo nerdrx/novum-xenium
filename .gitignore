@@ -143,3 +143,6 @@ dist-desktop/
 
 # Android distribution output
 dist-android/
+
+# Generated user handbook (source lives in handbook/).
+/_site/

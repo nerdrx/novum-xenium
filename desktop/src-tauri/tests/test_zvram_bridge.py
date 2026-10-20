@@ -629,6 +629,25 @@ class BridgeTests(unittest.TestCase):
                 bridge._register_router(self.model_helper, params, self.checkout, self.base / 'cookie', 8000)
             self.assertEqual(request.call_count, 1)
 
+    def test_router_registration_rejects_malformed_model_inventory_before_endpoint_changes(self):
+        params = {'port': 8097, 'model_ids': ['tiny']}
+        invalid_responses = [
+            'not JSON',
+            {'data': {}},
+            {'data': ['not a model row']},
+        ]
+        for response in invalid_responses:
+            with self.subTest(response=response):
+                with (mock.patch.object(bridge, '_router_inventory', return_value=[{'id': 'tiny'}]),
+                      mock.patch.object(bridge, '_local_json', return_value=response),
+                      mock.patch.object(self.model_helper, 'session_cookie', return_value='session', create=True),
+                      mock.patch.object(self.model_helper, '_request', create=True) as request):
+                    with self.assertRaisesRegex(ValueError, 'invalid registration inventory'):
+                        bridge._register_router(
+                            self.model_helper, params, self.checkout, self.base / 'cookie', 8000,
+                        )
+                    request.assert_not_called()
+
     def test_port_check_allows_time_wait_but_rejects_a_listener(self):
         import socket
         with socket.socket() as server:

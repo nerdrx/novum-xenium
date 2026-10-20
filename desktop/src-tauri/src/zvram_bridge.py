@@ -873,6 +873,12 @@ def _register_router(model_helper, params, backend_checkout, cookie_path, backen
     models = _router_inventory(params)
     ids = [model['id'] for model in models]
     base = f'http://127.0.0.1:{params["port"]}/v1'
+    inventory = _local_json(base + '/models')
+    if not isinstance(inventory, dict) or not isinstance(inventory.get('data'), list):
+        raise ValueError('The model router returned an invalid registration inventory')
+    rows = inventory['data']
+    if any(not isinstance(row, dict) for row in rows):
+        raise ValueError('The model router returned an invalid registration inventory')
     cookie = model_helper.session_cookie(cookie_path)
     api = f'http://127.0.0.1:{backend_port}/api/model-endpoints'
     endpoints = model_helper._request(api, cookie)
@@ -891,7 +897,6 @@ def _register_router(model_helper, params, backend_checkout, cookie_path, backen
             'endpoint_kind': 'local', 'model_type': 'llm', 'skip_probe': 'false',
             'pinned_models': json.dumps(ids), 'shared': 'false'}, form=True)
     # Keep internal preset IDs out of the chat picker; requests use the public aliases.
-    rows = _local_json(base + '/models').get('data', [])
     hidden = [row['id'] for row in rows if isinstance(row, dict) and
               isinstance(row.get('id'), str) and row['id'] not in ids]
     model_helper._request(api + '/' + urllib.parse.quote(str(endpoint['id']), safe='') + '/models',

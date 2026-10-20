@@ -1437,6 +1437,16 @@ import { invalidateSettings } from './appConfig.js';
     }
   }
 
+  function _cancelResumeView(sessionId) {
+    const resume = sessionId && _resumeStreams.get(sessionId);
+    if (!resume) return false;
+    resume.cancelled = true;
+    try { resume.controller.abort(); } catch (_) {}
+    try { Promise.resolve(resume.reader?.cancel()).catch(() => {}); } catch (_) {}
+    if (resume.cleanup) resume.cleanup(true);
+    return true;
+  }
+
   // Sources box builder and toggleSources are now in chatRenderer.js
   var _buildSourcesBox = chatRenderer.buildSourcesBox;
 
@@ -2458,6 +2468,7 @@ import { invalidateSettings } from './appConfig.js';
       ? _pendingRecovery : null;
     const streamGeneration = (_streamGenerations.get(streamSessionId) || 0) + 1;
     _streamGenerations.set(streamSessionId, streamGeneration);
+    _cancelResumeView(streamSessionId);
     const _sendState = { generation: streamGeneration, abortCtrl: null, waitingForModelSwitch: false, cancelled: false };
     _sendStates.set(streamSessionId, _sendState);
     // The previous send's run identity dies with its ownership: a Stop after
@@ -6668,18 +6679,27 @@ import { invalidateSettings } from './appConfig.js';
   }
   async function _probeStaleLocalStream() {
     const active = _getForegroundStreamState();
-    if (!active || _staleStreamProbeInFlight) return;
+    if (!active || _sendInFlight || _staleStreamProbeInFlight) return;
     if (Date.now() - (active.lastActivity || _lastReaderActivity) < STALE_LOCAL_STREAM_MS) return;
     const sid = sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId();
     if (!sid) return;
     if (_backgroundStreams.has(sid) || (sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId() !== sid)) return;
+    const generation = _streamGenerations.get(sid);
+    const probeController = new AbortController();
+    const probeTimeout = setTimeout(() => probeController.abort(), 15000);
     _staleStreamProbeInFlight = true;
     try {
       const res = await fetch(`${API_BASE}/api/chat/stream_status/${encodeURIComponent(sid)}`, {
         credentials: 'same-origin',
         cache: 'no-store',
+        signal: probeController.signal,
       });
-      if (!_getForegroundStreamState() || _backgroundStreams.has(sid)) return;
+      // A delayed status response belongs only to the stale reader we probed.
+      // Navigation, a newer send, or fresh activity must keep its own busy state.
+      if (sessionModule.getCurrentSessionId() !== sid || _sendInFlight ||
+          _getForegroundStreamState() !== active || _backgroundStreams.has(sid) ||
+          _streamGenerations.get(sid) !== generation ||
+          Date.now() - (active.lastActivity || _lastReaderActivity) < STALE_LOCAL_STREAM_MS) return;
       if (res.status !== 404) return;
 
       console.warn('[stream-watchdog] Local stream was stale and server has no active stream. Unlocking composer.');
@@ -6702,6 +6722,7 @@ import { invalidateSettings } from './appConfig.js';
     } catch (err) {
       console.warn('[stream-watchdog] Stream status probe failed:', err);
     } finally {
+      clearTimeout(probeTimeout);
       _staleStreamProbeInFlight = false;
     }
   }
@@ -6776,13 +6797,7 @@ import { invalidateSettings } from './appConfig.js';
    * Called when user switches sessions mid-stream.
    */
   export function detachCurrentStream(sessionId) {
-    const resuming = sessionId && _resumeStreams.get(sessionId);
-    if (resuming) {
-      resuming.cancelled = true;
-      try { resuming.controller.abort(); } catch (_) {}
-      try { Promise.resolve(resuming.reader?.cancel()).catch(() => {}); } catch (_) {}
-      if (resuming.cleanup) resuming.cleanup(true);
-    }
+    const resuming = _cancelResumeView(sessionId);
     const active = sessionId ? _activeStreams.get(sessionId) : _getForegroundStreamState();
     if (!active || !active.abortCtrl) {
       // Not streaming — fall through to abort
@@ -6846,6 +6861,7 @@ import { invalidateSettings } from './appConfig.js';
     if (!sessionId) return false;
     if (hasActiveStream(sessionId)) return false;
 
+    const resumeGeneration = _streamGenerations.get(sessionId);
     const resumeState = {
       controller: new AbortController(), reader: null, holder: null, spinner: null,
       cancelled: false, cleaned: false, cleanup: null,
@@ -6853,14 +6869,17 @@ import { invalidateSettings } from './appConfig.js';
     _resumeStreams.set(sessionId, resumeState);
     const isCurrentResume = () => !resumeState.cancelled &&
       _resumeStreams.get(sessionId) === resumeState &&
+      _streamGenerations.get(sessionId) === resumeGeneration &&
       (!sessionModule.getCurrentSessionId || sessionModule.getCurrentSessionId() === sessionId);
     const releaseResumeState = (removeHolder = false) => {
       if (resumeState.cleaned) return;
       resumeState.cleaned = true;
       try { resumeState.spinner?.destroy(); } catch (_) {}
       if (removeHolder && resumeState.holder?.parentNode) resumeState.holder.remove();
-      _resumingStreams.delete(sessionId);
-      if (_resumeStreams.get(sessionId) === resumeState) _resumeStreams.delete(sessionId);
+      if (_resumeStreams.get(sessionId) === resumeState) {
+        _resumingStreams.delete(sessionId);
+        _resumeStreams.delete(sessionId);
+      }
     };
     resumeState.cleanup = releaseResumeState;
 
@@ -6941,8 +6960,11 @@ import { invalidateSettings } from './appConfig.js';
     const cleanup = () => {
       replayRendering.settle();
       try { spinner.destroy(); } catch (_) {}
-      _resumingStreams.delete(sessionId);
-      if (sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId() === sessionId) {
+      const ownsResume = isCurrentResume();
+      if (ownsResume) {
+        _resumingStreams.delete(sessionId);
+      }
+      if (ownsResume && sessionModule.getCurrentSessionId && sessionModule.getCurrentSessionId() === sessionId) {
         if (submitBtn) updateSubmitButton('idle', submitBtn);
         if (sessionModule && sessionModule.clearStreaming) sessionModule.clearStreaming(sessionId);
         const input = uiModule.el && uiModule.el('message');

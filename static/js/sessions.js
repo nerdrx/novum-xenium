@@ -39,7 +39,6 @@ const _showAllSessionsOverride = { mobile: null, desktop: null };
 let _expandedFolders = {};  // folderName -> true if "show more" clicked
 let _sortMode = Storage.get('odysseus-session-sort') || 'active'; // default to last active
 const DATE_SECTION_COLLAPSE_KEY = 'ody-session-date-section-collapsed';
-let _autoCreateInProgress = false; // guard against recursive auto-create
 const _INCOGNITO_SESSIONS_KEY = 'ody-incognito-sessions'; // sessionStorage key for incognito session IDs
 const _isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const _mod = _isMac ? '⌘' : 'Ctrl';
@@ -435,9 +434,15 @@ async function _cleanupIncognitoSessions() {
   if (toDelete.length === 0) return;
   const keep = ids.filter(sid => sid === currentSessionId);
   sessionStorage.setItem(_INCOGNITO_SESSIONS_KEY, JSON.stringify(keep));
-  await Promise.all(toDelete.map(sid =>
-    _deleteSessionRequest(sid).catch(() => {})
-  ));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    await Promise.all(toDelete.map(sid =>
+      _deleteSessionRequest(sid, { signal: controller.signal }).catch(() => {})
+    ));
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // Research indicator tracking
@@ -2093,28 +2098,51 @@ export async function loadSessions() {
     await _cleanupIncognitoSessions();
 
     // Use prefetched data from login page if available (first load only)
-    const prefetched = sessionStorage.getItem('ody-prefetch-sessions');
+    let prefetched = null;
+    try {
+      prefetched = sessionStorage.getItem('ody-prefetch-sessions');
+      if (prefetched) sessionStorage.removeItem('ody-prefetch-sessions');
+    } catch (_) {
+      // Session storage can be unavailable in privacy-restricted contexts.
+      prefetched = null;
+    }
     let fetched;
     if (prefetched) {
-      sessionStorage.removeItem('ody-prefetch-sessions');
-      fetched = JSON.parse(prefetched);
-    } else {
+      try {
+        const cached = JSON.parse(prefetched);
+        if (Array.isArray(cached)) fetched = cached;
+      } catch (_) {
+        // A stale or partial login-page cache must not block the API fallback.
+      }
+    }
+    if (!Array.isArray(fetched)) {
       let url = `${API_BASE}/api/sessions`;
       if (currentSessionId && _isIncognitoSession(currentSessionId)) {
         url += `?active_incognito_id=${encodeURIComponent(currentSessionId)}`;
       }
-      const res = await fetch(url);
-      if (!res.ok) {
-        let detail = '';
-        try {
-          const payload = await res.json();
-          detail = payload?.detail || payload?.error || '';
-        } catch (_) {}
-        const error = new Error(detail || `Session request failed (HTTP ${res.status})`);
-        error.status = res.status;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) {
+          let detail = '';
+          try {
+            const payload = await res.json();
+            detail = payload?.detail || payload?.error || '';
+          } catch (error) {
+            if (controller.signal.aborted) throw error;
+          }
+          const error = new Error(detail || `Session request failed (HTTP ${res.status})`);
+          error.status = res.status;
+          throw error;
+        }
+        fetched = await res.json();
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error('Session request timed out');
         throw error;
+      } finally {
+        clearTimeout(timeout);
       }
-      fetched = await res.json();
     }
     if (!Array.isArray(fetched)) {
       throw new Error('Session request returned an invalid response');
@@ -2233,17 +2261,6 @@ export async function loadSessions() {
         window.chatModule.showWelcomeScreen();
       }
       updateModelPicker();
-      // Only auto-create if there are truly zero sessions (not just unselected)
-      if (activeSessions.length === 0 && !_autoCreateInProgress) {
-        _autoCreateInProgress = true;
-        try {
-          const dc = await _getPreferredDefaultChat();
-          if (dc && dc.endpoint_url && dc.model) {
-              await createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id, { source: 'default' });
-          }
-        } catch (_) { /* no default model — that's fine, user can /setup */ }
-        _autoCreateInProgress = false;
-      }
     }
     return true;
   } catch (error) {
@@ -2624,31 +2641,6 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
 // Pending session — stored locally until the first message is sent
 let _pendingChat = null; // { url, modelId, endpointId }
 let _pendingMaterializePromise = null;
-
-async function _getPreferredDefaultChat() {
-  let dc = null;
-  try {
-    dc = window.__odysseusDefaultChat || null;
-  } catch (_) {}
-  if (!dc || !dc.endpoint_url || !dc.model) {
-    try {
-      dc = JSON.parse(localStorage.getItem('odysseus-default-chat-cache') || 'null');
-    } catch (_) {}
-  }
-  if (dc && dc.endpoint_url && dc.model) return dc;
-  try {
-    const dcRes = await fetch(`${API_BASE}/api/default-chat`);
-    dc = await dcRes.json();
-    if (dc && dc.endpoint_url && dc.model) {
-      try {
-        window.__odysseusDefaultChat = dc;
-        localStorage.setItem('odysseus-default-chat-cache', JSON.stringify(dc));
-      } catch (_) {}
-      return dc;
-    }
-  } catch (_) {}
-  return null;
-}
 
 export function createDirectChat(url, modelId, endpointId, opts = {}) {
   const incomingSource = opts.source || 'manual';

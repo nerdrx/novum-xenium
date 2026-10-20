@@ -56,6 +56,7 @@ const ui = {
   showError: (message) => globalThis.__sessionErrors.push(String(message)),
   showToast: () => {},
   styledConfirm: async () => true,
+  scrollHistoryInstant: () => {},
 };
 export default ui;
 """,
@@ -190,17 +191,20 @@ function makeWorld() {
     value: { platform: 'Linux' },
     configurable: true,
   });
-  globalThis.history = { replaceState() { historyWrites += 1; } };
+  globalThis.history = { replaceState() { historyWrites += 1; }, pushState() { historyWrites += 1; } };
+  globalThis.CustomEvent = class { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } };
   globalThis.window = {
     document,
+    history: globalThis.history,
     innerWidth: 1024,
     innerHeight: 768,
     location: { origin: 'http://odysseus.test', hash: '', pathname: '/', href: '/' },
     addEventListener() {},
     removeEventListener() {},
+    dispatchEvent() {},
     chatModule: {
       detachCurrentStream() {},
-      showWelcomeScreen() {},
+      showWelcomeScreen() { globalThis.__welcomeScreenCount += 1; },
     },
     __odysseusDefaultChat: {
       endpoint_url: 'http://model.test',
@@ -215,9 +219,10 @@ function makeWorld() {
     return id;
   };
   globalThis.cancelAnimationFrame = (id) => cancelledFrames.add(id);
-  globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
-  globalThis.clearTimeout = () => {};
+  globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms, cancelled: false }); return timers.length; };
+  globalThis.clearTimeout = (id) => { if (timers[id - 1]) timers[id - 1].cancelled = true; };
   globalThis.__sessionErrors = [];
+  globalThis.__welcomeScreenCount = 0;
 
   return {
     add(id, options = {}) {
@@ -239,8 +244,16 @@ function makeWorld() {
     },
     runTimers() {
       const due = timers.splice(0, timers.length);
-      for (const timer of due) timer.fn();
+      for (const timer of due) if (!timer.cancelled) timer.fn();
     },
+    runTimer(ms) {
+      const timer = [...timers].reverse().find(item => item.ms === ms && !item.cancelled);
+      if (!timer) return false;
+      timer.cancelled = true;
+      timer.fn();
+      return true;
+    },
+    activeTimerCount(ms) { return timers.filter(timer => timer.ms === ms && !timer.cancelled).length; },
     byId,
     historyWrites: () => historyWrites,
     resetHistoryWrites: () => { historyWrites = 0; },
@@ -253,10 +266,15 @@ world.add('sessions-section');
 const message = world.add('message', { value: 'draft before seed' });
 
 const responses = [
-  {
+  ...Array.from({ length: 5 }, () => ({
     ok: true,
     status: 200,
     json: async () => [{ id: 'existing', name: 'Existing', folder: 'Assistant', archived: false }],
+  })),
+  {
+    ok: true,
+    status: 200,
+    json: async () => ({ invalid: true }),
   },
   {
     ok: false,
@@ -265,7 +283,10 @@ const responses = [
   },
 ];
 let fetchCount = 0;
-globalThis.fetch = async () => {
+globalThis.fetch = async (url) => {
+  if (!String(url).includes('/api/sessions')) {
+    return { ok: true, status: 200, json: async () => [] };
+  }
   fetchCount += 1;
   const response = responses.shift();
   if (!response) throw new Error('unexpected fetch');
@@ -275,7 +296,40 @@ globalThis.fetch = async () => {
 const sessions = await import(SESSIONS_URL + '?bootstrap');
 const shell = await import(SHELL_URL + '?bootstrap');
 
+sessionStorage.setItem('ody-prefetch-sessions', '{');
+const malformedPrefetch = await sessions.loadSessions();
+const malformedPrefetchFetches = fetchCount;
+sessionStorage.setItem('ody-prefetch-sessions', JSON.stringify({ invalid: true }));
+const invalidShapePrefetch = await sessions.loadSessions();
+const invalidShapePrefetchFetches = fetchCount;
+const originalGetItem = sessionStorage.getItem.bind(sessionStorage);
+sessionStorage.getItem = (key) => {
+  if (key === 'ody-prefetch-sessions') throw Object.assign(new Error('denied'), { name: 'SecurityError' });
+  return originalGetItem(key);
+};
+const storageGetDenied = await sessions.loadSessions();
+const storageGetDeniedFetches = fetchCount;
+sessionStorage.getItem = originalGetItem;
+sessionStorage.setItem('ody-prefetch-sessions', JSON.stringify([{ id: 'stale-cache', archived: false }]));
+const originalRemoveItem = sessionStorage.removeItem.bind(sessionStorage);
+sessionStorage.removeItem = (key) => {
+  if (key === 'ody-prefetch-sessions') throw Object.assign(new Error('denied'), { name: 'SecurityError' });
+  return originalRemoveItem(key);
+};
+const storageRemoveDenied = await sessions.loadSessions();
+const storageRemoveDeniedFetches = fetchCount;
+sessionStorage.removeItem = originalRemoveItem;
+sessionStorage.setItem('ody-prefetch-sessions', JSON.stringify([
+  { id: 'cached', name: 'Cached', folder: 'Assistant', archived: false },
+]));
+const validPrefetchFetchesBefore = fetchCount;
+const validPrefetchTimeoutsBefore = world.activeTimerCount(15000);
+const validPrefetch = await sessions.loadSessions();
+const validPrefetchFetchesAfter = fetchCount;
+const validPrefetchTimeoutsAfter = world.activeTimerCount(15000);
+sessionStorage.removeItem('ody-prefetch-sessions');
 const seeded = await sessions.loadSessions();
+sessionStorage.removeItem('ody-prefetch-sessions');
 world.paint(1);
 localStorage.setItem('lastSessionId', 'existing');
 message.value = 'draft must survive';
@@ -286,6 +340,7 @@ const row = world.add('session-list-loading', { statusText: 'Loading chats…' }
 let opened = 0;
 shell.deferRouteOpener('/email', () => { opened += 1; });
 
+const invalidServerResponse = await sessions.loadSessions();
 const hydrated = await shell.settleSessionHydration(() => sessions.loadSessions());
 const beforePaint = row.status.textContent;
 world.paint(2);
@@ -300,9 +355,150 @@ globalThis.fetch = async () => {
   return response;
 };
 const authResult = await sessions.loadSessions();
+const bootstrapErrors = __sessionErrors.slice();
+const authAddedError = __sessionErrors.length !== errorsBeforeAuth;
+const bootstrapLastSessionId = localStorage.getItem('lastSessionId');
+const bootstrapHistoryWrites = world.historyWrites();
+
+const timedOutPhases = [];
+for (const phase of ['fetch', 'body', 'error-body']) {
+  let requestSignal;
+  globalThis.fetch = (_url, options = {}) => {
+    requestSignal = options.signal;
+    const aborted = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+    if (phase === 'fetch') {
+      return new Promise((_resolve, reject) => requestSignal.addEventListener('abort', () => reject(aborted()), { once: true }));
+    }
+    return Promise.resolve({
+      ok: phase !== 'error-body',
+      status: 503,
+      json: () => new Promise((_resolve, reject) => requestSignal.addEventListener('abort', () => reject(aborted()), { once: true })),
+    });
+  };
+  const pending = sessions.loadSessions();
+  await new Promise(resolve => setImmediate(resolve));
+  const hasSignal = requestSignal instanceof AbortSignal;
+  const timerRan = world.runTimer(15000);
+  const result = await pending;
+  timedOutPhases.push({ phase, hasSignal, timerRan, aborted: requestSignal?.aborted, result });
+}
+globalThis.fetch = async () => ({
+  ok: true,
+  status: 200,
+  json: async () => [{ id: 'existing', name: 'Existing', folder: 'Assistant', archived: false }],
+});
+const manualRetry = await sessions.loadSessions();
+const startupDraftPreserved = message.value;
+
+const currentIncognito = 'current-incognito';
+sessions.setCurrentSessionId(currentIncognito);
+sessionStorage.setItem('ody-incognito-sessions', JSON.stringify(['stale-incognito', currentIncognito]));
+const cleanupDeleteCalls = [];
+let cleanupDeleteSignal;
+globalThis.fetch = async (url, options = {}) => {
+  if (options.method === 'DELETE') {
+    cleanupDeleteCalls.push(String(url));
+    cleanupDeleteSignal = options.signal;
+    return new Promise((_resolve, reject) => cleanupDeleteSignal.addEventListener(
+      'abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true },
+    ));
+  }
+  if (String(url).includes('/api/sessions')) {
+    return { ok: true, status: 200, json: async () => [{ id: 'existing', name: 'Existing', folder: 'Assistant', archived: false }] };
+  }
+  return { ok: true, status: 200, json: async () => [] };
+};
+const cleanupPending = sessions.loadSessions();
+await new Promise(resolve => setImmediate(resolve));
+const cleanupTimeoutRan = world.runTimer(15000);
+const cleanupTimedOutLoad = await cleanupPending;
+const cleanupAborted = cleanupDeleteSignal?.aborted === true;
+const cleanupKeptCurrent = JSON.parse(sessionStorage.getItem('ody-incognito-sessions'));
+await sessions.loadSessions();
+const cleanupWasNotReplayed = cleanupDeleteCalls.length === 1;
+
+sessionStorage.setItem('ody-incognito-sessions', JSON.stringify(['stale-success', currentIncognito]));
+globalThis.fetch = async (url, options = {}) => {
+  if (options.method === 'DELETE') {
+    cleanupDeleteCalls.push(String(url));
+    return { ok: true, status: 204, json: async () => null };
+  }
+  if (String(url).includes('/api/sessions')) {
+    return { ok: true, status: 200, json: async () => [{ id: 'existing', name: 'Existing', folder: 'Assistant', archived: false }] };
+  }
+  return { ok: true, status: 200, json: async () => [] };
+};
+const cleanupTimersBeforeSuccess = world.activeTimerCount(15000);
+const cleanupSucceeded = await sessions.loadSessions();
+const cleanupTimersAfterSuccess = world.activeTimerCount(15000);
+const successfulCleanupKeptCurrent = JSON.parse(sessionStorage.getItem('ody-incognito-sessions'));
+
+sessionStorage.setItem('ody-incognito-sessions', '[]');
+let defaultChatLookups = 0;
+globalThis.fetch = async (url) => {
+  if (String(url).includes('/api/default-chat')) {
+    defaultChatLookups += 1;
+    return { ok: true, status: 200, json: async () => ({}) };
+  }
+  if (String(url).includes('/api/sessions')) {
+    return { ok: true, status: 200, json: async () => [] };
+  }
+  return { ok: true, status: 200, json: async () => [] };
+};
+window.__odysseusDefaultChat = { endpoint_url: 'http://model.test', model: 'test/model', endpoint_id: 'endpoint-1' };
+localStorage.setItem('odysseus-default-chat-cache', JSON.stringify(window.__odysseusDefaultChat));
+const emptyWithBootstrap = await import(SESSIONS_URL + '?empty-bootstrap');
+const welcomeBeforeBootstrapEmpty = __welcomeScreenCount;
+const emptyWithBootstrapResult = await emptyWithBootstrap.loadSessions();
+const emptyWithBootstrapState = {
+  result: emptyWithBootstrapResult,
+  pending: emptyWithBootstrap.hasPendingChat(),
+  disabled: message.disabled,
+  welcomeShown: __welcomeScreenCount > welcomeBeforeBootstrapEmpty,
+  defaultLookups: defaultChatLookups,
+};
+
+window.__odysseusDefaultChat = null;
+localStorage.removeItem('odysseus-default-chat-cache');
+const emptyWithoutDefault = await import(SESSIONS_URL + '?empty-no-default');
+const welcomeBeforeNoDefaultEmpty = __welcomeScreenCount;
+const emptyWithoutDefaultResult = await emptyWithoutDefault.loadSessions();
+const emptyWithoutDefaultState = {
+  result: emptyWithoutDefaultResult,
+  pending: emptyWithoutDefault.hasPendingChat(),
+  disabled: message.disabled,
+  welcomeShown: __welcomeScreenCount > welcomeBeforeNoDefaultEmpty,
+  defaultLookups: defaultChatLookups,
+};
+
+const pendingManual = await import(SESSIONS_URL + '?empty-manual-pending');
+message.value = '';
+pendingManual.createDirectChat('http://manual.test', 'manual/model', 'manual-endpoint', { source: 'manual' });
+message.value = 'manual pending draft';
+const pendingManualResult = await pendingManual.loadSessions();
+const pendingManualState = {
+  result: pendingManualResult,
+  pending: pendingManual.hasPendingChat(),
+  draft: message.value,
+  defaultLookups: defaultChatLookups,
+};
 
 console.log(JSON.stringify({
+  malformedPrefetch,
+  malformedPrefetchFetches,
+  invalidShapePrefetch,
+  invalidShapePrefetchFetches,
+  storageGetDenied,
+  storageGetDeniedFetches,
+  storageRemoveDenied,
+  storageRemoveDeniedFetches,
+  validPrefetch,
+  validPrefetchFetchesBefore,
+  validPrefetchFetchesAfter,
+  validPrefetchTimeoutsBefore,
+  validPrefetchTimeoutsAfter,
   seeded,
+  invalidServerResponse,
   hydrated,
   beforePaint,
   afterPaint: row.status.textContent,
@@ -313,13 +509,29 @@ console.log(JSON.stringify({
   fetchCount,
   sessionIds: sessions.getSessions().map(session => session.id),
   pendingChat: sessions.hasPendingChat(),
-  draft: message.value,
-  lastSessionId: localStorage.getItem('lastSessionId'),
-  historyWrites: world.historyWrites(),
-  errors: __sessionErrors,
+  draft: startupDraftPreserved,
+  lastSessionId: bootstrapLastSessionId,
+  historyWrites: bootstrapHistoryWrites,
+  errors: bootstrapErrors,
   authResult,
   authRedirect: window.location.href,
-  authAddedError: __sessionErrors.length !== errorsBeforeAuth,
+  authAddedError,
+  timedOutPhases,
+  manualRetry,
+  timeoutErrors: __sessionErrors.slice(bootstrapErrors.length),
+  draftAfterTimeout: startupDraftPreserved,
+  cleanupTimeoutRan,
+  cleanupTimedOutLoad,
+  cleanupAborted,
+  cleanupKeptCurrent,
+  cleanupWasNotReplayed,
+  cleanupSucceeded,
+  cleanupTimersBeforeSuccess,
+  cleanupTimersAfterSuccess,
+  successfulCleanupKeptCurrent,
+  emptyWithBootstrapState,
+  emptyWithoutDefaultState,
+  pendingManualState,
 }));
 """
 
@@ -401,8 +613,23 @@ def results(tmp_path_factory):
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def test_fulfilled_503_is_not_applied_as_an_empty_session_list(results):
+def test_prefetch_cache_misses_fall_back_and_valid_cache_is_reused(results):
+    assert results["malformedPrefetch"] is True
+    assert results["malformedPrefetchFetches"] == 1
+    assert results["invalidShapePrefetch"] is True
+    assert results["invalidShapePrefetchFetches"] == 2
+    assert results["storageGetDenied"] is True
+    assert results["storageGetDeniedFetches"] == 3
+    assert results["storageRemoveDenied"] is True
+    assert results["storageRemoveDeniedFetches"] == 4
+    assert results["validPrefetch"] is True
+    assert results["validPrefetchFetchesBefore"] == results["validPrefetchFetchesAfter"] == 4
+    assert results["validPrefetchTimeoutsBefore"] == results["validPrefetchTimeoutsAfter"]
     assert results["seeded"] is True
+
+
+def test_fulfilled_503_and_invalid_server_payload_remain_failures(results):
+    assert results["invalidServerResponse"] is False
     assert results["hydrated"] is False
     assert results["sessionIds"] == ["existing"]
     assert results["pendingChat"] is False, "failure created a default direct chat"
@@ -419,6 +646,7 @@ def test_fulfilled_503_keeps_failure_state_and_route_deferred(results):
     assert results["opened"] == 0
     assert results["staleRouteRan"] is False
     assert results["errors"] == [
+        "Failed to load sessions: Session request returned an invalid response",
         "Failed to load sessions: temporarily unavailable",
     ]
 
@@ -428,3 +656,50 @@ def test_401_keeps_global_auth_redirect_contract(results):
     assert results["authRedirect"] == "/login"
     assert results["authAddedError"] is False
     assert results["sessionIds"] == ["existing"]
+
+
+def test_session_fetch_timeout_covers_response_body_and_allows_retry(results):
+    assert results["timedOutPhases"] == [
+        {"phase": phase, "hasSignal": True, "timerRan": True, "aborted": True, "result": False}
+        for phase in ("fetch", "body", "error-body")
+    ]
+    assert results["manualRetry"] is True
+    assert results["timeoutErrors"] == [
+        "Failed to load sessions: Session request timed out",
+    ] * 3
+    assert results["draftAfterTimeout"] == "draft must survive"
+    assert results["sessionIds"] == ["existing"]
+
+
+def test_stale_incognito_cleanup_is_bounded_and_keeps_current_session(results):
+    assert results["cleanupTimeoutRan"] is True
+    assert results["cleanupTimedOutLoad"] is True
+    assert results["cleanupAborted"] is True
+    assert results["cleanupKeptCurrent"] == ["current-incognito"]
+    assert results["cleanupWasNotReplayed"] is True
+    assert results["cleanupSucceeded"] is True
+    assert results["cleanupTimersBeforeSuccess"] == results["cleanupTimersAfterSuccess"] == 0
+    assert results["successfulCleanupKeptCurrent"] == ["current-incognito"]
+
+
+def test_empty_startup_stays_fresh_and_preserves_manual_pending_chat(results):
+    assert results["emptyWithBootstrapState"] == {
+        "result": True,
+        "pending": False,
+        "disabled": False,
+        "welcomeShown": True,
+        "defaultLookups": 0,
+    }
+    assert results["emptyWithoutDefaultState"] == {
+        "result": True,
+        "pending": False,
+        "disabled": False,
+        "welcomeShown": True,
+        "defaultLookups": 0,
+    }
+    assert results["pendingManualState"] == {
+        "result": True,
+        "pending": True,
+        "draft": "manual pending draft",
+        "defaultLookups": 0,
+    }

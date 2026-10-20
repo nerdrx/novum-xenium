@@ -30,6 +30,7 @@ secrets.env~
 /config/ollama/
 /config/searxng/settings.local.yml
 .git/
+.github/
 .claude/
 .playwright-mcp/
 .pytest_cache/
@@ -38,6 +39,8 @@ secrets.env~
 dev-docs/
 docs/
 website/
+handbook/
+_site/
 assets/branding/
 *.md
 !README.md

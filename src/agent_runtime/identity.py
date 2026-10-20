@@ -148,9 +148,14 @@ def is_test_command(command: str) -> bool:
         while args and args[0] in {'-I', '-S', '-s', '-E', '-B', '-u'}:
             args.pop(0)
         return len(args) >= 2 and args[:2] in (['-m', 'pytest'], ['-m', 'unittest'])
+    if binary == 'node':
+        return len(words) > 1 and words[1] == '--test'
     if binary in {'npm', 'pnpm', 'yarn', 'make', 'cargo', 'go'}:
         args = words[1:]
-        return bool(args and (args[0] == 'test' or binary == 'npm' and args[:2] == ('run', 'test')))
+        return bool(args and (
+            args[0] == 'test'
+            or binary in {'npm', 'pnpm', 'yarn'} and args[:2] == ('run', 'test')
+        ))
     return bool(re.match(r'^/(?:tests?|verifier)/[^/]+', words[0]))
 
 

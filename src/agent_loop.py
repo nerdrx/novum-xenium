@@ -10064,6 +10064,20 @@ def _tui_test_scope_needs_explicit_runner(text: str) -> bool:
     ))
 
 
+def _tui_test_action_requested(text: str) -> bool:
+    """Recognize affirmative test actions, ignoring an explicitly negated one."""
+    value = str(text or "")
+    positive = r"\btest\s+now\b|\b(?:run|execute|rerun|re-run)\b.{0,40}\b(?:tests?|test suite|pytest)\b"
+    negated = re.compile(
+        r"\b(?:do\s+not|don't|dont|never)\b.{0,24}(?:" + positive + r")",
+        re.IGNORECASE,
+    )
+    return bool(
+        re.search(positive, value, re.IGNORECASE)
+        and not any(negated.search(clause) for clause in re.split(r"[;!?\n]+|\.(?=\s|$)", value))
+    )
+
+
 def _tui_local_fallback_shell_command(
     text: str,
     *,
@@ -10084,11 +10098,7 @@ def _tui_local_fallback_shell_command(
         re.IGNORECASE,
     ):
         return "pwd; whoami; uname -srm"
-    if re.search(
-        r"\btest\s+now\b|\b(?:run|execute|rerun|re-run)\b.{0,40}\b(?:tests?|test suite|pytest)\b",
-        value,
-        re.IGNORECASE,
-    ):
+    if _tui_test_action_requested(value):
         explicit_pytest, pytest_command = _tui_requested_pytest_command(value)
         if explicit_pytest:
             return pytest_command
@@ -26708,11 +26718,7 @@ async def stream_agent_loop(
     _qwen_terminal_summary_completed = False
     _tui_test_request = bool(
         _tui_local_execution_turn
-        and re.search(
-            r"\btest\s+now\b|\b(?:run|execute|rerun|re-run)\b.{0,40}\b(?:tests?|test suite|pytest)\b",
-            _last_user,
-            re.IGNORECASE,
-        )
+        and _tui_test_action_requested(_last_user)
     )
     _tui_test_completed = False
     _tui_test_summary_text = ""
@@ -32118,17 +32124,17 @@ async def stream_agent_loop(
             and not _force_answer
             and exact_approval is None
         ):
-            _fallback_command = _tui_local_fallback_shell_command(_last_user)
-            if _fallback_command:
+            _fallback_content = _tui_local_test_runner_host_shell_content(_last_user)
+            if _fallback_content:
                 logger.warning(
                     "[agent-intent] enforced test action after non-tool round: %s",
-                    _fallback_command,
+                    _tui_host_command_text(_fallback_content),
                 )
                 round_response = ""
                 tool_blocks = [
                     ToolBlock(
                         "host_shell",
-                        json.dumps({"command": _fallback_command}),
+                        _fallback_content,
                     )
                 ]
                 converted_calls = []
@@ -35982,34 +35988,23 @@ async def stream_agent_loop(
 
             if block.tool_type == "host_shell" and _tui_test_request:
                 command_text = _tui_host_command_text(full_command)
-                if not re.search(
-                    r"(?:python(?:3(?:\.\d+)?)?\s+-m\s+pytest|\bpytest\b|npm\s+(?:run\s+)?test\b|"
-                    r"make\s+test\b|\bgo\s+test\b|cargo\s+test\b|No supported test runner)",
-                    command_text,
-                    re.IGNORECASE,
-                ):
-                    test_command = _tui_local_fallback_shell_command(_last_user)
-                    if test_command:
-                        logger.info(
-                            "Normalized placeholder test host command to test-runner probe"
-                        )
-                        test_content = _tui_local_test_runner_host_shell_content(_last_user)
-                        block = type(block)(block.tool_type, test_content)
-                        full_command = test_content
-                        cmd_display = test_content
-                else:
-                    normalized_pytest = _tui_normalize_pytest_command(command_text)
-                    if normalized_pytest and normalized_pytest != command_text:
-                        test_content = json.dumps({
-                            "command": normalized_pytest,
-                            "timeout": 120,
-                        })
-                        logger.info(
-                            "Normalized pytest interpreter while preserving explicit targets"
-                        )
-                        block = type(block)(block.tool_type, test_content)
-                        full_command = test_content
-                        cmd_display = test_content
+                normalized_pytest = _tui_normalize_pytest_command(command_text)
+                if normalized_pytest and normalized_pytest != command_text:
+                    try:
+                        test_options = json.loads(full_command)
+                    except (ValueError, TypeError):
+                        test_options = {}
+                    if not isinstance(test_options, dict):
+                        test_options = {}
+                    test_options["command"] = normalized_pytest
+                    test_options.setdefault("timeout", 120)
+                    test_content = json.dumps(test_options)
+                    logger.info(
+                        "Normalized pytest interpreter while preserving explicit targets"
+                    )
+                    block = type(block)(block.tool_type, test_content)
+                    full_command = test_content
+                    cmd_display = test_content
             if (
                 block.tool_type == "host_shell"
                 and _tui_project_discovery_request
@@ -37162,12 +37157,15 @@ async def stream_agent_loop(
                 local_inspection_budget_hit = True
             if (
                 block.tool_type == "host_shell"
-                and re.search(
-                    r"(?:python\s+-m\s+pytest|\bpytest\b|npm\s+(?:run\s+)?test\b|make\s+test\b|\bgo\s+test\b|cargo\s+test\b)",
-                    full_command,
-                    re.IGNORECASE,
+                and (
+                    command_is_test(full_command)
+                    or (
+                        _tui_test_request
+                        and bool(_server_test_fallback := _tui_local_fallback_shell_command(_last_user))
+                        and _tui_host_command_text(full_command) == _server_test_fallback
+                    )
                 )
-                ):
+            ):
                 _tui_test_completed = True
                 _tui_test_summary_text = str(
                     result.get("output") or result.get("stdout") or ""

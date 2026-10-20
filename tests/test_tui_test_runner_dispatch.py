@@ -16,6 +16,51 @@ from src.agent_loop import (
 )
 
 
+def _actual_test_request_flag(prompt: str) -> bool:
+    tree = ast.parse(inspect.getsource(al.stream_agent_loop))
+    assignment = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_tui_test_request"
+                for target in node.targets)
+    )
+    code = compile(ast.fix_missing_locations(ast.Module(body=[assignment], type_ignores=[])),
+                   "<actual-test-intent-init>", "exec")
+    runtime = {
+        "surface": "odysseus-tui",
+        "host_shell_bridge": {"url": "http://host.docker.internal:17654/run"},
+        "runtime_execution_contract": {"local_workspace_tasks": "use_host_shell_bridge"},
+    }
+    local_turn = al._tui_local_tool_constrained_turn(
+        prompt, workspace="/synthetic", client_runtime_context=runtime
+    )
+    namespace = dict(vars(al), _last_user=prompt, _tui_local_execution_turn=local_turn)
+    exec(code, namespace)
+    return namespace["_tui_test_request"]
+
+
+def _run_actual_no_tool_test_fallback(prompt: str, test_request: bool, tool_blocks=None):
+    tree = ast.parse(inspect.getsource(al.stream_agent_loop))
+    branch = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and "_tui_test_completed" in ast.unparse(node.test)
+        and "not tool_blocks" in ast.unparse(node.test)
+    )
+    code = compile(ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[])),
+                   "<actual-no-tool-test-fallback>", "exec")
+    blocks = [] if tool_blocks is None else tool_blocks
+    namespace = dict(
+        vars(al), _tui_test_request=test_request, _tui_test_completed=False,
+        tool_blocks=blocks, native_tool_calls=[], _force_answer=False,
+        exact_approval=None, _last_user=prompt, round_response="model prose",
+        converted_calls=["discarded"], used_native=True,
+    )
+    namespace["logger"] = type("Logger", (), {"warning": lambda *args: None})()
+    exec(code, namespace)
+    return namespace, blocks
+
+
 def _run_runner(tmp_path: Path, command: str, *, node_has_test: bool = False,
                 npm_exit: int = 0, create_tests: bool = True) -> tuple[int, str]:
     if create_tests:
@@ -158,7 +203,7 @@ def test_explicit_pytest_directory_arguments_are_not_stripped():
         assert command == al._tui_normalize_pytest_command(f"pytest {target}")
 
 
-def test_actual_host_normalization_only_changes_placeholder_test_commands():
+def test_actual_host_normalization_preserves_supplied_runners():
     # Execute the actual normalization branch without executing a host command.
     tree = ast.parse(inspect.getsource(al.stream_agent_loop))
     branch = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
@@ -166,11 +211,14 @@ def test_actual_host_normalization_only_changes_placeholder_test_commands():
     code = compile(ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[])),
                    "<actual-host-test-normalization>", "exec")
     cases = (
+        ("Run tests in this repo", "node --test tests/unit.test.mjs", "node --test tests/unit.test.mjs"),
+        ("Run tests in this repo", "python -m unittest tests.test_unit", "python -m unittest tests.test_unit"),
+        ("Run tests in this repo", "yarn test unit", "yarn test unit"),
         ("Run only unit tests", "pytest -m unit tests/test_unit.py",
          al._tui_normalize_pytest_command("pytest -m unit tests/test_unit.py")),
-        ("Run pytest tests/test_specific.py", "echo pending",
-         _tui_local_fallback_shell_command("Run pytest tests/test_specific.py")),
-        ("Run all tests except integration", "echo pending", "echo pending"),
+        ("Run pytest tests/test_specific.py", "echo pending", "echo pending"),
+        ("Run all tests except integration", "node --test tests/unit.test.mjs",
+         "node --test tests/unit.test.mjs"),
     )
     for prompt, command, expected in cases:
         original = json.dumps({"command": command, "timeout": 120})
@@ -179,4 +227,118 @@ def test_actual_host_normalization_only_changes_placeholder_test_commands():
                          _last_user=prompt, _tui_test_request=True)
         exec(code, namespace)
         assert json.loads(namespace["full_command"])["command"] == expected
+
+
+def test_node_test_is_shared_verifier_evidence_not_shell_echo_or_help():
+    from src.agent_evidence import command_is_test
+    from src.agent_runtime.identity import is_test_command
+
+    assert is_test_command("node --test tests/unit.test.mjs")
+    assert command_is_test(json.dumps({"command": "node --test tests/unit.test.mjs"}))
+    for command in ("npm run test", "pnpm run test", "yarn run test"):
+        assert is_test_command(command), command
+    for command in (
+        "node --help", "node --test --help", "echo node --test", "node script.js --test",
+        "echo pytest", "pytest --collect-only", "node --test || true",
+        "pnpm run build", "yarn run lint", "make run test", "npm run test -- --help",
+    ):
+        assert not is_test_command(command), command
+
+
+def test_actual_no_tool_fallback_uses_runner_content_and_counts_attempt():
+    prompt = "Run tests in this repo"
+    assert _actual_test_request_flag(prompt) is True
+    namespace, _ = _run_actual_no_tool_test_fallback(
+        prompt, _actual_test_request_flag(prompt)
+    )
+    assert namespace["tool_blocks"]
+    payload = json.loads(namespace["tool_blocks"][0].content)
+    assert payload["command"] == _tui_local_fallback_shell_command(prompt)
+    assert payload["timeout"] == 120
+    assert namespace["round_response"] == ""
+
+
+def test_negated_test_actions_do_not_trigger_automatic_runner():
+    for prompt in (
+        "Do not run tests; just read main.py", "Never execute tests",
+        "Never test now", "Don't test now", "Do not execute main.test.js",
+    ):
+        test_request = _actual_test_request_flag(prompt)
+        assert test_request is False
+        namespace, _ = _run_actual_no_tool_test_fallback(prompt, test_request)
+        assert namespace["tool_blocks"] == []
+
+    assert _actual_test_request_flag("Do not edit main.py; run tests") is True
+
+
+def test_pytest_interpreter_normalization_preserves_call_options():
+    tree = ast.parse(inspect.getsource(al.stream_agent_loop))
+    branch = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
+                  and ast.unparse(node.test) == "block.tool_type == 'host_shell' and _tui_test_request")
+    code = compile(ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[])),
+                   "<actual-host-test-options>", "exec")
+    original = {"command": "pytest tests/test_unit.py", "timeout": 7, "detach": True}
+    encoded = json.dumps(original)
+    namespace = dict(vars(al), block=al.ToolBlock("host_shell", encoded),
+                     full_command=encoded, cmd_display=encoded,
+                     _last_user="Run tests in this repo", _tui_test_request=True)
+    exec(code, namespace)
+    assert json.loads(namespace["full_command"]) == dict(
+        original, command=al._tui_normalize_pytest_command(original["command"])
+    )
+
+
+def test_no_tool_fallback_leaves_a_provided_model_tool_call_untouched():
+    prompt = "Run tests in this repo"
+    call = al.ToolBlock("read_file", "main.py")
+    namespace, provided = _run_actual_no_tool_test_fallback(
+        prompt, _actual_test_request_flag(prompt), [call]
+    )
+    assert namespace["tool_blocks"] is provided
+    assert namespace["tool_blocks"] == [call]
+
+
+def test_actual_completion_accepts_test_runner_or_exact_server_fallback_attempt():
+    tree = ast.parse(inspect.getsource(al.stream_agent_loop))
+    branch = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and "_server_test_fallback" in ast.unparse(node.test)
+    )
+    code = compile(ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[])),
+                   "<actual-test-completion>", "exec")
+    prompt = "Run tests in this repo"
+    generic = _tui_local_fallback_shell_command(prompt)
+    assert generic and not al.command_is_test(generic)
+    cases = (
+        ("pytest -q", True),
+        ("node --test tests/unit.test.mjs", True),
+        (generic, True),  # recorded as an attempt, not canonical test evidence
+        ("echo pytest", False),
+        ("pytest --help", False),
+        ("pytest --collect-only", False),
+        ("node --test || true", False),
+    )
+    for command, expected in cases:
+        encoded = json.dumps({"command": command})
+        namespace = dict(
+            vars(al), block=al.ToolBlock("host_shell", encoded),
+            full_command=encoded, result={"output": "synthetic result"},
+            _tui_test_request=True, _last_user=prompt,
+            _tui_test_completed=False, _tui_test_summary_text="",
+        )
+        exec(code, namespace)
+        assert namespace["_tui_test_completed"] is expected, command
+        if expected:
+            assert namespace["_tui_test_summary_text"] == "synthetic result"
+
+    non_test_prompt = "Run a bash block"
+    probe = _tui_local_fallback_shell_command(non_test_prompt)
+    assert probe and not al.command_is_test(probe)
+    encoded = json.dumps({"command": probe})
+    namespace.update(block=al.ToolBlock("host_shell", encoded), full_command=encoded,
+                     _last_user=non_test_prompt, _tui_test_request=False,
+                     _tui_test_completed=False, _tui_test_summary_text="")
+    exec(code, namespace)
+    assert namespace["_tui_test_completed"] is False
 

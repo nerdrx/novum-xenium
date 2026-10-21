@@ -14,6 +14,7 @@ import fileHandlerModule from './fileHandler.js?v=20260909mobileattachmentedit1'
 const API_BASE = window.location.origin;
 const ACTIVE_EDITOR_SESSION_KEY = 'odysseus-gallery-active-editor-v1';
 let _open = false;
+let _bulkUploadBatchId = 0;
 let _galleryResizeHandler = null;
 let _libraryRequestSequence = 0;
 let _libraryRefreshPending = false;
@@ -427,6 +428,7 @@ async function _bulkUpload(filesOrItems, fallbackAlbumId) {
   const progress = document.getElementById('gallery-upload-progress');
   const status = document.getElementById('gallery-upload-status');
   if (!bar) return;
+  const batchId = ++_bulkUploadBatchId;
 
   const items = filesOrItems.map(it =>
     it instanceof File ? { file: it, albumId: fallbackAlbumId } : it
@@ -435,6 +437,8 @@ async function _bulkUpload(filesOrItems, fallbackAlbumId) {
   bar.style.display = '';
   let done = 0, dupes = 0, errors = 0, firstError = '';
   const total = items.length;
+  if (progress) progress.style.width = '0%';
+  if (status) status.textContent = `0/${total}`;
 
   // Concurrency pool — N workers pulling from the queue. 4 is a reasonable
   // default for a local server: enough to overlap network + EXIF + disk
@@ -464,8 +468,10 @@ async function _bulkUpload(filesOrItems, fallbackAlbumId) {
         }
       } catch (e) { errors++; }
       done++;
-      if (progress) progress.style.width = `${(done / total) * 100}%`;
-      if (status) status.textContent = `${done}/${total}${dupes ? ` (${dupes} duplicates)` : ''}`;
+      if (batchId === _bulkUploadBatchId) {
+        if (progress) progress.style.width = `${(done / total) * 100}%`;
+        if (status) status.textContent = `${done}/${total}${dupes ? ` (${dupes} duplicates)` : ''}`;
+      }
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, worker));
@@ -473,7 +479,7 @@ async function _bulkUpload(filesOrItems, fallbackAlbumId) {
   const msg = `${done - dupes - errors} imported` +
     (dupes ? `, ${dupes} duplicates skipped` : '') +
     (errors ? `, ${errors} errors` : '');
-  if (status) status.textContent = msg;
+  if (batchId === _bulkUploadBatchId && status) status.textContent = msg;
   if (firstError) {
     uiModule.showError(`${msg}: ${firstError}`);
   } else if (errors) {
@@ -481,7 +487,7 @@ async function _bulkUpload(filesOrItems, fallbackAlbumId) {
   } else {
     uiModule.showToast(msg);
   }
-  setTimeout(() => { bar.style.display = 'none'; }, 3000);
+  setTimeout(() => { if (batchId === _bulkUploadBatchId) bar.style.display = 'none'; }, 3000);
   // Auto-switch to Recent so the just-uploaded photos are immediately
   // visible at the top (otherwise Shuffle would scatter them).
   if (done - dupes - errors > 0 && _sort !== 'recent') {

@@ -38,6 +38,7 @@ This spec covers speech behavior in:
 Provider runtime:
 
 - `disabled` returns unavailable and avoids provider calls;
+- empty or non-string saved provider values resolve to `disabled` in the service at runtime without rewriting the stored setting; unknown non-empty provider names remain unavailable;
 - `browser` is client-side only through Web Speech API and does not call `/api/stt/transcribe`;
 - `local` lazily imports `faster-whisper`, writes uploaded audio to a temporary file using its recognized extension, transcribes, and deletes the temp file in `finally`;
 - `endpoint:<id>` resolves a `ModelEndpoint` and posts the audio filename and recognized MIME type to `/audio/transcriptions` with model and optional language.
@@ -67,6 +68,10 @@ Frontend behavior:
   start from the welcome screen creates a pending draft identity when needed. If a natural recorder
   stop is delivered after navigation changes chats, the app treats the destination as ambiguous and
   asks before copying the transcript or downloading the audio instead of placing it into either chat.
+- Compare owns its composer action while active: its button sends to or stops Compare runs and does
+  not start microphone capture. Entering Compare invalidates a pending recording attempt or stops an
+  active recording before changing chats; a transcript completed afterward remains with the
+  destination captured when recording stopped, not the Compare composer.
 - browser recognition waits up to two seconds after the audio recorder finishes for its final result
   and end event, then makes a best-effort abort if needed. Empty browser results use audio fallback;
 - the frontend captures its provider after microphone permission resolves and uses that value for
@@ -146,9 +151,10 @@ TTS cached audio can contain sensitive assistant text rendered as speech. The ca
 ## Testing Coverage
 
 Existing coverage includes speech settings restore/default/read-failure/save behavior, recorder
-format fallback and ownership, speech service toggles, malformed/non-string TTS provider and speed
-handling, cache stats plus configured eviction/disable/file filtering/error handling, STT temp
-cleanup and MIME/extension metadata, direct upload limits, model routes, and settings scrubbing.
+format fallback and ownership including Compare Send/Stop transitions, speech service toggles,
+malformed STT providers, malformed/non-string TTS provider and speed handling, cache stats plus configured
+eviction/disable/file filtering/error handling, STT temp cleanup and MIME/extension metadata,
+direct upload limits, model routes, and settings scrubbing.
 Browser tests use synthetic media and fixture APIs; they do not validate a physical microphone,
 browser permission prompt, real speech provider, local model, or GPU.
 
@@ -162,4 +168,3 @@ privacy behavior, and real provider or optional-dependency behavior.
 - Endpoint speech providers need owner-isolation or explicit global-settings documentation.
 - TTS cache needs privacy policy: owner partition, TTL, no-store response headers, or accepted global cache semantics.
 - STT upload validation needs content type/extension/magic-byte policy.
-- Browser/compare STT mic behavior needs a product decision or regression test because compare can force send-button visuals while shared empty-input logic can start recording.

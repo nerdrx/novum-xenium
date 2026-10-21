@@ -18,7 +18,7 @@ Image providers are configured separately from chat providers. Some workflows ca
 
 Gallery image uploads accept PNG, JPEG, WebP, and GIF. Novum identifies a supported image before saving its file or database entry. Unrecognized image bytes are rejected; replacing an image with unrecognized bytes leaves the existing image intact. An optional EXIF metadata warning can still accompany an accepted image. Identifying the format does not guarantee every pixel or metadata field is valid.
 
-Bulk imports report imported, duplicate, and failed counts separately. Failures produce an error notification with the first available server reason, shortened for readability and displayed as plain text. Other selected files can still succeed. When imports overlap, the progress bar follows the newest batch; earlier batches continue and still report their results. See the pinned [bulk upload handler](https://github.com/nerdrx/novum-xenium/blob/69f85cf682cd092e031d37831748365b962d227c/static/js/gallery.js).
+Bulk imports report imported, duplicate, and failed counts separately. Failures produce an error notification with the first available server reason, shortened for readability and displayed as plain text. Other selected files can still succeed. When imports overlap, the progress bar follows the newest batch; earlier batches continue and still report their results. See the pinned [bulk upload handler](https://github.com/nerdrx/novum-xenium/blob/ab19dc86ec1901c9279f46e00f4f7f7ce58000a4/static/js/gallery.js).
 
 Album-list reads stop waiting after 15 seconds, including a stalled response body. A failed refresh keeps the last successful list and offers Retry. After an album action fails, a stalled recovery refresh can keep its control locked and delay the warning for up to 15 seconds. The mutation request itself has no new deadline. Pressing Enter in a photo name saves once through the existing blur handler; a failed rename keeps the typed value for retry.
 
@@ -33,7 +33,13 @@ response still hides the section. A failed refresh does not mean projects were
 deleted. Newer list requests own the result, so a late failure cannot replace
 the newer list or its loading indicator.
 
-See the pinned [draft-list controls](https://github.com/nerdrx/novum-xenium/blob/69f85cf682cd092e031d37831748365b962d227c/static/js/gallery.js).
+Saved-project list reads stop waiting after 15 seconds, including a stalled
+response body. A timeout keeps the last loaded list and offers **Retry**; it
+does not retry a deletion.
+
+Saved-project deletion checks the response for each selected project. If deletion cannot be confirmed, Novum warns and refreshes the list; inspect that list before retrying. Confirmed deletions leave the current selection, while unconfirmed projects stay selected if still present and you have not cancelled selection. A newer selection remains separate. Bulk confirmation captures the project IDs when it opens, so selecting another project while confirmation is open does not add it to that deletion.
+
+See the pinned [draft-list controls](https://github.com/nerdrx/novum-xenium/blob/ab19dc86ec1901c9279f46e00f4f7f7ce58000a4/static/js/gallery.js).
 
 ## Audio
 

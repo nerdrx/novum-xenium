@@ -197,6 +197,16 @@ not promise visual correctness merely because a document was generated.
    must be configured separately by the operator. Browser permission does not
    configure external delivery.
 
+Bulk archive, bulk delete, and **Clear past reminders** report only confirmed
+successes. If some changes cannot be confirmed, Novum shows a warning instead
+of counting every target as successful. Failed selected notes remain available
+for retry when still listed; a newer selection or cancellation stays separate.
+If a change succeeded but the list refresh failed, the warning distinguishes
+those outcomes. Check Notes before retrying an uncertain operation.
+
+See the pinned [selected-note operations](https://github.com/nerdrx/novum-xenium/blob/ab19dc86ec1901c9279f46e00f4f7f7ce58000a4/frontend/src/features/notes/application/selection.js)
+and [past-reminder deletion workflow](https://github.com/nerdrx/novum-xenium/blob/ab19dc86ec1901c9279f46e00f4f7f7ce58000a4/frontend/src/features/notes/application/deletion.js).
+
 Notes and calendar reminders share the reminder-note system. Reminders retry
 only within 90 seconds of the due time; a recent successful delivery through
 the same channel suppresses repeats for 25 minutes. If a reminder is late,

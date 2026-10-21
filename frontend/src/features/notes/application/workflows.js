@@ -9,6 +9,8 @@ export function createNotesWorkflows({
   const _renderNotes = effects.render;
   const patchNote = _patchNote;
   const uiModule = effects;
+  const withStatus = (message, error) => Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599
+    ? `${message} (HTTP ${error.status})` : message;
   let fetchSequence = 0;
   let dataRevision = 0;
   let activeReminderNotes = null;
@@ -41,12 +43,12 @@ export function createNotesWorkflows({
     const safeIdx = Math.min(Math.max(prevIdx, 0), state.notes.length);
     app.insertNoteAt(safeIdx, { ...note, archived: false });
     _renderNotes();
-    patchNote(note.id, { archived: false }).catch(() => {
+    patchNote(note.id, { archived: false }).catch(error => {
       // Roll back local insertion if the server refuses
       const i = state.notes.findIndex(n => n.id === note.id);
       if (i >= 0) app.removeNoteAt(i);
       _renderNotes();
-      uiModule.showError('Undo failed');
+      uiModule.showError(withStatus('Undo failed', error));
     });
   }
 
@@ -63,10 +65,10 @@ export function createNotesWorkflows({
     _pushUndo({ label: 'archive', run: undo });
     patchNote(id, { archived: true }).then(() => {
       effects.archived(undo);
-    }).catch(() => {
+    }).catch(error => {
       app.insertNoteAt(idx, removed);
       _renderNotes();
-      uiModule.showError('Failed to archive');
+      uiModule.showError(withStatus('Failed to archive', error));
     });
     return true;
   }

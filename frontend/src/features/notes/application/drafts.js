@@ -34,8 +34,9 @@ export function createNotesDrafts({
           const note = state.notes.find(n => n.id === id);
           if (note) app.mergeNote(note, payload);
           if (persistence.getItem(_draftKey(id)) === JSON.stringify(d)) _clearDraft(id);
-        } catch {
-          if (!view.failed) effects.showError('Note not synced. Your edits are kept on this device; retry Save.');
+        } catch (error) {
+          const status = Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? ` (HTTP ${error.status})` : '';
+          if (!view.failed) effects.showError(`Note not synced${status}. Your edits are kept on this device; retry Save.`);
           view.failed = true;
         }
       });

@@ -20,9 +20,14 @@ export function createSelectionOperations({
       exitSelection();
     }
     async function mutateSelected(ids, mutate, verb, failureAction) {
+      let firstHttpStatus = null;
       const results = await Promise.all(ids.map(async id => {
         try { await mutate(id); return { id, ok: true }; }
-        catch (_) { return { id, ok: false }; }
+        catch (error) {
+          const status = Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? error.status : null;
+          if (firstHttpStatus === null && status !== null) firstHttpStatus = status;
+          return { id, ok: false };
+        }
       }));
       const succeeded = results.filter(result => result.ok);
       const failed = results.filter(result => !result.ok);
@@ -30,10 +35,11 @@ export function createSelectionOperations({
       const refreshed = await fetchNotes();
       if (state.selectMode && !state.selectedIds.size) exitSelection();
       else effects.render();
+      const status = firstHttpStatus === null ? '' : ` First HTTP error: HTTP ${firstHttpStatus}.`;
       if (failed.length) {
         const completed = succeeded.length ? `${verb} ${succeeded.length}; ` : '';
         const refresh = refreshed ? '' : ' The Notes list also could not refresh.';
-        effects.showError(`${completed}Could not confirm ${failed.length} note ${failureAction} operation${failed.length === 1 ? '' : 's'}. Check Notes before retrying.${refresh}`);
+        effects.showError(`${completed}Could not confirm ${failed.length} note ${failureAction} operation${failed.length === 1 ? '' : 's'}. Check Notes before retrying.${status}${refresh}`);
       } else if (!refreshed) {
         effects.showError(`${verb} ${succeeded.length}, but the Notes list could not refresh. Check Notes before retrying.`);
       } else if (succeeded.length) {

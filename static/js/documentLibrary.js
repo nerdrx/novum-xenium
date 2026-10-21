@@ -2317,7 +2317,8 @@ function _setLibraryCountChipContent(chip, label, count) {
         const restoreBtn = preview.querySelector('.doclib-chat-restore-btn');
         if (restoreBtn) restoreBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
-          await fetch(API_BASE + '/api/session/' + session.id + '/unarchive', { method: 'POST' });
+          if (isArchive) await _arcRunMutation('restore', 'chats:' + session.id);
+          else await fetch(API_BASE + '/api/session/' + session.id + '/unarchive', { method: 'POST' });
           _renderLibArchive();
         });
         const copyBtn = preview.querySelector('.doclib-chat-copy-btn');
@@ -2329,7 +2330,10 @@ function _setLibraryCountChipContent(chip, label, count) {
         if (deleteBtn) deleteBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           if (!await window.styledConfirm('Delete this chat?', { confirmText: 'Delete', danger: true })) return;
-          await sessionModule.deleteSessionById(session.id);
+          const result = isArchive
+            ? await _arcRunMutation('delete', 'chats:' + session.id)
+            : await sessionModule.deleteSessionById(session.id);
+          if (isArchive && !result.ok) { _renderLibArchive(); return; }
           card.style.maxHeight = `${Math.max(card.getBoundingClientRect().height, card.scrollHeight)}px`;
           card.classList.add('memory-tidy-removing');
           await new Promise(r => setTimeout(r, 520));
@@ -2598,6 +2602,7 @@ function _setLibraryCountChipContent(chip, label, count) {
     let _arcSort = 'recent';
     let _arcSelectMode = false;
     const _arcSelected = new Set();
+    let _arcSelectionRevision = 0;
     let _arcModelFilter = '';
     let _arcTypeFilter = '';   // '', 'chats', 'documents', 'research'
 
@@ -2679,12 +2684,12 @@ function _setLibraryCountChipContent(chip, label, count) {
         actions.querySelector('.doclib-chat-delete-btn').addEventListener('click', async (ev) => {
           ev.stopPropagation();
           if (!await window.styledConfirm('Delete this document?', { confirmText: 'Delete', danger: true })) return;
-          await fetch(`${API_BASE}/api/document/${d.id}`, { method: 'DELETE', credentials: 'same-origin' });
+          await _arcRunMutation('delete', 'documents:' + d.id);
           _renderLibArchive();
         });
         actions.querySelector('.doclib-chat-restore-btn').addEventListener('click', async (ev) => {
           ev.stopPropagation();
-          await fetch(`${API_BASE}/api/document/${d.id}/archive?archived=false`, { method: 'POST', credentials: 'same-origin' });
+          await _arcRunMutation('restore', 'documents:' + d.id);
           _renderLibArchive();
         });
         // Open = clone the doc into the active session and surface it in the editor.
@@ -2762,25 +2767,27 @@ function _setLibraryCountChipContent(chip, label, count) {
           '</div>' +
           '<div class="doclib-chat-preview" style="display:none;"></div>';
         const cb = card.querySelector('.memory-select-cb');
-        if (cb) { cb.addEventListener('click', e => e.stopPropagation()); cb.addEventListener('change', () => { if (cb.checked) _arcSelected.add('chats:' + s.id); else _arcSelected.delete('chats:' + s.id); _updateArcCount(); }); }
+        if (cb) { cb.addEventListener('click', e => e.stopPropagation()); cb.addEventListener('change', () => { if (cb.checked) _arcSelected.add('chats:' + s.id); else _arcSelected.delete('chats:' + s.id); _arcSelectionRevision++; _updateArcCount(); }); }
         card.querySelector('._arc-menu').addEventListener('click', (e) => { e.stopPropagation(); _showLibDropdown(e.currentTarget, [
           { label: 'Open', action: () => { if (window.sessionModule) window.sessionModule.selectSession(s.id); } },
           { label: 'Copy', action: () => _copyChatById(s.id) },
-          { label: 'Restore', action: async () => { await fetch(API_BASE + '/api/session/' + s.id + '/unarchive', { method: 'POST' }); _renderLibArchive(); } },
+          { label: 'Restore', action: async () => { await _arcRunMutation('restore', 'chats:' + s.id); _renderLibArchive(); } },
           { label: 'Delete', action: async () => {
             if (!await window.styledConfirm('Delete this chat permanently?', { confirmText: 'Delete', danger: true })) return;
-            await sessionModule.deleteSessionById(s.id);
+            const result = await _arcRunMutation('delete', 'chats:' + s.id);
+            if (!result.ok) { _renderLibArchive(); return; }
             _renderLibArchive();
           }, danger: true },
         ], { onSelect: () => {
           _arcSelectMode = true;
           _arcSelected.add('chats:' + s.id);
+          _arcSelectionRevision++;
           document.getElementById('doclib-arc-bulk')?.classList.remove('hidden');
           _renderArcGrid();
         } }); });
         card.addEventListener('click', (e) => {
           if (card._suppressNextClick) { card._suppressNextClick = false; return; }
-          if (_arcSelectMode) { const c = card.querySelector('.memory-select-cb'); if (c) { c.checked = !c.checked; if (c.checked) _arcSelected.add('chats:' + s.id); else _arcSelected.delete('chats:' + s.id); _updateArcCount(); } return; }
+          if (_arcSelectMode) { const c = card.querySelector('.memory-select-cb'); if (c) { c.checked = !c.checked; if (c.checked) _arcSelected.add('chats:' + s.id); else _arcSelected.delete('chats:' + s.id); _arcSelectionRevision++; _updateArcCount(); } return; }
           if (e.target.closest('._arc-menu') || e.target.closest('.memory-select-cb') || e.target.closest('.doclib-chat-open-btn')) return;
           _toggleChatPreview(card, s);
         });
@@ -2807,18 +2814,19 @@ function _setLibraryCountChipContent(chip, label, count) {
           '</div>' +
           '<div class="doclib-chat-preview" style="display:none;"></div>';
         const _dcbEl = card.querySelector('.memory-select-cb');
-        if (_dcbEl) { _dcbEl.addEventListener('click', e => e.stopPropagation()); _dcbEl.addEventListener('change', () => { if (_dcbEl.checked) _arcSelected.add('documents:' + d.id); else _arcSelected.delete('documents:' + d.id); _updateArcCount(); }); }
+        if (_dcbEl) { _dcbEl.addEventListener('click', e => e.stopPropagation()); _dcbEl.addEventListener('change', () => { if (_dcbEl.checked) _arcSelected.add('documents:' + d.id); else _arcSelected.delete('documents:' + d.id); _arcSelectionRevision++; _updateArcCount(); }); }
         card.addEventListener('click', (e) => {
           if (e.target.closest('._arc-doc-menu') || e.target.closest('.memory-select-cb')) return;
-          if (_arcSelectMode) { const c = card.querySelector('.memory-select-cb'); if (c) { c.checked = !c.checked; if (c.checked) _arcSelected.add('documents:' + d.id); else _arcSelected.delete('documents:' + d.id); _updateArcCount(); } return; }
+          if (_arcSelectMode) { const c = card.querySelector('.memory-select-cb'); if (c) { c.checked = !c.checked; if (c.checked) _arcSelected.add('documents:' + d.id); else _arcSelected.delete('documents:' + d.id); _arcSelectionRevision++; _updateArcCount(); } return; }
           _toggleArcDocPreview(card, d);
         });
         card.querySelector('._arc-doc-menu').addEventListener('click', (e) => { e.stopPropagation(); _showLibDropdown(e.currentTarget, [
-          { label: 'Restore', action: async () => { await fetch(API_BASE + '/api/document/' + d.id + '/archive?archived=false', { method: 'POST', credentials: 'same-origin' }); _renderLibArchive(); } },
-          { label: 'Delete', danger: true, action: async () => { if (!await window.styledConfirm('Delete this document?', { confirmText: 'Delete', danger: true })) return; await fetch(API_BASE + '/api/document/' + d.id, { method: 'DELETE', credentials: 'same-origin' }); _renderLibArchive(); } },
+          { label: 'Restore', action: async () => { await _arcRunMutation('restore', 'documents:' + d.id); _renderLibArchive(); } },
+          { label: 'Delete', danger: true, action: async () => { if (!await window.styledConfirm('Delete this document?', { confirmText: 'Delete', danger: true })) return; await _arcRunMutation('delete', 'documents:' + d.id); _renderLibArchive(); } },
         ], { onSelect: () => {
           _arcSelectMode = true;
           _arcSelected.add('documents:' + d.id);
+          _arcSelectionRevision++;
           document.getElementById('doclib-arc-bulk')?.classList.remove('hidden');
           _renderArcGrid();
         } }); });
@@ -2845,19 +2853,20 @@ function _setLibraryCountChipContent(chip, label, count) {
           '</div>' +
           '<div class="doclib-chat-preview" style="display:none;"></div>';
         const _rcbEl = card.querySelector('.memory-select-cb');
-        if (_rcbEl) { _rcbEl.addEventListener('click', e => e.stopPropagation()); _rcbEl.addEventListener('change', () => { if (_rcbEl.checked) _arcSelected.add('research:' + r.id); else _arcSelected.delete('research:' + r.id); _updateArcCount(); }); }
+        if (_rcbEl) { _rcbEl.addEventListener('click', e => e.stopPropagation()); _rcbEl.addEventListener('change', () => { if (_rcbEl.checked) _arcSelected.add('research:' + r.id); else _arcSelected.delete('research:' + r.id); _arcSelectionRevision++; _updateArcCount(); }); }
         card.addEventListener('click', (e) => {
           if (e.target.closest('._arc-res-menu') || e.target.closest('.memory-select-cb')) return;
-          if (_arcSelectMode) { const c = card.querySelector('.memory-select-cb'); if (c) { c.checked = !c.checked; if (c.checked) _arcSelected.add('research:' + r.id); else _arcSelected.delete('research:' + r.id); _updateArcCount(); } return; }
+          if (_arcSelectMode) { const c = card.querySelector('.memory-select-cb'); if (c) { c.checked = !c.checked; if (c.checked) _arcSelected.add('research:' + r.id); else _arcSelected.delete('research:' + r.id); _arcSelectionRevision++; _updateArcCount(); } return; }
           _toggleResearchPreview(card, r);
         });
         card.querySelector('._arc-res-menu').addEventListener('click', (e) => { e.stopPropagation(); _showLibDropdown(e.currentTarget, [
           { label: 'Open', action: () => { const a = document.createElement('a'); a.href = '/api/research/report/' + r.id; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); } },
-          { label: 'Restore', action: async () => { await fetch('/api/research/' + r.id + '/archive?archived=false', { method: 'POST', credentials: 'same-origin' }); _renderLibArchive(); } },
-          { label: 'Delete', danger: true, action: async () => { if (!await window.styledConfirm('Delete this research?', { confirmText: 'Delete', danger: true })) return; await fetch('/api/research/' + r.id, { method: 'DELETE', credentials: 'same-origin' }); _renderLibArchive(); } },
+          { label: 'Restore', action: async () => { await _arcRunMutation('restore', 'research:' + r.id); _renderLibArchive(); } },
+          { label: 'Delete', danger: true, action: async () => { if (!await window.styledConfirm('Delete this research?', { confirmText: 'Delete', danger: true })) return; await _arcRunMutation('delete', 'research:' + r.id); _renderLibArchive(); } },
         ], { onSelect: () => {
           _arcSelectMode = true;
           _arcSelected.add('research:' + r.id);
+          _arcSelectionRevision++;
           document.getElementById('doclib-arc-bulk')?.classList.remove('hidden');
           _renderArcGrid();
         } }); });
@@ -2895,9 +2904,10 @@ function _setLibraryCountChipContent(chip, label, count) {
     // Archive event listeners
     document.getElementById('doclib-arc-sort').addEventListener('change', (e) => { _arcSort = e.target.value; _renderArcGrid(); });
     document.getElementById('doclib-arc-search').addEventListener('input', (e) => { _arcSearch = e.target.value.trim(); _renderArcGrid(); });
-    document.getElementById('doclib-arc-select-btn').addEventListener('click', () => { _arcSelectMode = !_arcSelectMode; _arcSelected.clear(); document.getElementById('doclib-arc-bulk').classList.toggle('hidden', !_arcSelectMode); _renderArcGrid(); });
+    document.getElementById('doclib-arc-select-btn').addEventListener('click', () => { _arcSelectMode = !_arcSelectMode; _arcSelected.clear(); _arcSelectionRevision++; document.getElementById('doclib-arc-bulk').classList.toggle('hidden', !_arcSelectMode); _renderArcGrid(); });
     document.getElementById('doclib-arc-bulk-cancel')?.addEventListener('click', () => {
       _arcSelectMode = false; _arcSelected.clear();
+      _arcSelectionRevision++;
       document.getElementById('doclib-arc-bulk').classList.add('hidden');
       _renderArcGrid();
     });
@@ -2913,6 +2923,7 @@ function _setLibraryCountChipContent(chip, label, count) {
         const k = cb.dataset.arckey;
         if (k) { if (newState) _arcSelected.add(k); else _arcSelected.delete(k); }
       });
+      _arcSelectionRevision++;
       _updateArcCount();
     }
     document.getElementById('doclib-arc-select-all').addEventListener('change', _arcToggleAll);
@@ -2933,21 +2944,48 @@ function _setLibraryCountChipContent(chip, label, count) {
       if (type === 'research') return fetch('/api/research/' + id, { method: 'DELETE', credentials: 'same-origin' });
       return sessionModule.deleteSessionById(id, { credentials: 'same-origin' });
     }
+    async function _arcMutationResult(action, key) {
+      try {
+        const response = await (action === 'restore' ? _arcRestoreOne(key) : _arcDeleteOne(key));
+        return { key, ok: response?.ok === true, status: Number.isInteger(response?.status) ? response.status : null };
+      } catch {
+        return { key, ok: false, status: null };
+      }
+    }
+    function _arcReportMutationResults(action, results) {
+      const failed = results.filter(result => !result.ok);
+      if (!failed.length || !uiModule?.showError) return;
+      const succeeded = results.length - failed.length;
+      const statuses = [...new Set(failed.map(result => result.status).filter(status => Number.isInteger(status) && status >= 400 && status <= 599))];
+      const reasons = statuses.map(status => `HTTP ${status}`);
+      if (failed.some(result => !result.status)) reasons.push('network error');
+      uiModule.showError(`Could not confirm ${action} for ${failed.length} of ${results.length} archived item${results.length === 1 ? '' : 's'}${succeeded ? `; ${succeeded} succeeded` : ''}${reasons.length ? ` (${reasons.join(', ')})` : ''}.`);
+    }
+    async function _arcRunMutation(action, key) {
+      const result = await _arcMutationResult(action, key);
+      _arcReportMutationResults(action, [result]);
+      return result;
+    }
     document.getElementById('doclib-arc-bulk-restore').addEventListener('click', async () => {
-      if (!_arcSelected.size) return;
-      await Promise.all([..._arcSelected].map(_arcRestoreOne));
-      _arcSelected.clear(); _arcSelectMode = false;
-      document.getElementById('doclib-arc-bulk').classList.add('hidden');
+      const keys = [..._arcSelected];
+      if (!keys.length) return;
+      const selectionRevision = _arcSelectionRevision;
+      const results = await Promise.all(keys.map(key => _arcMutationResult('restore', key)));
+      _arcReportMutationResults('restore', results);
+      for (const result of results) if (result.ok) _arcSelected.delete(result.key);
+      if (_arcSelectionRevision === selectionRevision && !_arcSelected.size) _arcSelectMode = false;
+      document.getElementById('doclib-arc-bulk').classList.toggle('hidden', !_arcSelectMode);
       _renderLibArchive();
     });
     document.getElementById('doclib-arc-bulk-delete').addEventListener('click', async () => {
-      const count = _arcSelected.size;
-      if (!count) return;
-      if (!await window.styledConfirm(`Delete ${count} archived item${count > 1 ? 's' : ''} permanently?`, { confirmText: 'Delete', danger: true })) return;
+      const keys = [..._arcSelected];
+      if (!keys.length) return;
+      const selectionRevision = _arcSelectionRevision;
+      if (!await window.styledConfirm(`Delete ${keys.length} archived item${keys.length > 1 ? 's' : ''} permanently?`, { confirmText: 'Delete', danger: true })) return;
       const grid = document.getElementById('doclib-arc-grid');
       if (grid) {
         grid.querySelectorAll('.memory-item[data-arckey]').forEach(card => {
-          if (_arcSelected.has(card.dataset.arckey)) {
+          if (keys.includes(card.dataset.arckey)) {
             card.style.transition = 'opacity 0.25s, transform 0.25s';
             card.style.opacity = '0';
             card.style.transform = 'scale(0.95)';
@@ -2955,10 +2993,11 @@ function _setLibraryCountChipContent(chip, label, count) {
         });
       }
       await new Promise(r => setTimeout(r, 250));
-      await Promise.all([..._arcSelected].map(_arcDeleteOne));
-      _arcSelected.clear();
-      _arcSelectMode = false;
-      document.getElementById('doclib-arc-bulk').classList.add('hidden');
+      const results = await Promise.all(keys.map(key => _arcMutationResult('delete', key)));
+      _arcReportMutationResults('delete', results);
+      for (const result of results) if (result.ok) _arcSelected.delete(result.key);
+      if (_arcSelectionRevision === selectionRevision && !_arcSelected.size) _arcSelectMode = false;
+      document.getElementById('doclib-arc-bulk').classList.toggle('hidden', !_arcSelectMode);
       _renderLibArchive();
     });
 
@@ -3117,15 +3156,16 @@ function _setLibraryCountChipContent(chip, label, count) {
           ? await uiModule.styledConfirm('Delete this research report?', { confirmText: 'Delete', danger: true })
           : window.confirm('Delete this research report?');
         if (!ok) return;
+        if (item.archived) {
+          await _arcRunMutation('delete', 'research:' + item.id);
+          _renderLibArchive();
+          return;
+        }
         try {
           const res = await fetch(`${API_BASE}/api/research/${item.id}`, { method: 'DELETE', credentials: 'same-origin' });
           if (!res.ok) throw new Error(await res.text());
-          if (item.archived) {
-            _renderLibArchive();
-          } else {
-            _researchItems = _researchItems.filter(r => r.id !== item.id);
-            _renderResearchGrid();
-          }
+          _researchItems = _researchItems.filter(r => r.id !== item.id);
+          _renderResearchGrid();
         } catch (err) {
           if (uiModule && uiModule.showError) uiModule.showError('Failed to delete: ' + err.message);
         }
@@ -3137,14 +3177,16 @@ function _setLibraryCountChipContent(chip, label, count) {
         // refresh the archive. From the Research tab, toggle as before.
         const fromArchiveTab = !!item.archived;
         const toArchived = fromArchiveTab ? false : !_researchArchivedView;
+        if (fromArchiveTab) {
+          const result = await _arcRunMutation('restore', 'research:' + item.id);
+          _renderLibArchive();
+          if (result.ok && uiModule) uiModule.showToast('Restored');
+          return;
+        }
         try {
           await fetch(`${API_BASE}/api/research/${item.id}/archive?archived=${toArchived}`, { method: 'POST', credentials: 'same-origin' });
-          if (fromArchiveTab) {
-            _renderLibArchive();
-          } else {
-            _researchItems = _researchItems.filter(r => r.id !== item.id);
-            _renderResearchGrid();
-          }
+          _researchItems = _researchItems.filter(r => r.id !== item.id);
+          _renderResearchGrid();
           if (uiModule) uiModule.showToast(toArchived ? 'Archived' : 'Restored');
         } catch { if (uiModule) uiModule.showError('Failed to ' + (toArchived ? 'archive' : 'restore')); }
       });

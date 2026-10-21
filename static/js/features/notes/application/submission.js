@@ -62,7 +62,8 @@ export function createNotesSubmission({
           effects.render();
         }
       }).catch(err => {
-        effects.showError('Save failed: ' + err.message);
+        const status = Number.isInteger(err?.status) && err.status >= 100 && err.status <= 599 ? ` (HTTP ${err.status})` : '';
+        effects.showError('Save failed: ' + err.message + status);
         fetchNotes().then(() => effects.render());
       });
 

@@ -26,6 +26,24 @@ test('list, reorder, upload, reminder and agent transports retain exact requests
   assert.equal(api.uploadUrl('file'), 'https://notes.invalid/api/upload/file');
 });
 
+test('scoped note read forwards its abort signal and parses only that note', async () => {
+  const calls = [], controller = new AbortController();
+  const note = { id: 'n', pinned: false, sort_order: 4 };
+  const api = createNotesApi({ origin: 'https://notes.invalid', request: async (...args) => { calls.push(args); return { ok: true, json: async () => note }; } });
+  assert.equal(await api.getNote('n', { signal: controller.signal }), note);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'https://notes.invalid/api/notes/n');
+  assert.equal(calls[0][1].credentials, 'same-origin');
+  assert.equal(calls[0][1].signal, controller.signal);
+  await api.getNote('a/b?c', { signal: controller.signal });
+  assert.equal(calls[1][0], 'https://notes.invalid/api/notes/a%2Fb%3Fc');
+});
+
+test('scoped note read keeps HTTP status without exposing a response body', async () => {
+  const api = createNotesApi({ origin: 'https://notes.invalid', request: async () => ({ ok: false, status: 503, json: async () => ({ detail: 'PRIVATE BODY' }) }) });
+  await assert.rejects(api.getNote('n'), error => error.message === 'Failed to load note' && error.status === 503 && !error.message.includes('PRIVATE BODY'));
+});
+
 test('draft and marker persistence retain keys, formats and malformed fallback', () => {
   const values = new Map();
   const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };

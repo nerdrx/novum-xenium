@@ -6,6 +6,8 @@ export function createChecklistOperations({
   uid
 }) {
     const state = app.state;
+    const withStatus = (message, error) => Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599
+      ? `${message} (HTTP ${error.status})` : message;
     function itemNote(id, index) {
       const note = state.notes.find(n => n.id === id);
       return note && Array.isArray(note.items) && note.items[index] ? note : null;
@@ -16,8 +18,8 @@ export function createChecklistOperations({
       const removed = note.items[index];
       app.mergeNote(note, { items: note.items.filter((_, i) => i !== index) });
       effects.render();
-      api.patchNote(id, { items: note.items }).catch(() => {
-        app.spliceItems(note, index, 0, removed); effects.render(); effects.showError('Failed to remove item');
+      api.patchNote(id, { items: note.items }).catch(error => {
+        app.spliceItems(note, index, 0, removed); effects.render(); effects.showError(withStatus('Failed to remove item', error));
       });
     }
     function editItem(note, index, text) {
@@ -26,10 +28,10 @@ export function createChecklistOperations({
       const oldItem = note.items[index];
       if (!text) app.spliceItems(note, index, 1);
       else app.updateItem(note, index, { text });
-      api.patchNote(note.id, { items: note.items }).catch(() => {
+      api.patchNote(note.id, { items: note.items }).catch(error => {
         if (!text) app.spliceItems(note, index, 0, oldItem);
         else app.updateItem(note, index, { text: oldText });
-        effects.render(); effects.showError('Failed to update item');
+        effects.render(); effects.showError(withStatus('Failed to update item', error));
       });
       effects.render();
     }
@@ -40,8 +42,8 @@ export function createChecklistOperations({
       items.push({ id: uid(), text, done: false });
       app.mergeNote(note, { items });
       added(); effects.render();
-      return () => api.patchNote(id, { items }).catch(() => {
-        app.mergeNote(note, { items: items.slice(0, -1) }); effects.render(); effects.showError('Failed to add item');
+      return () => api.patchNote(id, { items }).catch(error => {
+        app.mergeNote(note, { items: items.slice(0, -1) }); effects.render(); effects.showError(withStatus('Failed to add item', error));
       });
     }
     function toggleItem(id, index, changed, completed) {

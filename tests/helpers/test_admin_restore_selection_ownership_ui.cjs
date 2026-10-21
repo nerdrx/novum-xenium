@@ -14,7 +14,7 @@ const html = `<!doctype html><meta charset="utf-8"><body>
 <input type="file" id="adm-fullRestoreFile"><button id="adm-fullRestoreApply" style="display:none">Stage Restore and Require Restart</button>
 <div id="adm-backupMsg"></div><div id="adm-fullRestorePreview"></div>
 <script type="module">import '/static/js/admin.js';window.ready=true;</script>`;
-let heldStage, stageStarted = 0, nextStageStatus = 200, restorePending = false;
+let heldStage, stageStarted = 0, nextStageStatus = 200, nextStageTruncated = false, restorePending = false;
 const requests = [];
 const send = (res, body) => {res.writeHead(200, {'Content-Type':'application/json'});res.end(JSON.stringify(body));};
 const server = http.createServer((req,res) => {
@@ -25,7 +25,7 @@ const server = http.createServer((req,res) => {
     let body = '';req.on('data', c => body += c);req.on('end', () => {
       requests.push({path:url.pathname,body});
       if (url.pathname.endsWith('/preview')) return send(res,{created_at:body,files:1,unpacked_bytes:12,includes_database:true,includes_encryption_key:true});
-      stageStarted++;let status=nextStageStatus;nextStageStatus=200;if(status===200&&restorePending)status=400;heldStage = () => {if(status===200)restorePending=true;res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(status===200?{ok:true,message:'Synthetic restore staged'}:{detail:status===400?'A restore is already pending; restart the application first':'Synthetic staging failure'}));};
+      stageStarted++;let status=nextStageStatus;nextStageStatus=200;let truncated=nextStageTruncated;nextStageTruncated=false;if(status===200&&restorePending)status=400;heldStage = () => {if(status===200)restorePending=true;res.writeHead(status,{'Content-Type':'application/json'});if(truncated)return res.end('{"ok":true,');res.end(JSON.stringify(status===200?{ok:true,message:'Synthetic restore staged'}:{detail:status===400?'A restore is already pending; restart the application first':'Synthetic staging failure'}));};
     });return;
   }
   if (url.pathname === '/static/js/admin.js') {res.setHeader('Content-Type','text/javascript');return res.end(source.replace(marker,'window.__initBackup = initBackup;\n'+marker));}
@@ -50,8 +50,8 @@ const server = http.createServer((req,res) => {
       await input.setInputFiles({name:name+'.zip',mimeType:'application/zip',buffer:Buffer.from('synthetic-'+name)});
       await page.waitForFunction(name=>document.querySelector('#adm-fullRestorePreview').textContent.includes('synthetic-'+name),name);
     };
-    const stage = async (number,status=200) => {
-      nextStageStatus=status;await apply.click();
+    const stage = async (number,status=200,truncated=false) => {
+      nextStageStatus=status;nextStageTruncated=truncated;await apply.click();
       await new Promise((resolve,reject)=>{const deadline=Date.now()+5000;const tick=()=>stageStarted===number?resolve():Date.now()>deadline?reject(Error('stage not started')):setTimeout(tick,10);tick();});
     };
     const release = async () => {heldStage();heldStage=null;await page.waitForFunction(()=>!document.querySelector('#adm-fullRestoreApply').disabled);};
@@ -75,12 +75,25 @@ const server = http.createServer((req,res) => {
     await choose('C');await stage(4,503);await release();
     assert((await page.locator('#adm-fullRestorePreview').textContent()).includes('synthetic-C'),'failure preserves current choice');
     assert.equal(await apply.isVisible(),true);
-    assert((await page.locator('#adm-backupMsg').textContent()).includes('Synthetic staging failure'));
+    assert((await page.locator('#adm-backupMsg').textContent()).includes('Could not confirm restore staging: Synthetic staging failure. A restore may be pending; check before restarting.'));
     await stage(5);await release();
     assert.equal(await apply.isVisible(),false);
+    await page.evaluate(()=>fetch('/__reset-synthetic-backend'));
+    await choose('D');await stage(6,200,true);await release();
+    const uncertainMessage=await page.locator('#adm-backupMsg').textContent();
+    assert(uncertainMessage.includes('Could not confirm restore staging'),'truncated 200 must be reported as uncertain');
+    assert(uncertainMessage.includes('A restore may be pending; check before restarting.'),'uncertain result gives safe next step');
+    assert.equal(await apply.isVisible(),true,'uncertain result preserves the selected backup');
+    await stage(7);await release();
+    const pendingMessage=await page.locator('#adm-backupMsg').textContent();
+    assert(pendingMessage.includes('Could not confirm restore staging: A restore is already pending; restart the application first.'),'pending 400 detail remains visible under uncertain-outcome guidance');
+    assert((await page.locator('#adm-fullRestorePreview').textContent()).includes('synthetic-D'),'same-file retry preserves the selected backup');
+    await page.evaluate(()=>fetch('/__reset-synthetic-backend'));
+    await stage(8);await release();
+    assert.equal(await apply.isVisible(),false,'same-file retry can be staged after fixture clears pending state');
     const stages=requests.filter(r=>r.path.endsWith('/restore')).map(r=>r.body);
-    assert.deepEqual(stages,['synthetic-A','synthetic-B','synthetic-B','synthetic-C','synthetic-C']);
+    assert.deepEqual(stages,['synthetic-A','synthetic-B','synthetic-B','synthetic-C','synthetic-C','synthetic-D','synthetic-D','synthetic-D']);
     assert.deepEqual(errors,[]);assert.equal(externalRequests,0);
-    console.log(JSON.stringify({source_sha256:crypto.createHash('sha256').update(source).digest('hex'),pass:true,newerPreviewPreserved:true,acceptedOlderStageReported:true,pendingRestoreRejectedB:true,currentStageCleanup:true,failedStageRetryPreserved:true,stages,errors,externalRequests,limits:'Actual admin module with private initializer exposure; synthetic loopback files/responses only. No real backup or restore.'}));
+    console.log(JSON.stringify({source_sha256:crypto.createHash('sha256').update(source).digest('hex'),pass:true,newerPreviewPreserved:true,acceptedOlderStageReported:true,pendingRestoreRejectedB:true,truncated200ReportedUncertain:true,sameFilePendingRetryPreserved:true,currentStageCleanup:true,failedStageRetryPreserved:true,stages,errors,externalRequests,limits:'Actual admin module with private initializer exposure; synthetic loopback files/responses only. No real backup or restore.'}));
   } finally {heldStage?.();await browser?.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

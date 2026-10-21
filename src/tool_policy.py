@@ -554,6 +554,17 @@ _GUIDE_ONLY_PATTERNS: Tuple[Tuple[re.Pattern[str], str], ...] = tuple(
     )
 )
 
+_GUIDE_ONLY_LITERAL_REPLACEMENT_OPERAND = r'(?:"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)'
+_GUIDE_ONLY_LITERAL_REPLACEMENT_COMMAND = re.compile(
+    r"(?:please\s+)?(?:in\s+[^,\s]+\s*,\s*)?"
+    r"replace\s+(?:the\s+)?literal\s+(?:sentence|text|phrase|string)\s+"
+    + _GUIDE_ONLY_LITERAL_REPLACEMENT_OPERAND
+    + r"\s+with\s+"
+    + _GUIDE_ONLY_LITERAL_REPLACEMENT_OPERAND
+    + r"\.?",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class ToolPolicy:
@@ -588,6 +599,8 @@ def detect_guide_only_turn(message: object) -> Optional[str]:
     if not isinstance(message, str) or not message.strip():
         return None
     text = re.sub(r"\s+", " ", message.strip())
+    if _GUIDE_ONLY_LITERAL_REPLACEMENT_COMMAND.fullmatch(text):
+        return None
     for pattern, reason in _GUIDE_ONLY_PATTERNS:
         if pattern.search(text):
             return reason

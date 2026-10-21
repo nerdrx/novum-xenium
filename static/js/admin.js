@@ -3946,7 +3946,10 @@ function initBackup() {
         previewBox.textContent = 'Restore staged. Stop and start Novum Xenium to activate it. External Docker volumes and runtime caches are preserved.';
         applyRestore.style.display = 'none'; validatedFile = null;
       }
-    } catch (e) { msg.textContent = 'Restore staging failed: ' + e.message; msg.className = 'admin-error'; }
+    } catch (e) {
+      msg.textContent = `Could not confirm restore staging: ${e.message}. A restore may be pending; check before restarting.`;
+      msg.className = 'admin-error';
+    }
     applyRestore.disabled = false; applyRestore.textContent = 'Stage Restore and Require Restart';
   });
 }

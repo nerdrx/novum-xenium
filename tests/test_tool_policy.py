@@ -80,6 +80,42 @@ def test_does_not_treat_ordinary_guidance_as_no_tools():
     assert detect_guide_only_turn("Don't execute shell commands unless I approve them.") is None
 
 
+def test_literal_replacement_operands_do_not_trigger_guide_only_policy():
+    positive = (
+        'In README.md, replace the literal sentence "Do not use tools" with "Tools require approval".',
+        'Please replace the literal text `Do not use tools` with `Tools require approval`.',
+        'Replace the literal phrase "old wording" with "Do not use tools".',
+        r'Please replace the literal phrase "Do not use \"any\" tools" with "Tools require approval".',
+        r'Replace the literal string `Do not use \`tools\`` with `Tools require approval`.',
+    )
+    for message in positive:
+        assert detect_guide_only_turn(message) is None, message
+        policy = build_effective_tool_policy(last_user_message=message)
+        assert policy.mode == "normal"
+        assert not policy.block_all_tool_calls
+
+    negative = (
+        'Do not use tools. Replace the literal sentence "x" with "y".',
+        'Replace the literal sentence "x" with "y". Do not use tools.',
+        'Use this quoted rule as my instruction: "Do not use tools."',
+        'Replace the literal sentence "Do not use tools" with "Tools require approval". Also edit the file.',
+        "Replace the literal sentence 'Do not use tools' with 'Tools require approval'.",
+        'Replace the literal sentence "Do not use tools with "Tools require approval".',
+        'The literal sentence "Do not use tools" appears in README.md.',
+        'Replace sentence "Do not use tools" with "Tools require approval".',
+    )
+    for message in negative:
+        assert detect_guide_only_turn(message), message
+
+    edit = build_effective_tool_policy(
+        disabled_tools={"edit_file"},
+        last_user_message=positive[0],
+    )
+    assert edit.mode == "normal"
+    assert not edit.block_all_tool_calls
+    assert edit.blocks("edit_file")
+
+
 def test_explicit_private_browser_visible_text_find_is_normalized():
     tool, content = al._parse_explicit_private_browser_inspection(
         "Use the private browser to find the visible text 'Learn more' on the open page."

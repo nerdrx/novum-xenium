@@ -1268,6 +1268,7 @@ function _draftsHideLoading(section) {
 
 // Held between renders so search + select state survive a re-render.
 let _draftsCache = [];
+let _draftsLoadSequence = 0;
 let _draftsSearch = '';
 let _draftsSelectMode = false;
 let _draftsSelected = new Set();
@@ -1281,21 +1282,53 @@ async function _renderEditorDrafts() {
   const section = document.getElementById('gallery-editor-drafts');
   const grid = document.getElementById('gallery-editor-drafts-grid');
   if (!section || !grid) return;
+  const sequence = ++_draftsLoadSequence;
+  const current = () => sequence === _draftsLoadSequence && section.isConnected && grid.isConnected
+    && document.getElementById('gallery-editor-drafts') === section
+    && document.getElementById('gallery-editor-drafts-grid') === grid;
   // Show a frosted whirlpool overlay over the drafts area while the
   // list is fetching. The section becomes visible BEFORE the fetch so
   // the user sees the loading indicator instead of a blank space.
   section.hidden = false;
+  section.querySelector('.gallery-editor-drafts-load-error')?.remove();
+  _draftsWireOnce();
+  if (_draftsCache.length) _draftsPaint();
   _draftsShowLoading(section);
   try {
     const res = await fetch(`${API_BASE}/api/editor-drafts`, { credentials: 'same-origin' });
-    if (res.ok) {
-      const out = await res.json();
-      _draftsCache = Array.isArray(out.drafts) ? out.drafts : [];
-    }
-  } catch (_) {
-    _draftsCache = [];
+    if (!current()) return false;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const out = await res.json();
+    if (!current()) return false;
+    if (!Array.isArray(out?.drafts)) throw new Error('Invalid saved project list');
+    _draftsCache = out.drafts;
+  } catch (error) {
+    if (!current()) return false;
+    console.error('Editor drafts fetch error:', error);
+    const alert = document.createElement('div');
+    alert.className = 'gallery-albums-empty gallery-editor-drafts-load-error';
+    alert.setAttribute('role', 'alert');
+    alert.style.opacity = '1';
+    const message = document.createElement('span');
+    message.textContent = _draftsCache.length
+      ? 'Could not refresh saved projects. The last loaded list is kept.'
+      : 'Could not load saved projects.';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'gallery-select-btn';
+    retry.textContent = 'Retry';
+    retry.style.minWidth = '44px';
+    retry.style.minHeight = '44px';
+    retry.style.setProperty('margin', '0', 'important');
+    retry.style.opacity = '1';
+    retry.addEventListener('click', () => { _renderEditorDrafts(); });
+    alert.append(message, retry);
+    section.appendChild(alert);
+    return false;
+  } finally {
+    if (current()) _draftsHideLoading(section);
   }
-  _draftsHideLoading(section);
+  if (!current()) return false;
   if (!_draftsCache.length) {
     section.hidden = true;
     grid.innerHTML = '';
@@ -1315,6 +1348,7 @@ async function _renderEditorDrafts() {
     setTimeout(() => grid.classList.remove('gallery-drafts-just-opened'), 900);
   }
   _draftsWireOnce();
+  return true;
 }
 
 // Re-render only the grid (and bulk bar) from cached drafts + search +

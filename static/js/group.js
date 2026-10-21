@@ -105,17 +105,17 @@ function _initGroupTab() {
 
   // _groupParticipants is at module scope
   let _modelsCache = null;
-  let deletingGroupPreset = false;
+  let groupPresetMutationInProgress = false;
   let groupPresetsStale = false;
   let groupPresetsLoadId = 0;
 
   async function _deleteGroupPreset(groups, idx, name, confirmFirst = false) {
-    if (deletingGroupPreset) return;
+    if (groupPresetMutationInProgress) return;
     if (groupPresetsStale) {
       uiModule.showToast('Group preset list needs to reload. Reopen the Group tab to retry.');
       return;
     }
-    deletingGroupPreset = true;
+    groupPresetMutationInProgress = true;
     const operationLoadId = groupPresetsLoadId;
     let requestStarted = false;
     try {
@@ -147,7 +147,7 @@ function _initGroupTab() {
         uiModule.showToast('Could not confirm the delete. Please try again.');
       }
     } finally {
-      deletingGroupPreset = false;
+      groupPresetMutationInProgress = false;
     }
   }
 
@@ -303,7 +303,7 @@ function _initGroupTab() {
     await startGroup(picked, 'group-' + Date.now());
 
     // Auto-save as preset if 2+ participants
-    let presetSaveFailed = false;
+    let presetSaveWarning = '';
     if (picked.length >= 2) {
       const presetData = {
         id: 'grp-' + Date.now(),
@@ -318,32 +318,54 @@ function _initGroupTab() {
           characterName: p.character?.characterName || null,
         })),
       };
-      try {
-        const existingResponse = await fetch(API_BASE + '/api/presets/groups', { credentials: 'same-origin' });
-        if (!existingResponse.ok) throw new Error('Group preset list failed: ' + existingResponse.status);
-        const existing = await existingResponse.json();
-        const groups = existing.groups || [];
-        // Don't duplicate if same participants
-        const sig = presetData.participants.map(p => p.modelKey + ':' + (p.characterId || '')).sort().join(',');
-        const exists = groups.some(g => (g.participants || []).map(p => (p.modelKey || p.modelId) + ':' + (p.characterId || '')).sort().join(',') === sig);
-        if (!exists) {
-          groups.push(presetData);
-          const saveResponse = await fetch(API_BASE + '/api/presets/groups', {
-            method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ groups }),
-          });
-          if (!saveResponse.ok) throw new Error('Group preset save failed: ' + saveResponse.status);
+      if (groupPresetMutationInProgress) {
+        presetSaveWarning = 'preset list is busy; try again later.';
+      } else {
+        groupPresetMutationInProgress = true;
+        let writeStarted = false;
+        try {
+          const existingResponse = await fetch(API_BASE + '/api/presets/groups', { credentials: 'same-origin' });
+          if (!existingResponse.ok) throw new Error('Group preset list failed: ' + existingResponse.status);
+          const existing = await existingResponse.json();
+          const groups = existing.groups || [];
+          // Don't duplicate if same participants
+          const sig = presetData.participants.map(p => p.modelKey + ':' + (p.characterId || '')).sort().join(',');
+          const exists = groups.some(g => (g.participants || []).map(p => (p.modelKey || p.modelId) + ':' + (p.characterId || '')).sort().join(',') === sig);
+          if (!exists) {
+            groups.push(presetData);
+            writeStarted = true;
+            const saveResponse = await fetch(API_BASE + '/api/presets/groups', {
+              method: 'POST', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ groups }),
+            });
+            if (!saveResponse.ok) throw new Error('Group preset save failed: ' + saveResponse.status);
+            groupPresetsStale = true;
+            groupPresetsLoadId++;
+            if (!(await _loadGroupPresets())) presetSaveWarning = 'preset saved, but the list could not be refreshed. Reopen the Group tab.';
+          }
+        } catch (e) {
+          if (writeStarted) {
+            // A lost response may follow a successful write; reconcile before unlocking mutations.
+            groupPresetsStale = true;
+            groupPresetsLoadId++;
+            const refreshed = await _loadGroupPresets();
+            presetSaveWarning = refreshed
+              ? 'could not confirm whether the preset was saved. The list was refreshed; check before retrying.'
+              : 'could not confirm whether the preset was saved. Reopen the Group tab before retrying.';
+          } else {
+            presetSaveWarning = 'preset could not be saved. Try again later.';
+          }
+          console.warn('[group] Group chat started, but preset save needs attention:', e);
+        } finally {
+          groupPresetMutationInProgress = false;
         }
-      } catch (e) {
-        presetSaveFailed = true;
-        console.warn('[group] Group chat started, but preset could not be saved:', e);
       }
     }
 
     const readyMessage = 'Group chat ready — ' + picked.length + ' participants';
-    uiModule.showToast(presetSaveFailed
-      ? readyMessage + '; preset could not be saved. Try again later.'
+    uiModule.showToast(presetSaveWarning
+      ? readyMessage + '; ' + presetSaveWarning
       : readyMessage);
   });
 

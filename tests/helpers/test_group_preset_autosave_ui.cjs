@@ -175,10 +175,10 @@ async function main() {
 
     const postFailure = await runScenario('post-failure');
     assert.ok(postFailure.shownToast.includes('Group chat ready'));
-    assert.ok(postFailure.shownToast.includes('preset could not be saved'));
+    assert.ok(postFailure.shownToast.includes('could not confirm whether the preset was saved'));
     assert.deepEqual(postFailure.startCalls, [{ models: ['fixture-a', 'fixture-b'], active: true }]);
     assert.equal(postFailure.active, true, 'Preset failure must not stop the group chat');
-    assert.equal(postFailure.getRequests, 1);
+    assert.equal(postFailure.getRequests, 2, 'Ambiguous POST failure is reconciled before mutations unlock');
     assert.equal(postFailure.postRequests, 1);
     assert.equal(postFailure.postedGroups.length, 1);
     assert.deepEqual(postFailure.persistedGroups, []);
@@ -186,7 +186,7 @@ async function main() {
     const success = await runScenario('success');
     assert.equal(success.shownToast, 'Group chat ready — 2 participants×');
     assert.deepEqual(success.startCalls, [{ models: ['fixture-a', 'fixture-b'], active: true }]);
-    assert.equal(success.getRequests, 1);
+    assert.equal(success.getRequests, 2, 'Accepted autosave refreshes the visible preset list');
     assert.equal(success.postRequests, 1);
     assert.equal(success.persistedGroups.length, 1);
     assert.equal(success.persistedGroups[0].participants.length, 2);

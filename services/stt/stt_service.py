@@ -10,6 +10,34 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+_AUDIO_FORMATS = {
+    "audio/webm": ("webm", "audio/webm"),
+    "audio/mp4": ("m4a", "audio/mp4"),
+    "audio/ogg": ("ogg", "audio/ogg"),
+    "audio/wav": ("wav", "audio/wav"),
+    "audio/mpeg": ("mp3", "audio/mpeg"),
+}
+
+
+def _audio_format(content_type: str = "", filename: str = "") -> tuple[str, str]:
+    mime = (content_type or "").split(";", 1)[0].strip().lower()
+    if mime in _AUDIO_FORMATS:
+        return _AUDIO_FORMATS[mime]
+    extension = Path(filename or "").suffix.lower().lstrip(".")
+    by_extension = {
+        "webm": _AUDIO_FORMATS["audio/webm"],
+        "m4a": _AUDIO_FORMATS["audio/mp4"],
+        "mp4": _AUDIO_FORMATS["audio/mp4"],
+        "ogg": _AUDIO_FORMATS["audio/ogg"],
+        "wav": _AUDIO_FORMATS["audio/wav"],
+        "mp3": _AUDIO_FORMATS["audio/mpeg"],
+    }
+    if extension in by_extension:
+        return by_extension[extension]
+    if not mime and not extension:
+        return _AUDIO_FORMATS["audio/webm"]
+    return "bin", "application/octet-stream"
+
 
 class STTService:
     """Multi-provider STT service.
@@ -87,14 +115,16 @@ class STTService:
                 return None
         return self._whisper_model
 
-    def _transcribe_local(self, audio_bytes: bytes, language: str = "") -> Optional[str]:
+    def _transcribe_local(
+        self, audio_bytes: bytes, language: str = "", extension: str = "webm"
+    ) -> Optional[str]:
         model = self._get_whisper()
         if not model:
             return None
         tmp_path = None
         try:
             # Write to temp file (faster-whisper needs a file path or file-like)
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=f".{extension}", delete=False) as tmp:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
 
@@ -116,7 +146,15 @@ class STTService:
 
     # ── API endpoint ──
 
-    def _transcribe_api(self, audio_bytes: bytes, endpoint_id: str, model: str, language: str = "") -> Optional[str]:
+    def _transcribe_api(
+        self,
+        audio_bytes: bytes,
+        endpoint_id: str,
+        model: str,
+        language: str = "",
+        extension: str = "webm",
+        content_type: str = "audio/webm",
+    ) -> Optional[str]:
         from src.database import SessionLocal, ModelEndpoint
 
         db = SessionLocal()
@@ -135,7 +173,7 @@ class STTService:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        files = {"file": ("audio.webm", io.BytesIO(audio_bytes), "audio/webm")}
+        files = {"file": (f"audio.{extension}", io.BytesIO(audio_bytes), content_type)}
         data = {"model": model or "whisper-1"}
         if language:
             data["language"] = language
@@ -153,22 +191,23 @@ class STTService:
 
     # ── Public interface ──
 
-    def transcribe(self, audio_bytes: bytes) -> Optional[str]:
+    def transcribe(self, audio_bytes: bytes, content_type: str = "", filename: str = "") -> Optional[str]:
         settings = self._load_settings()
         if settings.get("stt_enabled") is False:
             return None
         provider = settings["stt_provider"]
         model = settings["stt_model"]
         language = settings.get("stt_language", "")
+        extension, normalized_type = _audio_format(content_type, filename)
 
         if provider in ("disabled", "browser"):
             return None
 
         if provider == "local":
-            return self._transcribe_local(audio_bytes, language)
+            return self._transcribe_local(audio_bytes, language, extension)
         elif provider.startswith("endpoint:"):
             endpoint_id = provider.split(":", 1)[1]
-            return self._transcribe_api(audio_bytes, endpoint_id, model, language)
+            return self._transcribe_api(audio_bytes, endpoint_id, model, language, extension, normalized_type)
         else:
             logger.error(f"Unknown STT provider: {provider}")
             return None

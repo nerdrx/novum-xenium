@@ -180,17 +180,40 @@ async function _copyVoiceTranscript(destination, text) {
   try {
     if (uiModule.copyToClipboard) {
       const copied = await uiModule.copyToClipboard(text);
-      if (copied === false) throw new Error('Clipboard unavailable');
       if (copied === true) return true;
+      if (!_voiceDestinationIdentityMatches(destination)) {
+        uiModule.showToast?.('Voice transcript recovery stopped because the account changed.');
+        return false;
+      }
+      if (copied === false) throw new Error('Clipboard unavailable');
     }
     // Older cached helpers return no status; confirm through the native API
     // before reporting recovery as successful.
-    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
     throw new Error('Clipboard unavailable');
   } catch {
     uiModule.showError?.('Could not copy the voice transcript.');
+  }
+  if (!_voiceDestinationIdentityMatches(destination)) {
+    uiModule.showToast?.('Voice transcript recovery stopped because the account changed.');
     return false;
   }
+  const downloadConfirmed = await uiModule.styledConfirm(
+    'The transcript could not be copied. Download it as a text file instead?',
+    { title: 'Voice transcript', confirmText: 'Download transcript', cancelText: 'Discard transcript' }
+  );
+  if (!downloadConfirmed) return false;
+  if (!_voiceDestinationIdentityMatches(destination)) {
+    uiModule.showToast?.('Voice transcript was not downloaded because the account changed.');
+    return false;
+  }
+  const transcriptFile = new File([text], 'voice-transcript.txt', { type: 'text/plain;charset=utf-8' });
+  _downloadVoiceAudio(transcriptFile);
+  uiModule.showToast?.('Voice transcript downloaded.');
+  return true;
 }
 
 export async function deliverVoiceTranscription(destination, transcript, insertCurrent, recoveryOnly = false) {

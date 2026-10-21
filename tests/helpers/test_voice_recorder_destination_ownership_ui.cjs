@@ -6,7 +6,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 
-const repo = path.resolve(__dirname, '../..');
+const repo = path.resolve(process.env.SOURCE_ROOT || path.join(__dirname, '../..'));
 const origin = 'http://127.0.0.1';
 const htmlPath = path.join(repo, 'static/index.html');
 const apiRequests = [], externalRequests = [], pageErrors = [], clipboardWrites = [], downloads = [];
@@ -48,6 +48,7 @@ const mediaScript = `(() => {
   }
   Object.defineProperty(window, 'MediaRecorder', { configurable: true, value: Recorder });
   Object.defineProperty(window, 'SpeechRecognition', { configurable: true, value: Recognition });
+  Object.defineProperty(window, 'webkitSpeechRecognition', { configurable: true, value: Recognition });
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText(text) { window.__voiceFixture.clipboard.push(text); return Promise.resolve(); } } });
   const originalAnchorClick = HTMLAnchorElement.prototype.click;
   HTMLAnchorElement.prototype.click = function() {
@@ -159,6 +160,130 @@ const server = http.createServer((req, res) => {
       authMode = 'user';
       return { isolatedContext, isolatedPage };
     };
+
+    if (process.env.VOICE_HELPER_FOCUS === 'clipboard-recovery') {
+      const installClipboardFailure = async (p, captureDownload = false) => p.evaluate(capture => {
+        const f = window.__voiceFixture;
+        f.execCopyCalls = 0; f.execTextareaCount = 0; f.downloadPayloads = [];
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+          writeText(text) { f.clipboard.push(text); return Promise.reject(new Error('synthetic clipboard denial')); }
+        }});
+        document.execCommand = command => {
+          if (command === 'copy') { f.execCopyCalls++; f.execTextareaCount = document.querySelectorAll('textarea').length; }
+          return false;
+        };
+        if (capture) {
+          const blobs = new Map(); let next = 0;
+          f.downloadPayloads = [];
+          URL.createObjectURL = blob => { const url = `blob:${location.origin}/pass209-${++next}`; blobs.set(url, blob); return url; };
+          URL.revokeObjectURL = () => {};
+          const previousClick = HTMLAnchorElement.prototype.click;
+          HTMLAnchorElement.prototype.click = function() {
+            const blob = blobs.get(this.href);
+            if (blob) { f.downloads.push(this.download); f.downloadPayloads.push({ name: this.download, blob }); return; }
+            return previousClick.call(this);
+          };
+        }
+      }, captureDownload);
+      const runDeletedRecovery = async (mode) => {
+        const app = await openApp('user'); const p = app.isolatedPage;
+        if (mode !== 'clipboard-success') await installClipboardFailure(p, mode === 'download');
+        await p.locator('#sidebar-new-chat-btn').click();
+        await p.waitForFunction(() => !!window.sessionModule.getPendingDraftId());
+        const originalId = await p.evaluate(() => window.sessionModule.getPendingDraftId());
+        await p.locator('.send-btn').click();
+        await p.waitForFunction(() => window.__voiceFixture.requests.length === 1);
+        await p.evaluate(() => window.__voiceFixture.grant(0));
+        await p.waitForFunction(() => window.__voiceFixture.recorders[0]?.state === 'recording');
+        await p.locator('#message').fill('draft A stays private');
+        await p.locator('.send-btn').click();
+        await p.waitForFunction(() => window.__voiceFixture.recognitions[0]?.stopped === true);
+        await p.locator('#sidebar-new-chat-btn').click();
+        await p.waitForFunction(id => window.sessionModule.getPendingDraftId() !== id, originalId);
+        const currentId = await p.evaluate(() => window.sessionModule.getPendingDraftId());
+        await p.locator('#message').fill('draft B stays visible');
+        await p.evaluate(id => window.sessionModule.deleteSessionById(id), originalId);
+        await p.evaluate(text => { window.__voiceFixture.recognitions[0].emit(text); window.__voiceFixture.recognitions[0].finish(); }, 'synthetic recovery transcript');
+        await p.waitForFunction(() => document.querySelector('#styled-confirm-overlay')?.classList.contains('hidden') === false, null, { timeout: 10000 });
+        const firstPrompt = await p.locator('#styled-confirm-msg').textContent();
+        assert.match(firstPrompt, /copy it to your clipboard/i);
+        assert.match(await p.locator('#styled-confirm-ok').textContent(), /copy transcript/i);
+        await p.locator('#styled-confirm-ok').click();
+        if (mode === 'clipboard-success') {
+          await p.waitForFunction(() => window.__voiceFixture.clipboard.includes('synthetic recovery transcript'), null, { timeout: 10000 });
+          const success = await p.evaluate(() => ({ clipboard: window.__voiceFixture.clipboard.slice(), dialogHidden: document.querySelector('#styled-confirm-overlay')?.classList.contains('hidden'), toast: document.querySelector('.toast-message')?.textContent }));
+          assert.equal(success.dialogHidden, true);
+          assert.ok(success.toast.includes('Copied'));
+          await app.isolatedContext.close();
+          return { mode, originalId, currentId, firstPrompt, success };
+        }
+        await p.waitForFunction(() => {
+          const overlay = document.querySelector('#styled-confirm-overlay');
+          const message = document.querySelector('#styled-confirm-msg')?.textContent || '';
+          const toast = document.querySelector('.toast-message')?.textContent || '';
+          return (overlay?.classList.contains('hidden') === false && /download it as a text file/i.test(message)) || toast.includes('Could not copy the voice transcript.');
+        }, null, { timeout: 10000 });
+        const fallbackDialogVisible = await p.locator('#styled-confirm-overlay').evaluate(el => !el.classList.contains('hidden'));
+        assert.equal(fallbackDialogVisible, true, 'copy failure must leave an explicit recovery choice open');
+        const secondPrompt = await p.locator('#styled-confirm-msg').textContent();
+        assert.match(secondPrompt, /download it as a text file/i);
+        assert.match(await p.locator('#styled-confirm-ok').textContent(), /download transcript/i);
+        assert.match(await p.locator('#styled-confirm-cancel').textContent(), /discard transcript/i);
+        const retainedBeforeChoice = await p.evaluate(() => ({ input: document.querySelector('#message')?.value, transcriptVisible: document.body.innerText.includes('synthetic recovery transcript'), stored: Array.from({length: localStorage.length}, (_, i) => localStorage.getItem(localStorage.key(i)) || '').some(value => value.includes('synthetic recovery transcript')) }));
+        assert.equal(retainedBeforeChoice.input, 'draft B stays visible');
+        assert.equal(retainedBeforeChoice.transcriptVisible, false);
+        assert.equal(retainedBeforeChoice.stored, false);
+        if (mode === 'discard') {
+          await p.locator('#styled-confirm-cancel').click();
+          await p.waitForFunction(() => document.querySelector('#styled-confirm-overlay')?.classList.contains('hidden') === true);
+        } else {
+          if (mode === 'account-switch') await p.evaluate(() => localStorage.setItem('odysseus-auth-user', 'different-fixture-user'));
+          await p.locator('#styled-confirm-ok').click();
+          if (mode === 'download') await p.waitForFunction(() => window.__voiceFixture.downloads.length === 1, null, { timeout: 10000 });
+          else await p.waitForFunction(() => document.querySelector('.toast-message')?.textContent.includes('account changed'), null, { timeout: 10000 });
+        }
+        const outcome = await p.evaluate(async () => ({
+          currentId: window.sessionModule.getPendingDraftId(), input: document.querySelector('#message')?.value,
+          toast: document.querySelector('.toast-message')?.textContent,
+          clipboard: window.__voiceFixture.clipboard.slice(), execCopyCalls: window.__voiceFixture.execCopyCalls,
+          execTextareaCount: window.__voiceFixture.execTextareaCount, textareasAfter: document.querySelectorAll('textarea').length,
+          textareaHasTranscript: Array.from(document.querySelectorAll('textarea')).some(el => el.value.includes('synthetic recovery transcript')),
+          downloads: window.__voiceFixture.downloads.slice(),
+          downloadPayloads: await Promise.all((window.__voiceFixture.downloadPayloads || []).map(async item => ({ name: item.name, type: item.blob.type, bytes: Array.from(new Uint8Array(await item.blob.arrayBuffer())) }))),
+          dialogHidden: document.querySelector('#styled-confirm-overlay')?.classList.contains('hidden'),
+          transcriptVisible: document.body.innerText.includes('synthetic recovery transcript'),
+          transcriptStored: Array.from({length: localStorage.length}, (_, i) => localStorage.getItem(localStorage.key(i)) || '').some(value => value.includes('synthetic recovery transcript')),
+        }));
+        assert.equal(outcome.currentId, currentId);
+        assert.equal(outcome.input, 'draft B stays visible');
+        assert.equal(outcome.dialogHidden, true);
+        assert.equal(outcome.transcriptVisible, false);
+        assert.equal(outcome.transcriptStored, false);
+        assert.deepEqual(outcome.clipboard, ['synthetic recovery transcript']);
+        assert.equal(outcome.execCopyCalls, 1);
+        assert.equal(outcome.execTextareaCount, outcome.textareasAfter + 1);
+        assert.equal(outcome.textareaHasTranscript, false);
+        if (mode === 'download') {
+          assert.deepEqual(outcome.downloads, ['voice-transcript.txt']);
+          assert.deepEqual(outcome.downloadPayloads, [{ name: 'voice-transcript.txt', type: 'text/plain;charset=utf-8', bytes: Array.from(new TextEncoder().encode('synthetic recovery transcript')) }]);
+          assert.equal(outcome.toast, 'Voice transcript downloaded.');
+        } else {
+          assert.deepEqual(outcome.downloads, []);
+          if (mode === 'account-switch') assert.equal(outcome.toast, 'Voice transcript was not downloaded because the account changed.');
+        }
+        await app.isolatedContext.close();
+        return { mode, originalId, currentId, firstPrompt, secondPrompt, retainedBeforeChoice, outcome };
+      };
+      const downloadRecovery = await runDeletedRecovery('download');
+      const discardRecovery = await runDeletedRecovery('discard');
+      const changedAccountRecovery = await runDeletedRecovery('account-switch');
+      const successfulCopy = await runDeletedRecovery('clipboard-success');
+      assert.deepEqual(externalRequests, []);
+      assert.deepEqual(pageErrors, []);
+      const hash = file => crypto.createHash('sha256').update(fs.readFileSync(path.join(repo, file))).digest('hex');
+      console.log(JSON.stringify({ pass: true, source: { gitHead: execFileSync('git', ['rev-parse','HEAD'], { cwd: repo, encoding: 'utf8' }).trim(), voiceRecorderJs: hash('static/js/voiceRecorder.js'), sessionsJs: hash('static/js/sessions.js'), uiJs: hash('static/js/ui.js') }, downloadRecovery, discardRecovery, changedAccountRecovery, successfulCopy, externalRequests, pageErrors, scope: 'Actual app and sessions recovery; fake GUM/MediaRecorder/both SpeechRecognition constructors; synthetic clipboard and blob-download sinks; loopback-only APIs; no physical mic, OS clipboard or live providers.' }, null, 2));
+      return;
+    }
 
     stageIs('no-pending startup recording');
     const startupApp = await openApp('user');

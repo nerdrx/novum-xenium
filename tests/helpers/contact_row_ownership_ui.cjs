@@ -222,9 +222,74 @@ const server = http.createServer(async (req, res) => {
       await page.locator('.contact-row[data-uid="fixture-a"] .contact-save').click();
       const goodResponse = await observeResponse(page, 'PUT', '/api/contacts/fixture-a');
       await page.waitForFunction(node => !node.isConnected, oldRow);
+      await twoFrames(page);
       assert.equal(await page.locator('.contact-name').first().textContent(), 'A draft retained');
+      const editorAfterSave = await page.locator('.contact-row[data-uid="fixture-a"] .contact-row-edit').evaluate(node => getComputedStyle(node).display !== 'none');
       const snapshot = await stateOn(page);
-      proof.cases.ownedSaveControls = { failedStatus: 503, failedDraftRetained: true, successfulStatus: goodResponse.status, savedName: snapshot.contacts[0].name, listReads: snapshot.listReads };
+      proof.cases.ownedSaveControls = { failedStatus: 503, failedDraftRetained: true, successfulStatus: goodResponse.status, savedName: snapshot.contacts[0].name, editorClosedAfterSave: !editorAfterSave, listReads: snapshot.listReads };
+      await page.close();
+    }
+
+    // An accepted A save refreshes server state without discarding newer A/B drafts.
+    fresh();
+    {
+      const page = await newPage(); await openManager(page);
+      await page.locator('.contact-row[data-uid="fixture-a"] .contact-edit').click();
+      await page.locator('.contact-row[data-uid="fixture-a"] .contact-edit-name').fill('Fixture A accepted');
+      holdSave = true;
+      await page.evaluate(() => window.__watchProofResponse('PUT', '/api/contacts/fixture-a'));
+      await page.locator('.contact-row[data-uid="fixture-a"] .contact-save').click();
+      await page.waitForFunction(async () => (await (await fetch('/__state')).json()).heldSave === 1);
+      await page.locator('.contact-row[data-uid="fixture-a"] .contact-edit-name').fill('Fixture A newer draft');
+      await page.locator('.contact-row[data-uid="fixture-b"] .contact-edit').click();
+      await page.locator('.contact-row[data-uid="fixture-b"] .contact-edit-name').fill('Fixture B first draft');
+      holdRefresh = true;
+      await page.evaluate(() => window.__watchProofResponse('GET', '/api/contacts/list'));
+      await release(page, '/__release-save');
+      const put = await observeResponse(page, 'PUT', '/api/contacts/fixture-a');
+      assert.equal(put.status, 200); assert.equal(put.body.success, true);
+      await page.waitForFunction(async () => (await (await fetch('/__state')).json()).heldRefresh > 0);
+      const latestB = 'Fixture B typed during list load';
+      const bInput = page.locator('.contact-row[data-uid="fixture-b"] .contact-edit-name');
+      await bInput.fill(latestB);
+      await bInput.evaluate(input => { input.focus(); input.setSelectionRange(8, 14, 'backward'); });
+      const whileHeld = await page.evaluate(() => ({
+        a: document.querySelector('.contact-row[data-uid="fixture-a"] .contact-edit-name')?.value,
+        b: document.querySelector('.contact-row[data-uid="fixture-b"] .contact-edit-name')?.value,
+      }));
+      await release(page, '/__release-refresh');
+      const listResponse = await observeResponse(page, 'GET', '/api/contacts/list');
+      assert.equal(listResponse.status, 200); assert.ok(Array.isArray(listResponse.body.contacts));
+      await twoFrames(page);
+      const after = await page.evaluate(() => {
+        const a = document.querySelector('.contact-row[data-uid="fixture-a"]');
+        const b = document.querySelector('.contact-row[data-uid="fixture-b"]');
+        const active = document.activeElement;
+        const activeRow = active?.closest('.contact-row');
+        return {
+          aDraft: a?.querySelector('.contact-edit-name')?.value ?? null,
+          bDraft: b?.querySelector('.contact-edit-name')?.value ?? null,
+          aEditorOpen: !!a && getComputedStyle(a.querySelector('.contact-row-edit')).display !== 'none',
+          bEditorOpen: !!b && getComputedStyle(b.querySelector('.contact-row-edit')).display !== 'none',
+          focusedUid: activeRow?.dataset.uid ?? null,
+          focusedClass: active?.classList.contains('contact-edit-name') ? 'contact-edit-name' : null,
+          selectionStart: active && 'selectionStart' in active ? active.selectionStart : null,
+          selectionEnd: active && 'selectionEnd' in active ? active.selectionEnd : null,
+          selectionDirection: active && 'selectionDirection' in active ? active.selectionDirection : null,
+          serverA: a?.querySelector('.contact-name')?.textContent ?? null,
+        };
+      });
+      const snapshot = await stateOn(page);
+      proof.cases.sameManagerSaveDrafts = {
+        submittedA: snapshot.writes[0]?.body.name,
+        savedA: snapshot.contacts.find(c => c.uid === 'fixture-a')?.name,
+        listRefreshCompleted: true,
+        whileRefreshHeld: whileHeld,
+        after,
+        aNewerDraftPreserved: after.aEditorOpen && after.aDraft === 'Fixture A newer draft',
+        bLatestDraftPreserved: after.bEditorOpen && after.bDraft === latestB,
+        focusAndSelectionPreserved: after.focusedUid === 'fixture-b' && after.focusedClass === 'contact-edit-name' && after.selectionStart === 8 && after.selectionEnd === 14 && after.selectionDirection === 'backward',
+      };
       await page.close();
     }
 

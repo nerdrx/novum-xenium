@@ -4244,7 +4244,7 @@ async function initUnifiedIntegrations() {
 
   // Render the contacts list inside the manager card with inline edit +
   // delete. Each row: name + emails; pencil flips to editable inputs.
-  async function _renderContactsManager(expectedList) {
+  async function _renderContactsManager(expectedList, renderOptions) {
     const list = expectedList || el('cm-list');
     if (!list || (expectedList && (!list.isConnected || el('cm-list') !== list))) return;
     const cnt = el('cm-count');
@@ -4285,6 +4285,31 @@ async function initUnifiedIntegrations() {
       return;
     } finally {
       clearTimeout(timeout);
+    }
+    const editorDrafts = [];
+    if (expectedList) {
+      list.querySelectorAll('.contact-row').forEach(row => {
+        const editForm = row.querySelector('.contact-row-edit');
+        if (!editForm || getComputedStyle(editForm).display === 'none') return;
+        const fields = {
+          name: row.querySelector('.contact-edit-name')?.value ?? '',
+          emails: row.querySelector('.contact-edit-emails')?.value ?? '',
+          phones: row.querySelector('.contact-edit-phones')?.value ?? '',
+          address: row.querySelector('.contact-edit-address')?.value ?? '',
+        };
+        const committed = renderOptions?.committedEditor;
+        if (committed?.uid === row.dataset.uid
+          && Object.keys(fields).every(key => fields[key] === committed.values[key])) return;
+        const active = editForm.contains(document.activeElement) ? document.activeElement : null;
+        editorDrafts.push({
+          uid: row.dataset.uid,
+          fields,
+          focusClass: active ? ['contact-edit-name', 'contact-edit-emails', 'contact-edit-phones', 'contact-edit-address'].find(name => active.classList.contains(name)) : null,
+          selectionStart: active && 'selectionStart' in active ? active.selectionStart : null,
+          selectionEnd: active && 'selectionEnd' in active ? active.selectionEnd : null,
+          selectionDirection: active && 'selectionDirection' in active ? active.selectionDirection : null,
+        });
+      });
     }
     list._hasLoadedContacts = true;
     if (cnt) cnt.textContent = contacts.length ? `(${contacts.length})` : '';
@@ -4368,11 +4393,20 @@ async function initUnifiedIntegrations() {
         view.style.display = 'flex';
       });
       row.querySelector('.contact-save')?.addEventListener('click', async () => {
+        const submittedEditor = {
+          uid,
+          values: {
+            name: row.querySelector('.contact-edit-name').value,
+            emails: row.querySelector('.contact-edit-emails').value,
+            phones: row.querySelector('.contact-edit-phones').value,
+            address: row.querySelector('.contact-edit-address')?.value || '',
+          },
+        };
         const body = {
-          name: row.querySelector('.contact-edit-name').value.trim(),
-          emails: row.querySelector('.contact-edit-emails').value.split(',').map(s => s.trim()).filter(Boolean),
-          phones: row.querySelector('.contact-edit-phones').value.split(',').map(s => s.trim()).filter(Boolean),
-          address: row.querySelector('.contact-edit-address')?.value.trim() || '',
+          name: submittedEditor.values.name.trim(),
+          emails: submittedEditor.values.emails.split(',').map(s => s.trim()).filter(Boolean),
+          phones: submittedEditor.values.phones.split(',').map(s => s.trim()).filter(Boolean),
+          address: submittedEditor.values.address.trim(),
         };
         try {
           const response = await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -4381,7 +4415,7 @@ async function initUnifiedIntegrations() {
           if (ownsRow()) uiModule.showError?.('Could not save contact. Try again.');
           return;
         }
-        if (ownsRow()) await _renderContactsManager(list);
+        if (ownsRow()) await _renderContactsManager(list, { committedEditor: submittedEditor });
       });
       row.querySelector('.contact-del')?.addEventListener('click', async () => {
         const ok = uiModule.styledConfirm
@@ -4397,6 +4431,28 @@ async function initUnifiedIntegrations() {
         }
         if (ownsRow()) await _renderContactsManager(list);
       });
+    });
+    editorDrafts.forEach(draft => {
+      const row = Array.from(list.querySelectorAll('.contact-row')).find(candidate => candidate.dataset.uid === draft.uid);
+      if (!row) return;
+      const editForm = row.querySelector('.contact-row-edit');
+      const view = row.querySelector('.contact-row-view');
+      if (!editForm || !view) return;
+      for (const [key, className] of Object.entries({ name: 'contact-edit-name', emails: 'contact-edit-emails', phones: 'contact-edit-phones', address: 'contact-edit-address' })) {
+        const input = row.querySelector(`.${className}`);
+        if (input) input.value = draft.fields[key];
+      }
+      view.style.display = 'none';
+      editForm.style.display = 'flex';
+      if (draft.focusClass) {
+        const input = row.querySelector(`.${draft.focusClass}`);
+        if (input) {
+          input.focus({ preventScroll: true });
+          if (draft.selectionStart !== null && draft.selectionEnd !== null) {
+            input.setSelectionRange(draft.selectionStart, draft.selectionEnd, draft.selectionDirection || 'none');
+          }
+        }
+      }
     });
   }
 

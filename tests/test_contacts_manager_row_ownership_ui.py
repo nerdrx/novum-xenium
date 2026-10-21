@@ -33,6 +33,14 @@ def test_contacts_manager_row_ownership_ui():
     assert payload["externalRequests"] == []
     assert payload["cases"]["ownedSaveControls"]["failedDraftRetained"] is True
     assert payload["cases"]["ownedSaveControls"]["savedName"] == "A draft retained"
+    assert payload["cases"]["ownedSaveControls"]["editorClosedAfterSave"] is True
+    assert payload["cases"]["sameManagerSaveDrafts"]["listRefreshCompleted"] is True
+    assert payload["cases"]["sameManagerSaveDrafts"]["aNewerDraftPreserved"] is True
+    assert payload["cases"]["sameManagerSaveDrafts"]["bLatestDraftPreserved"] is True
+    assert payload["cases"]["sameManagerSaveDrafts"]["focusAndSelectionPreserved"] is True
+    assert payload["cases"]["sameManagerSaveDrafts"]["submittedA"] == "Fixture A accepted"
+    assert payload["cases"]["sameManagerSaveDrafts"]["savedA"] == "Fixture A accepted"
+    assert payload["cases"]["sameManagerSaveDrafts"]["after"]["serverA"] == "Fixture A accepted"
     assert payload["cases"]["addSameFormNewDraft"]["newerDraftRetained"] is True
     assert payload["cases"]["addSameFormNewDraft"]["acceptedName"] == "First accepted Add"
     assert payload["cases"]["staleAddAfterReopen"]["draftPreserved"] is True

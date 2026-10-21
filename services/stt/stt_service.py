@@ -59,9 +59,12 @@ class STTService:
     def _load_settings(self) -> dict:
         from src.settings import load_settings
         saved = load_settings()
+        provider = saved.get("stt_provider", "disabled")
+        if not isinstance(provider, str) or not provider:
+            provider = "disabled"
         return {
             "stt_enabled": saved.get("stt_enabled", False),
-            "stt_provider": saved.get("stt_provider", "disabled"),
+            "stt_provider": provider,
             "stt_model": saved.get("stt_model", "base"),
             "stt_language": saved.get("stt_language", ""),
         }

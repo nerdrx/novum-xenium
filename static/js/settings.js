@@ -4040,21 +4040,54 @@ async function initUnifiedIntegrations() {
       if (!open) el('cm-add-name')?.focus();
     });
     el('cm-add-save')?.addEventListener('click', async () => {
-      const name = el('cm-add-name').value.trim();
-      const email = el('cm-add-email').value.trim();
-      const phone = el('cm-add-phone')?.value.trim() || '';
-      const address = el('cm-add-address')?.value.trim() || '';
+      const addRow = el('cm-add-row');
+      const nameInput = el('cm-add-name');
+      const emailInput = el('cm-add-email');
+      const phoneInput = el('cm-add-phone');
+      const addressInput = el('cm-add-address');
+      const name = nameInput.value.trim();
+      const email = emailInput.value.trim();
+      const phone = phoneInput?.value.trim() || '';
+      const address = addressInput?.value.trim() || '';
       // Need at least a name or email; address-only entries without a
       // name aren't useful as a contact.
       if (!name && !email) { (name ? el('cm-add-email') : el('cm-add-name')).focus(); return; }
+      let draftChanged = false;
+      const noteDraftChange = () => { draftChanged = true; };
+      const addInputs = [nameInput, emailInput, phoneInput, addressInput].filter(Boolean);
+      addInputs.forEach(input => input.addEventListener('input', noteDraftChange));
+      addInputs.forEach(input => input.addEventListener('change', noteDraftChange));
+      let accepted = false;
       try {
-        await fetch('/api/contacts/add', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, email, phone, address }) });
-      } catch (_) {}
-      el('cm-add-name').value = '';
-      el('cm-add-email').value = '';
-      if (el('cm-add-phone')) el('cm-add-phone').value = '';
-      if (el('cm-add-address')) el('cm-add-address').value = '';
-      el('cm-add-row').style.display = 'none';
+        const res = await fetch('/api/contacts/add', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, email, phone, address }) });
+        if (!res.ok) throw new Error('Add failed');
+        const data = await res.json();
+        if (!data || typeof data !== 'object' || Array.isArray(data) || data.success !== true) throw new Error('Add failed');
+        accepted = true;
+      } catch (_) {
+        // A failed add keeps the draft so the user can retry it.
+      } finally {
+        addInputs.forEach(input => input.removeEventListener('input', noteDraftChange));
+        addInputs.forEach(input => input.removeEventListener('change', noteDraftChange));
+      }
+      if (!accepted) {
+        uiModule.showError ? uiModule.showError('Could not add contact. Try again.') : alert('Could not add contact. Try again.');
+        return;
+      }
+      const formRoot = el('unified-intg-form');
+      const ownsAddForm = addRow?.isConnected && el('cm-add-row') === addRow &&
+        addRow.contains(nameInput) && addRow.contains(emailInput) &&
+        formRoot?.contains(addRow) && formRoot.style.display !== 'none';
+      if (ownsAddForm) {
+        if (!draftChanged) {
+          nameInput.value = '';
+          emailInput.value = '';
+          if (phoneInput) phoneInput.value = '';
+          if (addressInput) addressInput.value = '';
+        }
+        const hasDraft = nameInput.value || emailInput.value || phoneInput?.value || addressInput?.value;
+        addRow.style.display = hasDraft ? 'flex' : 'none';
+      }
       await _renderContactsManager();
     });
     const _downloadContacts = async (format) => {
@@ -4092,6 +4125,7 @@ async function initUnifiedIntegrations() {
       const btn = el('cm-import-btn');
       const orig = btn ? btn.textContent : '';
       if (btn) { btn.textContent = 'Importing…'; btn.disabled = true; }
+      let imported = 0, total = 0, failed = 0;
       try {
         const texts = await Promise.all(files.map(f => f.text()));
         const vcfParts = [];
@@ -4101,18 +4135,25 @@ async function initUnifiedIntegrations() {
           if (name.endsWith('.csv') || !String(text || '').toUpperCase().includes('BEGIN:VCARD')) csvParts.push(text);
           else vcfParts.push(text);
         });
-        let imported = 0, total = 0, failed = 0;
         const _postImport = async (body) => {
           const r = await fetch('/api/contacts/import', {
             method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
           });
-          const d = await r.json();
-          if (d.error) throw new Error(d.error);
-          imported += Number(d.imported || 0);
-          total += Number(d.total || 0);
-          failed += Number(d.failed || 0);
+          if (!r.ok) throw new Error(`Import failed (HTTP ${r.status})`);
+          let d;
+          try { d = await r.json(); } catch (_) { throw new Error('Invalid import response'); }
+          if (!d || typeof d !== 'object' || Array.isArray(d) || typeof d.success !== 'boolean' ||
+              !Number.isSafeInteger(d.imported) || d.imported < 0 ||
+              !Number.isSafeInteger(d.total) || d.total < 0 ||
+              !Number.isSafeInteger(d.failed) || d.failed < 0 ||
+              d.imported > d.total || d.failed > d.total || d.imported + d.failed > d.total || d.success !== (d.imported > 0) || d.error) {
+            throw new Error(typeof d?.error === 'string' ? d.error : 'Invalid import response');
+          }
+          imported += d.imported;
+          total += d.total;
+          failed += d.failed;
         };
         if (vcfParts.length) await _postImport({ vcf: vcfParts.join('\n') });
         if (csvParts.length) await _postImport({ csv: csvParts.join('\n') });
@@ -4120,7 +4161,9 @@ async function initUnifiedIntegrations() {
         const msg = `Imported ${imported}/${total}` + (failed ? ` (${failed} failed)` : '');
         uiModule.showToast ? uiModule.showToast(msg) : null;
       } catch (err) {
-        uiModule.showError ? uiModule.showError(err?.message || 'Import failed') : alert(err?.message || 'Import failed');
+        const partial = total ? `Imported ${imported}/${total}` + (failed ? ` (${failed} failed)` : '') + '; ' : '';
+        const message = partial + (err?.message || 'Import failed');
+        uiModule.showError ? uiModule.showError(message) : alert(message);
       } finally {
         if (btn) { btn.textContent = orig; btn.disabled = false; }
         e.target.value = '';

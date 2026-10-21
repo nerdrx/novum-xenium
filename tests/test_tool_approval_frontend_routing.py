@@ -127,12 +127,13 @@ def test_app_submit_debounce_only_yields_for_control_plane_and_keeps_special_rou
       handleSubmit(event());
       delete form.dataset.odysseusControlPlaneSubmit;
       compareActive = true;
-      form.dataset.odysseusControlPlaneSubmit = 'tool-approval';
-      handleSubmit(event());
+      handleSubmit(event()); // Compare owns send/stop even while ordinary debounce is active
+      const timerCountAfterCompare = timers.length;
       compareActive = false;
       groupActive = true;
+      form.dataset.odysseusControlPlaneSubmit = 'tool-approval';
       handleSubmit(event());
-      process.stdout.write(JSON.stringify({{ calls, timerDelays: timers.map(t => t.delay) }}));
+      process.stdout.write(JSON.stringify({{ calls, timerCountAfterCompare, timerDelays: timers.map(t => t.delay) }}));
     """
     result = subprocess.run(
         ["node", "--input-type=module"], input=script, capture_output=True,
@@ -141,7 +142,8 @@ def test_app_submit_debounce_only_yields_for_control_plane_and_keeps_special_rou
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "calls": {"chat": 2, "compare": 1, "group": 1, "hidden": 3},
-        "timerDelays": [300, 300, 300, 300],
+        "timerCountAfterCompare": 2,
+        "timerDelays": [300, 300, 300],
     }
 
 

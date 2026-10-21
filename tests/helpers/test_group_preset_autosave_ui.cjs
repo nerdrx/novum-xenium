@@ -203,7 +203,7 @@ async function main() {
     assert.deepEqual(pageErrors, []);
     console.log(JSON.stringify({
       pass: true,
-      base: 'c58b104e1a98e4cda5d20ff11b2f9a6e729fc4d8',
+      base: '360aa59323a5f1f84cb0b312d0b6c8f323b6f0d2',
       source: { path: 'static/js/group.js', sha256: sourceHash, transform: 'only internal startGroup call replaced with async fixture stub' },
       getFailure,
       postFailure,

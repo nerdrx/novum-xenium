@@ -109,6 +109,22 @@ function _initGroupTab() {
   let groupPresetsStale = false;
   let groupPresetsLoadId = 0;
 
+  async function _requestGroupPresets(options = {}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(API_BASE + '/api/presets/groups', {
+        credentials: 'same-origin', ...options, signal: controller.signal,
+      });
+      const data = (!options.method || options.method === 'GET') && response.ok
+        ? await response.json()
+        : null;
+      return { response, data };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async function _deleteGroupPreset(groups, idx, name, confirmFirst = false) {
     if (groupPresetMutationInProgress) return;
     if (groupPresetsStale) {
@@ -123,7 +139,7 @@ function _initGroupTab() {
       if (operationLoadId !== groupPresetsLoadId) return;
       const nextGroups = groups.filter((_, index) => index !== idx);
       requestStarted = true;
-      const res = await fetch(API_BASE + '/api/presets/groups', {
+      const { response: res } = await _requestGroupPresets({
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groups: nextGroups }),
@@ -324,9 +340,8 @@ function _initGroupTab() {
         groupPresetMutationInProgress = true;
         let writeStarted = false;
         try {
-          const existingResponse = await fetch(API_BASE + '/api/presets/groups', { credentials: 'same-origin' });
+          const { response: existingResponse, data: existing } = await _requestGroupPresets();
           if (!existingResponse.ok) throw new Error('Group preset list failed: ' + existingResponse.status);
-          const existing = await existingResponse.json();
           const groups = existing.groups || [];
           // Don't duplicate if same participants
           const sig = presetData.participants.map(p => p.modelKey + ':' + (p.characterId || '')).sort().join(',');
@@ -334,7 +349,7 @@ function _initGroupTab() {
           if (!exists) {
             groups.push(presetData);
             writeStarted = true;
-            const saveResponse = await fetch(API_BASE + '/api/presets/groups', {
+            const { response: saveResponse } = await _requestGroupPresets({
               method: 'POST', credentials: 'same-origin',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ groups }),
@@ -354,6 +369,8 @@ function _initGroupTab() {
               ? 'could not confirm whether the preset was saved. The list was refreshed; check before retrying.'
               : 'could not confirm whether the preset was saved. Reopen the Group tab before retrying.';
           } else {
+            groupPresetsStale = true;
+            groupPresetsLoadId++;
             presetSaveWarning = 'preset could not be saved. Try again later.';
           }
           console.warn('[group] Group chat started, but preset save needs attention:', e);
@@ -435,9 +452,8 @@ function _initGroupTab() {
   async function _loadGroupPresets() {
     const loadId = ++groupPresetsLoadId;
     try {
-      const res = await fetch(API_BASE + '/api/presets/groups', { credentials: 'same-origin' });
+      const { response: res, data } = await _requestGroupPresets();
       if (!res.ok) throw new Error('Group preset list failed: ' + res.status);
-      const data = await res.json();
       if (loadId !== groupPresetsLoadId) return false;
       const groups = data.groups || [];
       // Render presets above participant list

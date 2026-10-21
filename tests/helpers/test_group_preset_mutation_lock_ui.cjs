@@ -270,7 +270,7 @@ async function main() {
     assert.deepEqual(pageErrors, []);
     console.log(JSON.stringify({
       pass: true,
-      baseHead: 'dd91476009e0ed73131ef945553b42022097bc06',
+      baseHead: '360aa59323a5f1f84cb0b312d0b6c8f323b6f0d2',
       source: { path: 'static/js/group.js', sha256: sourceHash, transform: 'only internal startGroup call replaced by fixture stub' },
       races: { autosaveThenDelete, deleteThenAutosaveSkipped, acceptedAutosaveRefreshFailed },
       isolation: { sessionRequests, externalRequests, pageErrors, network: 'guarded loopback fixture only; no session APIs, real accounts or inference' },

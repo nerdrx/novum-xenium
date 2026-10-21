@@ -54,7 +54,9 @@ recording uses the normal audio-file fallback. Once the audio recorder finishes,
 Novum waits up to two seconds for browser recognition to end and uses the
 transcript received so far. If none arrived, it attaches the recorded audio; if recognition has not
 ended, Novum makes a best-effort abort. Each recording keeps its own audio
-chunks, browser transcript, and recognizer. A late completion from an older
+chunks, browser transcript, and recognizer. Changing the speech setting during
+a Browser recording does not leave that recording's recognizer running after Stop.
+A late completion from an older
 recording does not reset the controls for a newer one.
 
 Stopped audio follows the configured speech path: transcription can add text
@@ -64,12 +66,23 @@ If the browser rejects the requested WebM recording format, the app retries
 with the browser's native recording format. Recognized formats keep matching
 attachment and transcription metadata; MP4 audio may appear as an `.m4a` file.
 Unrecognized formats are kept as `.bin` files.
-Transcription is inserted into the composer that is open when the result
-completes. Browser recognition has the brief completion wait described above;
-server-side transcription can finish later. Wait for transcription before
-switching chats, and review the result before sending it. See
-the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/d5864db488ce762a670e27080bfb357a67e76980/specs/speech.md)
-and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/8c7b37698a2d4964c7463ab97133767894792b08/static/js/voiceRecorder.js)
+An explicit **Stop** chooses the chat or pending draft open at that moment.
+If you switch chats while transcription finishes, the text is kept with that
+destination rather than inserted into the newly opened composer. A newer draft
+there is preserved and the transcript is appended. Page-only and incognito
+drafts are not saved for reload. If the original destination is unavailable,
+Novum can offer **Copy transcript** or **Discard transcript**; a changed account
+prevents delivery or recovery into another account.
+
+Audio fallback attaches only when its destination is still current. Otherwise,
+Novum offers a download or discard instead of attaching it to another chat.
+If recording ends naturally and navigation makes its destination ambiguous,
+Novum offers explicit transcript/audio recovery without assigning it to either
+chat automatically. Browser recognition has the brief completion wait described
+above; server-side transcription can finish later. Review the result before
+sending it. See
+the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/d29d6081aaeef08563ea8aa7c82835f4dac74574/specs/speech.md)
+and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/b1b3c622ec9f7b0fce5e1b6787beafcaad0d1229/static/js/voiceRecorder.js)
 for provider and fallback behavior. Chat model configuration alone does not
 enable speech input.
 

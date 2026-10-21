@@ -16,7 +16,31 @@ Image providers are configured separately from chat providers. Some workflows ca
 
 ## Audio
 
-The desktop's local Linux alarm is a host-side feature that uses a user-session timer and restores the previous system volume/mute state after its bounded playback. The computer and user audio session must be available. It does not wake a powered-off computer or act as an Android alarm. Other voice/audio features require their own supported provider configuration; verify the exact feature in the current Settings and release notes.
+The desktop's local Linux alarm is a host-side feature that uses a user-session timer and restores the previous system volume/mute state after its bounded playback. The computer and user audio session must be available. It does not wake a powered-off computer or act as an Android alarm. Other voice/audio features require their own supported provider configuration.
+
+
+### Chat microphone
+
+When speech input is enabled for your instance, an empty chat composer with no
+attachments shows a microphone button. Select it to request microphone access;
+select **Stop** to end the app's pending attempt or recording. Capture requires
+HTTPS or localhost. If access is denied, review this site's microphone
+permission in your browser, then try again. If no microphone is found, check
+that an input device is connected and available to the browser.
+
+**Stop cannot close a browser permission prompt.** Respond to that prompt in
+the browser. A grant arriving after Stop does not start recording; select the
+microphone again to make a new attempt. If creating the audio recorder or its `start()`
+call fails, the app releases the acquired stream, returns the composer to idle,
+and shows an error.
+An older permission failure does not reset a newer recording's controls.
+
+Stopped audio follows the configured speech path: transcription can add text
+to the composer, and supported fallback paths attach the recording as a file.
+Review the result before sending it. See the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/ffa3cee2c31083fd336085fecb665ecf1b687c25/specs/speech.md)
+and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/ffa3cee2c31083fd336085fecb665ecf1b687c25/static/js/voiceRecorder.js)
+for provider and fallback behavior. Chat model configuration alone does not
+enable speech input.
 
 ## Troubleshooting
 

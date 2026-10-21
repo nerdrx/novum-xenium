@@ -15,6 +15,7 @@ let audioChunks = [];
 let isRecording = false;
 let recordingStartTime = null;
 let recordingInterval = null;
+let recordingIntent = 0;
 
 // Browser STT state
 let _recognition = null;
@@ -149,6 +150,8 @@ function insertTranscription(text, showToast) {
  * Start voice recording
  */
 export function startRecording(onFileCreated, showToast, showError) {
+  const intent = ++recordingIntent;
+
   // Check for secure context (getUserMedia requires HTTPS or localhost)
   if (!window.isSecureContext) {
     if (showError) showError('Microphone requires HTTPS. Use a reverse proxy with SSL or access via localhost.');
@@ -166,6 +169,11 @@ export function startRecording(onFileCreated, showToast, showError) {
 
   navigator.mediaDevices.getUserMedia({ audio: true })
     .then(stream => {
+      if (intent !== recordingIntent) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+
       mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
 
       mediaRecorder.ondataavailable = event => {
@@ -229,6 +237,8 @@ export function startRecording(onFileCreated, showToast, showError) {
       }
     })
     .catch(error => {
+      if (intent !== recordingIntent) return;
+
       console.error('Microphone access error:', error);
       if (showError) {
         if (error.name === 'NotAllowedError') {
@@ -247,6 +257,7 @@ export function startRecording(onFileCreated, showToast, showError) {
  * Stop voice recording
  */
 export function stopRecording() {
+  recordingIntent++;
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     mediaRecorder.stop();
     // isRecording will be set to false in _resetRecordingUI called from onstop

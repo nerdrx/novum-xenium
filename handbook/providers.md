@@ -18,11 +18,11 @@ Do not paste API keys into chat or public logs. Hosted providers receive request
 
 Each time you enter Settings → AI, Novum refreshes the endpoint inventory. If that refresh fails or returns a non-array response, it leaves already displayed endpoint and model selections unchanged. This inventory-refresh behavior does not confirm provider health. A valid empty inventory clears the endpoint and model selectors. After the service recovers, leave and re-enter AI to refresh the inventory.
 
-During initial loading, Utility, Vision, Deep Research, and Research Search keep fields you have edited instead of replacing them with a late settings response. Their saves send only the changed setting and any dependent model or effort reset. Failed or malformed settings reads leave the controls available for editing.
+During initial loading, Utility, Vision, Deep Research, and Research Search keep fields you have edited instead of replacing them with a late settings response. Their saves send only the changed setting and any dependent model or effort reset. Failed or malformed settings reads leave the controls available for editing. A saved Vision model absent from the inventory remains selected with a “saved; not in current list” label. You can explicitly choose another model or Auto-detect.
 
 A save that receives no response stops waiting after 15 seconds; Novum does not retry it automatically. Check the save message: keeping an edit visible does not confirm it reached the server. A failed request may still have been saved; reload Novum and check Settings before retrying.
 
-See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/162cb8f1dc980640cb9fb74982ff4f3e73f7485d/static/js/settings.js).
+See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/846d157a2234d09bf5972fb51af8b5516e4a1be9/static/js/settings.js).
 
 ## Connect an account with sign-in
 

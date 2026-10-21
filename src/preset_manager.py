@@ -249,5 +249,4 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
 
     def save_group_presets(self, groups: list) -> bool:
         """Save group chat presets."""
-        self.presets["group_presets"] = groups
-        return self.save(self.presets)
+        return self.save({**self.presets, "group_presets": groups})

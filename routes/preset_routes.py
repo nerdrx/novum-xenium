@@ -128,7 +128,8 @@ def setup_preset_routes(preset_manager) -> APIRouter:
     async def save_group_presets(request: Request, _admin: None = Depends(require_admin)):
         """Save group chat presets."""
         data = await request.json()
-        preset_manager.save_group_presets(data.get("groups", []))
+        if not preset_manager.save_group_presets(data.get("groups", [])):
+            raise HTTPException(status_code=500, detail="Failed to save group presets")
         return {"ok": True}
 
     return router

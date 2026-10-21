@@ -4124,6 +4124,9 @@ function startOdysseusApp() {
 
   function _updateSendBtnIcon() {
     if (!sendBtn) return;
+    // Compare owns the composer action while active, including its send/stop
+    // button state. Refreshes for the ordinary chat must not replace it with mic.
+    if (compareModule && compareModule.isActive()) return;
     if (sendBtn.dataset.mode === 'streaming') {
       _updateStreamingSubmitButton();
       return;
@@ -4222,6 +4225,13 @@ function startOdysseusApp() {
         return;
       }
 
+      // Preserve Compare's send/stop action before ordinary New chat or mic
+      // handling. A real recording Stop above still has priority.
+      if (compareModule && compareModule.isActive()) {
+        handleSubmit(e);
+        return;
+      }
+
       const hasText = messageInput && messageInput.value.trim().length > 0;
       const hasFiles = _hasAttachments();
 
@@ -4285,6 +4295,10 @@ function startOdysseusApp() {
         // text state. Without this, a fast type-and-Enter would still see the
 	        // stale 'newchat' mode and open a new chat instead of sending.
 	        try { _updateSendBtnIcon(); } catch {}
+	        if (compareModule && compareModule.isActive()) {
+	          _submitChatFormDirect(chatForm);
+	          return;
+	        }
 	        if (sendBtn && sendBtn.dataset.mode === 'newchat') {
 	          const isAlreadyNewChat = document.getElementById('chat-container')?.classList.contains('welcome-active');
 	          if (isAlreadyNewChat) {

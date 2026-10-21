@@ -67,14 +67,16 @@ def _post_test(client, captured, env=None):
 
     Patches httpx.AsyncClient at the real module level so the route's
     ``import httpx; httpx.AsyncClient(...)`` picks up the fake class.
-    Also stubs validate_caldav_url (lazy-imported from src.caldav_sync).
+    Also stubs the async URL validator (lazy-imported from src.caldav_sync).
     """
     fake_cls = _make_fake_async_client(captured)
 
-    # Stub the caldav_sync module so the lazy `from src.caldav_sync import validate_caldav_url`
+    # Stub the caldav_sync module so the lazy async validator import
     # inside the route body resolves to a pass-through.
     caldav_sync_stub = MagicMock()
-    caldav_sync_stub.validate_caldav_url = lambda u: u
+    async def validate_url_async(url):
+        return url
+    caldav_sync_stub.validate_caldav_url_async = validate_url_async
 
     ctx_managers = [
         patch.object(httpx, "AsyncClient", fake_cls),

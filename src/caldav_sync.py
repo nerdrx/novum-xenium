@@ -129,6 +129,11 @@ def validate_caldav_url(raw_url: str) -> str:
     return urlunparse(parsed._replace(fragment="")).rstrip("/")
 
 
+async def validate_caldav_url_async(raw_url: str) -> str:
+    """Validate a CalDAV URL without blocking the event loop on DNS."""
+    return await asyncio.to_thread(validate_caldav_url, raw_url)
+
+
 def _event_etag(obj) -> str:
     """Best-effort ETag extraction from python-caldav resources."""
     try:
@@ -641,7 +646,7 @@ async def sync_caldav(owner: str) -> dict:
             totals["errors"].append(f"{label}: missing URL, username, or password")
             continue
         try:
-            url = validate_caldav_url(url)
+            url = await validate_caldav_url_async(url)
             result = await asyncio.to_thread(_sync_blocking, owner, url, user, pw, account_id)
         except ValueError as e:
             result = {"calendars": 0, "events": 0, "deleted": 0, "errors": [str(e)]}

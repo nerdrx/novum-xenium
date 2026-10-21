@@ -998,15 +998,16 @@ def setup_calendar_routes(upload_handler=None) -> APIRouter:
             body = await request.json()
         except Exception:
             body = {}
-        accounts = _get_caldav_accounts(owner)
         if not (body.get("url") or "").strip():
             _save_caldav_accounts(owner, [])
             return {"ok": True, "cleared": True}
-        from src.caldav_sync import validate_caldav_url
+        from src.caldav_sync import validate_caldav_url_async
         try:
-            validated_url = validate_caldav_url(body.get("url", ""))
+            validated_url = await validate_caldav_url_async(body.get("url", ""))
         except ValueError as e:
             raise HTTPException(400, str(e))
+        # Reload after DNS validation yields so concurrent account edits survive.
+        accounts = _get_caldav_accounts(owner)
         if accounts:
             acc = dict(accounts[0])
         else:
@@ -1056,9 +1057,9 @@ def setup_calendar_routes(upload_handler=None) -> APIRouter:
             body = await request.json()
         except Exception:
             body = {}
-        from src.caldav_sync import validate_caldav_url
+        from src.caldav_sync import validate_caldav_url_async
         try:
-            url = validate_caldav_url(body.get("url", ""))
+            url = await validate_caldav_url_async(body.get("url", ""))
         except ValueError as e:
             raise HTTPException(400, str(e))
         if not body.get("password"):
@@ -1088,13 +1089,21 @@ def setup_calendar_routes(upload_handler=None) -> APIRouter:
         idx = next((i for i, a in enumerate(accounts) if a.get("id") == account_id), None)
         if idx is None:
             raise HTTPException(404, "Account not found")
-        acc = dict(accounts[idx])
+        validated_url = None
         if body.get("url"):
-            from src.caldav_sync import validate_caldav_url
+            from src.caldav_sync import validate_caldav_url_async
             try:
-                acc["url"] = validate_caldav_url(body["url"])
+                validated_url = await validate_caldav_url_async(body["url"])
             except ValueError as e:
                 raise HTTPException(400, str(e))
+            # Re-read the target and sibling accounts after yielding for DNS.
+            accounts = _get_caldav_accounts(owner)
+            idx = next((i for i, a in enumerate(accounts) if a.get("id") == account_id), None)
+            if idx is None:
+                raise HTTPException(404, "Account not found")
+        acc = dict(accounts[idx])
+        if validated_url is not None:
+            acc["url"] = validated_url
         if body.get("label") is not None:
             acc["label"] = (body.get("label") or "").strip() or "CalDAV"
         if body.get("username") is not None:
@@ -1152,9 +1161,9 @@ def setup_calendar_routes(upload_handler=None) -> APIRouter:
                             pass
         if not (url and user and pw):
             return {"ok": False, "error": "Missing URL, username, or password"}
-        from src.caldav_sync import validate_caldav_url
+        from src.caldav_sync import validate_caldav_url_async
         try:
-            url = validate_caldav_url(url)
+            url = await validate_caldav_url_async(url)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         import httpx

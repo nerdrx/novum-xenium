@@ -976,6 +976,7 @@ function _zoomView(direction) {
   if (idx < 0) return;
   const next = idx + direction;
   if (next < 0 || next >= chain.length) return;
+  _invalidateCalendarFocus();
   _view = chain[next];
   _render();
 }
@@ -985,8 +986,13 @@ function _zoomView(direction) {
 // a newer render has already started. Stops fast prev/next/today clicks
 // from letting a slow fetch clobber the latest layout.
 let _renderToken = 0;
+let _calendarFocusToken = 0;
 let _eventFormState = null;
 let _pendingEventFormFocus = null;
+function _invalidateCalendarFocus() {
+  _calendarFocusToken++;
+  _highlightEventUid = null;
+}
 function _isStaleRender(t) { return t !== _renderToken; }
 
 function _render() {
@@ -2123,6 +2129,7 @@ async function _renderWeek() {
         ghost.remove();
         if (!startHHMM || !endHHMM) return;
         if (window.matchMedia('(max-width: 768px)').matches && !dragged) {
+          _invalidateCalendarFocus();
           body.querySelectorAll('.cal-wk-mobile-expanded').forEach(block => {
             block.classList.remove('cal-wk-mobile-expanded');
           });
@@ -2456,6 +2463,7 @@ async function _renderYear() {
   body.querySelectorAll('.cal-year-month').forEach(el => {
     el.addEventListener('click', (e) => {
       if (e.target.closest('.cal-year-day')) return;
+      _invalidateCalendarFocus();
       const m = parseInt(el.dataset.month);
       _currentDate = new Date(_currentDate.getFullYear(), m, 1);
       _view = 'month';
@@ -2465,6 +2473,7 @@ async function _renderYear() {
   // Day click in year view → jump to month
   body.querySelectorAll('.cal-year-day').forEach(el => {
     el.addEventListener('click', () => {
+      _invalidateCalendarFocus();
       const d = el.dataset.date;
       _adjustDayDrawerForSelection(body, d);
       _currentDate = new Date(d + 'T00:00:00');
@@ -2834,6 +2843,7 @@ function _wireAll(body) {
   }
 
   document.getElementById('cal-prev')?.addEventListener('click', () => {
+    _invalidateCalendarFocus();
     _selectedWeekSlot = null;
     _slideDir = -1;
     if (_view === 'year') _currentDate = new Date(_currentDate.getFullYear() - 1, 0, 1);
@@ -2846,6 +2856,7 @@ function _wireAll(body) {
     _render();
   });
   document.getElementById('cal-next')?.addEventListener('click', () => {
+    _invalidateCalendarFocus();
     // Collapse a hovered Week card immediately. The next range may need to
     // fetch before it can replace the grid, and the old :hover otherwise
     // remains expanded beneath a stationary pointer during that wait.
@@ -2862,6 +2873,7 @@ function _wireAll(body) {
     _render();
   });
   document.getElementById('cal-today')?.addEventListener('click', () => {
+    _invalidateCalendarFocus();
     _selectedWeekSlot = null;
     _currentDate = new Date();
     _selectedDay = _today();
@@ -2971,6 +2983,7 @@ function _wireAll(body) {
       try { searchInput.setSelectionRange(len, len); } catch {}
     }
     searchInput.addEventListener('input', (e) => {
+      _invalidateCalendarFocus();
       _searchQuery = e.target.value.trim();
       // Partial update: swap only the search results inside the day-detail
       // panel, leaving the search input element itself in place. A full
@@ -3000,6 +3013,7 @@ function _wireAll(body) {
   }
 
   body.querySelectorAll('.cal-view-btn').forEach(b => b.addEventListener('click', () => {
+    _invalidateCalendarFocus();
     const calBody = document.getElementById('cal-body');
     const detail = calBody?.querySelector('.cal-day-detail');
     const bodyHeight = calBody?.getBoundingClientRect().height || 0;
@@ -3078,6 +3092,7 @@ function _wireAll(body) {
   }));
   body.querySelectorAll('.cal-day[data-date]').forEach(cell => cell.addEventListener('click', (e) => {
     if (e.target.closest('.cal-event-item,.cal-multiday')) return;
+    _invalidateCalendarFocus();
     const d = cell.dataset.date;
     const drawerAdjusted = _adjustDayDrawerForSelection(body, d);
     // First click on a day: select it. Second click on the same already-
@@ -3534,6 +3549,7 @@ function _parseTitleTime(text) {
 }
 
 function _showEventForm(existing, defaultDate, defaultEndDate, options = {}) {
+  if (!options.formState) _invalidateCalendarFocus();
   const body = document.getElementById('cal-body');
   if (!body) return;
   const formState = options.formState || {
@@ -4399,6 +4415,7 @@ function _restoreCalendarFromMinimized() {
 
 function openCalendar(options = {}) {
   const preserveFocus = !!(options && options.preserveFocus);
+  if (!preserveFocus) _invalidateCalendarFocus();
   // If currently minimized, restore before the `_open` guard. Minimized
   // calendar keeps `_open=true` so state is preserved; checking `_open` first
   // made AI/sidebar "open calendar" calls no-op against a docked calendar.
@@ -4481,15 +4498,20 @@ function openCalendar(options = {}) {
 // Used by the chat anchor-link delegate so `[Wake up](#event-<uid>)`
 // opens the calendar on that day with the event highlighted.
 async function openCalendarTo(target) {
+  _invalidateCalendarFocus();
+  const focusToken = _calendarFocusToken;
   openCalendar({ preserveFocus: true });
   if (!target) return;
   try {
     await _fetchCalendars();
+    if (focusToken !== _calendarFocusToken) return;
     const targetStr = String(target || '').trim();
     if (targetStr.startsWith('search:')) {
-      _searchQuery = targetStr.slice('search:'.length).trim();
+      const searchQuery = targetStr.slice('search:'.length).trim();
       const now = new Date();
       await _fetchEvents(`${now.getFullYear()}-01-01`, `${now.getFullYear() + 2}-01-01`);
+      if (focusToken !== _calendarFocusToken) return;
+      _searchQuery = searchQuery;
       _currentDate = now;
       _selectedDay = _ds(now);
       _view = 'month';
@@ -4506,6 +4528,7 @@ async function openCalendarTo(target) {
       // Treat as an event uid. Cache is not authoritative when opening from a
       // chat link, so fetch the event directly if it is not already loaded.
       const ev = await _fetchEventByUid(targetStr);
+      if (focusToken !== _calendarFocusToken) return;
       if (ev && ev.dtstart) dt = new Date(ev.dtstart);
       if (ev) _highlightEventUid = ev.uid;
     }
@@ -4516,6 +4539,7 @@ async function openCalendarTo(target) {
       _scrollToSelectedDayOnRender = true;
       const range = _monthRange(_currentDate);
       await _fetchEvents(range[0], range[1], true);
+      if (focusToken !== _calendarFocusToken) return;
       _render();
     }
   } catch (e) { /* best-effort focus */ }
@@ -4580,6 +4604,7 @@ function _scrollSelectedDayIntoView(body, behavior = 'smooth') {
 }
 
 function _doCloseCalendar() {
+  _invalidateCalendarFocus();
   _open = false;
   _eventFormState = null;
   _pendingEventFormFocus = null;
@@ -4598,6 +4623,7 @@ function _doCloseCalendar() {
 }
 
 function closeCalendar() {
+  _invalidateCalendarFocus();
   if (!_open && !Modals.isMinimized('calendar-modal')) return;
   if (Modals.isRegistered('calendar-modal')) {
     Modals.close('calendar-modal');
@@ -4629,6 +4655,8 @@ function _saveCache() {
 }
 
 async function openCalendarView(view, target) {
+  _invalidateCalendarFocus();
+  const focusToken = _calendarFocusToken;
   const normalizedView = String(view || '').trim().toLowerCase();
   if (['day', 'week', 'month', 'year', 'agenda'].includes(normalizedView)) {
     _view = normalizedView === 'day' ? 'week' : normalizedView;
@@ -4651,12 +4679,14 @@ async function openCalendarView(view, target) {
   openCalendar({ preserveFocus: true });
   try {
     await _fetchCalendars();
+    if (focusToken !== _calendarFocusToken) return;
     const range = _view === 'year'
       ? [`${_currentDate.getFullYear()}-01-01`, `${_currentDate.getFullYear() + 1}-01-01`]
       : _view === 'week'
         ? _weekRange(_currentDate)
         : _monthRange(_currentDate);
     await _fetchEvents(range[0], range[1], true);
+    if (focusToken !== _calendarFocusToken) return;
     _render();
   } catch (e) {}
 }

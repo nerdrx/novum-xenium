@@ -60,6 +60,8 @@ async function main() {
       while (heldEventReads.length) heldEventReads.shift()();
       const context = await browser.newContext({ viewport, isMobile: true, hasTouch: true });
       const page = await context.newPage();
+      // Keep the fixed fixture event upcoming regardless of the host date.
+      await page.clock.setFixedTime(new Date('2026-10-20T07:00:00Z'));
       page.setDefaultTimeout(7000);
       const errors = [], externalRequests = [];
       page.on('pageerror', error => errors.push(error.stack || error.message));

@@ -191,6 +191,7 @@ export function startRecording(onFileCreated, showToast, showError) {
       };
 
       recorder.onstop = async () => {
+        const stopIntent = recorder._odysseusStopIntent ?? intent;
         stream.getTracks().forEach(track => track.stop());
 
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
@@ -228,7 +229,9 @@ export function startRecording(onFileCreated, showToast, showError) {
           if (onFileCreated) onFileCreated(audioFile);
         }
 
-        _resetRecordingUI();
+        if (mediaRecorder === recorder && recordingIntent === stopIntent) {
+          _resetRecordingUI();
+        }
       };
 
       try {
@@ -279,6 +282,8 @@ export function startRecording(onFileCreated, showToast, showError) {
 export function stopRecording() {
   recordingIntent++;
   if (mediaRecorder && mediaRecorder.state === 'recording') {
+    // Native onstop may arrive after a newer recording attempt starts.
+    mediaRecorder._odysseusStopIntent = recordingIntent;
     mediaRecorder.stop();
     // isRecording will be set to false in _resetRecordingUI called from onstop
   } else {

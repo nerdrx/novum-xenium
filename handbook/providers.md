@@ -8,11 +8,9 @@ A provider supplies model inference. Novum Xenium can connect to hosted APIs and
 2. Choose the **+** button (**Add model endpoints**).
 3. Add the local server or API endpoint in the management panel. For an OpenAI-compatible service, use its API base URL, model identifier, and credential as required by that endpoint. For local Ollama, the Docker host name `host.docker.internal` is provided; the conventional Ollama API port is `11434`.
 4. Save and return to the model picker. Select the endpoint/model and send a short prompt.
-5. If no model appears, open **Settings → AI** to inspect saved model choices. If the endpoint is marked offline, check the provider process and network path. If it appears but inference fails, inspect provider logs and the exact request error.
+5. If no model appears, open Each time you enter Settings → AI, Novum refreshes the endpoint inventory. If that refresh fails or returns a non-array response, it leaves already displayed endpoint and model selections unchanged. This inventory-refresh behavior does not confirm provider health. A valid empty inventory clears the endpoint and model selectors. After the service recovers, leave and re-enter AI to refresh the inventory.
 
-Provider forms differ. Do not reuse a URL from another endpoint type without confirming API compatibility. The model picker is the entry point for adding endpoints; account administrators can manage records through **Settings → Admin → Endpoints**.
-
-Do not paste API keys into chat or public logs. Hosted providers receive request content, attachments, and any context sent with the request. Consult that provider's data and retention terms.
+See the pinned [settings endpoint reader and refresh handling](https://github.com/nerdrx/novum-xenium/blob/1947969f49f68afbf40e10250ee351a3fe96ccd6/static/js/settings.js).
 
 ## Connect an account with sign-in
 

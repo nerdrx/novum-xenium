@@ -10,7 +10,7 @@ const sourcePath = path.join(repo, 'static/js/settings.js');
 const sourceHash = crypto.createHash('sha256').update(fs.readFileSync(sourcePath)).digest('hex');
 const state = {
   config: { url: 'https://carddav.fixture.invalid/addressbook/', username: 'fixture-user', password: '***' },
-  configGets: 0, saves: [], saveStatus: 200, saveResponseKind:'success', configGetStatus:200, configShape:'valid', pendingConfig: null, pendingConfigBody:null, holdNextConfig: false, holdNextConfigBody:false, holdNextSave: false, pendingSave: null, notifications: 0, integrationGets:0,
+  showFixtureContacts:false, configGets: 0, saves: [], saveStatus: 200, saveResponseKind:'success', configGetStatus:200, configShape:'valid', pendingConfig: null, pendingConfigBody:null, holdNextConfig: false, holdNextConfigBody:false, holdNextSave: false, pendingSave: null, notifications: 0, integrationGets:0,
 };
 const json = (res, value, status=200) => { res.writeHead(status, {'content-type':'application/json','cache-control':'no-store'}); res.end(JSON.stringify(value)); };
 const pageHtml = `<!doctype html><meta charset="utf-8"><body>
@@ -24,6 +24,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url, 'http://127.0.0.1');
     if (u.pathname === '/') { res.writeHead(200, {'content-type':'text/html; charset=utf-8'}); return res.end(pageHtml); }
+    if (u.pathname === '/__fixture-contacts') {state.showFixtureContacts=u.searchParams.get('enabled')==='true';return json(res,{ok:true});}
     if (u.pathname === '/__state') return json(res, {
       configGets: state.configGets, saves: state.saves, saveStatus: state.saveStatus, saveResponseKind:state.saveResponseKind, configGetStatus:state.configGetStatus, configShape:state.configShape,
       pendingConfig: !!state.pendingConfig, pendingConfigBody:!!state.pendingConfigBody, holdNextConfig: state.holdNextConfig, holdNextConfigBody:state.holdNextConfigBody, pendingSave:!!state.pendingSave, notifications:state.notifications, integrationGets:state.integrationGets, passwordPresent:state.config.password==='***',
@@ -92,7 +93,7 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/api/auth/integrations') {state.integrationGets++;return json(res, {integrations:[]});}
     if (u.pathname === '/api/auth/integrations/presets') return json(res, {presets:{}});
     if (u.pathname === '/api/calendar/config/accounts') return json(res, {accounts:[]});
-    if (u.pathname === '/api/contacts/list') return json(res, {contacts:[],count:0});
+    if (u.pathname === '/api/contacts/list') return json(res, state.showFixtureContacts?{contacts:[{uid:'fixture-b',name:'Fixture B',emails:[],phones:[],address:''}],count:1}:{contacts:[],count:0});
     if (u.pathname === '/api/email/accounts') return json(res, {accounts:[]});
     if (u.pathname === '/api/mcp/servers') return json(res, {servers:[]});
     if (u.pathname === '/api/vault/config') return json(res, {});
@@ -202,6 +203,36 @@ const server = http.createServer(async (req, res) => {
     assert.equal(proof.cases.heldSaveAfterSwitch.draft,'Other form draft');
     assert.equal(notifyAfter,notifyBefore+1);
     assert.equal(proof.pageErrors.length,0);
+
+    // An accepted setup save must not refresh a newly opened manager over its row draft.
+    await page.locator('#uf-api-cancel').click();
+    await page.request.get(`${origin}/__fixture-contacts?enabled=true`);
+    await openType('carddav');
+    await page.waitForFunction(()=>document.querySelector('#uf-carddav-save')?.disabled===false);
+    await page.request.get(`${origin}/__hold-save`);
+    await page.locator('#uf-carddav-url').fill('https://accepted-config.fixture.invalid/book/');
+    await page.locator('#uf-carddav-save').click();
+    await page.waitForFunction(async()=> (await(await fetch('/__state')).json()).pendingSave);
+    await page.locator('#uf-carddav-cancel').click();
+    await openType('carddav');
+    await page.locator('.contact-row[data-uid="fixture-b"] .contact-edit').click();
+    await page.locator('.contact-edit-name').fill('B unsaved after setup save');
+    const configDraft=await page.locator('.contact-edit-name').evaluateHandle(n=>n);
+    const configNotifyBefore=await page.evaluate(()=>window.fixtureNotifications);
+    const configGetsBefore=(await stateOn()).integrationGets;
+    const configFinished=page.waitForEvent('requestfinished',req=>new URL(req.url()).pathname==='/api/contacts/config'&&req.method()==='PUT');
+    const configReleased=await page.request.get(`${origin}/__release-save`);assert.equal(configReleased.status(),200);
+    await configFinished;
+    await page.waitForFunction(async n=>(await(await fetch('/__state')).json()).integrationGets>n,configGetsBefore);
+    await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+    proof.cases.configSaveAfterReopen={draft:await page.locator('.contact-edit-name').inputValue(),originalEditorConnected:await page.evaluate(n=>n.isConnected,configDraft),editorVisible:await page.locator('.contact-edit-name').isVisible(),notificationsBefore:configNotifyBefore,notificationsAfter:await page.evaluate(()=>window.fixtureNotifications)};
+    assert.equal(proof.cases.configSaveAfterReopen.draft,'B unsaved after setup save');
+    assert.equal(proof.cases.configSaveAfterReopen.originalEditorConnected,true);
+    assert.equal(proof.cases.configSaveAfterReopen.editorVisible,true);
+    assert.equal(proof.cases.configSaveAfterReopen.notificationsAfter,configNotifyBefore+1);
+    await page.locator('#uf-carddav-cancel').click();
+    await page.request.get(`${origin}/__fixture-contacts?enabled=false`);
+    await openType('api');
 
     // Save stays disabled during prefill, and late config preserves typed fields.
     await page.locator('#uf-api-cancel').click();

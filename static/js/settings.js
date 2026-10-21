@@ -4068,6 +4068,7 @@ async function initUnifiedIntegrations() {
     saveButton.addEventListener('click', async () => {
       if (saving || !isCurrentForm()) return;
       saving = true;
+      const managerList = el('cm-list');
       const body = { carddav_url: urlInput.value, carddav_username: userInput.value };
       if (passInput.value) body.carddav_password = passInput.value;
       const submitted = { url: urlInput.value, username: userInput.value, password: passInput.value };
@@ -4084,7 +4085,7 @@ async function initUnifiedIntegrations() {
           setMessage(changed ? 'Saved; newer edits remain unsaved.' : 'Saved', true);
         }
         notifyIntegrationsChanged();
-        try { await _renderContactsManager(); } catch (_) {}
+        try { await _renderContactsManager(managerList); } catch (_) {}
         try { await renderList(); } catch (_) {}
       } catch (_) {
         if (isCurrentForm()) setMessage('Save failed', false);

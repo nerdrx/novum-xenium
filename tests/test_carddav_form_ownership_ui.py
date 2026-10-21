@@ -46,3 +46,8 @@ def test_carddav_form_ownership_ui():
     assert proof["cases"]["prefillJsonDeadline"]["bodyPendingBeforeAbort"] is True
     for shape in ("missing", "null", "array", "wrongtype"):
         assert proof["cases"][f"invalidPrefill{shape}"]["message"] == "Could not load saved CardDAV settings."
+
+    assert proof["cases"]["configSaveAfterReopen"]["draft"] == "B unsaved after setup save"
+    assert proof["cases"]["configSaveAfterReopen"]["originalEditorConnected"] is True
+    assert proof["cases"]["configSaveAfterReopen"]["editorVisible"] is True
+    assert proof["cases"]["configSaveAfterReopen"]["notificationsAfter"] == proof["cases"]["configSaveAfterReopen"]["notificationsBefore"] + 1

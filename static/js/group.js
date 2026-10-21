@@ -303,6 +303,7 @@ function _initGroupTab() {
     await startGroup(picked, 'group-' + Date.now());
 
     // Auto-save as preset if 2+ participants
+    let presetSaveFailed = false;
     if (picked.length >= 2) {
       const presetData = {
         id: 'grp-' + Date.now(),
@@ -318,23 +319,32 @@ function _initGroupTab() {
         })),
       };
       try {
-        const existing = await fetch(API_BASE + '/api/presets/groups', { credentials: 'same-origin' }).then(r => r.json());
+        const existingResponse = await fetch(API_BASE + '/api/presets/groups', { credentials: 'same-origin' });
+        if (!existingResponse.ok) throw new Error('Group preset list failed: ' + existingResponse.status);
+        const existing = await existingResponse.json();
         const groups = existing.groups || [];
         // Don't duplicate if same participants
         const sig = presetData.participants.map(p => p.modelKey + ':' + (p.characterId || '')).sort().join(',');
         const exists = groups.some(g => (g.participants || []).map(p => (p.modelKey || p.modelId) + ':' + (p.characterId || '')).sort().join(',') === sig);
         if (!exists) {
           groups.push(presetData);
-          await fetch(API_BASE + '/api/presets/groups', {
+          const saveResponse = await fetch(API_BASE + '/api/presets/groups', {
             method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ groups }),
           });
+          if (!saveResponse.ok) throw new Error('Group preset save failed: ' + saveResponse.status);
         }
-      } catch (e) {}
+      } catch (e) {
+        presetSaveFailed = true;
+        console.warn('[group] Group chat started, but preset could not be saved:', e);
+      }
     }
 
-    uiModule.showToast('Group chat ready — ' + picked.length + ' participants');
+    const readyMessage = 'Group chat ready — ' + picked.length + ' participants';
+    uiModule.showToast(presetSaveFailed
+      ? readyMessage + '; preset could not be saved. Try again later.'
+      : readyMessage);
   });
 
   const groupTab = document.querySelector('.preset-tab[data-chartab="group"]');

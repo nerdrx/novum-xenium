@@ -26,15 +26,15 @@ def setup_stt_routes(stt_service):
     async def transcribe_audio(file: UploadFile = File(...)):
         """Transcribe uploaded audio file to text"""
         try:
+            audio_bytes = await read_upload_limited(file, STT_MAX_AUDIO_BYTES, "Audio file")
+            if not audio_bytes:
+                raise HTTPException(status_code=400, detail={"message": "Empty audio file"})
+
             if not stt_service.available:
                 raise HTTPException(
                     status_code=503,
                     detail={"message": "STT service not available or set to browser mode"}
                 )
-
-            audio_bytes = await read_upload_limited(file, STT_MAX_AUDIO_BYTES, "Audio file")
-            if not audio_bytes:
-                raise HTTPException(status_code=400, detail={"message": "Empty audio file"})
 
             text = stt_service.transcribe(
                 audio_bytes,

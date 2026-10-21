@@ -33,7 +33,12 @@ def test_contacts_manager_http_status_ui():
     assert payload["externalRequests"] == []
     assert payload["cases"]["save503"]["draftRetained"] is True
     assert payload["cases"]["saveRetry"]["savedName"] == "Mira Unsaved Draft"
+    assert payload["cases"]["saveFalseBody"]["draftRetained"] is True
+    assert payload["cases"]["saveFalseBodyRetry"]["savedName"] == "Mira False-Body Draft"
+    assert payload["cases"]["saveNullBody"]["draftRetained"] is True
     assert payload["cases"]["saveNetworkFailure"]["draftRetained"] is True
     assert payload["cases"]["delete403"]["contactStillPresent"] is True
+    assert payload["cases"]["deleteFalseBody"]["contactRetained"] is True
+    assert payload["cases"]["deleteMissingBody"]["contactRetained"] is True
     assert payload["cases"]["deleteNetworkFailure"]["contactStillPresent"] is True
     assert payload["cases"]["deleteSuccess"]["contactRemoved"] is True

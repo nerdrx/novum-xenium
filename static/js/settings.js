@@ -4234,7 +4234,7 @@ async function initUnifiedIntegrations() {
         };
         try {
           const response = await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-          if (!response.ok) throw new Error('Contact save failed');
+          if (!response.ok || (await response.json())?.success !== true) throw new Error('Contact save failed');
         } catch (_) {
           uiModule.showError?.('Could not save contact. Try again.');
           return;
@@ -4248,7 +4248,7 @@ async function initUnifiedIntegrations() {
         if (!ok) return;
         try {
           const response = await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'DELETE', credentials: 'same-origin' });
-          if (!response.ok) throw new Error('Contact delete failed');
+          if (!response.ok || (await response.json())?.success !== true) throw new Error('Contact delete failed');
         } catch (_) {
           uiModule.showError?.('Could not delete contact. Try again.');
           return;

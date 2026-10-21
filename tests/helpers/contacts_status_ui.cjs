@@ -37,14 +37,22 @@ const server = http.createServer(async (req, res) => {
       const body=JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
       const status=state.mode === 'save503' ? 503 : 200;
       state.writes.push({body,status});
-      if (status === 200) Object.assign(state.contacts[0], body);
-      return json(res, status === 503 ? {detail:'synthetic save failure'} : {success:true}, status);
+      const responseBody = status === 503 ? {detail:'synthetic save failure'}
+        : state.mode === 'saveFalse' ? {success:false}
+        : state.mode === 'saveNull' ? null
+        : {success:true};
+      if (status === 200 && responseBody?.success === true) Object.assign(state.contacts[0], body);
+      return json(res, responseBody, status);
     }
     if (u.pathname === '/api/contacts/fixture-contact-1' && req.method === 'DELETE') {
       const status=state.mode === 'delete403' ? 403 : 200;
       state.deletes.push({status});
-      if (status === 200) state.contacts = [];
-      return json(res, status === 403 ? {detail:'synthetic delete forbidden'} : {success:true}, status);
+      const responseBody = status === 403 ? {detail:'synthetic delete forbidden'}
+        : state.mode === 'deleteFalse' ? {success:false}
+        : state.mode === 'deleteMissing' ? {}
+        : {success:true};
+      if (status === 200 && responseBody?.success === true) state.contacts = [];
+      return json(res, responseBody, status);
     }
     const file = path.resolve(repo, `.${decodeURIComponent(u.pathname)}`);
     if (!file.startsWith(repo + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); return res.end('not found'); }
@@ -73,6 +81,29 @@ const server = http.createServer(async (req, res) => {
     const awaitRerender=async old=>page.waitForFunction(node=>!node.isConnected,old);
     const clearToast=async()=>page.locator('#toast').evaluate(el=>{el.textContent='';el.classList.remove('show');});
     const failedOrRerendered=async(row,text)=>page.waitForFunction(([node,expected])=>document.querySelector('#toast .toast-message')?.textContent===expected||!node.isConnected,[row,text]);
+    const assertSaveFailure=async(mode,draft)=>{
+      await edit(); await page.locator('.contact-edit-name').fill(draft);
+      const row=await oldRow(), before=await stateOn(), reads=before.listReads;
+      await clearToast(); await setMode(mode); await page.locator('.contact-save').click();
+      await failedOrRerendered(row,'Could not save contact. Try again.');
+      const current=await stateOn();
+      assert.equal(await page.evaluate(node=>node.isConnected,row),true);
+      assert.equal(await page.locator('.contact-edit-name').inputValue(),draft);
+      assert.equal(await page.locator('#toast .toast-message').innerText(),'Could not save contact. Try again.');
+      assert.equal(current.listReads,reads); assert.equal(current.contacts[0].name,before.contacts[0].name);
+      return {row,reads,current};
+    };
+    const assertDeleteFailure=async(mode)=>{
+      const row=await oldRow(), reads=(await stateOn()).listReads;
+      await clearToast(); await setMode(mode); await page.locator('.contact-del').click();
+      await page.locator('#styled-confirm-ok').waitFor({state:'visible'}); await page.locator('#styled-confirm-ok').click();
+      await failedOrRerendered(row,'Could not delete contact. Try again.');
+      const current=await stateOn();
+      assert.equal(await page.evaluate(node=>node.isConnected,row),true);
+      assert.equal(await page.locator('#toast .toast-message').innerText(),'Could not delete contact. Try again.');
+      assert.equal(current.listReads,reads); assert.equal(current.contacts.length,1);
+      return {row,reads,current};
+    };
 
     // Positive control: successful PUT updates data, then refreshes the actual row.
     await edit(); await page.locator('.contact-edit-name').fill('Mira Saved');
@@ -100,6 +131,22 @@ const server = http.createServer(async (req, res) => {
     after=await stateOn(); assert.equal(after.writes.at(-1).status,200); assert.equal(after.contacts[0].name,'Mira Unsaved Draft');
     proof.cases.saveRetry={status:200,savedName:after.contacts[0].name};
 
+    // HTTP 200 is not success unless the endpoint confirms it in the body.
+    let bodyFailure=await assertSaveFailure('saveFalse','Mira False-Body Draft');
+    assert.equal(bodyFailure.current.writes.at(-1).status,200);
+    proof.cases.saveFalseBody={status:200,draftRetained:true,noRefresh:bodyFailure.current.listReads===bodyFailure.reads};
+    prior=bodyFailure.row; await setMode('ok'); await page.locator('.contact-save').click(); await awaitRerender(prior);
+    await page.waitForFunction(()=>document.querySelector('.contact-name')?.textContent==='Mira False-Body Draft');
+    after=await stateOn(); assert.equal(after.contacts[0].name,'Mira False-Body Draft');
+    proof.cases.saveFalseBodyRetry={savedName:after.contacts[0].name};
+
+    bodyFailure=await assertSaveFailure('saveNull','Mira Null-Body Draft');
+    assert.equal(bodyFailure.current.writes.at(-1).status,200);
+    proof.cases.saveNullBody={status:200,draftRetained:true,noRefresh:bodyFailure.current.listReads===bodyFailure.reads};
+    prior=bodyFailure.row; await setMode('ok'); await page.locator('.contact-save').click(); await awaitRerender(prior);
+    await page.waitForFunction(()=>document.querySelector('.contact-name')?.textContent==='Mira Null-Body Draft');
+    after=await stateOn(); assert.equal(after.contacts[0].name,'Mira Null-Body Draft');
+
     // A rejected fetch follows the same no-refresh, draft-preserving path.
     await edit(); await page.locator('.contact-edit-name').fill('Mira Network Draft');
     prior=await oldRow(); const beforeNetworkSaveReads=(await stateOn()).listReads; const writesBeforeNetwork=(await stateOn()).writes.length;
@@ -122,6 +169,13 @@ const server = http.createServer(async (req, res) => {
     assert.equal(after.deletes.at(-1).status,403); assert.equal(after.contacts.length,1);
     assert.equal(after.listReads,beforeDeleteReads); assert.equal(await page.evaluate(row=>row.isConnected,rowBeforeDelete),true);
     proof.cases.delete403={status:403,contactStillPresent:true,visibleError:await page.locator('#toast .toast-message').innerText(),listRefreshes:after.listReads-beforeDeleteReads};
+
+    let deleteFailure=await assertDeleteFailure('deleteFalse');
+    assert.equal(deleteFailure.current.deletes.at(-1).status,200);
+    proof.cases.deleteFalseBody={status:200,contactRetained:true,noRefresh:deleteFailure.current.listReads===deleteFailure.reads};
+    deleteFailure=await assertDeleteFailure('deleteMissing');
+    assert.equal(deleteFailure.current.deletes.at(-1).status,200);
+    proof.cases.deleteMissingBody={status:200,contactRetained:true,noRefresh:deleteFailure.current.listReads===deleteFailure.reads};
 
     // Network rejection must also keep the row and avoid refreshing.
     const rowBeforeNetworkDelete=await oldRow(); const beforeNetworkDeleteReads=after.listReads; const serverDeletesBefore=(await stateOn()).deletes.length;

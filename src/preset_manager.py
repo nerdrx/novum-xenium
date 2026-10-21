@@ -191,11 +191,15 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
             "persona_memory": persona_memory if enabled and name else "",
             "persona_memory_schema": persona_memory_schema if enabled and name else "general",
         }
-        return self.save({**self.presets, "custom": custom})
+        return self.save({
+            **self.presets,
+            "custom": custom,
+            "custom_revision": self.get_custom_revision() + 1,
+        })
     
     def get_all(self) -> Dict[str, Any]:
         """Get all presets"""
-        return self.presets.copy()
+        return {**self.presets, "custom_revision": self.get_custom_revision()}
 
     def get_user_templates(self) -> list:
         """Get user-saved character templates."""
@@ -212,13 +216,49 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
             templates.append(template)
         return self.save({**self.presets, "user_templates": templates})
 
-    def delete_user_template(self, template_id: str) -> bool:
-        """Delete a user template by id."""
+    def get_custom_revision(self) -> int:
+        """Return the persisted custom-preset revision, defaulting legacy files to zero."""
+        revision = self.presets.get("custom_revision", 0) if isinstance(self.presets, dict) else 0
+        return revision if type(revision) is int and revision >= 0 else 0
+
+    def delete_user_template(
+        self,
+        template_id: str,
+        expected_custom_revision: int | None = None,
+    ) -> bool | None:
+        """Delete a template, optionally clearing its unchanged active custom preset.
+
+        Returns False on write failure, True on success, or None for a stale
+        active-preset revision. Legacy callers without a revision retain
+        template-only deletion.
+        """
+        current_templates = self.presets.get("user_templates", [])
+        deleted_names = {
+            template.get("name")
+            for template in current_templates
+            if isinstance(template, dict) and template.get("id") == template_id
+        }
         templates = [
-            template for template in self.presets.get("user_templates", [])
+            template for template in current_templates
             if template.get("id") != template_id
         ]
-        return self.save({**self.presets, "user_templates": templates})
+        candidate = {**self.presets, "user_templates": templates}
+        custom = self.presets.get("custom")
+        active_name = custom.get("character_name") if isinstance(custom, dict) and custom.get("enabled") else ""
+        if expected_custom_revision is not None and active_name in deleted_names:
+            current_revision = self.get_custom_revision()
+            if expected_custom_revision != current_revision:
+                return None
+            candidate["custom"] = {
+                **custom,
+                "character_name": "",
+                "system_prompt": "",
+                "enabled": False,
+                "persona_memory": "",
+                "persona_memory_schema": "general",
+            }
+            candidate["custom_revision"] = current_revision + 1
+        return self.save(candidate)
 
     def update_persona_memory(self, name: str, memory: str) -> bool:
         """Persist auto-maintained continuity notes for a saved/active persona."""

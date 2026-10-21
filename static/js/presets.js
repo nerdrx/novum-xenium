@@ -7,6 +7,15 @@
 let API_BASE = '';
 let selectedPreset = null;
 let presets = {};
+let customPresetRevision = null;
+let customSaveRevision = 0;
+let latestAcceptedCustomSaveRevision = 0;
+const latestAcceptedCustomSaveByName = new Map();
+
+function _acceptCustomPresetRevision(value) {
+  if (!Number.isSafeInteger(value) || value < 0) return;
+  if (customPresetRevision === null || value > customPresetRevision) customPresetRevision = value;
+}
 
 export function loadStoredArray(key) {
   try {
@@ -250,6 +259,9 @@ function initNameDropdown() {
       const isBuiltin = PROMPT_TEMPLATES.some(t => t.name === charName);
       const activePresetAtDelete = presets.custom;
       const deleteSelection = select.value;
+      const expectedRevisionAtDelete = customPresetRevision;
+      let deleteStillOwnsCustom = expectedRevisionAtDelete === null
+        || customPresetRevision === expectedRevisionAtDelete;
       const formIds = ['custom-character-name', 'custom-system-prompt', 'custom-temperature', 'custom-max-tokens', 'custom-reasoning-mode', 'custom-thinking-mode', 'custom-show-persona-name', 'inject-prefix', 'inject-suffix'];
       const formValues = formIds.map(id => {
         const field = document.getElementById(id);
@@ -259,12 +271,22 @@ function initNameDropdown() {
       try {
         // Delete saved template if exists
         if (match) {
-          const response = await fetch(`${API_BASE}/api/presets/templates/${match.id}`, { method: 'DELETE' });
+          const revisionQuery = expectedRevisionAtDelete === null
+            ? ''
+            : `?expected_custom_revision=${expectedRevisionAtDelete}`;
+          const response = await fetch(`${API_BASE}/api/presets/templates/${match.id}${revisionQuery}`, { method: 'DELETE' });
+          if (response.status === 409) {
+            window.uiModule?.showError?.('Persona settings changed while deletion was pending. Copy unsaved edits, then reload the page before retrying if deletion is still intended.');
+            return;
+          }
           const result = response.ok ? await response.json() : null;
           if (!result?.success) {
             window.uiModule?.showError?.('Could not confirm deletion. Reload saved templates before retrying.');
             return;
           }
+          deleteStillOwnsCustom = expectedRevisionAtDelete === null
+            || customPresetRevision === expectedRevisionAtDelete;
+          _acceptCustomPresetRevision(result.custom_revision);
         }
         // Hide built-in preset
         if (isBuiltin) {
@@ -279,7 +301,7 @@ function initNameDropdown() {
         });
         // Deactivate only if the user still owns the form state being deleted.
         let deactivatedActivePreset = false;
-        if (formUnchanged && presets.custom === activePresetAtDelete && presets.custom?.character_name === charName) {
+        if (deleteStillOwnsCustom && formUnchanged && presets.custom === activePresetAtDelete && presets.custom?.character_name === charName) {
           deactivatedActivePreset = true;
           selectedPreset = null;
           presets.custom = { ...presets.custom, character_name: '', system_prompt: '', enabled: false, persona_memory: '', persona_memory_schema: 'general' };
@@ -573,9 +595,31 @@ function initSaveAsTemplate() {
  * Load presets from server
  */
 export async function loadPresets(showError) {
+  const acceptedCustomSaveAtStart = latestAcceptedCustomSaveRevision;
+  const controller = new AbortController();
+  const loadTimer = setTimeout(() => controller.abort(), 15000);
   try {
-    const res = await fetch(`${API_BASE}/api/presets`);
-    presets = await res.json();
+    const res = await fetch(`${API_BASE}/api/presets`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const loadedPresets = await res.json();
+    if (
+      !loadedPresets
+      || typeof loadedPresets !== 'object'
+      || Array.isArray(loadedPresets)
+      || (loadedPresets.custom != null
+        && (typeof loadedPresets.custom !== 'object' || Array.isArray(loadedPresets.custom)))
+    ) {
+      throw new Error('Invalid presets response');
+    }
+    _acceptCustomPresetRevision(loadedPresets.custom_revision);
+    const preserveAcceptedCustom = latestAcceptedCustomSaveRevision > acceptedCustomSaveAtStart;
+    const acceptedCustom = presets.custom;
+    presets = preserveAcceptedCustom
+      ? { ...loadedPresets, custom: acceptedCustom }
+      : loadedPresets;
+    if (preserveAcceptedCustom && customPresetRevision !== null) {
+      presets.custom_revision = customPresetRevision;
+    }
 
     const custom = presets.custom;
     if (custom) custom.thinking_mode = ['on', 'off'].includes(custom.thinking_mode) ? custom.thinking_mode : '';
@@ -611,6 +655,8 @@ export async function loadPresets(showError) {
     if (showError) {
       showError('Failed to load presets');
     }
+  } finally {
+    clearTimeout(loadTimer);
   }
 }
 
@@ -913,6 +959,32 @@ export async function saveCustomPreset(showToast, showError) {
     persona_memory_schema: presets.custom?.character_name === name ? (presets.custom?.persona_memory_schema || 'general') : 'general',
   };
 
+  const _templateSelectionAtSave = document.getElementById('char-template-select')?.value || '';
+  const _saveModal = document.getElementById('custom-preset-modal');
+  const _saveModalWasOpen = !!_saveModal && !_saveModal.classList.contains('hidden');
+  const _saveFormFields = [
+    ['custom-character-name', nameInput],
+    ['custom-system-prompt', promptInput],
+    ['custom-temperature', tempInput],
+    ['custom-max-tokens', tokensInput],
+    ['custom-reasoning-mode', reasoningInput],
+    ['custom-thinking-mode', thinkingInput],
+    ['custom-show-persona-name', showNameInput],
+    ['inject-prefix', _prefixInput],
+    ['inject-suffix', _suffixInput],
+  ].map(([id, field]) => [id, field, field ? (field.type === 'checkbox' ? field.checked : field.value) : null]);
+  const _ownsSaveForm = () => _saveModalWasOpen
+    && _saveModal.isConnected
+    && document.getElementById('custom-preset-modal') === _saveModal
+    && !_saveModal.classList.contains('hidden')
+    && (document.querySelector('.preset-tab.active')?.dataset.chartab || 'character') === _activeTab
+    && (document.getElementById('char-template-select')?.value || '') === _templateSelectionAtSave
+    && _saveFormFields.every(([id, field, value]) => {
+      if (document.getElementById(id) !== field) return false;
+      return field ? (field.type === 'checkbox' ? field.checked : field.value) === value : value === null;
+    });
+  const _saveRevision = ++customSaveRevision;
+
   try {
     const response = await fetch(`${API_BASE}/api/presets/custom`, {
       method: 'POST',
@@ -922,42 +994,55 @@ export async function saveCustomPreset(showToast, showError) {
 
     const result = await response.json();
     if (result.success) {
-      presets.custom = { ...presets.custom, ...config, character_name: name, enabled: enabled };
-
-      // The custom preset must be the SELECTED preset for its values to reach
-      // the model — chat.js only sends `preset_id` when getSelectedPreset() is
-      // truthy. Activate it when there's a persona (name/prompt) OR when the
-      // user has dialed in non-default tuning (temperature / max tokens / thinking mode) — the
-      // "Inject" tab's plain-chat case. Without the tuning check, "just set
-      // temp, token limit, or either reasoning control" would silently do nothing.
-      const _hasTuning = (config.temperature !== 1.0)
-        || (config.max_tokens !== 0)
-        || (config.reasoning_mode !== 'auto')
-        || !!config.thinking_mode;
-      const _hasInject = !!(config.inject_prefix || config.inject_suffix);
-      const _hasContent = !!(system_prompt || name || _hasTuning || _hasInject);
-      if (enabled && _hasContent) {
-        selectedPreset = 'custom';
-        // Turn off research — doesn't make sense with a character
-        if (window._syncResearchIndicator) window._syncResearchIndicator(false);
-      } else {
-        selectedPreset = null;
+      _acceptCustomPresetRevision(result.custom_revision);
+      if (_saveRevision > (latestAcceptedCustomSaveByName.get(name) || 0)) {
+        latestAcceptedCustomSaveByName.set(name, _saveRevision);
       }
 
-      // Update mini button state
-      const miniBtn = document.getElementById('overflow-preset-btn');
-      if (miniBtn) {
-        miniBtn.classList.toggle('active', enabled && _hasContent);
-      }
+      const _ownsAcceptedCustomState = _saveRevision >= latestAcceptedCustomSaveRevision;
+      if (_ownsAcceptedCustomState) {
+        latestAcceptedCustomSaveRevision = _saveRevision;
+        presets.custom = { ...presets.custom, ...config, character_name: name, enabled: enabled };
 
-      setTimeout(() => { _syncCharIndicator(); }, 0);
+        // The custom preset must be the SELECTED preset for its values to reach
+        // the model — chat.js only sends `preset_id` when getSelectedPreset() is
+        // truthy. Activate it when there's a persona (name/prompt) OR when the
+        // user has dialed in non-default tuning (temperature / max tokens / thinking mode).
+        const _hasTuning = (config.temperature !== 1.0)
+          || (config.max_tokens !== 0)
+          || (config.reasoning_mode !== 'auto')
+          || !!config.thinking_mode;
+        const _hasInject = !!(config.inject_prefix || config.inject_suffix);
+        const _hasContent = !!(system_prompt || name || _hasTuning || _hasInject);
+        if (enabled && _hasContent) {
+          selectedPreset = 'custom';
+          // Turn off research — doesn't make sense with a character
+          if (window._syncResearchIndicator) window._syncResearchIndicator(false);
+        } else {
+          selectedPreset = null;
+        }
+
+        // Update mini button state
+        const miniBtn = document.getElementById('overflow-preset-btn');
+        if (miniBtn) {
+          miniBtn.classList.toggle('active', enabled && _hasContent);
+        }
+
+        setTimeout(() => { _syncCharIndicator(); }, 0);
+
+        if (showToast) {
+          // The Inject tab is a plain tuned "prompt" chat, not a persona — say so.
+          showToast(_isInjectStart ? 'Prompt saved' : 'Persona saved');
+        }
+        if (_ownsSaveForm()) _saveModal.classList.add('hidden');
+      }
 
       // Auto-save to templates (non-blocking) — skip built-in presets
-      const _selVal = document.getElementById('char-template-select')?.value || '';
+      const _selVal = _templateSelectionAtSave;
       const isBuiltinPreset = PROMPT_TEMPLATES.some(t => t.isPreset && (t.name === name || t.name === _selVal));
       const saveName = isBuiltinPreset ? null : (name || null);
 
-      if (saveName) {
+      if (saveName && latestAcceptedCustomSaveByName.get(saveName) === _saveRevision) {
         const _existing = userTemplates.find(t => t.name === saveName);
         const _pendingExisting = pendingUserTemplates.get(saveName);
         const _entry = {
@@ -997,14 +1082,6 @@ export async function saveCustomPreset(showToast, showError) {
         });
       }
 
-      if (showToast) {
-        // The Inject tab is a plain tuned "prompt" chat, not a persona — say so.
-        showToast(_isInjectStart ? 'Prompt saved' : 'Persona saved');
-      }
-      const modal = document.getElementById('custom-preset-modal');
-      if (modal) {
-        modal.classList.add('hidden');
-      }
     } else {
       if (showError) {
         showError('Failed to save custom preset');

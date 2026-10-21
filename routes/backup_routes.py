@@ -311,13 +311,26 @@ def setup_backup_routes(memory_manager, preset_manager, skills_manager) -> APIRo
 
         # ── Presets ──
         if "presets" in body and isinstance(body["presets"], dict):
+            custom = body["presets"].get("custom")
+            if custom is not None and not isinstance(custom, dict):
+                raise HTTPException(400, "Preset custom must be a JSON object")
             current = preset_manager.get_all()
+            imports_custom = isinstance(custom, dict)
             for key, value in body["presets"].items():
+                # This is local concurrency metadata, not backup content.
+                if key == "custom_revision":
+                    continue
                 if isinstance(value, dict):
                     current[key] = value
                 elif isinstance(value, list):
                     current[key] = value
-            preset_manager.save(current)
+            if imports_custom:
+                current["custom_revision"] = preset_manager.get_custom_revision() + 1
+            if not preset_manager.save(current):
+                raise HTTPException(
+                    500,
+                    "Presets were not saved; earlier backup sections may already have been imported.",
+                )
             imported.append("presets")
 
         # ── Settings ──

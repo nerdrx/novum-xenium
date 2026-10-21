@@ -92,6 +92,9 @@ def test_custom_preset_route_forwards_reasoning_mode():
             self.args = args
             return True
 
+        def get_custom_revision(self):
+            return 0
+
     manager = Manager()
     endpoint = next(
         route.endpoint for route in setup_preset_routes(manager).routes

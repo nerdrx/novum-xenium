@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Dict, Any, List, Literal
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends, Query
 from pydantic import BaseModel, Field
 
 from src.request_models import PresetUpdateRequest
@@ -36,7 +36,7 @@ def setup_preset_routes(preset_manager) -> APIRouter:
 
     @router.get("/api/presets")
     async def get_presets() -> Dict[str, Any]:
-        return preset_manager.presets
+        return preset_manager.get_all()
 
     @router.post("/api/presets/custom")
     async def update_custom_preset(preset_update: PresetUpdateRequest, _admin: None = Depends(require_admin)) -> Dict[str, Any]:
@@ -56,7 +56,11 @@ def setup_preset_routes(preset_manager) -> APIRouter:
                 preset_update.show_persona_name,
             )
             if success:
-                return {"success": True, "message": "Custom preset updated"}
+                return {
+                    "success": True,
+                    "message": "Custom preset updated",
+                    "custom_revision": preset_manager.get_custom_revision(),
+                }
             return {"success": False, "message": "Failed to save preset"}
         except Exception as e:
             logger.error(f"Preset update error: {e}")
@@ -77,10 +81,16 @@ def setup_preset_routes(preset_manager) -> APIRouter:
         return {"success": False, "message": "Failed to save template"}
 
     @router.delete("/api/presets/templates/{template_id}")
-    async def delete_user_template(template_id: str, _admin: None = Depends(require_admin)) -> Dict[str, Any]:
-        success = preset_manager.delete_user_template(template_id)
+    async def delete_user_template(
+        template_id: str,
+        expected_custom_revision: int | None = Query(default=None, ge=0),
+        _admin: None = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        success = preset_manager.delete_user_template(template_id, expected_custom_revision)
+        if success is None:
+            raise HTTPException(409, "Active custom preset changed; reload and retry")
         if success:
-            return {"success": True}
+            return {"success": True, "custom_revision": preset_manager.get_custom_revision()}
         return {"success": False, "message": "Failed to delete template"}
 
     @router.post("/api/presets/expand")

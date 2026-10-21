@@ -3934,15 +3934,18 @@ function initBackup() {
   applyRestore?.addEventListener('click', async () => {
     if (!validatedFile) return;
     if (!window.confirm('Stage this backup? Application data will be replaced when Novum Xenium next starts. Runtime caches and external Docker volumes are preserved and are not restored.')) return;
+    const stagedFile = validatedFile;
     const msg = el('adm-backupMsg');
     applyRestore.disabled = true; applyRestore.textContent = 'Staging restore...';
     try {
-      const res = await fetch('/api/backup/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/zip' }, body: validatedFile });
+      const res = await fetch('/api/backup/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/zip' }, body: stagedFile });
       const result = await res.json().catch(() => null);
       if (!res.ok || !result?.ok) throw new Error(result?.detail || `HTTP ${res.status}`);
       msg.textContent = result.message; msg.className = 'admin-success';
-      previewBox.textContent = 'Restore staged. Stop and start Novum Xenium to activate it. External Docker volumes and runtime caches are preserved.';
-      applyRestore.style.display = 'none'; validatedFile = null;
+      if (validatedFile === stagedFile) {
+        previewBox.textContent = 'Restore staged. Stop and start Novum Xenium to activate it. External Docker volumes and runtime caches are preserved.';
+        applyRestore.style.display = 'none'; validatedFile = null;
+      }
     } catch (e) { msg.textContent = 'Restore staging failed: ' + e.message; msg.className = 'admin-error'; }
     applyRestore.disabled = false; applyRestore.textContent = 'Stage Restore and Require Restart';
   });

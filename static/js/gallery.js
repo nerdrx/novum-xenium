@@ -326,9 +326,13 @@ async function _fetchAlbums() {
   const sequence = ++_albumsLoadSequence;
   const current = () => _open && sequence === _albumsLoadSequence;
   const container = document.getElementById('gallery-albums-container');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   container?.setAttribute('aria-busy', 'true');
   try {
-    const res = await fetch(`${API_BASE}/api/gallery/albums`, { credentials: 'same-origin' });
+    const res = await fetch(`${API_BASE}/api/gallery/albums`, {
+      credentials: 'same-origin', signal: controller.signal,
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!Array.isArray(data?.albums) || !data.albums.every(album =>
@@ -352,6 +356,7 @@ async function _fetchAlbums() {
     _renderAlbumsGrid();
     return false;
   } finally {
+    clearTimeout(timeout);
     if (current()) container?.removeAttribute('aria-busy');
   }
 }
@@ -2398,7 +2403,7 @@ function _openDetail(img, opener = null) {
       }
     };
     _nameInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); _saveName(); _nameInput.blur(); }
+      if (e.key === 'Enter') { e.preventDefault(); _nameInput.blur(); }
     });
     _nameInput.addEventListener('blur', _saveName);
   }

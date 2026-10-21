@@ -203,21 +203,22 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
 
     def save_user_template(self, template: dict) -> bool:
         """Save a new user template or update existing by id."""
-        templates = self.presets.get("user_templates", [])
+        templates = list(self.presets.get("user_templates", []))
         # Update existing if same id
         existing = next((i for i, t in enumerate(templates) if t.get("id") == template.get("id")), None)
         if existing is not None:
             templates[existing] = template
         else:
             templates.append(template)
-        self.presets["user_templates"] = templates
-        return self.save(self.presets)
+        return self.save({**self.presets, "user_templates": templates})
 
     def delete_user_template(self, template_id: str) -> bool:
         """Delete a user template by id."""
-        templates = self.presets.get("user_templates", [])
-        self.presets["user_templates"] = [t for t in templates if t.get("id") != template_id]
-        return self.save(self.presets)
+        templates = [
+            template for template in self.presets.get("user_templates", [])
+            if template.get("id") != template_id
+        ]
+        return self.save({**self.presets, "user_templates": templates})
 
     def update_persona_memory(self, name: str, memory: str) -> bool:
         """Persist auto-maintained continuity notes for a saved/active persona."""

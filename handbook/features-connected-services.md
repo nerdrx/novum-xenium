@@ -120,7 +120,15 @@ search. List requests have a 15-second deadline covering both the response and
 its JSON body. This deadline does not prove that the remote address book is
 available.
 
-See the pinned [email and contacts specification](https://github.com/nerdrx/novum-xenium/blob/3089bd52e22f005180340828f9c93cd1c1d251bf/specs/email-contacts.md#contacts), [contacts routes](https://github.com/nerdrx/novum-xenium/blob/3089bd52e22f005180340828f9c93cd1c1d251bf/routes/contacts/contacts_routes.py), and [Contacts settings UI](https://github.com/nerdrx/novum-xenium/blob/3089bd52e22f005180340828f9c93cd1c1d251bf/static/js/settings.js).
+When a Save refresh or successful Retry replaces the list in the same open
+manager, other open row editors keep their drafts. The saved row closes if its
+fields still match the submitted values; newer edits remain as drafts. Edits
+typed while the list response is pending are included. A preserved text field
+keeps its focus and selection if it was active before the list was replaced.
+Manual Search does not preserve row drafts this way. Drafts are not restored
+for contacts missing from the response or filtered out by the current search.
+
+See the pinned [email and contacts specification](https://github.com/nerdrx/novum-xenium/blob/9a57408a4b6b232d24ebc0f6c91cd4fe91936c75/specs/email-contacts.md#contacts), [contacts routes](https://github.com/nerdrx/novum-xenium/blob/9a57408a4b6b232d24ebc0f6c91cd4fe91936c75/routes/contacts/contacts_routes.py), and [Contacts settings UI](https://github.com/nerdrx/novum-xenium/blob/9a57408a4b6b232d24ebc0f6c91cd4fe91936c75/static/js/settings.js).
 
 ## Email
 

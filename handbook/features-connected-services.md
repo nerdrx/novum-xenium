@@ -75,19 +75,35 @@ documents backend behavior and remaining limits.
 ## Contacts
 
 Contacts are managed by an administrator. In **Settings → Integrations**, add
-**Contacts (CardDAV)** to configure an address book. Enter its URL and username;
-enter the password when adding or changing it. When editing an existing setup,
+**Contacts (CardDAV)** to configure an address book. Enter its URL and, if
+required by the server, a username; enter the password when adding or changing it. When editing an existing setup,
 leave the password field blank to keep the saved password. The app masks the
-saved password in configuration reads. If CardDAV is not configured, the
+saved password in configuration reads. Saving an empty URL disables CardDAV;
+this does not delete the local contact store. If CardDAV is not configured, the
 contacts service uses its local contact store. A configured CardDAV outage can
 serve cached contacts for reading, but failed remote writes do not switch to
 local storage.
+
+The setup form waits up to 15 seconds for saved settings, including the JSON
+response body. Save stays disabled during this initial load; Cancel works
+immediately. Typing a URL or username while loading keeps your edits. If loading
+fails, the form shows an error and releases its controls. Reopen the form to
+retry loading the saved setup before replacing values you could not verify.
+A successful save reports when newer edits remain unsaved.
 
 Open **Contacts (CardDAV)** to search contacts, add one, edit a row, or delete
 it. The form requires a name or email to add a contact. Use **Import** for VCF
 or CSV files and **Export .vcf** or **Export .csv** to download contacts.
 Imports can report partial failures; review the displayed imported/total and
-failed counts.
+failed counts. If one file type finishes before another fails, those completed
+imports remain applied; check the counts before importing the same files again.
+A duplicate-only import can legitimately report zero imported contacts.
+
+If adding a contact fails, the form keeps the draft for retry. An accepted
+earlier Add also keeps a newer draft typed while that request was pending.
+Finishing a write from a manager you closed or replaced does not refresh over
+the reopened manager’s row draft. Accepted writes remain saved; reopen Contacts
+when you are ready to reload them.
 
 The current Contacts manager has no separate **Sync now** control. CardDAV
 reads use a short server-side cache, so changes made in another client may not
@@ -98,7 +114,13 @@ unclear response can still mean the server applied the change, so verify the
 contact in the remote address book before retrying. A cached row is not
 confirmation that a remote write failed.
 
-See the pinned [email and contacts specification](https://github.com/nerdrx/novum-xenium/blob/4cf96306cb8379f69054f0e427b47641571d3981/specs/email-contacts.md#contacts), [contacts routes](https://github.com/nerdrx/novum-xenium/blob/4cf96306cb8379f69054f0e427b47641571d3981/routes/contacts/contacts_routes.py), and [Contacts settings UI](https://github.com/nerdrx/novum-xenium/blob/4cf96306cb8379f69054f0e427b47641571d3981/static/js/settings.js).
+If loading the list fails, use **Retry**. After a failed refresh, a warning
+identifies the retained rows as previous results; they may not match a new
+search. List requests have a 15-second deadline covering both the response and
+its JSON body. This deadline does not prove that the remote address book is
+available.
+
+See the pinned [email and contacts specification](https://github.com/nerdrx/novum-xenium/blob/3089bd52e22f005180340828f9c93cd1c1d251bf/specs/email-contacts.md#contacts), [contacts routes](https://github.com/nerdrx/novum-xenium/blob/3089bd52e22f005180340828f9c93cd1c1d251bf/routes/contacts/contacts_routes.py), and [Contacts settings UI](https://github.com/nerdrx/novum-xenium/blob/3089bd52e22f005180340828f9c93cd1c1d251bf/static/js/settings.js).
 
 ## Email
 

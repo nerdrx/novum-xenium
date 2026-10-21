@@ -3579,6 +3579,16 @@ async function initUnifiedIntegrations() {
           </div>
         </div>
       </div>`;
+    const apiFormRoot = formEl.firstElementChild;
+    const apiMessage = el('uf-api-msg');
+    const isCurrentApiForm = () => {
+      if (formIntent !== activeFormIntent || !apiFormRoot?.isConnected || !formEl.contains(apiFormRoot)) return false;
+      for (let node = apiFormRoot; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (node.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
+      }
+      return true;
+    };
     // Custom preset dropdown wire-up (hidden select stays as data source).
     (() => {
       const trig = el('uf-api-preset-trigger');
@@ -3685,25 +3695,31 @@ async function initUnifiedIntegrations() {
         // level would silently miss, leaving Test perpetually stuck on
         // "Save first" until the form was reopened.
         if (!_editId && saved) _editId = saved.integration?.id || saved.id;
-        el('uf-api-msg').textContent = 'Saved'; el('uf-api-msg').style.color = 'var(--green,#50fa7b)';
-        await renderList();
+        if (isCurrentApiForm()) { apiMessage.textContent = 'Saved'; apiMessage.style.color = 'var(--green,#50fa7b)'; }
         notifyIntegrationsChanged();
-      } catch (_) { el('uf-api-msg').textContent = 'Failed'; el('uf-api-msg').style.color = 'var(--red)'; }
+        try { await renderList(); }
+        catch (_) { uiModule.showError?.('API integration saved, but its list could not be refreshed.'); }
+      } catch (_) {
+        if (isCurrentApiForm()) { apiMessage.textContent = 'Failed'; apiMessage.style.color = 'var(--red)'; }
+      }
     });
     el('uf-api-test').addEventListener('click', async () => {
       if (!_editId) { el('uf-api-msg').textContent = 'Save first'; return; }
       try {
         const r = await fetch(`/api/auth/integrations/${_editId}/test`, { method: 'POST', credentials: 'same-origin' });
         const d = await r.json();
+        if (!isCurrentApiForm()) return;
         // Backend returns {ok: bool, message: str}
         if (d.ok) {
-          el('uf-api-msg').textContent = d.message || 'Connected';
-          el('uf-api-msg').style.color = 'var(--green,#50fa7b)';
+          apiMessage.textContent = d.message || 'Connected';
+          apiMessage.style.color = 'var(--green,#50fa7b)';
         } else {
-          el('uf-api-msg').textContent = (d.message || d.error || d.detail || `HTTP ${r.status}`).slice(0, 360);
-          el('uf-api-msg').style.color = 'var(--red)';
+          apiMessage.textContent = (d.message || d.error || d.detail || `HTTP ${r.status}`).slice(0, 360);
+          apiMessage.style.color = 'var(--red)';
         }
-      } catch (e) { el('uf-api-msg').textContent = 'Error: ' + e.message; el('uf-api-msg').style.color = 'var(--red)'; }
+      } catch (e) {
+        if (isCurrentApiForm()) { apiMessage.textContent = 'Error: ' + e.message; apiMessage.style.color = 'var(--red)'; }
+      }
     });
   }
 

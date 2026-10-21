@@ -59,6 +59,9 @@ let _currentDate = new Date();
 let _events = [];
 let _allEvents = {};
 let _fetchedRanges = [];
+let _eventLoadRequest = 0;
+let _eventLoadInFlight = null;
+let _eventLoadError = null;
 let _calendars = [];
 let _hiddenCals = new Set();
 let _hiddenTypes = new Set();   // event_type values to hide
@@ -179,31 +182,85 @@ function _scheduleCalendarSettingsSave(id, snapshot) {
   state.timer = setTimeout(() => _queueCalendarSettingsSave(id, snapshot, state, sequence), 300);
 }
 
-async function _fetchEvents(start, end, force) {
+async function _fetchEvents(start, end, force, searchRange = false) {
+  const sameFailedRange = _eventLoadError?.start === start && _eventLoadError?.end === end;
+  // A search link loads a wider range than the visible month. Keep that
+  // failure attached to the search until its exact range is retried or the
+  // search is cleared, even if another view rerenders while search is active.
+  if (_searchQuery && _eventLoadError?.searchRange && (start !== _eventLoadError.start || end !== _eventLoadError.end || !force)) {
+    _events = _filterPool(start, end);
+    return;
+  }
+  if (_searchQuery && _eventLoadInFlight?.request === _eventLoadRequest && _eventLoadInFlight.searchRange && (start !== _eventLoadInFlight.start || end !== _eventLoadInFlight.end)) {
+    _events = _filterPool(start, end);
+    return;
+  }
+  // openCalendarView and its first render can ask for the same range while
+  // the explicit request is pending. Let that render share its result rather
+  // than invalidating the request that owns the visible range.
+  if (!force && _eventLoadInFlight?.request === _eventLoadRequest && _eventLoadInFlight.start === start && _eventLoadInFlight.end === end) {
+    _events = _filterPool(start, end);
+    return _eventLoadInFlight.hasCache ? undefined : _eventLoadInFlight.promise;
+  }
+  if (!force && sameFailedRange) {
+    _events = _filterPool(start, end);
+    return;
+  }
+  const request = ++_eventLoadRequest;
+  if (_eventLoadError && !sameFailedRange) _eventLoadError = null;
   if (!force && _rangeIsCached(start, end)) {
     _events = _filterPool(start, end);
     return;
   }
+  if (force) _eventLoadError = null;
   // Render from pool immediately if we have any cached data
   const hasCache = Object.keys(_allEvents).length > 0;
   if (hasCache) _events = _filterPool(start, end);
-  const fetchPromise = fetch(`${API_BASE}/api/calendar/events?start=${start}&end=${end}`, { credentials: 'same-origin' })
-    .then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(data => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  const inFlight = { start, end, request, searchRange, hasCache, promise: null };
+  _eventLoadInFlight = inFlight;
+  const fetchPromise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/calendar/events?start=${start}&end=${end}`, { credentials: 'same-origin', signal: controller.signal });
+      if (!res.ok) {
+        let reason = '';
+        try {
+          const failure = await res.json();
+          reason = failure.detail || failure.error || '';
+        } catch {}
+        throw new Error(reason || 'HTTP ' + res.status);
+      }
+      const data = await res.json();
+      if (request !== _eventLoadRequest) return;
+      const responseEvents = data?.events;
+      if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(responseEvents) || responseEvents.some(ev => !ev || typeof ev !== 'object' || Array.isArray(ev) || typeof ev.uid !== 'string' || !ev.uid)) {
+        throw new Error('Invalid event response');
+      }
       // On first fetch after cache load, replace pool entirely to avoid
       // stale/duplicate UIDs from a previous backend (e.g. CalDAV → SQLite)
       if (hasCache && _fetchedRanges.length === 0) _allEvents = {};
-      (data.events || []).forEach(ev => { _allEvents[ev.uid] = ev; });
+      responseEvents.forEach(ev => { _allEvents[ev.uid] = ev; });
       _fetchedRanges.push([start, end]);
       _events = _filterPool(start, end);
+      _eventLoadError = null;
       if (typeof _saveCache === 'function') _saveCache();
       // Re-render in background when new data arrives (if calendar still open)
       if (_open && hasCache && !document.querySelector('#cal-body .cal-form')) _render();
-    })
-    .catch(e => { console.error('Calendar: failed to fetch events', e); });
+    } catch (e) {
+      if (request !== _eventLoadRequest) return;
+      const message = controller.signal.aborted ? 'Request timed out. Please retry.' : (e.message || 'Connection failed. Please retry.');
+      _eventLoadError = { start, end, message, searchRange };
+      console.error('Calendar: failed to fetch events', e);
+      // A cache-backed render has already returned. Refresh its header to
+      // show the warning while keeping the cached event pool intact.
+      if (hasCache && _open && !document.querySelector('#cal-body .cal-form')) _render();
+    } finally {
+      clearTimeout(timeout);
+      if (_eventLoadInFlight === inFlight) _eventLoadInFlight = null;
+    }
+  })();
+  inFlight.promise = fetchPromise;
   // If we have cache, don't block on fetch — return immediately so render is instant
   if (hasCache) return;
   // No cache — must await the fetch
@@ -1186,7 +1243,8 @@ function _headerHTML() {
     />
     <span class="cal-quickadd-hint" id="cal-quickadd-hint" aria-hidden="true"><span class="qa-hint-accent">+ Quick add</span><span class="qa-hint-separator">-</span><span class="qa-hint-example" id="qa-hint-example">return home to Ithaca 1pm tmrw</span><svg class="qa-hint-enter" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></span>
     <span class="cal-quickadd-status" id="cal-quickadd-status"></span>
-  </div>`;
+  </div>
+  ${_eventLoadError ? `<div class="cal-event-load-error" role="alert"><span>Could not load events: ${_e(_eventLoadError.message)}</span><button type="button" class="cal-btn" data-cal-event-retry>Retry</button></div>` : ''}`;
 }
 
 function _filtersData() {
@@ -2561,6 +2619,14 @@ function _dayDetailHTML(dateStr) {
 
 function _wireAll(body) {
   _watchSideNavCalendarPane();
+  body.querySelector('[data-cal-event-retry]')?.addEventListener('click', () => {
+    const failed = _eventLoadError;
+    if (!failed) return;
+    const focusToken = _calendarFocusToken;
+    _fetchEvents(failed.start, failed.end, true, failed.searchRange).then(() => {
+      if (focusToken === _calendarFocusToken && _open && !document.querySelector('#cal-body .cal-form')) _render();
+    });
+  });
   // ── Day-detail splitter (drag to resize) ────────────────────────
   // Restores the saved height each render so the user's choice survives
   // navigation between months/weeks. Drag adjusts a single CSS variable
@@ -4520,7 +4586,7 @@ async function openCalendarTo(target) {
     if (targetStr.startsWith('search:')) {
       const searchQuery = targetStr.slice('search:'.length).trim();
       const now = new Date();
-      await _fetchEvents(`${now.getFullYear()}-01-01`, `${now.getFullYear() + 2}-01-01`);
+      await _fetchEvents(`${now.getFullYear()}-01-01`, `${now.getFullYear() + 2}-01-01`, false, true);
       if (focusToken !== _calendarFocusToken) return;
       _searchQuery = searchQuery;
       _currentDate = now;

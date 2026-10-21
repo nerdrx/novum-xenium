@@ -433,7 +433,7 @@ async function _bulkUpload(filesOrItems, fallbackAlbumId) {
   );
 
   bar.style.display = '';
-  let done = 0, dupes = 0, errors = 0;
+  let done = 0, dupes = 0, errors = 0, firstError = '';
   const total = items.length;
 
   // Concurrency pool — N workers pulling from the queue. 4 is a reasonable
@@ -455,8 +455,13 @@ async function _bulkUpload(filesOrItems, fallbackAlbumId) {
           method: 'POST', body: fd, credentials: 'same-origin',
         });
         const data = await res.json();
-        if (data.duplicate) dupes++;
-        else if (!data.ok) errors++;
+        if (res.ok && data.duplicate) dupes++;
+        else if (!res.ok || !data.ok) {
+          errors++;
+          if (!firstError && typeof data.detail === 'string') {
+            firstError = data.detail.replace(/\s+/g, ' ').trim().slice(0, 160);
+          }
+        }
       } catch (e) { errors++; }
       done++;
       if (progress) progress.style.width = `${(done / total) * 100}%`;
@@ -469,7 +474,13 @@ async function _bulkUpload(filesOrItems, fallbackAlbumId) {
     (dupes ? `, ${dupes} duplicates skipped` : '') +
     (errors ? `, ${errors} errors` : '');
   if (status) status.textContent = msg;
-  uiModule.showToast(msg);
+  if (firstError) {
+    uiModule.showError(`${msg}: ${firstError}`);
+  } else if (errors) {
+    uiModule.showError(msg);
+  } else {
+    uiModule.showToast(msg);
+  }
   setTimeout(() => { bar.style.display = 'none'; }, 3000);
   // Auto-switch to Recent so the just-uploaded photos are immediately
   // visible at the top (otherwise Shuffle would scatter them).

@@ -20,6 +20,44 @@ lost, reopen Integrations to check whether removal completed before trying
 again. A successful removal refreshes the list without closing a different
 integration form opened while the request was pending.
 
+## API integrations
+
+An administrator can add an **API** integration under **Settings →
+Integrations**. These connect services such as Gitea or Home Assistant;
+[chat model providers](providers.md) are configured separately.
+
+Choose a preset or **Custom**, then enter a name and a base URL reachable
+from the Novum backend. Choose the service's authentication method:
+
+| Method | Credential to enter |
+| --- | --- |
+| Bearer | Token only; Novum adds the `Bearer` prefix. |
+| Header | Token and the service's header name, such as `X-Auth-Token`. |
+| Basic | `username:password` in the API Key field. |
+| None | No separate credential; some webhook URLs contain their own secret. |
+
+Choose **Save**, then **Test**. Test uses the saved configuration, so save
+edited fields before testing them. Leaving the API Key field blank when
+editing keeps the stored key. A successful save remains a save even if the
+list refresh fails: the app reports that refresh problem separately. Reopen
+Integrations to inspect the saved entry before repeating the save.
+
+If some integration lists cannot load, the available entries remain visible
+with a warning and **Retry**. An empty failed list is not reported as an
+empty configuration. Each list request has a 15-second deadline, including
+reading its response body; Retry starts a fresh load after a failure.
+A newer refresh takes precedence over an older one, so a delayed Retry does
+not replace the list refreshed after a save.
+
+**Test can send a message:** ntfy publishes a connectivity message to the
+configured reminder topic, and Discord Webhook sends a test embed to its
+channel. Other API presets use a GET connection check. Review the destination
+before testing; a successful HTTP response is not proof of phone delivery.
+
+See the frozen [API integration routes](https://github.com/nerdrx/novum-xenium/blob/80002733fcdb49fb358c9398210797215aaba14e/routes/auth_routes.py)
+and [credential and request handling](https://github.com/nerdrx/novum-xenium/blob/80002733fcdb49fb358c9398210797215aaba14e/src/integrations.py)
+for the exact saved-configuration behavior.
+
 ## Calendar
 
 Use Calendar for local events, CalDAV sync, and ICS exchange. Open **Calendar**

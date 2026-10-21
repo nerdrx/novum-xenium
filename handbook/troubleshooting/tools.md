@@ -40,6 +40,13 @@ do not recognize; ask for a narrower explanation or action. The
 `ODYSSEUS_TOOL_APPROVAL_GATE` setting is enabled by default and should stay
 enabled. A pending approval is a safety boundary, not a service failure.
 
+Pending approval cards expire after 10 minutes by default. An old card grants
+nothing; the server can reject it as invalid, expired, or belonging to another
+thread. Check the current chat, operation, and target. If the action is still
+wanted, restate the intended request to obtain a fresh card. Do not weaken
+the approval gate to recover a stale card. See the frozen
+[approval store](https://github.com/nerdrx/novum-xenium/blob/80002733fcdb49fb358c9398210797215aaba14e/src/tool_approvals.py).
+
 An **Access denied** result from the task manager concerns access to that
 target; it does not mean the task tool is missing. Confirm the signed-in
 account and intended task. Novum's automatic recovery must not repeat that

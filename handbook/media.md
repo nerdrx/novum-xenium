@@ -21,7 +21,7 @@ The desktop's local Linux alarm is a host-side feature that uses a user-session 
 
 ### Chat microphone
 
-When speech input is enabled for your instance, an empty chat composer with no
+In ordinary chat, when speech input is enabled for your instance, an empty composer with no
 attachments shows a microphone button. Select it to request microphone access;
 select **Stop** to end the app's pending attempt or recording. Capture requires
 HTTPS or localhost. If access is denied, review this site's microphone
@@ -32,13 +32,14 @@ To enable speech input, open **Settings → AI Defaults → Speech to Text**, tu
 on the setting, and choose **Browser (built-in)**, **Local model**, or a
 configured API endpoint. Speech input is off by default, and changing these
 instance settings requires administrator access. If saved settings cannot be
-loaded, the controls stay unavailable; reload the app and try again. The
-browser provider uses the browser's Web Speech API, whose availability and
-behavior depend on the browser. A Local model status check does not load
-Whisper; loading a cold configured model is attempted when transcription is
-first requested. Changing the configured local model takes effect at the next
-transcription attempt; status checks do not reload or unload the cached model. See the pinned [settings panel](https://github.com/nerdrx/novum-xenium/blob/b38a9c98283208e62a39d9269a47ac74c717a06a/static/index.html)
-and [speech service](https://github.com/nerdrx/novum-xenium/blob/4d7563f83c898a262f37682d9dce3f44a5703a3c/services/stt/stt_service.py)
+loaded, the controls stay unavailable; reload the app and try again. The speech
+service treats an empty or non-string saved provider as disabled without
+rewriting that stored setting. The browser provider uses the browser's Web Speech
+API, whose availability and behavior depend on the browser. A Local model status
+check does not load Whisper; loading a cold configured model is attempted on the
+first transcription request. Changing the configured local model takes effect at
+the next transcription attempt; status checks do not reload or unload the cached model. See the pinned [settings panel](https://github.com/nerdrx/novum-xenium/blob/b38a9c98283208e62a39d9269a47ac74c717a06a/static/index.html)
+and [speech service](https://github.com/nerdrx/novum-xenium/blob/68035935097a29d1461cb06b38868c8c02166c9b/services/stt/stt_service.py)
 for those settings and loading boundaries.
 
 **Stop cannot close a browser permission prompt.** Respond to that prompt in
@@ -47,6 +48,15 @@ microphone again to make a new attempt. If creating the audio recorder or its
 `start()` call fails, the app releases the acquired stream, returns the composer
 to idle, and shows an error. An older permission result does not reset newer
 recording controls.
+
+Compare uses its composer button to send to or stop Compare runs; it does not
+start microphone capture. Entering Compare cancels the app's pending recording
+attempt or stops an active recording before switching chats. If the transcript
+finishes after Compare opens, it stays with the chat captured when recording stopped,
+not the Compare composer.
+The Compare **Stop** action becomes available as soon as a run begins. See the
+[chat action handler](https://github.com/nerdrx/novum-xenium/blob/68035935097a29d1461cb06b38868c8c02166c9b/static/app.js)
+for Compare button ownership.
 
 If browser speech recognition is unavailable or cannot be started, audio capture
 continues. Stop remains available; if there is no browser transcript, the
@@ -81,7 +91,7 @@ Novum offers explicit transcript/audio recovery without assigning it to either
 chat automatically. Browser recognition has the brief completion wait described
 above; server-side transcription can finish later. Review the result before
 sending it. See
-the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/d29d6081aaeef08563ea8aa7c82835f4dac74574/specs/speech.md)
+the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/98fe494a2116f0a66f733db0b28fc67abf1415ca/specs/speech.md)
 and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/b1b3c622ec9f7b0fce5e1b6787beafcaad0d1229/static/js/voiceRecorder.js)
 for provider and fallback behavior. Chat model configuration alone does not
 enable speech input.

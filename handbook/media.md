@@ -31,15 +31,18 @@ that an input device is connected and available to the browser.
 To enable speech input, open **Settings → AI Defaults → Speech to Text**, turn
 on the setting, and choose **Browser (built-in)**, **Local model**, or a
 configured API endpoint. Speech input is off by default, and changing these
-instance settings requires administrator access. If saved settings cannot be
-loaded, the controls stay unavailable; reload the app and try again. The speech
+instance settings requires administrator access. Only a saved boolean `true`
+enables speech input; missing or malformed values act as off without rewriting the
+saved setting. If saved settings cannot be loaded, the controls stay unavailable;
+reload the app and try again. The speech
 service treats an empty or non-string saved provider as disabled without
 rewriting that stored setting. The browser provider uses the browser's Web Speech
 API, whose availability and behavior depend on the browser. A Local model status
-check does not load Whisper; loading a cold configured model is attempted on the
-first transcription request. Changing the configured local model takes effect at
+check does not load Whisper. Empty or over-limit audio is rejected before a local
+model is initialized. Loading a cold configured model is attempted on the first
+valid transcription request. Changing the configured local model takes effect at
 the next transcription attempt; status checks do not reload or unload the cached model. See the pinned [settings panel](https://github.com/nerdrx/novum-xenium/blob/b38a9c98283208e62a39d9269a47ac74c717a06a/static/index.html)
-and [speech service](https://github.com/nerdrx/novum-xenium/blob/68035935097a29d1461cb06b38868c8c02166c9b/services/stt/stt_service.py)
+and [speech service](https://github.com/nerdrx/novum-xenium/blob/6fc1a623e0cb5e5c3d19b49cb901a0ca7ddc31f4/services/stt/stt_service.py)
 for those settings and loading boundaries.
 
 **Stop cannot close a browser permission prompt.** Respond to that prompt in
@@ -93,7 +96,7 @@ Novum offers explicit transcript/audio recovery without assigning it to either
 chat automatically. Browser recognition has the brief completion wait described
 above; server-side transcription can finish later. Review the result before
 sending it. See
-the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/67c6ceffac5908c8a6c667ab8227152735737d78/specs/speech.md)
+the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/e40e94de6027b922af969f82b288dd7851f7d92b/specs/speech.md)
 and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/b1b3c622ec9f7b0fce5e1b6787beafcaad0d1229/static/js/voiceRecorder.js)
 for provider and fallback behavior. The [session recovery implementation](https://github.com/nerdrx/novum-xenium/blob/86b9d1d3b72166d0b1a28d0968a1da70713978c6/static/js/sessions.js)
 keeps this text recovery separate from chat insertion. Chat model configuration

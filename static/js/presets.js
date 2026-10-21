@@ -433,13 +433,14 @@ function initResetButton() {
 async function loadUserTemplates() {
   try {
     const res = await fetch(`${API_BASE}/api/presets/templates`);
-    if (!res.ok) return false;
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
     const templates = await res.json();
-    if (!Array.isArray(templates)) return false;
+    if (!Array.isArray(templates)) throw new Error('Invalid template response');
     userTemplates = templates;
     _populateCharSelect();
     return true;
   } catch (e) {
+    window.uiModule?.showError?.('Could not refresh saved templates. Copy unsaved edits, then refresh the page after the server recovers.');
     return false;
   }
 }

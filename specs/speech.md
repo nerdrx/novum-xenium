@@ -69,6 +69,9 @@ Frontend behavior:
   asks before copying the transcript or downloading the audio instead of placing it into either chat.
 - browser recognition waits up to two seconds after the audio recorder finishes for its final result
   and end event, then makes a best-effort abort if needed. Empty browser results use audio fallback;
+- the frontend captures its provider after microphone permission resolves and uses that value for
+  the recorder's startup and stop path. Changing settings during a Browser recording does not
+  abandon its recognizer. Server transcription still resolves the global backend settings at request time;
 - a delayed transcript follows the Stop destination and appends to its latest draft. Account changes
   prevent delivery; deleted or unavailable destinations can offer explicit copy/discard recovery.
   Incognito and unverified page-owned drafts retain their memory-only scope. Offscreen audio fallback

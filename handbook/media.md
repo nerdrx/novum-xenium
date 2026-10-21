@@ -14,6 +14,12 @@ To use a local image model, download a supported model in Cookbook, wait for the
 
 Image providers are configured separately from chat providers. Some workflows can use an existing host login through the optional Codex image bridge, which needs its own setup. It is not installed or enabled merely by using a chat model. See the [Codex image bridge instructions](https://github.com/nerdrx/novum-xenium/blob/main/docs/codex-image-bridge.md).
 
+## Gallery uploads and previews
+
+Gallery image uploads accept PNG, JPEG, WebP, and GIF. Novum identifies a supported image before saving its file or database entry. Unrecognized image bytes are rejected; replacing an image with unrecognized bytes leaves the existing image intact. An optional EXIF metadata warning can still accompany an accepted image. Identifying the format does not guarantee every pixel or metadata field is valid.
+
+XBM processing is disabled on the guarded image-input paths. Generic chat uploads retain their broader file support: if optional image metadata or thumbnail creation fails, the original file remains available. This does not make every supported decoder safe; see [dependency audit findings](reference/security.md#dependency-audit-findings).
+
 ## Audio
 
 The desktop's local Linux alarm is a host-side feature that uses a user-session timer and restores the previous system volume/mute state after its bounded playback. The computer and user audio session must be available. It does not wake a powered-off computer or act as an Android alarm. Other voice/audio features require their own supported provider configuration.

@@ -66,7 +66,12 @@ def test_malformed_stored_reasoning_mode_migrates_without_resetting_presets(
 def test_custom_update_rejects_non_string_reasoning_mode():
     manager = PresetManager.__new__(PresetManager)
     manager.presets = {}
-    manager.save = lambda presets: True
+
+    def save(presets):
+        manager.presets = presets
+        return True
+
+    manager.save = save
 
     assert manager.update_custom(0.6, 1024, "Prompt", reasoning_mode={"on": True})
     assert manager.presets["custom"]["reasoning_mode"] == "auto"

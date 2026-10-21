@@ -172,7 +172,7 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
                         persona_memory = template.get("persona_memory", "") or ""
                         persona_memory_schema = template.get("persona_memory_schema", persona_memory_schema) or persona_memory_schema
                         break
-        self.presets["custom"] = {
+        custom = {
             "name": name or "Custom",
             "character_name": name,
             "temperature": temperature,
@@ -191,7 +191,7 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
             "persona_memory": persona_memory if enabled and name else "",
             "persona_memory_schema": persona_memory_schema if enabled and name else "general",
         }
-        return self.save(self.presets)
+        return self.save({**self.presets, "custom": custom})
     
     def get_all(self) -> Dict[str, Any]:
         """Get all presets"""
@@ -227,22 +227,32 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
         if not name:
             return False
 
+        candidate = self.presets
         changed = False
         custom = self.presets.get("custom")
         if isinstance(custom, dict) and custom.get("character_name") == name:
             if custom.get("persona_memory", "") != memory:
-                custom["persona_memory"] = memory
+                candidate = {
+                    **candidate,
+                    "custom": {**custom, "persona_memory": memory},
+                }
                 changed = True
 
         templates = self.presets.get("user_templates", [])
         if isinstance(templates, list):
+            updated_templates = []
+            templates_changed = False
             for template in templates:
                 if isinstance(template, dict) and template.get("name") == name:
                     if template.get("persona_memory", "") != memory:
-                        template["persona_memory"] = memory
-                        changed = True
+                        template = {**template, "persona_memory": memory}
+                        templates_changed = True
+                updated_templates.append(template)
+            if templates_changed:
+                candidate = {**candidate, "user_templates": updated_templates}
+                changed = True
 
-        return self.save(self.presets) if changed else True
+        return self.save(candidate) if changed else True
 
     def get_group_presets(self) -> list:
         """Get saved group chat presets."""

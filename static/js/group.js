@@ -105,6 +105,51 @@ function _initGroupTab() {
 
   // _groupParticipants is at module scope
   let _modelsCache = null;
+  let deletingGroupPreset = false;
+  let groupPresetsStale = false;
+  let groupPresetsLoadId = 0;
+
+  async function _deleteGroupPreset(groups, idx, name, confirmFirst = false) {
+    if (deletingGroupPreset) return;
+    if (groupPresetsStale) {
+      uiModule.showToast('Group preset list needs to reload. Reopen the Group tab to retry.');
+      return;
+    }
+    deletingGroupPreset = true;
+    const operationLoadId = groupPresetsLoadId;
+    let requestStarted = false;
+    try {
+      if (confirmFirst && !(await window.styledConfirm('Delete preset "' + name + '"?', { confirmText: 'Delete', danger: true }))) return;
+      if (operationLoadId !== groupPresetsLoadId) return;
+      const nextGroups = groups.filter((_, index) => index !== idx);
+      requestStarted = true;
+      const res = await fetch(API_BASE + '/api/presets/groups', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groups: nextGroups }),
+      });
+      if (!res.ok) throw new Error('Group preset delete failed: ' + res.status);
+      groupPresetsStale = true;
+      groupPresetsLoadId++; // Ignore any older list response that could restore deleted chips.
+      if (!(await _loadGroupPresets())) {
+        uiModule.showToast('Preset deleted, but the list could not refresh. Reopen the Group tab to reload.');
+      }
+    } catch (e) {
+      if (requestStarted) {
+        // A lost response may follow a successful write, so refresh before any retry.
+        groupPresetsStale = true;
+        groupPresetsLoadId++;
+        const refreshed = await _loadGroupPresets();
+        uiModule.showToast(refreshed
+          ? 'Could not confirm the delete. The list was refreshed; try again if the preset remains.'
+          : 'Could not confirm the delete. Reopen the Group tab to reload before retrying.');
+      } else {
+        uiModule.showToast('Could not confirm the delete. Please try again.');
+      }
+    } finally {
+      deletingGroupPreset = false;
+    }
+  }
 
   async function _getModels() {
     if (_modelsCache) return _modelsCache;
@@ -356,9 +401,12 @@ function _initGroupTab() {
 
   // Load and render saved group presets
   async function _loadGroupPresets() {
+    const loadId = ++groupPresetsLoadId;
     try {
       const res = await fetch(API_BASE + '/api/presets/groups', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Group preset list failed: ' + res.status);
       const data = await res.json();
+      if (loadId !== groupPresetsLoadId) return false;
       const groups = data.groups || [];
       // Render presets above participant list
       let presetsDiv = document.getElementById('group-presets-list');
@@ -369,7 +417,10 @@ function _initGroupTab() {
         participantsEl.parentNode.insertBefore(presetsDiv, participantsEl);
       }
       presetsDiv.innerHTML = '';
-      if (groups.length === 0) return;
+      if (groups.length === 0) {
+        groupPresetsStale = false;
+        return true;
+      }
       groups.forEach((g, idx) => {
         const chip = document.createElement('button');
         chip.className = 'preset-save-btn';
@@ -382,12 +433,7 @@ function _initGroupTab() {
         chipX.style.cssText = 'opacity:0.4;margin-left:4px;cursor:pointer;';
         chipX.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          groups.splice(idx, 1);
-          fetch(API_BASE + '/api/presets/groups', {
-            method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ groups }),
-          }).then(() => _loadGroupPresets());
+          _deleteGroupPreset(groups, idx, g.name || 'Group');
         });
         chip.appendChild(chipX);
         chip.title = (g.participants || []).map(p => p.characterName || p.modelDisplay || '?').join(', ');
@@ -412,18 +458,19 @@ function _initGroupTab() {
         // Long-press / right-click to delete
         chip.addEventListener('contextmenu', async (e) => {
           e.preventDefault();
-          if (await window.styledConfirm('Delete preset "' + (g.name || 'Group') + '"?', { confirmText: 'Delete', danger: true })) {
-            groups.splice(idx, 1);
-            fetch(API_BASE + '/api/presets/groups', {
-              method: 'POST', credentials: 'same-origin',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ groups }),
-            }).then(() => _loadGroupPresets());
-          }
+          _deleteGroupPreset(groups, idx, g.name || 'Group', true);
         });
         presetsDiv.appendChild(chip);
       });
-    } catch (e) { console.warn('[group] Failed to load presets:', e); }
+      groupPresetsStale = false;
+      return true;
+    } catch (e) {
+      if (loadId === groupPresetsLoadId) {
+        groupPresetsStale = true;
+        console.warn('[group] Failed to load presets:', e);
+      }
+      return false;
+    }
   }
   // Restore button text when switching away from Group tab
   document.querySelectorAll('.preset-tab[data-chartab]').forEach(tab => {

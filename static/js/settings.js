@@ -3307,6 +3307,7 @@ async function initUnifiedIntegrations() {
   if (!listEl) return;
   let integrationNotice = '';
   let activeFormIntent = 0;
+  let listRenderGeneration = 0;
 
   // Hide the "+ Add Integration" button whenever the per-type create form
   // is open so it doesn't compete visually with the in-progress form.
@@ -3328,16 +3329,42 @@ async function initUnifiedIntegrations() {
   }
 
   async function fetchAll() {
+    const failedSources = [];
+    const isRecord = value => !!value && typeof value === 'object' && !Array.isArray(value);
+    const records = value => Array.isArray(value) && value.every(isRecord);
+    const load = async (url, fallback, valid, adminOnly = false) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
+        if (!response.ok) {
+          if (adminOnly && response.status === 403) return fallback;
+          failedSources.push(url);
+          return fallback;
+        }
+        const value = await response.json();
+        if (!valid(value)) {
+          failedSources.push(url);
+          return fallback;
+        }
+        return value;
+      } catch (_) {
+        failedSources.push(url);
+        return fallback;
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
     const [apiRes, calRes, cardRes, contactsRes, emailAccountsRes, mcpRes, vaultRes, tokenRes, calendarsRes] = await Promise.all([
-      fetch('/api/auth/integrations', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { integrations: [] }).catch(() => ({ integrations: [] })),
-      fetch('/api/calendar/config/accounts', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { accounts: [] }).catch(() => ({ accounts: [] })),
-      fetch('/api/contacts/config', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
-      fetch('/api/contacts/list', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { contacts: [], count: 0 }).catch(() => ({ contacts: [], count: 0 })),
-      fetch('/api/email/accounts', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { accounts: [] }).catch(() => ({ accounts: [] })),
-      fetch('/api/mcp/servers', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : []).catch(() => []),
-      fetch('/api/vault/config', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
-      fetch('/api/tokens', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : []).catch(() => []),
-      fetch('/api/calendar/calendars', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { calendars: [] }).catch(() => ({ calendars: [] })),
+      load('/api/auth/integrations', { integrations: [] }, v => isRecord(v) && records(v.integrations), true),
+      load('/api/calendar/config/accounts', { accounts: [] }, v => isRecord(v) && records(v.accounts)),
+      load('/api/contacts/config', {}, isRecord, true),
+      load('/api/contacts/list', { contacts: [], count: 0 }, v => isRecord(v) && records(v.contacts), true),
+      load('/api/email/accounts', { accounts: [] }, v => isRecord(v) && records(v.accounts)),
+      load('/api/mcp/servers', [], v => records(v) || (isRecord(v) && records(v.servers)), true),
+      load('/api/vault/config', {}, isRecord, true),
+      load('/api/tokens', [], records, true),
+      load('/api/calendar/calendars', { calendars: [] }, v => isRecord(v) && records(v.calendars)),
     ]);
     const items = [];
     // API integrations
@@ -3397,7 +3424,7 @@ async function initUnifiedIntegrations() {
       items.push({ type: agentType, id: tok.id, name: tok.name || (agentType === 'claude' ? 'Claude Agent' : 'Codex Agent'), detail, enabled: true, data: tok });
     }
     // Vaultwarden removed as an integration option.
-    return items;
+    return { items, failedSources };
   }
 
   function renderCard(item) {
@@ -3422,17 +3449,31 @@ async function initUnifiedIntegrations() {
   }
 
   async function renderList() {
-    const items = await fetchAll();
+    const generation = ++listRenderGeneration;
+    const { items, failedSources } = await fetchAll();
+    if (generation !== listRenderGeneration) return;
     const noticeHtml = integrationNotice ? `
       <div class="intg-followup-note" style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:8px;border:1px solid color-mix(in srgb, var(--accent, var(--red)) 35%, transparent);border-left:3px solid var(--accent, var(--red));border-radius:5px;background:color-mix(in srgb, var(--accent, var(--red)) 8%, transparent);font-size:11px;">
         <span style="flex:1;line-height:1.35">${integrationNotice}</span>
         <button type="button" class="admin-btn-sm intg-open-email-settings" style="white-space:nowrap;">Email settings</button>
       </div>` : '';
-    if (items.length === 0) {
+    const loadWarningHtml = failedSources.length ? `
+      <div class="intg-load-warning" role="status" aria-live="polite" style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:8px;border:1px solid color-mix(in srgb, var(--red) 40%, transparent);border-left:3px solid var(--red);border-radius:5px;font-size:12px;">
+        <span style="flex:1;line-height:1.35">${items.length ? 'Some integrations could not be loaded. Showing available integrations.' : 'Integrations could not be loaded.'}</span>
+        <button type="button" class="admin-btn-sm intg-retry-load" style="min-width:44px;min-height:44px;padding:8px 12px;white-space:nowrap;">Retry</button>
+      </div>` : '';
+    if (items.length === 0 && failedSources.length === 0) {
       listEl.innerHTML = noticeHtml + '<div style="padding:12px;opacity:0.5;font-size:12px;text-align:center">No integrations configured</div>';
+    } else if (items.length === 0) {
+      listEl.innerHTML = noticeHtml + loadWarningHtml;
     } else {
-      listEl.innerHTML = noticeHtml + items.map(renderCard).join('');
+      listEl.innerHTML = noticeHtml + loadWarningHtml + items.map(renderCard).join('');
     }
+    listEl.querySelector('.intg-retry-load')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.currentTarget.disabled = true;
+      renderList();
+    });
     listEl.querySelector('.intg-open-email-settings')?.addEventListener('click', (e) => {
       e.stopPropagation();
       _openEmailSettings();

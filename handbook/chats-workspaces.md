@@ -28,6 +28,8 @@ a reusable-template warning means that the separate template save could not be
 confirmed. Copy important unsaved edits before refreshing the page and checking
 the saved-template list. A lost response can follow an accepted write, so check
 the list before retrying rather than assuming nothing changed.
+New personas may appear in Group choices while that template save is pending;
+availability there does not confirm that a reusable template was saved.
 
 **Save as Template** saves a reusable entry without starting a model. A failed
 disk write leaves the previously saved configuration and templates intact.

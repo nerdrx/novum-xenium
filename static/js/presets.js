@@ -72,6 +72,8 @@ export const PROMPT_TEMPLATES = [
 ];
 
 let userTemplates = [];
+const pendingUserTemplates = new Map();
+let userTemplateLoadRevision = 0;
 
 /**
  * Initialize with dependencies
@@ -431,15 +433,19 @@ function initResetButton() {
  * Load user templates from server and populate datalist
  */
 async function loadUserTemplates() {
+  const requestRevision = ++userTemplateLoadRevision;
   try {
     const res = await fetch(`${API_BASE}/api/presets/templates`);
+    if (requestRevision !== userTemplateLoadRevision) return false;
     if (!res.ok) throw new Error(`Server returned ${res.status}`);
     const templates = await res.json();
+    if (requestRevision !== userTemplateLoadRevision) return false;
     if (!Array.isArray(templates)) throw new Error('Invalid template response');
     userTemplates = templates;
     _populateCharSelect();
     return true;
   } catch (e) {
+    if (requestRevision !== userTemplateLoadRevision) return false;
     window.uiModule?.showError?.('Could not refresh saved templates. Copy unsaved edits, then refresh the page after the server recovers.');
     return false;
   }
@@ -953,8 +959,9 @@ export async function saveCustomPreset(showToast, showError) {
 
       if (saveName) {
         const _existing = userTemplates.find(t => t.name === saveName);
+        const _pendingExisting = pendingUserTemplates.get(saveName);
         const _entry = {
-          id: _existing && _existing.id
+          id: (_existing && _existing.id) || (_pendingExisting && _pendingExisting.id)
             || 'user-' + Math.random().toString(16).slice(2, 10),
           name: saveName,
           // use ?? since it's more semantic for null-coalescing
@@ -967,6 +974,7 @@ export async function saveCustomPreset(showToast, showError) {
           persona_memory_schema: config.persona_memory_schema || 'general',
         }
         const ENDPOINT = `${API_BASE}/api/presets/templates`;
+        pendingUserTemplates.set(saveName, _entry);
 
         fetch(ENDPOINT, {
           method: "POST",
@@ -984,6 +992,8 @@ export async function saveCustomPreset(showToast, showError) {
           if (showError) showError(message);
           else window.uiModule?.showError?.(message);
           loadUserTemplates();
+        }).finally(() => {
+          if (pendingUserTemplates.get(saveName) === _entry) pendingUserTemplates.delete(saveName);
         });
       }
 
@@ -1030,10 +1040,17 @@ export function getAllPresets() {
 }
 
 /**
- * Get the in-memory user templates list (may be stale; call loadUserTemplates first if freshness matters).
+ * Get saved templates plus in-flight persona saves for Group availability.
+ * Call loadUserTemplates first if freshness matters; pending entries are not yet confirmed.
  */
 export function getUserTemplates() {
-  return [...userTemplates];
+  const templates = [...userTemplates];
+  for (const pending of pendingUserTemplates.values()) {
+    const index = templates.findIndex(t => t.name === pending.name);
+    if (index < 0) templates.push(pending);
+    else templates[index] = pending;
+  }
+  return templates;
 }
 
 /**

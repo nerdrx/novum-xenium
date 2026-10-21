@@ -30,6 +30,9 @@ the saved-template list. A lost response can follow an accepted write, so check
 the list before retrying rather than assuming nothing changed.
 New personas may appear in Group choices while that template save is pending;
 availability there does not confirm that a reusable template was saved.
+On updated servers, each custom save and its reusable-template attempt finish
+in order. Template persistence can still fail independently; its warning does
+not undo an accepted custom save.
 
 **Save as Template** saves a reusable entry without starting a model. A failed
 disk write leaves the previously saved configuration and templates intact.
@@ -39,15 +42,22 @@ If a refresh fails, the displayed entries can be from the last successful load;
 wait for the server to recover and refresh again before retrying a change.
 
 If a save finishes while you edit another persona, your newer form stays open.
-The completed save still applies unless a newer save has already succeeded.
+Custom saves from one panel are sent in order, using the values captured when
+you pressed Save. Once a queued save begins checking or writing settings, it
+stops waiting after 15 seconds, including reading the response. A timeout does
+not prove that the server rejected the write: keep the draft and check saved settings before
+retrying. Servers that support conditional saves reject conflicting writes;
+the draft stays open for you to review and explicitly save again. With an older
+server, an uncertain write blocks further custom saves in that panel. Copy
+important edits and reload the page before retrying.
 Deleting a saved, active persona also disables that persona. If the same persona
 was saved again while deletion was pending, the app keeps the newer settings and
 asks you to reload the page before retrying.
 
 Saved templates retain the **Thinking** override: **On**, **Off**, or the model
 default. Older templates without an override use the model default. The pinned
-[template request contract](https://github.com/nerdrx/novum-xenium/blob/feb113618767b285a98541584f32a924ab8e6cf8/routes/preset_routes.py)
-and [preset persistence](https://github.com/nerdrx/novum-xenium/blob/feb113618767b285a98541584f32a924ab8e6cf8/src/preset_manager.py)
+[template request contract](https://github.com/nerdrx/novum-xenium/blob/a05e88ec77cd9d0ed88c5fe5fa5d3ffb44adb2aa/routes/preset_routes.py)
+and [preset persistence](https://github.com/nerdrx/novum-xenium/blob/a05e88ec77cd9d0ed88c5fe5fa5d3ffb44adb2aa/src/preset_manager.py)
 describe these save boundaries.
 
 ## Unsent drafts

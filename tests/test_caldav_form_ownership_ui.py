@@ -58,3 +58,7 @@ def test_caldav_form_ownership_loopback():
     assert payload["cases"]["explicitSavedEditBlankPassword"]["test"]["account_id"] == "fixture-account-a"
     assert payload["cases"]["explicitSavedEditBlankPassword"]["test"]["password"] == ""
     assert payload["cases"]["normalTestSave"]["observed"] == "tested and saved same values"
+    assert payload["cases"]["heldApiPresetsThenCalDavBDraft"]["afterRelease"]["rootSameAndConnected"] is True
+    assert payload["cases"]["heldApiPresetsThenCalDavBDraft"]["afterRelease"]["label"] == "B draft survives"
+    assert payload["cases"]["cancelledPriorFormThenApiPresets"]["afterCancel"]["visible"] is False
+    assert payload["cases"]["normalApiPresetLoad"]["apiFormPainted"] is True

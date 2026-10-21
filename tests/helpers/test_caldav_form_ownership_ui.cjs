@@ -225,6 +225,7 @@ const server = http.createServer(async (req, res) => {
         window.__caldavAccountJsonConsumed = 0;
         window.__caldavAccountFetchResolved = 0;
         window.__apiPresetsFetchResolved = 0;
+        window.__apiPresetsJsonConsumed = 0;
         const nativeFetch = window.fetch.bind(window);
         window.fetch = async (...args) => {
           const response = await nativeFetch(...args);
@@ -239,6 +240,7 @@ const server = http.createServer(async (req, res) => {
             const data = await originalJson(...jsonArgs);
             if (request.pathname === '/api/calendar/test') window.__caldavTestJsonConsumed++;
             if (request.pathname === '/api/calendar/config/accounts' && method === 'GET') window.__caldavAccountJsonConsumed++;
+            if (request.pathname === '/api/auth/integrations/presets') window.__apiPresetsJsonConsumed++;
             return data;
           };
           return response;
@@ -765,6 +767,96 @@ const server = http.createServer(async (req, res) => {
         result.cases.normalTestSave = { observed: 'tested and saved same values', test: finalState.tests[0].body, save: finalState.saves[0] };
       } finally { await closeContext(context); }
     }
+    // A delayed API preset response must not replace a newer CalDAV form.
+    {
+      const { page, context } = await newPage();
+      try {
+        await resetState(page);
+        const presetReads = await page.evaluate(() => window.__apiPresetsFetchResolved);
+        const presetJson = await page.evaluate(() => window.__apiPresetsJsonConsumed);
+        await page.request.get(`${origin}/__hold-next-presets`);
+        await page.locator('.intg-card[data-intg-id="fixture-api"]').click();
+        await page.waitForFunction(async () => (await (await fetch('/__state')).json()).pendingPresets.length === 1);
+        await openAccount(page, 'fixture-account-b');
+        await fillAccount(page, 'B draft survives', 'https://fixture.invalid/b-draft', 'b-draft-user', 'b-draft-password');
+        await page.evaluate(() => { window.__expectedCalDavRoot = document.querySelector('#uf-caldav-url').closest('.admin-card'); });
+        const beforeRelease = await page.evaluate(() => ({
+          activeType: document.querySelector('.intg-card-active')?.dataset.intgType,
+          activeId: document.querySelector('.intg-card-active')?.dataset.intgId,
+          visible: getComputedStyle(document.querySelector('#unified-intg-form')).display !== 'none',
+          apiFormPainted: !!document.querySelector('#uf-api-name'),
+          url: document.querySelector('#uf-caldav-url')?.value,
+          label: document.querySelector('#uf-caldav-label')?.value,
+          rootConnected: window.__expectedCalDavRoot?.isConnected,
+        }));
+        assert.deepEqual(beforeRelease, {
+          activeType: 'caldav', activeId: 'fixture-account-b', visible: true,
+          apiFormPainted: false, url: 'https://fixture.invalid/b-draft',
+          label: 'B draft survives', rootConnected: true,
+        });
+        await page.request.get(`${origin}/__release-presets`);
+        await page.waitForFunction(count => window.__apiPresetsFetchResolved === count + 1, presetReads);
+        await page.waitForFunction(count => window.__apiPresetsJsonConsumed === count + 1, presetJson);
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        const afterRelease = await page.evaluate(() => ({
+          activeType: document.querySelector('.intg-card-active')?.dataset.intgType,
+          activeId: document.querySelector('.intg-card-active')?.dataset.intgId,
+          visible: getComputedStyle(document.querySelector('#unified-intg-form')).display !== 'none',
+          apiFormPainted: !!document.querySelector('#uf-api-name'),
+          url: document.querySelector('#uf-caldav-url')?.value,
+          label: document.querySelector('#uf-caldav-label')?.value,
+          rootSameAndConnected: window.__expectedCalDavRoot === document.querySelector('#uf-caldav-url')?.closest('.admin-card') && window.__expectedCalDavRoot.isConnected,
+        }));
+        assert.deepEqual(afterRelease, {
+          activeType: 'caldav', activeId: 'fixture-account-b', visible: true,
+          apiFormPainted: false, url: 'https://fixture.invalid/b-draft',
+          label: 'B draft survives', rootSameAndConnected: true,
+        }, 'stale API presets must not replace the newer CalDAV draft');
+        result.cases.heldApiPresetsThenCalDavBDraft = { beforeRelease, afterRelease, stalePresetResponseConsumed: true };
+      } finally { await closeContext(context); }
+    }
+
+    // A still-current API intent must not paint after Cancel hides the shared form.
+    {
+      const { page, context } = await newPage();
+      try {
+        await openAccount(page, 'fixture-account-b');
+        const presetReads = await page.evaluate(() => window.__apiPresetsFetchResolved);
+        const presetJson = await page.evaluate(() => window.__apiPresetsJsonConsumed);
+        await page.request.get(`${origin}/__hold-next-presets`);
+        await page.locator('.intg-card[data-intg-id="fixture-api"]').click();
+        await page.waitForFunction(async () => (await (await fetch('/__state')).json()).pendingPresets.length === 1);
+        await page.locator('#uf-caldav-cancel').click();
+        assert.equal(await page.locator('#unified-intg-form').isVisible(), false);
+        await page.request.get(`${origin}/__release-presets`);
+        await page.waitForFunction(count => window.__apiPresetsFetchResolved === count + 1, presetReads);
+        await page.waitForFunction(count => window.__apiPresetsJsonConsumed === count + 1, presetJson);
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        const afterCancel = await page.evaluate(() => ({
+          visible: getComputedStyle(document.querySelector('#unified-intg-form')).display !== 'none',
+          apiFormPainted: !!document.querySelector('#uf-api-name'),
+          caldavRootConnected: !!document.querySelector('#uf-caldav-url')?.isConnected,
+        }));
+        assert.deepEqual(afterCancel, { visible: false, apiFormPainted: false, caldavRootConnected: true });
+        result.cases.cancelledPriorFormThenApiPresets = { afterCancel, stalePresetResponseConsumed: true };
+      } finally { await closeContext(context); }
+    }
+
+    // The same API preset flow still opens normally when its selection remains current.
+    {
+      const { page, context } = await newPage();
+      try {
+        await page.locator('.intg-card[data-intg-id="fixture-api"]').click();
+        await page.locator('#uf-api-name').waitFor();
+        result.cases.normalApiPresetLoad = {
+          apiFormPainted: true,
+          visible: await page.locator('#unified-intg-form').isVisible(),
+          presetCount: await page.locator('#uf-api-preset option').count(),
+        };
+        assert.equal(result.cases.normalApiPresetLoad.visible, true);
+      } finally { await closeContext(context); }
+    }
+
     assert.deepEqual(result.externalRequests, [], 'no non-fixture request was allowed');
     assert.deepEqual(result.pageErrors, [], 'actual settings module raised no browser errors');
     result.pass = true;

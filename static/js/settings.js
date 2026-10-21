@@ -3483,7 +3483,7 @@ async function initUnifiedIntegrations() {
   function showForm(type, editId) {
     const intent = ++activeFormIntent;
     formEl.style.display = '';
-    if (type === 'api') showApiForm(editId);
+    if (type === 'api') showApiForm(editId, intent);
     else if (type === 'caldav') showCalDavForm(editId, intent);
     else if (type === 'contacts' || type === 'carddav') showCardDavForm();
     else if (type === 'email') showEmailForm(editId);
@@ -3494,12 +3494,17 @@ async function initUnifiedIntegrations() {
   }
 
   // ── API form ──
-  async function showApiForm(editId) {
+  async function showApiForm(editId, formIntent) {
     let presets = {};
     try {
       const r = await fetch('/api/auth/integrations/presets', { credentials: 'same-origin' });
       if (r.ok) { const d = await r.json(); presets = d.presets || {}; }
     } catch (_) {}
+    if (formIntent !== activeFormIntent || !formEl.isConnected) return;
+    for (let node = formEl; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (node.hidden || style.display === 'none' || style.visibility === 'hidden') return;
+    }
     const presetEntries = Object.entries(presets);
     // Same `?` hint helper as the email form. Native title tooltip,
     // tabbable for keyboard users. Inline-styled so it doesn't need

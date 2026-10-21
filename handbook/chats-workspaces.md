@@ -20,6 +20,26 @@ Use a preset's **×** control or right-click confirmation to delete it. After a 
 
 Make preset changes in one panel at a time. Writes within that panel are serialized; optional autosave can be skipped with a warning while another preset change is pending. See the pinned [group controls](https://github.com/nerdrx/novum-xenium/blob/369613158e7ad63373a0b3bf0883ff9ae9944dda/static/js/group.js) and [group preset persistence](https://github.com/nerdrx/novum-xenium/blob/e433a03bb1b78fe6472836624bd9ae2f9f1cb459/src/preset_manager.py).
 
+## Personas and saved templates
+
+Starting a persona saves the active custom configuration and separately attempts
+to save a reusable template. **Persona saved** confirms the custom configuration;
+a reusable-template warning means that the separate template save could not be
+confirmed. Copy important unsaved edits before refreshing the page and checking
+the saved-template list. A lost response can follow an accepted write, so check
+the list before retrying rather than assuming nothing changed.
+
+**Save as Template** saves a reusable entry without starting a model. A failed
+disk write leaves the previously saved configuration and templates intact.
+Failed deletions show a warning. If deletion cannot be confirmed, copy unsaved
+edits, refresh the page, and check the saved-template list before retrying.
+
+Saved templates retain the **Thinking** override: **On**, **Off**, or the model
+default. Older templates without an override use the model default. The pinned
+[template request contract](https://github.com/nerdrx/novum-xenium/blob/7082346afd5b0857b75f3e5f9bdbfd2b7fb9cd3a/routes/preset_routes.py)
+and [preset persistence](https://github.com/nerdrx/novum-xenium/blob/bdd1df629254b97d316ce21d6b0a2b13134c9e34/src/preset_manager.py)
+describe these save boundaries.
+
 ## Unsent drafts
 
 Ordinary composer text is saved separately from sent chat history and restored

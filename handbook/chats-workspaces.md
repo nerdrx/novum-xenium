@@ -14,7 +14,25 @@ Chat titles can be generated and refined after a reply. A title that you explici
 
 ## Unsent drafts
 
-Ordinary composer text is saved separately from sent chat history and restored when you return to its chat. Drafts are kept in browser storage with bounded size/count limits; on storage failure or when a draft exceeds those limits, Novum warns that it will remain available only while the page stays open. Incognito/Nobody drafts remain in memory and are not saved across reloads. Attachments are not included in the saved plain-text draft. If the app shows a draft-storage warning, keep the page open and copy important text before navigating or reloading.
+Ordinary composer text is saved separately from sent chat history and restored
+when you return to its chat. Drafts are kept in browser storage with bounded
+size/count limits; on storage failure or when a draft exceeds those limits,
+Novum warns that it will remain available only while the page stays open.
+
+If authentication is anonymous or temporarily unavailable, a pending new-chat
+draft stays in this page's memory. Browser Back to that pending chat restores
+its text and selected model metadata in the same page, but this page-only draft
+does not survive reload. After authentication verifies the same user, an
+eligible non-incognito pending draft can be adopted into that account's draft
+storage. Incognito/Nobody drafts remain page-only and are not adopted into
+account storage; if the account changes, page-owned drafts are not restored
+under the new identity.
+
+Attachments, including voice-recording fallback files, are not included in the
+saved plain-text draft. If the app shows a draft-storage warning, keep the page
+open and copy important text before navigating or reloading.
+
+For microphone access and recording recovery, see [Chat microphone](media.md#chat-microphone). The pinned [session draft handling](https://github.com/nerdrx/novum-xenium/blob/d5864db488ce762a670e27080bfb357a67e76980/static/js/sessions.js) and [draft storage](https://github.com/nerdrx/novum-xenium/blob/d5864db488ce762a670e27080bfb357a67e76980/static/js/composerDrafts.js) show the implementation for this release.
 
 ## Models and context
 

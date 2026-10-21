@@ -30,15 +30,25 @@ that an input device is connected and available to the browser.
 
 **Stop cannot close a browser permission prompt.** Respond to that prompt in
 the browser. A grant arriving after Stop does not start recording; select the
-microphone again to make a new attempt. If creating the audio recorder or its `start()`
-call fails, the app releases the acquired stream, returns the composer to idle,
-and shows an error.
-An older permission failure does not reset a newer recording's controls.
+microphone again to make a new attempt. If creating the audio recorder or its
+`start()` call fails, the app releases the acquired stream, returns the composer
+to idle, and shows an error. An older permission result does not reset newer
+recording controls.
+
+If browser speech recognition is unavailable or cannot be started, audio capture
+continues. Stop remains available; if there is no browser transcript, the
+recording uses the normal audio-file fallback. Each recording keeps its own
+audio chunks, browser transcript, and recognizer. A late completion from an
+older recording does not reset the controls for a newer one.
 
 Stopped audio follows the configured speech path: transcription can add text
 to the composer, and supported fallback paths attach the recording as a file.
-Review the result before sending it. See the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/ffa3cee2c31083fd336085fecb665ecf1b687c25/specs/speech.md)
-and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/ffa3cee2c31083fd336085fecb665ecf1b687c25/static/js/voiceRecorder.js)
+Those audio attachments are separate from the browser's plain-text draft store.
+For server-side transcription, a result that arrives after you switch chats can
+still be inserted into the composer that is open when it completes; wait for
+transcription before navigating, and review the result before sending it. See
+the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/d5864db488ce762a670e27080bfb357a67e76980/specs/speech.md)
+and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/d5864db488ce762a670e27080bfb357a67e76980/static/js/voiceRecorder.js)
 for provider and fallback behavior. Chat model configuration alone does not
 enable speech input.
 

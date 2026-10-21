@@ -22,6 +22,11 @@ class UserTemplateRequest(BaseModel):
     temperature: float = Field(1.0, ge=0.0, le=2.0)
     max_tokens: int = Field(0, ge=0, le=65536)
     reasoning_mode: Literal["auto", "on", "off"] = "auto"
+    thinking_mode: str = Field(
+        "",
+        pattern="^(|on|off)$",
+        description="Thinking override: empty uses the model default",
+    )
     persona_memory: str = Field("", max_length=6000)
     persona_memory_schema: str = Field("general", pattern="^(general|health)$")
 

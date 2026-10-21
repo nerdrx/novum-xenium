@@ -79,6 +79,9 @@ Frontend behavior:
   abandon its recognizer. Server transcription still resolves the global backend settings at request time;
 - a delayed transcript follows the Stop destination and appends to its latest draft. Account changes
   prevent delivery; deleted or unavailable destinations can offer explicit copy/discard recovery.
+  If copying fails, the user can explicitly download `voice-transcript.txt` or discard it; the app
+  does not download automatically, persist the transcript, or insert it into the current chat, and
+  it rechecks account identity before download.
   Incognito and unverified page-owned drafts retain their memory-only scope. Offscreen audio fallback
   offers download/discard rather than attaching to another chat.
 

@@ -1087,6 +1087,7 @@ function initializeEventListeners() {
         if (resChk && resChk.checked) {
           _syncResearchIndicator(false);
         }
+        voiceRecorderModule.stopRecording();
         _startFreshChat();
         compareModule.toggleMode();
       }

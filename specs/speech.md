@@ -1,6 +1,6 @@
 # Speech
 
-Last updated: dev@86b886c | 2026-10-15
+Last updated: 2026-10-21
 
 ## Scope
 
@@ -19,7 +19,7 @@ This spec covers speech behavior in:
 - frontend modules `static/js/voiceRecorder.js`, `static/js/tts-ai.js`, `static/app.js`, `static/js/chat.js`, `static/js/slashCommands.js`, `static/js/keyboard-shortcuts.js`, `static/js/settings.js`, `static/js/settings/speech.js`, and `static/index.html`;
 - optional dependency declarations in `requirements-optional.txt`;
 - runtime cache path `data/tts_cache/`;
-- tests covering speech service toggles, TTS speed/cache, STT temp cleanup, upload limits, settings scrubbing, and model endpoint cleanup.
+- tests covering speech settings, recorder ownership/format fallback, speech service toggles, TTS speed/cache, STT temp cleanup, upload limits, settings scrubbing, and model endpoint cleanup.
 
 ## Current Call Sites Include
 
@@ -39,8 +39,13 @@ Provider runtime:
 
 - `disabled` returns unavailable and avoids provider calls;
 - `browser` is client-side only through Web Speech API and does not call `/api/stt/transcribe`;
-- `local` lazily imports `faster-whisper`, writes uploaded audio to a temporary WebM file, transcribes, and deletes the temp file in `finally`;
-- `endpoint:<id>` resolves a `ModelEndpoint` and posts `audio.webm` to `/audio/transcriptions` with model and optional language.
+- `local` lazily imports `faster-whisper`, writes uploaded audio to a temporary file using its recognized extension, transcribes, and deletes the temp file in `finally`;
+- `endpoint:<id>` resolves a `ModelEndpoint` and posts the audio filename and recognized MIME type to `/audio/transcriptions` with model and optional language.
+
+Local models are cached per service instance with their configured model name. `/api/stt/stats`
+reports whether the configured local model is already loaded without loading one. If the configured
+name changes, stats report it as unloaded; the next loader call replaces the cache. A failed
+replacement leaves no old model available to serve, and a later loader call can retry.
 
 Route behavior:
 
@@ -52,8 +57,22 @@ Route behavior:
 Frontend behavior:
 
 - browser recording needs secure context and microphone permissions;
+- the recorder requests WebM, then retries the browser's default `MediaRecorder` format if WebM
+  construction is unsupported. It derives upload and attachment extension/MIME from recorder or
+  chunk metadata for recognized WebM, MP4, Ogg, WAV, and MPEG audio; unknown formats use generic
+  binary metadata;
 - server transcription success inserts text into the input;
 - failed server transcription can attach the recorded audio file to chat instead; empty transcription shows a no-speech message.
+- recording captures a starting destination; explicit Stop captures the currently selected chat. A
+  start from the welcome screen creates a pending draft identity when needed. If a natural recorder
+  stop is delivered after navigation changes chats, the app treats the destination as ambiguous and
+  asks before copying the transcript or downloading the audio instead of placing it into either chat.
+- browser recognition waits up to two seconds after the audio recorder finishes for its final result
+  and end event, then makes a best-effort abort if needed. Empty browser results use audio fallback;
+- a delayed transcript follows the Stop destination and appends to its latest draft. Account changes
+  prevent delivery; deleted or unavailable destinations can offer explicit copy/discard recovery.
+  Incognito and unverified page-owned drafts retain their memory-only scope. Offscreen audio fallback
+  offers download/discard rather than attaching to another chat.
 
 ## TTS
 
@@ -78,9 +97,15 @@ Route behavior:
 
 ## Settings, Endpoints, And Cache
 
-Speech providers are global settings under `data/settings.json`, with defaults in `src/settings.py`. Settings reads are scrubbed for non-admin callers, writes are admin-only, and `manage_settings` can change non-secret speech settings through aliases.
+Speech providers are global settings under `data/settings.json`, with defaults in `src/settings.py`.
+Settings reads are scrubbed for non-admin callers, writes are admin-only, and `manage_settings` can
+change non-secret speech settings through aliases. In AI Defaults, Speech to Text defaults to off
+(`stt_enabled: false`, provider `disabled`). Its controls stay inert until saved settings load
+successfully; a failed or invalid read shows an error and does not write settings. Successful
+changes show confirmation, and a denied or failed save does not apply the new provider to the
+recorder.
 
-`static/js/settings/speech.js` owns TTS/STT settings initialization and provider selectors; the Settings coordinator imports those initializers. Visible UI state is not complete: backend and JS speech settings exist, the TTS settings card is currently hidden, and the STT settings JS exits when its removed DOM nodes are absent.
+`static/js/settings/speech.js` owns TTS/STT settings initialization and provider selectors; the Settings coordinator imports those initializers. The Speech to Text settings card is available under AI Defaults. The TTS settings card remains hidden by explicit opt-out; its backend and supporting code remain present.
 
 `routes.model_routes` clears `tts_provider` and `stt_provider` references when a referenced model endpoint is deleted.
 
@@ -117,13 +142,19 @@ TTS cached audio can contain sensitive assistant text rendered as speech. The ca
 
 ## Testing Coverage
 
-Existing coverage includes speech service toggles, malformed/non-string TTS provider and speed handling, cache stats plus configured eviction/disable/file filtering/error handling, STT temp cleanup, direct upload limits, model routes, and settings scrubbing.
+Existing coverage includes speech settings restore/default/read-failure/save behavior, recorder
+format fallback and ownership, speech service toggles, malformed/non-string TTS provider and speed
+handling, cache stats plus configured eviction/disable/file filtering/error handling, STT temp
+cleanup and MIME/extension metadata, direct upload limits, model routes, and settings scrubbing.
+Browser tests use synthetic media and fixture APIs; they do not validate a physical microphone,
+browser permission prompt, real speech provider, local model, or GPU.
 
-Missing coverage includes route-level STT/TTS success and failure shapes, auth/API-token behavior, endpoint owner isolation, STT type/magic rejection, TTS request-size/no-store/cache privacy behavior, degraded optional dependency paths, and frontend recorder/TTS fallback states.
+Missing coverage includes route-level STT failure and TTS success/failure shapes, auth/API-token
+behavior, endpoint owner isolation, STT type/magic rejection, TTS request-size/no-store/cache
+privacy behavior, and real provider or optional-dependency behavior.
 
 ## Current Gaps
 
-- Visible speech settings UI is incomplete relative to backend settings.
 - Speech routes need a deliberate API-token/scope policy.
 - Endpoint speech providers need owner-isolation or explicit global-settings documentation.
 - TTS cache needs privacy policy: owner partition, TTL, no-store response headers, or accepted global cache semantics.

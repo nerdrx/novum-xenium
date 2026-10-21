@@ -675,6 +675,45 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'advertise'):
                 bridge._router_inventory(params)
 
+    def test_router_inventory_requires_exact_ids_or_string_list_aliases(self):
+        params = {'port': 8097, 'model_ids': ['tiny']}
+        invalid_aliases = ('not-tiny-alias', {'alias': 'tiny'}, 7, ['tiny', 7])
+        for aliases in invalid_aliases:
+            row = {'id': 'nx-model-0:LOCAL', 'aliases': aliases}
+            with self.subTest(aliases=aliases):
+                with mock.patch.object(bridge, '_local_json', side_effect=[
+                    {'status': 'ok'}, {'data': [row]},
+                ]):
+                    with self.assertRaisesRegex(ValueError, 'advertise'):
+                        bridge._router_inventory(params)
+
+                with (mock.patch.object(bridge, '_owned_profile_running', return_value=True),
+                      mock.patch.object(bridge, '_local_json', side_effect=[
+                          {'status': 'ok'}, {'data': [row]},
+                      ]),
+                      mock.patch.object(self.manager, 'list_profiles', return_value=[{
+                          'name': 'nx-zvram-router', 'state': 'running',
+                      }])):
+                    status = bridge._router_status(
+                        self.model_helper, self.manager_helper, self.manager,
+                        {'nx-zvram-router': {**params, 'router': True}},
+                    )
+                self.assertTrue(status['running'])
+                self.assertFalse(status['healthy'])
+
+        for row in (
+            {'id': 'tiny', 'aliases': 'malformed'},
+            {'id': 'nx-model-0:LOCAL', 'aliases': ['tiny']},
+        ):
+            with self.subTest(valid_row=row):
+                with mock.patch.object(bridge, '_local_json', side_effect=[
+                    {'status': 'ok'}, {'data': [row]},
+                ]):
+                    self.assertEqual(
+                        bridge._router_inventory(params),
+                        [{'id': 'tiny', 'status': 'available'}],
+                    )
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name)

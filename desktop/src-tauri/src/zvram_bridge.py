@@ -826,7 +826,10 @@ def _router_inventory(params):
     inventory = []
     for name in expected:
         row = next((row for row in rows if isinstance(row, dict) and
-                    (row.get('id') == name or name in (row.get('aliases') or []))), None)
+                    (row.get('id') == name or
+                     (isinstance(row.get('aliases'), list)
+                      and all(isinstance(alias, str) for alias in row['aliases'])
+                      and name in row['aliases']))), None)
         if row is None:
             raise ValueError('The model router does not advertise the discovered models')
         status = row.get('status', {})

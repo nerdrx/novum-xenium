@@ -12,6 +12,14 @@ Chats hold conversation history and provide the context for a run. A project or 
 
 Chat titles can be generated and refined after a reply. A title that you explicitly set remains yours. Saved chat history is separate from run status cards and other limited evidence views; some transient status does not persist as full history.
 
+## Saved group presets
+
+Starting a group with at least two participants attempts to save its configuration as a reusable preset in the **Group** tab. If the saved list cannot load, Novum skips the write. A preset-save warning does not stop the group chat from becoming ready.
+
+Use a preset's **×** control or right-click confirmation to delete it. After a lost or failed write response, Novum refreshes the saved list before allowing another deletion. If refreshing fails, reopen the **Group** tab before retrying; old chips cannot submit another deletion until the list has recovered. Preset requests have a 15-second timeout, including successful response-body reads.
+
+Make preset changes in one panel at a time. Writes within that panel are serialized; optional autosave can be skipped with a warning while another preset change is pending. See the pinned [group controls](https://github.com/nerdrx/novum-xenium/blob/369613158e7ad63373a0b3bf0883ff9ae9944dda/static/js/group.js) and [group preset persistence](https://github.com/nerdrx/novum-xenium/blob/e433a03bb1b78fe6472836624bd9ae2f9f1cb459/src/preset_manager.py).
+
 ## Unsent drafts
 
 Ordinary composer text is saved separately from sent chat history and restored

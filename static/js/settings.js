@@ -3456,26 +3456,32 @@ async function initUnifiedIntegrations() {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const intgName = btn.dataset.intgName || 'this integration';
+        const formIntent = activeFormIntent;
         if (!await window.styledConfirm(`Remove "${intgName}"?`, { confirmText: 'Remove', danger: true })) return;
         const type = btn.dataset.intgType;
         const id = btn.dataset.intgId;
         try {
-          if (type === 'api') await fetch(`/api/auth/integrations/${id}`, { method: 'DELETE', credentials: 'same-origin' });
-          else if (type === 'caldav') await fetch(`/api/calendar/config/accounts/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+          let response;
+          if (type === 'api') response = await fetch(`/api/auth/integrations/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+          else if (type === 'caldav') response = await fetch(`/api/calendar/config/accounts/${id}`, { method: 'DELETE', credentials: 'same-origin' });
           else if (type === 'contacts') {
-            await fetch('/api/contacts/clear', { method: 'DELETE', credentials: 'same-origin' });
+            response = await fetch('/api/contacts/clear', { method: 'DELETE', credentials: 'same-origin' });
           }
           else if (type === 'carddav') {
-            await fetch('/api/contacts/config', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ carddav_url: '', carddav_username: '', carddav_password: '' }) });
+            response = await fetch('/api/contacts/config', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ carddav_url: '', carddav_username: '', carddav_password: '' }) });
           }
-          else if (type === 'email') await fetch(`/api/email/accounts/${id}`, { method: 'DELETE', credentials: 'same-origin' });
-          else if (type === 'mcp') await fetch(`/api/mcp/servers/${id}`, { method: 'DELETE', credentials: 'same-origin' });
-          else if (type === 'codex' || type === 'claude') await fetch(`/api/tokens/${id}`, { method: 'DELETE', credentials: 'same-origin' });
-          else if (type === 'vault') await fetch('/api/vault/logout', { method: 'POST', credentials: 'same-origin' });
-        } catch (_) {}
-        formEl.style.display = 'none';
-        await renderList();
+          else if (type === 'email') response = await fetch(`/api/email/accounts/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+          else if (type === 'mcp') response = await fetch(`/api/mcp/servers/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+          else if (type === 'codex' || type === 'claude') response = await fetch(`/api/tokens/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+          else if (type === 'vault') response = await fetch('/api/vault/logout', { method: 'POST', credentials: 'same-origin' });
+          if (!response?.ok) throw new Error('Integration removal failed');
+        } catch (_) {
+          uiModule.showError?.('Could not remove integration. Try again.');
+          return;
+        }
+        if (formIntent === activeFormIntent) formEl.style.display = 'none';
         notifyIntegrationsChanged();
+        await renderList();
       });
     });
   }

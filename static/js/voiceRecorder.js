@@ -11,15 +11,10 @@
  */
 
 let mediaRecorder = null;
-let audioChunks = [];
 let isRecording = false;
 let recordingStartTime = null;
 let recordingInterval = null;
 let recordingIntent = 0;
-
-// Browser STT state
-let _recognition = null;
-let _browserTranscript = '';
 
 // Cached STT provider — refreshed on settings change
 let _sttProvider = 'disabled';
@@ -73,37 +68,37 @@ function _resetRecordingUI() {
 /**
  * Start browser speech recognition alongside recording
  */
-function startBrowserSTT() {
+function startBrowserSTT(speech) {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) return;
 
-  _browserTranscript = '';
-  _recognition = new SpeechRecognition();
-  _recognition.continuous = true;
-  _recognition.interimResults = false;
-  _recognition.lang = '';
+  speech.transcript = '';
+  speech.recognition = new SpeechRecognition();
+  speech.recognition.continuous = true;
+  speech.recognition.interimResults = false;
+  speech.recognition.lang = '';
 
-  _recognition.onresult = (event) => {
+  speech.recognition.onresult = (event) => {
     for (let i = event.resultIndex; i < event.results.length; i++) {
       if (event.results[i].isFinal) {
-        _browserTranscript += event.results[i][0].transcript + ' ';
+        speech.transcript += event.results[i][0].transcript + ' ';
       }
     }
   };
 
-  _recognition.onerror = (e) => {
+  speech.recognition.onerror = (e) => {
     console.warn('Browser STT error:', e.error);
   };
 
-  _recognition.start();
+  speech.recognition.start();
 }
 
-function stopBrowserSTT() {
-  if (_recognition) {
-    try { _recognition.stop(); } catch (e) { /* ignore */ }
-    _recognition = null;
+function stopBrowserSTT(speech) {
+  if (speech?.recognition) {
+    try { speech.recognition.stop(); } catch (e) { /* ignore */ }
+    speech.recognition = null;
   }
-  return _browserTranscript.trim();
+  return (speech?.transcript || '').trim();
 }
 
 /**
@@ -165,8 +160,6 @@ export function startRecording(onFileCreated, showToast, showError) {
     return;
   }
 
-  audioChunks = [];
-
   navigator.mediaDevices.getUserMedia({ audio: true })
     .then(stream => {
       if (intent !== recordingIntent) {
@@ -183,6 +176,8 @@ export function startRecording(onFileCreated, showToast, showError) {
         throw error;
       }
       mediaRecorder = recorder;
+      const audioChunks = [];
+      const browserSpeech = { recognition: null, transcript: '' };
 
       recorder.ondataavailable = event => {
         if (event.data.size > 0) {
@@ -198,7 +193,7 @@ export function startRecording(onFileCreated, showToast, showError) {
         const provider = _sttProvider;
 
         if (provider === 'browser') {
-          const transcript = stopBrowserSTT();
+          const transcript = stopBrowserSTT(browserSpeech);
           if (transcript) {
             insertTranscription(transcript, showToast);
           } else {
@@ -248,9 +243,9 @@ export function startRecording(onFileCreated, showToast, showError) {
       let browserSttFailed = false;
       if (_sttProvider === 'browser') {
         try {
-          startBrowserSTT();
+          startBrowserSTT(browserSpeech);
         } catch (_) {
-          stopBrowserSTT();
+          stopBrowserSTT(browserSpeech);
           browserSttFailed = true;
         }
       }

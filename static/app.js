@@ -4161,7 +4161,7 @@ function startOdysseusApp() {
         sendBtn.classList.remove('mic-mode', 'newchat-expanded');
         clearTimeout(sendBtn._expandTimer);
       } else {
-        sendBtn.innerHTML = _newChatIcon + '<span class="send-btn-label">+ New</span>';
+        sendBtn.innerHTML = _newChatIcon + '<span class="send-btn-label">New chat</span>';
         sendBtn.title = 'New chat';
         newMode = 'newchat';
         sendBtn.classList.add('newchat-mode');

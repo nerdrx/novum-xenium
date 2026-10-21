@@ -28,6 +28,19 @@ HTTPS or localhost. If access is denied, review this site's microphone
 permission in your browser, then try again. If no microphone is found, check
 that an input device is connected and available to the browser.
 
+To enable speech input, open **Settings → AI Defaults → Speech to Text**, turn
+on the setting, and choose **Browser (built-in)**, **Local model**, or a
+configured API endpoint. Speech input is off by default, and changing these
+instance settings requires administrator access. If saved settings cannot be
+loaded, the controls stay unavailable; reload the app and try again. The
+browser provider uses the browser's Web Speech API, whose availability and
+behavior depend on the browser. A Local model status check does not load
+Whisper; loading a cold configured model is attempted when transcription is
+first requested. Changing the configured local model takes effect at the next
+transcription attempt; status checks do not reload or unload the cached model. See the pinned [settings panel](https://github.com/nerdrx/novum-xenium/blob/b38a9c98283208e62a39d9269a47ac74c717a06a/static/index.html)
+and [speech service](https://github.com/nerdrx/novum-xenium/blob/4d7563f83c898a262f37682d9dce3f44a5703a3c/services/stt/stt_service.py)
+for those settings and loading boundaries.
+
 **Stop cannot close a browser permission prompt.** Respond to that prompt in
 the browser. A grant arriving after Stop does not start recording; select the
 microphone again to make a new attempt. If creating the audio recorder or its

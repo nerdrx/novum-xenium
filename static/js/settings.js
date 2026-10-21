@@ -510,8 +510,47 @@ async function initUtilityModel() {
   var _endpoints = [];
   var fallbackWidget = null;
   var _levelsByEndpoint = {};
+  var touched = new Set();
+  var refreshModels = null;
+  var refreshEffort = null;
+  var saveSettings = _createSettingsSaver(msg, 1500);
+  function saveUtility(keys) {
+    var values = {
+      utility_endpoint_id: epSel.value || '',
+      utility_model: modelSel.value || '',
+      utility_reasoning_effort: effortSel ? (effortSel.value || '') : ''
+    };
+    var payload = {};
+    keys.forEach(function(key) { payload[key] = values[key]; });
+    return saveSettings(payload);
+  }
   if (epSel && epSel.options[0]) epSel.options[0].textContent = 'Same as chat';
   if (modelSel && modelSel.options[0]) modelSel.options[0].textContent = 'Same as chat';
+
+  function markTouched(keys) { keys.forEach(function(key) { touched.add(key); }); }
+  epSel.addEventListener('input', function() { markTouched(['utility_endpoint_id']); });
+  modelSel.addEventListener('input', function() { markTouched(['utility_model']); });
+  if (effortSel) effortSel.addEventListener('input', function() { markTouched(['utility_reasoning_effort']); });
+  epSel.addEventListener('change', function() {
+    modelSel.value = '';
+    if (refreshModels) refreshModels('');
+    if (effortSel) effortSel.value = '';
+    if (refreshEffort) refreshEffort('');
+    var keys = ['utility_endpoint_id', 'utility_model', 'utility_reasoning_effort'];
+    markTouched(keys);
+    saveUtility(keys);
+  });
+  modelSel.addEventListener('change', function() {
+    if (refreshEffort) refreshEffort(effortSel ? effortSel.value : '');
+    else if (effortSel) effortSel.value = '';
+    var keys = ['utility_model', 'utility_reasoning_effort'];
+    markTouched(keys);
+    saveUtility(keys);
+  });
+  if (effortSel) effortSel.addEventListener('change', function() {
+    markTouched(['utility_reasoning_effort']);
+    saveUtility(['utility_reasoning_effort']);
+  });
 
   try {
     _endpoints = await _fetchModelEndpoints();
@@ -533,7 +572,7 @@ async function initUtilityModel() {
     } catch (e) { console.warn('Failed to load reasoning levels for utility model', e); }
   }
 
-  function refreshEffort(selected) {
+  refreshEffort = function(selected) {
     if (!effortSel) return;
     var targetEp = epSel.value;
     var targetModel = modelSel.value;
@@ -588,22 +627,29 @@ async function initUtilityModel() {
     var show = isInherited || levels.length > 0;
     if (effortRow) effortRow.style.display = show ? '' : 'none';
     if (effortHelp) effortHelp.style.display = show ? '' : 'none';
-  }
+  };
 
-  function refreshModels(selectedModel) {
+  refreshModels = function(selectedModel) {
     var epId = epSel.value;
     var ep = _endpoints.find(function(e) { return e.id === epId; });
     _fillModelSelect(modelSel, ep ? ep.models : [], selectedModel, true);
-  }
+  };
 
   await loadEffortLevels();
 
   try {
     var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
-    if (settings.utility_endpoint_id) epSel.value = settings.utility_endpoint_id;
-    refreshModels(settings.utility_model || '');
-    refreshEffort(settings.utility_reasoning_effort || '');
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
+    var has = function(key) { return Object.prototype.hasOwnProperty.call(settings, key); };
+    if (!touched.has('utility_endpoint_id') && has('utility_endpoint_id') && settings.utility_endpoint_id) {
+      epSel.value = settings.utility_endpoint_id;
+    }
+    refreshModels(touched.has('utility_model') || !has('utility_model') ? modelSel.value : (settings.utility_model || ''));
+    refreshEffort(touched.has('utility_reasoning_effort') || !has('utility_reasoning_effort')
+      ? (effortSel ? effortSel.value : '')
+      : (settings.utility_reasoning_effort || ''));
     fallbackWidget = _bindFallbackWidget({
       containerId: 'set-utilityFallbacks',
       addBtnId: 'set-utilityAddFallback',
@@ -629,23 +675,6 @@ async function initUtilityModel() {
   // Persist whatever's currently selected. Empty endpoint or model → backend
   // transparently falls back to the chat model (mirrors the teacher panel:
   // no toggle, "—" means "unset, use chat").
-  async function saveUtility() {
-    try {
-      await _postSettings({
-        utility_endpoint_id: epSel.value || '',
-        utility_model: modelSel.value || '',
-        utility_reasoning_effort: effortSel ? (effortSel.value || '') : ''
-      });
-      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
-      setTimeout(function() { msg.textContent = ''; }, 1500);
-    } catch (e) { msg.textContent = e.status === 403 ? 'Admin access is required to change these settings.' : 'Failed to save'; msg.style.color = 'var(--red)'; }
-  }
-
-  // A new endpoint/model may not advertise the saved effort; refreshEffort
-  // resets it to the provider default, and saveUtility persists that.
-  epSel.addEventListener('change', function() { refreshModels(''); refreshEffort(''); saveUtility(); });
-  modelSel.addEventListener('change', function() { refreshEffort(effortSel ? effortSel.value : ''); saveUtility(); });
-  if (effortSel) effortSel.addEventListener('change', saveUtility);
   var defEp = el('set-defaultEpSelect');
   var defModel = el('set-defaultModelSelect');
   if (defEp) defEp.addEventListener('change', function() { if (!epSel.value) refreshEffort(effortSel ? effortSel.value : ''); });
@@ -769,6 +798,35 @@ async function initVisionSettings() {
   const configWrap = vlSel ? vlSel.closest('div[style*="flex-direction"]') : null;
   var _visionEndpoints = [];
   var visionFallbackWidget = null;
+  var touched = new Set();
+  var save = _createSettingsSaver(msg, 2000);
+  function syncVisionDisabled() {
+    var off = enabledToggle && !enabledToggle.checked;
+    var card = enabledToggle ? enabledToggle.closest('.admin-card') : null;
+    if (card) card.style.opacity = off ? '0.45' : '';
+    if (configWrap) configWrap.style.pointerEvents = off ? 'none' : '';
+  }
+  function saveSettings(keys) {
+    var values = { vision_enabled: enabledToggle ? enabledToggle.checked : true, vision_model: vlSel.value };
+    var payload = {};
+    keys.forEach(function(key) { payload[key] = values[key]; });
+    return save(payload);
+  }
+  if (vlSel) {
+    vlSel.addEventListener('input', function() { touched.add('vision_model'); });
+    vlSel.addEventListener('change', function() {
+      touched.add('vision_model');
+      saveSettings(['vision_model']);
+    });
+  }
+  if (enabledToggle) {
+    enabledToggle.addEventListener('input', function() { touched.add('vision_enabled'); });
+    enabledToggle.addEventListener('change', function() {
+      syncVisionDisabled();
+      touched.add('vision_enabled');
+      saveSettings(['vision_enabled']);
+    });
+  }
   var _vlExclude = ['audio', 'realtime', 'tts', 'dall-e', 'embedding', 'search', 'whisper'];
   function _isVisionModel(mid) {
     var lower = String(mid || '').toLowerCase();
@@ -797,10 +855,16 @@ async function initVisionSettings() {
   } catch (e) { console.warn('Failed to load endpoints for vision fallback', e); }
   try {
     const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    if (!settingsRes.ok) throw new Error(`HTTP ${settingsRes.status}`);
     const settings = await settingsRes.json();
-    if (settings.vision_model) vlSel.value = settings.vision_model;
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
+    if (!touched.has('vision_model') && Object.prototype.hasOwnProperty.call(settings, 'vision_model') && settings.vision_model) {
+      vlSel.value = settings.vision_model;
+    }
     _syncModelLogo(vlSel);
-    if (enabledToggle) enabledToggle.checked = settings.vision_enabled !== false;
+    if (enabledToggle && !touched.has('vision_enabled') && Object.prototype.hasOwnProperty.call(settings, 'vision_enabled')) {
+      enabledToggle.checked = settings.vision_enabled !== false;
+    }
     visionFallbackWidget = _bindFallbackWidget({
       containerId: 'set-visionFallbacks',
       addBtnId: 'set-visionAddFallback',
@@ -815,22 +879,7 @@ async function initVisionSettings() {
     });
   } catch (e) { console.warn('Failed to load vision settings', e); }
 
-  function syncVisionDisabled() {
-    var off = enabledToggle && !enabledToggle.checked;
-    var card = enabledToggle ? enabledToggle.closest('.admin-card') : null;
-    if (card) card.style.opacity = off ? '0.45' : '';
-    if (configWrap) configWrap.style.pointerEvents = off ? 'none' : '';
-  }
   syncVisionDisabled();
-
-  async function saveSettings() {
-    try {
-      await _postSettings({ vision_enabled: enabledToggle ? enabledToggle.checked : true, vision_model: vlSel.value });
-      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)'; setTimeout(() => { msg.textContent = ''; }, 2000);
-    } catch (e) { msg.textContent = e.status === 403 ? 'Admin access is required to change these settings.' : 'Failed to save'; msg.style.color = 'var(--red)'; }
-  }
-  vlSel.addEventListener('change', saveSettings);
-  if (enabledToggle) enabledToggle.addEventListener('change', function() { syncVisionDisabled(); saveSettings(); });
 
   _registerAiEndpointRefresh(function(endpoints) {
     _visionEndpoints = endpoints;
@@ -1253,32 +1302,111 @@ async function initResearchSettings() {
   var runTimeoutInput = el('set-researchRunTimeout');
   var msg = el('set-researchMsg');
   var endpoints = [];
+  var touched = new Set();
+  var refreshModels = null;
+  var showStatus = null;
+  var saveSequence = 0;
+  var save = _createSettingsSaver(msg, 2000);
+  function saveResearch(keys) {
+    var values = { research_endpoint_id: epSel.value, research_model: modelSel.value };
+    var numericInputs = {
+      research_max_tokens: [tokensInput, function(value) { return value >= 1024; }],
+      research_extraction_timeout_seconds: [extractTimeoutInput, function(value) { return value >= 15 && value <= 3600; }],
+      research_extraction_concurrency: [extractConcurrencyInput, function(value) { return value >= 1 && value <= 12; }],
+      research_run_timeout_seconds: [runTimeoutInput, function(value) { return value === 0 || (value >= 60 && value <= 86400); }],
+    };
+    var payload = {};
+    keys.forEach(function(key) {
+      if (Object.prototype.hasOwnProperty.call(values, key)) {
+        payload[key] = values[key];
+        return;
+      }
+      var numeric = numericInputs[key];
+      if (!numeric) return;
+      var raw = numeric[0].value;
+      if (raw === '') return;
+      var value = parseInt(raw, 10);
+      if (!isNaN(value) && numeric[1](value)) payload[key] = value;
+    });
+    if (Object.keys(payload).length) {
+      var current = ++saveSequence;
+      return save(payload).then(function() {
+        setTimeout(function() {
+          if (current === saveSequence && msg.textContent === '' && showStatus) showStatus();
+        }, 2100);
+      });
+    }
+  }
+
+  function markTouched(keys) { keys.forEach(function(key) { touched.add(key); }); }
+  epSel.addEventListener('input', function() { markTouched(['research_endpoint_id']); });
+  modelSel.addEventListener('input', function() { markTouched(['research_model']); });
+  [tokensInput, extractTimeoutInput, extractConcurrencyInput, runTimeoutInput].forEach(function(input) {
+    input.addEventListener('input', function() { markTouched([input.dataset.settingKey]); });
+  });
+  epSel.addEventListener('change', function() {
+    modelSel.value = '';
+    if (refreshModels) refreshModels('');
+    var keys = ['research_endpoint_id', 'research_model'];
+    markTouched(keys);
+    if (showStatus) showStatus();
+    saveResearch(keys);
+  });
+  modelSel.addEventListener('change', function() {
+    markTouched(['research_model']);
+    if (showStatus) showStatus();
+    saveResearch(['research_model']);
+  });
+  [tokensInput, extractTimeoutInput, extractConcurrencyInput, runTimeoutInput].forEach(function(input) {
+    input.addEventListener('change', function() {
+      var key = input.dataset.settingKey;
+      markTouched([key]);
+      if (showStatus) showStatus();
+      saveResearch([key]);
+    });
+  });
+  tokensInput.dataset.settingKey = 'research_max_tokens';
+  extractTimeoutInput.dataset.settingKey = 'research_extraction_timeout_seconds';
+  extractConcurrencyInput.dataset.settingKey = 'research_extraction_concurrency';
+  runTimeoutInput.dataset.settingKey = 'research_run_timeout_seconds';
 
   try {
     endpoints = await _fetchModelEndpoints();
     _fillEndpointSelect(epSel, endpoints, epSel.value, true);
   } catch (e) { console.warn('Failed to load endpoints for research', e); }
 
-  function refreshModels(selectedModel) {
+  refreshModels = function(selectedModel) {
     var epId = epSel.value;
     var ep = endpoints.find(function(e) { return e.id === epId; });
     _fillModelSelect(modelSel, ep ? ep.models : [], selectedModel, true);
-  }
+  };
 
   try {
     var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
-    if (settings.research_endpoint_id) epSel.value = settings.research_endpoint_id;
-    refreshModels(settings.research_model || '');
-    if (settings.research_max_tokens) tokensInput.value = settings.research_max_tokens;
-    if (settings.research_extraction_timeout_seconds) extractTimeoutInput.value = settings.research_extraction_timeout_seconds;
-    if (settings.research_extraction_concurrency) extractConcurrencyInput.value = settings.research_extraction_concurrency;
-    if (settings.research_run_timeout_seconds !== undefined && settings.research_run_timeout_seconds !== null) {
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
+    var has = function(key) { return Object.prototype.hasOwnProperty.call(settings, key); };
+    if (!touched.has('research_endpoint_id') && has('research_endpoint_id') && settings.research_endpoint_id) {
+      epSel.value = settings.research_endpoint_id;
+    }
+    refreshModels(touched.has('research_model') || !has('research_model') ? modelSel.value : (settings.research_model || ''));
+    if (!touched.has('research_max_tokens') && has('research_max_tokens') && settings.research_max_tokens) {
+      tokensInput.value = settings.research_max_tokens;
+    }
+    if (!touched.has('research_extraction_timeout_seconds') && has('research_extraction_timeout_seconds') && settings.research_extraction_timeout_seconds) {
+      extractTimeoutInput.value = settings.research_extraction_timeout_seconds;
+    }
+    if (!touched.has('research_extraction_concurrency') && has('research_extraction_concurrency') && settings.research_extraction_concurrency) {
+      extractConcurrencyInput.value = settings.research_extraction_concurrency;
+    }
+    if (!touched.has('research_run_timeout_seconds') && has('research_run_timeout_seconds')
+        && settings.research_run_timeout_seconds !== null) {
       runTimeoutInput.value = settings.research_run_timeout_seconds;
     }
   } catch (e) { console.warn('Failed to load research settings', e); }
 
-  function showStatus() {
+  showStatus = function() {
     var parts = [];
     if (epSel.value) {
       var epName = epSel.options[epSel.selectedIndex].textContent;
@@ -1307,43 +1435,8 @@ async function initResearchSettings() {
       msg.textContent = 'Using chat defaults';
       msg.style.color = 'var(--fg)';
     }
-  }
-  showStatus();
-
-  async function saveResearch() {
-    var payload = {
-      research_endpoint_id: epSel.value,
-      research_model: modelSel.value,
-    };
-    var tv = parseInt(tokensInput.value, 10);
-    if (tv && tv >= 1024) payload.research_max_tokens = tv;
-    var et = parseInt(extractTimeoutInput.value, 10);
-    if (et && et >= 15 && et <= 3600) payload.research_extraction_timeout_seconds = et;
-    var ec = parseInt(extractConcurrencyInput.value, 10);
-    if (ec && ec >= 1 && ec <= 12) payload.research_extraction_concurrency = ec;
-    if (runTimeoutInput.value !== '') {
-      var rt = parseInt(runTimeoutInput.value, 10);
-      // 0 = no limit (disables the hard timeout); otherwise 60s..86400s (24h)
-      if (!isNaN(rt) && (rt === 0 || (rt >= 60 && rt <= 86400))) {
-        payload.research_run_timeout_seconds = rt;
-      }
-    }
-    try {
-      await _postSettings(payload);
-      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
-      setTimeout(showStatus, 2000);
-    } catch (e) { msg.textContent = e.status === 403 ? 'Admin access is required to change these settings.' : 'Failed to save'; msg.style.color = 'var(--red)'; }
-  }
-
-  epSel.addEventListener('change', async function() {
-    refreshModels('');
-    saveResearch();
-  });
-  modelSel.addEventListener('change', saveResearch);
-  tokensInput.addEventListener('change', saveResearch);
-  extractTimeoutInput.addEventListener('change', saveResearch);
-  extractConcurrencyInput.addEventListener('change', saveResearch);
-  runTimeoutInput.addEventListener('change', saveResearch);
+  };
+  if (!msg.textContent) showStatus();
 
   _registerAiEndpointRefresh(function(nextEndpoints) {
     endpoints = nextEndpoints;
@@ -1357,6 +1450,15 @@ async function initResearchSearchSettings() {
   var searchSel = el('set-researchSearch');
   var msg = el('set-researchSearchMsg');
   var logoEl = el('set-researchSearch-logo');
+  var touched = false;
+  var save = _createSettingsSaver(msg || { textContent: '', style: {} }, 2000);
+  function saveResearchSearch() { return save({ research_search_provider: searchSel.value }); }
+  searchSel.addEventListener('input', function() { touched = true; });
+  searchSel.addEventListener('change', function() {
+    touched = true;
+    updateSearchLogo();
+    saveResearchSearch();
+  });
 
   function updateSearchLogo() {
     if (!logoEl) return;
@@ -1385,21 +1487,15 @@ async function initResearchSearchSettings() {
 
   try {
     var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
-    if (settings.research_search_provider) searchSel.value = settings.research_search_provider;
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
+    if (!touched && Object.prototype.hasOwnProperty.call(settings, 'research_search_provider')
+        && settings.research_search_provider) searchSel.value = settings.research_search_provider;
     updateSearchOptions(settings);
     updateSearchLogo();
   } catch (e) { console.warn('Failed to load research search settings', e); }
 
-  async function saveResearchSearch() {
-    try {
-      await _postSettings({ research_search_provider: searchSel.value });
-      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
-      setTimeout(function() { msg.textContent = ''; }, 2000);
-    } catch (e) { msg.textContent = e.status === 403 ? 'Admin access is required to change these settings.' : 'Failed to save'; msg.style.color = 'var(--red)'; }
-  }
-
-  searchSel.addEventListener('change', function() { updateSearchLogo(); saveResearchSearch(); });
 }
 
 /* ── Agent Settings (AI tab) ── */

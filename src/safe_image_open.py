@@ -1,4 +1,4 @@
-"""Pillow image opening with the known XBM header parser excluded."""
+"""Pillow image opening with XBM and standalone IPTC decoders excluded."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ import os
 
 
 def open_image(fp, mode="r", formats=None):
-    """Open an image while excluding XBM from Pillow's format candidates.
+    """Open an image while excluding XBM and standalone IPTC candidates.
 
     ``formats=None`` preserves Pillow's currently registered format set except
-    XBM. Callers with a closed input contract may pass their narrower Pillow
-    format names. Filesystem paths are made absolute without normalizing their
-    components; file-like ownership remains Pillow-native.
+    XBM and standalone IPTC. Callers with a closed input contract may pass
+    their narrower Pillow format names. Filesystem paths are made absolute
+    without normalizing their components; file-like ownership remains
+    Pillow-native.
     """
     from PIL import Image
 
@@ -36,7 +37,7 @@ def open_image(fp, mode="r", formats=None):
         raise TypeError("formats entries must be strings")
 
     normalized = tuple(str.upper(fmt) for fmt in candidates)
-    allowed = tuple(fmt for fmt in normalized if fmt != "XBM")
+    allowed = tuple(fmt for fmt in normalized if fmt not in {"XBM", "IPTC"})
 
     if isinstance(fp, (str, bytes, os.PathLike)):
         path = os.fspath(fp)

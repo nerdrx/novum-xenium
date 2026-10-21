@@ -67,6 +67,43 @@ def test_xbm_is_filtered_from_default_and_explicit_format_lists(monkeypatch):
     assert entered == []
 
 
+def test_standalone_iptc_is_filtered_from_default_and_explicit_lists(monkeypatch):
+    Image.init()
+    assert "IPTC" in Image.ID
+    payload = b"benign dispatch-only non-image bytes"
+    entered = []
+
+    def reject_other_factories(*args, **kwargs):
+        raise SyntaxError("intercepted before any non-IPTC decoder")
+
+    def reject_iptc_factory(*args, **kwargs):
+        entered.append("IPTC factory")
+        raise AssertionError("standalone IPTC factory must not run")
+
+    def observe_iptc_accept(prefix):
+        entered.append("IPTC accept")
+        return True
+
+    with monkeypatch.context() as scoped:
+        for fmt, (_factory, accept) in list(Image.OPEN.items()):
+            if fmt == "IPTC":
+                scoped.setitem(
+                    Image.OPEN, fmt, (reject_iptc_factory, observe_iptc_accept)
+                )
+            else:
+                scoped.setitem(Image.OPEN, fmt, (reject_other_factories, accept))
+
+        with pytest.raises(UnidentifiedImageError):
+            open_image(BytesIO(payload))
+        with pytest.raises(UnidentifiedImageError):
+            open_image(BytesIO(payload), formats=["IPTC"])
+        assert entered == []
+
+    with open_image(BytesIO(_encoded_image("PNG"))) as image:
+        assert image.format == "PNG"
+        assert image.size == (16, 16)
+
+
 def test_external_binary_stream_lifetime_matches_native_open():
     native_stream = BytesIO(_encoded_image("PNG"))
     helper_stream = BytesIO(_encoded_image("PNG"))

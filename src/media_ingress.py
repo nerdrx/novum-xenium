@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from PIL import Image, ImageOps, UnidentifiedImageError
+from src.safe_image_open import open_image
 
 
 IMAGE_SUFFIXES = frozenset({".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
@@ -174,7 +175,7 @@ def _visual_token_estimate(width: int, height: int) -> int:
 
 def _normalize_image(path: Path, limits: MediaIngressLimits) -> tuple[bytes, int, int]:
     try:
-        with Image.open(path) as opened:
+        with open_image(path) as opened:
             width, height = opened.size
             if width < 1 or height < 1 or width * height > limits.max_image_pixels:
                 raise ValueError(f"image dimensions are outside limits: {width}x{height}")

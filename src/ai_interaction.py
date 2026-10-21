@@ -72,8 +72,8 @@ def _image_dimensions(image_bytes: bytes) -> Optional[str]:
     """Return dimensions from the artifact itself, never provider metadata."""
     try:
         from io import BytesIO
-        from PIL import Image
-        with Image.open(BytesIO(image_bytes)) as image:
+        from src.safe_image_open import open_image
+        with open_image(BytesIO(image_bytes)) as image:
             width, height = image.size
         return f"{width}x{height}" if width > 0 and height > 0 else None
     except Exception:
@@ -1485,8 +1485,9 @@ async def do_edit_image(
     if not size or size == "auto":
         from PIL import Image
         from src.image_model_ids import image_edit_size
+        from src.safe_image_open import open_image
         try:
-            with Image.open(path) as source:
+            with open_image(path) as source:
                 width, height = source.size
                 # EXIF rotation changes the displayed portrait/landscape shape.
                 if source.getexif().get(274) in {5, 6, 7, 8}:

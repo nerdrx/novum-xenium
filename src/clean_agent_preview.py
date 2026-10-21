@@ -5041,11 +5041,12 @@ def bounded_visual_result_blocks(result, *, max_images=3):
         packed = []
         offset = 0
         font = ImageFont.load_default()
+        from src.safe_image_open import open_image
         for size in sizes:
             group = valid[offset:offset + size]
             decoded = []
             for source_index, (_mime, data) in enumerate(group, offset + 1):
-                with Image.open(io.BytesIO(base64.b64decode(data))) as source:
+                with open_image(io.BytesIO(base64.b64decode(data))) as source:
                     frame = source.convert('RGB')
                     if frame.width > 768:
                         height = max(1, round(frame.height * 768 / frame.width))

@@ -1425,8 +1425,9 @@ class UploadHandler:
         # can size itself to the right aspect ratio before the bytes arrive.
         if content_type.startswith("image/"):
             try:
-                from PIL import Image, ImageOps
-                with Image.open(file_path) as _im:
+                from PIL import ImageOps
+                from src.safe_image_open import open_image
+                with open_image(file_path) as _im:
                     _im = ImageOps.exif_transpose(_im)
                     file_metadata["width"] = _im.width
                     file_metadata["height"] = _im.height

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from core.database import GalleryImage
 from src.auth_helpers import _auth_disabled
+from src.safe_image_open import open_image as safe_image_open
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,8 @@ def _extract_exif(content: bytes) -> dict:
     """Extract EXIF metadata from image bytes. Returns dict of fields."""
     result = {"width": None, "height": None}
     try:
-        from PIL import Image
         from io import BytesIO
-        img = Image.open(BytesIO(content))
+        img = safe_image_open(BytesIO(content))
         # Read the raw EXIF before any transpose: exif_transpose strips the
         # orientation tag and with it the parsed EXIF view.
         exif = img._getexif() if hasattr(img, '_getexif') else None

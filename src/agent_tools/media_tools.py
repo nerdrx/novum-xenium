@@ -842,9 +842,9 @@ class InspectMediaTool:
                     temporary.close()
         if suffix in _IMAGE_SUFFIXES:
             try:
-                from PIL import Image
+                from src.safe_image_open import open_image
 
-                with Image.open(path) as source:
+                with open_image(path) as source:
                     source.seek(0)
                     image = source.convert("RGB")
                     source_size = image.size

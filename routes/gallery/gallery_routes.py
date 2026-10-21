@@ -25,6 +25,7 @@ from src.upload_limits import (
 from src.constants import GENERATED_IMAGES_DIR
 from src.path_confinement import confine
 from src.optional_deps import patch_realesrgan_torchvision_compat
+from src.safe_image_open import open_image as safe_image_open
 
 from routes.gallery.gallery_helpers import (
     GalleryPatch, _extract_exif, _image_to_dict, _owner_filter, _human_size,
@@ -34,6 +35,27 @@ logger = logging.getLogger(__name__)
 
 _SAM_STATE: Dict[str, Any] = {}
 _GROUNDING_STATE: Dict[str, Any] = {}
+_GALLERY_UPLOAD_FORMATS = {
+    "png": "PNG",
+    "jpg": "JPEG",
+    "jpeg": "JPEG",
+    "webp": "WEBP",
+    "gif": "GIF",
+}
+
+
+def _validate_gallery_upload_image(content: bytes, extension: str) -> None:
+    """Identify one of the gallery's declared image formats."""
+    from io import BytesIO
+
+    try:
+        with safe_image_open(
+            BytesIO(content),
+            formats=tuple(dict.fromkeys(_GALLERY_UPLOAD_FORMATS.values())),
+        ):
+            pass
+    except Exception as exc:
+        raise HTTPException(400, "Unsupported or invalid gallery image") from exc
 
 
 def _b64_to_pil_image(image_b64: str, *, mode: str = "RGBA"):
@@ -42,10 +64,8 @@ def _b64_to_pil_image(image_b64: str, *, mode: str = "RGBA"):
     if "," in image_b64 and image_b64.split(",", 1)[0].startswith("data:"):
         image_b64 = image_b64.split(",", 1)[1]
     try:
-        from PIL import Image
-
         raw = base64.b64decode(image_b64)
-        return Image.open(io.BytesIO(raw)).convert(mode)
+        return safe_image_open(io.BytesIO(raw)).convert(mode)
     except HTTPException:
         raise
     except Exception as exc:
@@ -267,7 +287,6 @@ def _atomic_replace_gallery_image(path: Path, content: bytes) -> None:
 def _rotate_gallery_image_sync(image_id: str, user: str | None, angle: int) -> dict[str, Any]:
     """Rotate using a worker-owned DB session; serialize only final persistence."""
     from io import BytesIO
-    from PIL import Image
     from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
 
     db = SessionLocal()
@@ -289,7 +308,7 @@ def _rotate_gallery_image_sync(image_id: str, user: str | None, angle: int) -> d
 
         # Decode/encode outside the shared persistence lock. The image bytes
         # are our immutable input even if another request removes the path.
-        with Image.open(BytesIO(source_bytes)) as pil:
+        with safe_image_open(BytesIO(source_bytes)) as pil:
             rotated = pil.rotate(-angle, expand=True)
             ext = filename.rsplit(".", 1)[-1].lower()
             save_kwargs = {}
@@ -347,7 +366,6 @@ def _rotate_gallery_image_sync(image_id: str, user: str | None, angle: int) -> d
 def _replace_gallery_image_sync(image_id: str, user: str | None, content: bytes) -> dict[str, Any]:
     """Replace an image on a worker, serialized with rotation and deletion."""
     from io import BytesIO
-    from PIL import Image
     from src.session_image_cleanup import IMAGE_PERSISTENCE_LOCK
 
     db = SessionLocal()
@@ -364,14 +382,11 @@ def _replace_gallery_image_sync(image_id: str, user: str | None, content: bytes)
 
         # Decode only after the owner and active-row checks, and keep the
         # expensive image work outside the shared mutation lock.
-        dimensions = None
         try:
-            with Image.open(BytesIO(content)) as image:
+            with safe_image_open(BytesIO(content)) as image:
                 dimensions = image.size
-        except Exception:
-            # Preserve the existing behavior for non-decodable uploads: store
-            # bytes and leave previously known dimensions unchanged.
-            pass
+        except Exception as exc:
+            raise HTTPException(400, "Invalid replacement image") from exc
 
         with IMAGE_PERSISTENCE_LOCK:
             img = db.query(GalleryImage).filter(
@@ -654,6 +669,15 @@ def setup_gallery_routes() -> APIRouter:
         album_id = form.get("album_id") or None
         content = await read_upload_limited(file, GALLERY_UPLOAD_MAX_BYTES, "Gallery upload")
 
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "png"
+        VIDEO_EXTS = {"mp4", "mov", "webm", "mkv", "m4v"}
+        IMAGE_EXTS = set(_GALLERY_UPLOAD_FORMATS)
+        if ext not in VIDEO_EXTS and ext not in IMAGE_EXTS:
+            raise HTTPException(400, f"Unsupported file type: .{ext}")
+        is_video = ext in VIDEO_EXTS
+        if not is_video:
+            _validate_gallery_upload_image(content, ext)
+
         # Duplicate detection via SHA-256
         file_hash = hashlib.sha256(content).hexdigest()
         db = SessionLocal()
@@ -678,12 +702,6 @@ def setup_gallery_routes() -> APIRouter:
             img_dir = Path(GENERATED_IMAGES_DIR)
             img_dir.mkdir(parents=True, exist_ok=True)
 
-            ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "png"
-            VIDEO_EXTS = {"mp4", "mov", "webm", "mkv", "m4v"}
-            IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}
-            if ext not in VIDEO_EXTS and ext not in IMAGE_EXTS:
-                raise HTTPException(400, f"Unsupported file type: .{ext}")
-            is_video = ext in VIDEO_EXTS
             filename = f"{uuid.uuid4().hex[:12]}.{ext}"
             img_path = img_dir / filename
             img_path.write_bytes(content)
@@ -1431,8 +1449,8 @@ def setup_gallery_routes() -> APIRouter:
             try:
                 img_bytes = base64.b64decode(body["image"])
                 mask_bytes = base64.b64decode(body["mask"])
-                source_png = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-                mask_png = Image.open(io.BytesIO(mask_bytes)).convert("L")  # luminance
+                source_png = safe_image_open(io.BytesIO(img_bytes)).convert("RGBA")
+                mask_png = safe_image_open(io.BytesIO(mask_bytes)).convert("L")  # luminance
                 # Build OpenAI mask: RGBA where alpha=255 means keep, 0 means regenerate.
                 # SD mask: white (255) = regenerate → alpha 0.  Black (0) = keep → alpha 255.
                 # RGB must be white for keep areas; start from fully-white opaque and
@@ -1521,7 +1539,7 @@ def setup_gallery_routes() -> APIRouter:
                     # the ORIGINAL source using the user's mask, so only
                     # the masked region actually changes.
                     try:
-                        generated = Image.open(io.BytesIO(base64.b64decode(raw_b64))).convert("RGBA")
+                        generated = safe_image_open(io.BytesIO(base64.b64decode(raw_b64))).convert("RGBA")
                         # Match the generated image to the source dims.
                         if generated.size != source_png.size:
                             generated = generated.resize(source_png.size, Image.LANCZOS)
@@ -1560,8 +1578,8 @@ def setup_gallery_routes() -> APIRouter:
                     # Normalize both inputs to PNG bytes. Local MLX and
                     # Diffusers wrappers expect white mask pixels to mean
                     # "edit this region", which matches the editor's mask.
-                    source_png = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-                    mask_png = Image.open(io.BytesIO(mask_bytes)).convert("L")
+                    source_png = safe_image_open(io.BytesIO(img_bytes)).convert("RGBA")
+                    mask_png = safe_image_open(io.BytesIO(mask_bytes)).convert("L")
                     src_buf = io.BytesIO()
                     source_png.save(src_buf, format="PNG")
                     mask_buf = io.BytesIO()
@@ -1847,7 +1865,7 @@ def setup_gallery_routes() -> APIRouter:
         import base64, io
 
         img_bytes = base64.b64decode(image_b64)
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        img = safe_image_open(io.BytesIO(img_bytes)).convert("RGB")
 
         # Unsharp mask: radius=2, percent=amount*200, threshold=3
         sharpened = img.filter(ImageFilter.UnsharpMask(radius=2, percent=int(amount * 200), threshold=3))
@@ -1880,7 +1898,7 @@ def setup_gallery_routes() -> APIRouter:
             raise HTTPException(500, "Server missing a required dependency")
         # Decode source image (RGB; Real-ESRGAN doesn't preserve alpha).
         img_bytes = base64.b64decode(image_b64)
-        src = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        src = safe_image_open(io.BytesIO(img_bytes)).convert("RGB")
         try:
             patch_realesrgan_torchvision_compat()
             from realesrgan import RealESRGANer
@@ -1930,7 +1948,7 @@ def setup_gallery_routes() -> APIRouter:
         except ImportError:
             raise HTTPException(500, "Server missing a required dependency")
         img_bytes = base64.b64decode(image_b64)
-        src = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        src = safe_image_open(io.BytesIO(img_bytes)).convert("RGB")
         try:
             patch_realesrgan_torchvision_compat()
             from basicsr.archs.rrdbnet_arch import RRDBNet
@@ -2106,7 +2124,7 @@ def setup_gallery_routes() -> APIRouter:
         import base64, io
 
         img_bytes = base64.b64decode(image_b64)
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+        img = safe_image_open(io.BytesIO(img_bytes)).convert("RGBA")
         W, H = img.size
 
         hint = None
@@ -2114,7 +2132,7 @@ def setup_gallery_routes() -> APIRouter:
         if hint_b64:
             try:
                 hint_bytes = base64.b64decode(hint_b64)
-                hint = Image.open(io.BytesIO(hint_bytes)).convert("L")
+                hint = safe_image_open(io.BytesIO(hint_bytes)).convert("L")
                 # Resize the hint to match if dimensions disagree
                 if hint.size != img.size:
                     hint = hint.resize(img.size, Image.NEAREST)
@@ -2192,7 +2210,7 @@ def setup_gallery_routes() -> APIRouter:
         import numpy as np
 
         img_bytes = base64.b64decode(image_b64)
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        img = safe_image_open(io.BytesIO(img_bytes)).convert("RGB")
 
         # Try GFPGAN first (AI face restoration)
         try:

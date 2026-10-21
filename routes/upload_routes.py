@@ -460,13 +460,14 @@ def setup_upload_routes(upload_handler):
         # Downscaled thumbnail for image previews — generated once and cached.
         if thumb and mime.startswith("image/"):
             try:
-                from PIL import Image, ImageOps
+                from PIL import ImageOps
+                from src.safe_image_open import open_image
                 thumb_dir = os.path.join(_upload_root(), ".thumbs")
                 os.makedirs(thumb_dir, exist_ok=True)
                 thumb_path = os.path.join(thumb_dir, file_id + ".jpg")
                 if (not os.path.exists(thumb_path)
                         or os.path.getmtime(thumb_path) < os.path.getmtime(path)):
-                    im = Image.open(path)
+                    im = open_image(path)
                     # iPhone / camera JPEGs encode rotation in EXIF rather than
                     # the pixel data. Browsers honour that on the original via
                     # image-orientation:from-image, but PIL strips EXIF when it

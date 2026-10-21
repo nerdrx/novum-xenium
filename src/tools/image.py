@@ -82,8 +82,9 @@ async def do_edit_image(content: str, owner: Optional[str] = None) -> Dict:
             return await edit_with_model(prompt, str(source_path), session_id=session_id, owner=owner, size='auto')
 
         from PIL import Image
+        from src.safe_image_open import open_image
 
-        with Image.open(source_path) as opened:
+        with open_image(source_path) as opened:
             image = opened.convert("RGBA")
             if action == "upscale":
                 try:

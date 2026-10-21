@@ -3781,6 +3781,9 @@ async function initUnifiedIntegrations() {
       messageEl.style.color = ok ? 'var(--green, #50fa7b)' : 'var(--red)';
     };
     const _runCalDavTest = async body => {
+      if (!body.url || !body.username || (!body.password && !body.account_id)) {
+        return { ok: false, error: 'Enter URL and username; new accounts also need a password' };
+      }
       try {
         const r = await fetch('/api/calendar/test', {
           method: 'POST', credentials: 'same-origin',

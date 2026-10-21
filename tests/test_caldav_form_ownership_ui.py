@@ -48,4 +48,13 @@ def test_caldav_form_ownership_loopback():
     assert payload["cases"]["nullTestResponse"]["message"] == "Invalid response from server"
     assert payload["cases"]["standaloneTestAfterEdit"]["observed"] == "changed fields preserved; stale success suppressed"
     assert payload["cases"]["sameFormTypingDuringEditLookup"]["observed"] == "typed fields preserved"
+    assert payload["cases"]["failedPrefillEmptyUsernameBlocked"]["testRequests"] == 0
+    assert payload["cases"]["failedPrefillEmptyUsernameBlocked"]["saves"] == 0
+    assert payload["cases"]["failedPrefillEmptyUsernameBlocked"]["prefillStatus"] == 503
+    assert payload["cases"]["manuallyClearedUrlAndUsernameBlocked"]["testRequests"] == 0
+    assert payload["cases"]["manuallyClearedUrlAndUsernameBlocked"]["saves"] == 0
+    assert payload["cases"]["newAccountBlankPasswordBlocked"]["testRequests"] == 0
+    assert payload["cases"]["newAccountBlankPasswordBlocked"]["saves"] == 0
+    assert payload["cases"]["explicitSavedEditBlankPassword"]["test"]["account_id"] == "fixture-account-a"
+    assert payload["cases"]["explicitSavedEditBlankPassword"]["test"]["password"] == ""
     assert payload["cases"]["normalTestSave"]["observed"] == "tested and saved same values"

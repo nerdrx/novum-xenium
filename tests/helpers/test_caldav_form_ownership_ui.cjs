@@ -10,7 +10,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
 const repo = path.resolve(__dirname, '../..');
 const settingsPath = path.join(repo, 'static/js/settings.js');
 const settingsHash = crypto.createHash('sha256').update(fs.readFileSync(settingsPath)).digest('hex');
-const state = { tests: [], saves: [], pending: [], nextTestHold: false, nextTestReply: null, pendingAccounts: [], nextAccountHold: false, pendingSaves: [], nextSaveHold: false, pendingPresets: [], nextPresetsHold: false, accountReads: 0 };
+const state = { tests: [], saves: [], pending: [], nextTestHold: false, nextTestReply: null, pendingAccounts: [], nextAccountHold: false, failNextAccount: false, accountStatuses: [], pendingSaves: [], nextSaveHold: false, pendingPresets: [], nextPresetsHold: false, accountReads: 0 };
 const accounts = [
   { id: 'fixture-account-a', label: 'Account A', url: 'https://fixture.invalid/a', username: 'a-user' },
   { id: 'fixture-account-b', label: 'Account B', url: 'https://fixture.invalid/b', username: 'b-user' },
@@ -48,6 +48,8 @@ function reset() {
   state.saves.length = 0;
   state.nextTestHold = false;
   state.nextTestReply = null;
+  state.failNextAccount = false;
+  state.accountStatuses.length = 0;
 }
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
@@ -60,6 +62,7 @@ const server = http.createServer(async (req, res) => {
     pendingSaves: state.pendingSaves.map(item => item.id),
     pendingPresets: state.pendingPresets.map(item => item.id),
     accountReads: state.accountReads,
+    accountStatuses: state.accountStatuses,
   });
   if (url.pathname === '/__reset') {
     try { reset(); return json(res, { ok: true }); }
@@ -71,6 +74,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/__hold-next-account') {
     state.nextAccountHold = true;
+    res.writeHead(204); return res.end();
+  }
+  if (url.pathname === '/__fail-next-account-prefill') {
+    state.failNextAccount = true;
     res.writeHead(204); return res.end();
   }
   if (url.pathname === '/__hold-next-save') {
@@ -123,6 +130,12 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/api/calendar/config/accounts' && req.method === 'GET') {
     state.accountReads++;
+    if (state.failNextAccount) {
+      state.failNextAccount = false;
+      state.accountStatuses.push(503);
+      return json(res, { detail: 'Synthetic prefill failure' }, 503);
+    }
+    state.accountStatuses.push(200);
     const id = state.pendingAccounts.length + 1;
     if (state.nextAccountHold) {
       state.nextAccountHold = false;
@@ -260,6 +273,12 @@ const server = http.createServer(async (req, res) => {
         const title = document.querySelector('#unified-intg-form h2')?.textContent || '';
         return window.__caldavAccountJsonConsumed === count + 1 && title.includes('Edit CalDAV Calendar');
       }, beforeReads);
+    };
+    const openNewCalDav = async page => {
+      await page.locator('#unified-intg-add-btn').click();
+      await page.locator('.uf-type-option[data-value="caldav"]').click();
+      await page.locator('#uf-caldav-save').waitFor();
+      assert.match(await page.locator('#unified-intg-form h2').textContent(), /Add CalDAV Calendar/);
     };
     const fillAccount = async (page, label, url, username, password) => {
       await page.locator('#uf-caldav-label').fill(label);
@@ -612,6 +631,113 @@ const server = http.createServer(async (req, res) => {
           currentUrl: await page.locator('#uf-caldav-url').inputValue(),
           currentLabel: await page.locator('#uf-caldav-label').inputValue(),
           currentMessage: await page.locator('#uf-caldav-msg').textContent(),
+        };
+      } finally { await closeContext(context); }
+    }
+
+    // Failed edit prefill leaves blank fields; Save must stop before Test or persistence.
+    {
+      const { page, context } = await newPage();
+      try {
+        await resetState(page);
+        await page.request.get(`${origin}/__fail-next-account-prefill`);
+        await openAccount(page, 'fixture-account-a');
+        const before = await stateOn(page);
+        assert.equal(before.accountStatuses.at(-1), 503);
+        assert.equal(await page.locator('#uf-caldav-url').inputValue(), '');
+        assert.equal(await page.locator('#uf-caldav-user').inputValue(), '');
+        await page.locator('#uf-caldav-save').click();
+        await page.waitForFunction(async () => {
+          const state = await (await fetch('/__state')).json();
+          return state.tests.length > 0 || document.querySelector('#uf-caldav-msg')?.textContent.includes('URL and username');
+        });
+        const after = await stateOn(page);
+        assert.equal(after.tests.length, 0);
+        assert.equal(after.saves.length, 0);
+        assert.equal(await page.evaluate(() => window.__caldavTestFetchResolved), 0);
+        assert.equal(await page.evaluate(() => window.__caldavSaveFetchResolved), 0);
+        result.cases.failedPrefillEmptyUsernameBlocked = {
+          observed: 'visible field error; no Test request or save',
+          prefillStatus: before.accountStatuses.at(-1),
+          testRequests: after.tests.length,
+          saves: after.saves.length,
+          message: await page.locator('#uf-caldav-msg').textContent(),
+        };
+      } finally { await closeContext(context); }
+    }
+
+    // Manually clearing URL and username on an edit cannot borrow saved values.
+    {
+      const { page, context } = await newPage();
+      try {
+        await resetState(page);
+        await openAccount(page, 'fixture-account-a');
+        await page.locator('#uf-caldav-url').fill('');
+        await page.locator('#uf-caldav-user').fill('');
+        await page.locator('#uf-caldav-save').click();
+        await page.waitForFunction(() => document.querySelector('#uf-caldav-msg')?.textContent.includes('URL and username'));
+        const after = await stateOn(page);
+        assert.equal(after.tests.length, 0);
+        assert.equal(after.saves.length, 0);
+        assert.equal(await page.evaluate(() => window.__caldavTestFetchResolved), 0);
+        assert.equal(await page.evaluate(() => window.__caldavSaveFetchResolved), 0);
+        assert.equal(await page.locator('#uf-caldav-url').inputValue(), '');
+        assert.equal(await page.locator('#uf-caldav-user').inputValue(), '');
+        result.cases.manuallyClearedUrlAndUsernameBlocked = {
+          observed: 'visible field error; no Test request or save',
+          testRequests: after.tests.length,
+          saves: after.saves.length,
+          message: await page.locator('#uf-caldav-msg').textContent(),
+        };
+      } finally { await closeContext(context); }
+    }
+
+    // New accounts require a password before Save can send a Test request.
+    {
+      const { page, context } = await newPage();
+      try {
+        await resetState(page);
+        await openNewCalDav(page);
+        await fillAccount(page, 'New fixture', 'https://fixture.invalid/new', 'new-user', '');
+        await page.locator('#uf-caldav-save').click();
+        await page.waitForFunction(() => document.querySelector('#uf-caldav-msg')?.textContent.includes('new accounts also need a password'));
+        const after = await stateOn(page);
+        assert.equal(after.tests.length, 0);
+        assert.equal(after.saves.length, 0);
+        assert.equal(await page.evaluate(() => window.__caldavTestFetchResolved), 0);
+        assert.equal(await page.evaluate(() => window.__caldavSaveFetchResolved), 0);
+        assert.equal(await page.locator('#uf-caldav-url').inputValue(), 'https://fixture.invalid/new');
+        assert.equal(await page.locator('#uf-caldav-user').inputValue(), 'new-user');
+        result.cases.newAccountBlankPasswordBlocked = {
+          observed: 'visible password requirement; no Test request or save',
+          testRequests: after.tests.length,
+          saves: after.saves.length,
+          message: await page.locator('#uf-caldav-msg').textContent(),
+        };
+      } finally { await closeContext(context); }
+    }
+
+    // Saved edits may still test with a blank password when their explicit account id is present.
+    {
+      const { page, context } = await newPage();
+      try {
+        await resetState(page);
+        await openAccount(page, 'fixture-account-a');
+        await fillAccount(page, 'Saved edit blank password', 'https://fixture.invalid/edit', 'edit-user', '');
+        await page.locator('#uf-caldav-save').click();
+        await page.waitForFunction(async () => {
+          const state = await (await fetch('/__state')).json();
+          return state.tests.length === 1 && state.saves.length === 1;
+        });
+        const after = await stateOn(page);
+        assert.deepEqual(after.tests[0].body, {
+          url: 'https://fixture.invalid/edit', username: 'edit-user', password: '', account_id: 'fixture-account-a',
+        });
+        assert.equal(after.saves[0].path, '/api/calendar/config/accounts/fixture-account-a');
+        result.cases.explicitSavedEditBlankPassword = {
+          observed: 'explicit account id preserved saved-edit fallback',
+          test: after.tests[0].body,
+          savePath: after.saves[0].path,
         };
       } finally { await closeContext(context); }
     }

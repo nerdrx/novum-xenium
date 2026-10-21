@@ -51,7 +51,16 @@ which restore you intend to activate before restarting; repeated staging is
 not an overwrite mechanism. A newer preview remains separate from the result
 of an earlier staging request.
 
-See the pinned [restore controls](https://github.com/nerdrx/novum-xenium/blob/cfffb7ec2eee2ec56701e0b699450ef7c13e570c/static/js/admin.js) and [backup staging implementation](https://github.com/nerdrx/novum-xenium/blob/cfffb7ec2eee2ec56701e0b699450ef7c13e570c/src/full_backup.py).
+If staging cannot be confirmed, do not assume that nothing was staged. A lost
+or unreadable response can occur after the server has prepared the restore.
+Keep the backend running while an administrator checks the configured data
+directory for `.odysseus-restore-pending.json`. That marker records pending or
+interrupted restore state; its presence requires review before another start.
+Do not edit or delete restore markers or staging directories as a retry shortcut.
+Only retry the same archive if you still intend to restore it. The pending-restore
+guard rejects a second stage rather than replacing the first one.
+
+See the pinned [restore controls](https://github.com/nerdrx/novum-xenium/blob/69f85cf682cd092e031d37831748365b962d227c/static/js/admin.js) and [backup staging implementation](https://github.com/nerdrx/novum-xenium/blob/69f85cf682cd092e031d37831748365b962d227c/src/full_backup.py).
 
 ## Import exported settings data
 

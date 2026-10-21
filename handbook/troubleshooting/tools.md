@@ -23,6 +23,19 @@ If skill suggestions are missing after a temporary connection failure, focus
 the composer or type again after a few seconds. Autocomplete retries the
 skill catalog while keeping built-in commands available.
 
+## Editing text that mentions tool restrictions
+
+An exact literal replacement request such as
+`In README.md, replace the literal sentence "Do not use tools" with "Tools require approval".`
+treats the quoted operands as text to edit. Those operands do not disable every
+tool for that turn. This narrow exception accepts a whole replacement command
+with balanced double quotes or backticks. Other wording still uses the existing
+restriction detector; it is not a general quoted-text parser.
+
+A tool ban outside that command, disabled tools, Plan mode, workspace boundaries,
+and approval requirements still apply. See the pinned
+[turn-policy detector](https://github.com/nerdrx/novum-xenium/blob/69f85cf682cd092e031d37831748365b962d227c/src/tool_policy.py).
+
 ## Account verification stops a send
 
 If a send cannot verify your account, keep the draft, check your connection or

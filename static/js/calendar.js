@@ -343,7 +343,22 @@ async function _syncCaldav(interactive) {
     const res = await fetch(`${API_BASE}/api/calendar/sync`, {
       method: 'POST', credentials: 'same-origin',
     });
-    const data = await res.json().catch(() => ({}));
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      if (interactive) return { errors: [`Invalid JSON response (HTTP ${res.status})`] };
+      return;
+    }
+    if (!res.ok) {
+      const reason = (data && (data.detail || data.error)) || `HTTP ${res.status}`;
+      if (interactive) return { errors: [reason] };
+      return;
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.errors)) {
+      if (interactive) return { errors: [`Invalid response payload (HTTP ${res.status})`] };
+      return;
+    }
     if (interactive) return data;
     // Background path: if the pull actually changed anything, drop
     // local caches and re-render so new events appear.

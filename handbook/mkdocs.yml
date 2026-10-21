@@ -52,6 +52,7 @@ nav:
       - Compare models: compare.md
       - Deep Research: research.md
       - Email drafts and recovery: email.md
+      - Calendar: calendar.md
       - Connected services: features-connected-services.md
   - Tutorials:
       - Safe coding session: tutorials/coding.md

@@ -13,28 +13,17 @@ label from the internal API.
 
 ## Calendar
 
-1. Select **Calendar** from the left navigation rail, or open `/calendar` in
-   the same signed-in workspace. The rail and route title are defined in
-   [`static/index.html`](https://github.com/nerdrx/novum-xenium/blob/main/static/index.html).
-2. Use the calendar's event controls to create or edit a time block, meeting,
-   or appointment. For reminders, use the reminder action on the event; the
-   app stores calendar reminders as Notes. A calendar event named “Reminder”
-   by itself does not notify you.
-3. To connect a remote calendar, open **Calendar settings** and add a CalDAV
-   account; test the connection, then run sync. Account credentials are
-   encrypted at rest and are not returned to the browser. Local SQLite remains
-   the source of truth if a remote write fails; pending changes are retained
-   for retry.
-4. Import or export an ICS file from the calendar controls. Imports create
-   fresh local event IDs in the selected calendar. Recurrence is expanded on
-   the server with a cap; a truncated response can omit later occurrences.
+Use Calendar for local events, CalDAV sync, and ICS exchange. Open **Calendar**
+from the navigation rail, then use **Calendar settings → Settings →
+Integrations** to configure a CalDAV account. Events support date and time,
+all-day status, recurrence, location, description, and a Notes-based reminder.
+Calendar reminders are separate todo notes; browser notification delivery is
+not guaranteed.
 
-If events are missing, check the selected calendar, date range and timezone,
-then test and sync the CalDAV account. Check the calendar's connection/error
-state before retrying edits. The server endpoints and sync rules are documented
-in [`specs/calendar-tasks-notes.md`](https://github.com/nerdrx/novum-xenium/blob/main/specs/calendar-tasks-notes.md); CalDAV
-connection validation blocks unsafe destinations, including private IPs
-unless the operator explicitly enables `ODYSSEUS_ALLOW_PRIVATE_CALDAV=1`.
+For event creation, views, search, account testing, sync recovery, ICS limits,
+and backup boundaries, see [Use Calendar](calendar.md). The
+[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/3c6f54a7637d79b84598c98c4f46a5f806c1a62c/specs/calendar-tasks-notes.md)
+documents backend behavior and remaining limits.
 
 ## Email
 

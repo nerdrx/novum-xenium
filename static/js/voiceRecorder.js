@@ -273,7 +273,7 @@ export function startRecording(onFileCreated, showToast, showError) {
 
         const format = _audioFormat(recorder.mimeType || audioChunks.find(chunk => chunk.type)?.type || 'audio/webm');
         const audioBlob = new Blob(audioChunks, { type: format.mimeType });
-        const provider = _sttProvider;
+        const provider = recorder._odysseusProvider;
 
         if (provider === 'browser') {
           const transcriptPromise = stopBrowserSTTAndWait(browserSpeech);
@@ -323,6 +323,8 @@ export function startRecording(onFileCreated, showToast, showError) {
       recorder._odysseusStartVoiceDestination = voiceApiReady
         ? session.captureVoiceDestination(recordingIdentity)
         : null;
+      // Bind this recorder to the provider accepted after microphone permission.
+      recorder._odysseusProvider = _sttProvider;
       try {
         recorder.start();
       } catch (error) {
@@ -335,7 +337,7 @@ export function startRecording(onFileCreated, showToast, showError) {
 
       // Start browser STT if that's the provider
       let browserSttFailed = false;
-      if (_sttProvider === 'browser') {
+      if (recorder._odysseusProvider === 'browser') {
         try {
           startBrowserSTT(browserSpeech);
         } catch (_) {

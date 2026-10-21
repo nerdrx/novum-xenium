@@ -64,6 +64,18 @@ to inspect the reminder record and due time. Delivery is not guaranteed.
 4. Save the account, return to Calendar, then choose **Calendar settings →
    Sync now**. Review the result shown beside the sync control.
 
+While a connection test runs, you can change the fields. A result for the old
+values cannot save the changed form; test the new values again. During the
+actual save request, the fields are temporarily disabled. Cancel or opening
+another integration prevents a pending connection test from starting a save.
+Once the save request has already been sent, closing the form does not undo
+it; reopen the account to check the saved values.
+
+A new account needs its own URL, username, and password for the test. Novum
+does not fill missing new-account credentials from another saved account.
+When editing a saved account, leave the password blank to keep and test with
+that account's stored password.
+
 New or updated CalDAV account passwords are encrypted by the application;
 legacy account settings may retain plaintext passwords until updated. Passwords
 are not returned to the browser in account listings. Use HTTPS for remote
@@ -143,10 +155,10 @@ provider. Email, chat-model, and CalDAV credentials are configured separately.
   browser notification permission, and whether a Novum session was open.
 
 For account and route behavior, see the
-[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/specs/calendar-tasks-notes.md).
-The frozen [calendar interface](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/static/js/calendar.js),
-[CalDAV settings](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/static/js/settings.js),
-[calendar routes](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/routes/calendar_routes.py),
-[CalDAV sync](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/src/caldav_sync.py),
-and [reminder polling](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/static/js/calendar/reminders.js)
+[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/a135f61b25fda702f2fa26b7ae83d1dcba39a714/specs/calendar-tasks-notes.md).
+The frozen [calendar interface](https://github.com/nerdrx/novum-xenium/blob/a135f61b25fda702f2fa26b7ae83d1dcba39a714/static/js/calendar.js),
+[CalDAV settings](https://github.com/nerdrx/novum-xenium/blob/a135f61b25fda702f2fa26b7ae83d1dcba39a714/static/js/settings.js),
+[calendar routes](https://github.com/nerdrx/novum-xenium/blob/a135f61b25fda702f2fa26b7ae83d1dcba39a714/routes/calendar_routes.py),
+[CalDAV sync](https://github.com/nerdrx/novum-xenium/blob/a135f61b25fda702f2fa26b7ae83d1dcba39a714/src/caldav_sync.py),
+and [reminder polling](https://github.com/nerdrx/novum-xenium/blob/a135f61b25fda702f2fa26b7ae83d1dcba39a714/static/js/calendar/reminders.js)
 show the behavior this guide describes.

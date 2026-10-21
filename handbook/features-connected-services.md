@@ -11,6 +11,15 @@ product setup and the linked source pages below for current implementation detai
 the source does not establish a reliable end-user path for it; don't infer a
 label from the internal API.
 
+## Remove an integration
+
+In **Settings → Integrations**, choose the card's remove button and confirm.
+A refused or failed request shows an error and keeps the open form and draft.
+Check server access and permissions before retrying. If the connection was
+lost, reopen Integrations to check whether removal completed before trying
+again. A successful removal refreshes the list without closing a different
+integration form opened while the request was pending.
+
 ## Calendar
 
 Use Calendar for local events, CalDAV sync, and ICS exchange. Open **Calendar**
@@ -22,7 +31,7 @@ not guaranteed.
 
 For event creation, views, search, account testing, sync recovery, ICS limits,
 and backup boundaries, see [Use Calendar](calendar.md). The
-[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/3c6f54a7637d79b84598c98c4f46a5f806c1a62c/specs/calendar-tasks-notes.md)
+[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/a135f61b25fda702f2fa26b7ae83d1dcba39a714/specs/calendar-tasks-notes.md)
 documents backend behavior and remaining limits.
 
 ## Email

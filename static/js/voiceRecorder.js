@@ -89,6 +89,8 @@ function startBrowserSTT(speech) {
   speech.recognition.onerror = (e) => {
     console.warn('Browser STT error:', e.error);
   };
+  speech.ended = false;
+  speech.recognition.onend = () => { speech.ended = true; };
 
   speech.recognition.start();
 }
@@ -99,6 +101,39 @@ function stopBrowserSTT(speech) {
     speech.recognition = null;
   }
   return (speech?.transcript || '').trim();
+}
+
+function stopBrowserSTTAndWait(speech) {
+  const recognition = speech?.recognition;
+  if (!recognition || speech.ended) {
+    if (speech) speech.recognition = null;
+    return Promise.resolve((speech?.transcript || '').trim());
+  }
+
+  return new Promise(resolve => {
+    const previousOnEnd = recognition.onend;
+    let timeout;
+    let finished = false;
+    const finish = (ended = false) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      if (!ended && !speech.ended) {
+        try { recognition.abort(); } catch (e) { /* ignore */ }
+      }
+      if (recognition.onend === onEnd) recognition.onend = previousOnEnd;
+      if (speech.recognition === recognition) speech.recognition = null;
+      resolve((speech.transcript || '').trim());
+    };
+    const onEnd = event => {
+      speech.ended = true;
+      try { previousOnEnd?.call(recognition, event); } finally { finish(true); }
+    };
+
+    recognition.onend = onEnd;
+    timeout = setTimeout(finish, 2000);
+    try { recognition.stop(); } catch (e) { finish(); }
+  });
 }
 
 /**
@@ -193,7 +228,8 @@ export function startRecording(onFileCreated, showToast, showError) {
         const provider = _sttProvider;
 
         if (provider === 'browser') {
-          const transcript = stopBrowserSTT(browserSpeech);
+          const transcriptPromise = stopBrowserSTTAndWait(browserSpeech);
+          const transcript = await transcriptPromise;
           if (transcript) {
             insertTranscription(transcript, showToast);
           } else {

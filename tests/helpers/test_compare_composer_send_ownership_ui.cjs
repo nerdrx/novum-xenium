@@ -11,6 +11,9 @@ const sourceHead = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], {encod
 const sourceFiles = ['static/index.html','static/app.js','static/js/voiceRecorder.js','static/js/compare/index.js','static/js/compare/selector.js','static/js/chat.js'];
 const hashes = Object.fromEntries(sourceFiles.map(file => [file, crypto.createHash('sha256').update(fs.readFileSync(path.join(repo,file))).digest('hex')]));
 const externalRequests = [], pageErrors = [], apiRequests = [];
+let holdCompareStreams = false;
+let heldCompareStreams = 0;
+let abortedCompareStreams = 0;
 const mediaInit = `(() => {
   const media = {requests:[], recorders:[], tracks:[], speech:{instances:0,starts:0,stops:0,aborts:0,active:false}};
   let grant;
@@ -26,9 +29,26 @@ let server;
 server = http.createServer((req,res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   if (url.pathname === '/') {res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return fs.createReadStream(path.join(repo,'static/index.html')).pipe(res);}
+  if (url.pathname === '/__fixture/stream-mode' && req.method === 'POST') {
+    holdCompareStreams = true;
+    res.writeHead(204); return res.end();
+  }
+  if (url.pathname === '/__fixture/stream-status') {
+    res.writeHead(200,{'content-type':'application/json'});
+    return res.end(JSON.stringify({held:heldCompareStreams,aborted:abortedCompareStreams,requests:apiRequests.filter(r=>r.path==='/api/chat_stream').length}));
+  }
   if (url.pathname.startsWith('/api/')) {
     apiRequests.push({method:req.method,path:url.pathname});
-    if (url.pathname === '/api/chat_stream') { req.resume(); res.writeHead(503,{'content-type':'application/json'}); return res.end(JSON.stringify({detail:'synthetic no-model fixture'})); }
+    if (url.pathname === '/api/chat_stream') {
+      if (!holdCompareStreams) { req.resume(); res.writeHead(503,{'content-type':'application/json'}); return res.end(JSON.stringify({detail:'synthetic no-model fixture'})); }
+      (async()=>{ for await (const _ of req) {} })().then(()=>{
+        heldCompareStreams++;
+        res.on('close',()=>{if(!res.writableEnded)abortedCompareStreams++;});
+        res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache'});
+        res.flushHeaders?.();
+      }).catch(()=>{if(!res.headersSent){res.writeHead(500);res.end();}});
+      return;
+    }
     let data = {};
     if (url.pathname === '/api/auth/status') data = {authenticated:true,configured:true,username:'fixture-user',is_admin:true,privileges:{}};
     else if (url.pathname === '/api/auth/settings') data = {stt_enabled:true,stt_provider:'browser',stt_model:'base',stt_language:''};
@@ -99,6 +119,40 @@ server = http.createServer((req,res) => {
     proof.result={compareState,refreshed,emptyClick,typedCompare,probeRequests:apiRequests.filter(r=>r.path==='/api/probe-selected').length,chatStreamFixtureRequests:compareStreamRequests,transcribeRequests:apiRequests.filter(r=>r.path==='/api/stt/transcribe').length};
     assert.equal(proof.result.transcribeRequests,0);
     assert.equal(proof.result.chatStreamFixtureRequests>0,true);
+
+    // Freeze the shared debounce and prove the real Compare Stop click aborts
+    // both held pane streams immediately, before 300 ms can elapse.
+    await page.evaluate(()=>fetch('/__fixture/stream-mode',{method:'POST'}));
+    await page.waitForFunction(start=>Date.now()-start>=350,Date.now(),{timeout:1000});
+    await page.clock.install({time:new Date('2026-01-01T00:00:00.000Z')});
+    await page.clock.pauseAt(new Date('2026-01-01T00:00:00.000Z'));
+    const stopBaseNow=await page.evaluate(()=>Date.now());
+    await page.locator('#message').fill('synthetic held compare prompt');
+    const heldResponses=[
+      page.waitForResponse(r=>r.url().endsWith('/api/chat_stream')&&r.status()===200,{timeout:10000}),
+      page.waitForResponse(r=>r.url().endsWith('/api/chat_stream')&&r.status()===200,{timeout:10000}),
+    ];
+    await page.locator('.send-btn').click();
+    await Promise.all(heldResponses);
+    await page.waitForFunction(()=>document.querySelector('.send-btn')?.title==='Stop all models'&&document.querySelector('.send-btn')?.dataset.mode==='streaming',null,{timeout:10000});
+    const heldBeforeStop=await page.evaluate(async()=>({streams:await(await fetch('/__fixture/stream-status')).json(),title:document.querySelector('.send-btn')?.title,mode:document.querySelector('.send-btn')?.dataset.mode}));
+    assert.equal(heldBeforeStop.streams.held,2);
+    assert.equal(heldBeforeStop.streams.aborted,0);
+    assert.equal(heldBeforeStop.title,'Stop all models');
+    const requestCountBeforeStop=heldBeforeStop.streams.requests;
+    await page.locator('.send-btn').click();
+    await page.clock.runFor(16); // Flush one RAF while virtual elapsed time remains below the debounce.
+    const immediateStop=await page.evaluate(async()=>({now:Date.now(),streams:await(await fetch('/__fixture/stream-status')).json(),title:document.querySelector('.send-btn')?.title,mode:document.querySelector('.send-btn')?.dataset.mode}));
+    assert.ok(immediateStop.now-stopBaseNow<300,`Stop occurred after ${immediateStop.now-stopBaseNow} virtual ms`);
+    assert.equal(immediateStop.title,'Send to all models','Compare Stop must synchronously reset its owned button');
+    assert.equal(immediateStop.mode,'');
+    assert.equal(immediateStop.streams.held,2);
+    assert.equal(immediateStop.streams.aborted,2,'immediate Compare Stop aborts both held streams');
+    assert.equal(immediateStop.streams.requests,requestCountBeforeStop,'Stop does not submit a second request');
+    const heldCompareStop={elapsedVirtualMs:immediateStop.now-stopBaseNow,heldStreams:immediateStop.streams.held,abortedStreams:immediateStop.streams.aborted,streamRequests:immediateStop.streams.requests,buttonTitle:immediateStop.title,buttonMode:immediateStop.mode,micRequests:await page.evaluate(()=>window.__compareMicFixture.media.requests.length),speechInstances:await page.evaluate(()=>window.__compareMicFixture.media.speech.instances)};
+    assert.equal(heldCompareStop.micRequests,0);
+    assert.equal(heldCompareStop.speechInstances,0);
+    proof.heldCompareStop=heldCompareStop;
 
     // Normal-chat control: mic remains available and Stop remains functional outside Compare.
     const normalContext=await browser.newContext({serviceWorkers:'block'});contexts.push(normalContext);await normalContext.addInitScript(mediaInit);

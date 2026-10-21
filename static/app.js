@@ -4046,16 +4046,16 @@ function startOdysseusApp() {
     if (e) e.preventDefault();
     _bumpChatPriority(30000);
     const isToolApprovalSubmit = chatForm?.dataset?.odysseusControlPlaneSubmit === 'tool-approval';
+    // Compare owns its synchronous send/stop state and must not be debounced.
+    if (compareModule && compareModule.isActive()) {
+      return compareModule.handleCompareSubmit(e);
+    }
+
     // Debounce: prevent double-submit while a request is being initiated
     if (_submitting && !isToolApprovalSubmit) return;
     _submitting = true;
     // Release after a short delay (stream start sets its own isStreaming guard)
     setTimeout(() => { _submitting = false; }, 300);
-
-    // Compare mode: route submit to compare handler (same message to all panes)
-    if (compareModule && compareModule.isActive()) {
-      return compareModule.handleCompareSubmit(e);
-    }
 
     // Group chat: route to group module
     if (groupModule && groupModule.isActive()) {

@@ -37,18 +37,22 @@ recording controls.
 
 If browser speech recognition is unavailable or cannot be started, audio capture
 continues. Stop remains available; if there is no browser transcript, the
-recording uses the normal audio-file fallback. Each recording keeps its own
-audio chunks, browser transcript, and recognizer. A late completion from an
-older recording does not reset the controls for a newer one.
+recording uses the normal audio-file fallback. Once the audio recorder finishes,
+Novum waits up to two seconds for browser recognition to end and uses the
+transcript received so far. If none arrived, it attaches the recorded audio; if recognition has not
+ended, Novum makes a best-effort abort. Each recording keeps its own audio
+chunks, browser transcript, and recognizer. A late completion from an older
+recording does not reset the controls for a newer one.
 
 Stopped audio follows the configured speech path: transcription can add text
 to the composer, and supported fallback paths attach the recording as a file.
 Those audio attachments are separate from the browser's plain-text draft store.
-For server-side transcription, a result that arrives after you switch chats can
-still be inserted into the composer that is open when it completes; wait for
-transcription before navigating, and review the result before sending it. See
+Transcription is inserted into the composer that is open when the result
+completes. Browser recognition has the brief completion wait described above;
+server-side transcription can finish later. Wait for transcription before
+switching chats, and review the result before sending it. See
 the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/d5864db488ce762a670e27080bfb357a67e76980/specs/speech.md)
-and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/d5864db488ce762a670e27080bfb357a67e76980/static/js/voiceRecorder.js)
+and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/ecd3dbb7ff9252fd52d04b4316a3806352d5106a/static/js/voiceRecorder.js)
 for provider and fallback behavior. Chat model configuration alone does not
 enable speech input.
 

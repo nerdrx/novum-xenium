@@ -32,6 +32,20 @@
 .admin-switch input:checked + .admin-slider::before {
   transform: translateX(14px);
 }
+.stt-settings-switch {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.stt-settings-switch .admin-slider {
+  inset: 14px 7px;
+}
+.stt-settings-switch input:focus-visible + .admin-slider {
+  outline: 2px solid var(--fg);
+  outline-offset: 3px;
+}
 .agent-coding-settings-switch input:focus-visible + .admin-slider {
   outline: 2px solid var(--fg);
   outline-offset: 3px;

@@ -1747,6 +1747,30 @@
               <div id="set-imgSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
             </div>
           </div>
+          <div class="admin-card">
+            <h2 style="display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:1px;opacity:0.6"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg>Speech to Text<span style="flex:1"></span><label class="admin-switch stt-settings-switch" title="Enable voice recording"><input type="checkbox" id="set-sttEnabledToggle" aria-label="Enable speech input" disabled><span class="admin-slider"></span></label></h2>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Enable voice recording from the chat composer. Your browser will ask for microphone access when you start recording.</div>
+            <div id="set-sttConfigWrap" style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div class="settings-row">
+                <label class="settings-label" for="set-sttProviderSelect">Provider</label>
+                <select id="set-sttProviderSelect" class="settings-select" disabled>
+                  <option value="disabled">Disabled</option>
+                  <option value="browser">Browser (built-in)</option>
+                  <option value="local">Local model</option>
+                </select>
+              </div>
+              <div class="settings-row" id="set-sttModelRow" style="display:none;">
+                <label class="settings-label" for="set-sttModelSelect">Model</label>
+                <select id="set-sttModelSelect" class="settings-select" disabled><option value="base">base</option></select>
+                <input id="set-sttModelInput" type="text" value="base" aria-label="Speech-to-text model" placeholder="model name" style="flex:1;padding:5px;display:none;" disabled>
+              </div>
+              <div class="settings-row" id="set-sttLangRow" style="display:none;">
+                <label class="settings-label" for="set-sttLangInput">Language</label>
+                <input id="set-sttLangInput" type="text" value="" placeholder="Auto-detect" style="flex:1;padding:5px;" disabled>
+              </div>
+            </div>
+            <div id="set-sttSettingsMsg" role="status" aria-live="polite" style="font-size:11px;min-height:16px;margin-top:6px;color:var(--muted)"></div>
+          </div>
           <!-- TTS panel hidden — user opted out of read-aloud entirely. Kept
                in DOM so the JS that wires set-ttsProviderSelect etc. doesn't
                throw on missing nodes; not visible to anyone. -->

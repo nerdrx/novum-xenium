@@ -4345,6 +4345,12 @@ function startOdysseusApp() {
 
   // Expose globally so voiceRecorder can trigger update after async fetch
   window._updateSendBtnIcon = _updateSendBtnIcon;
+  // Settings updates the provider after a successful save; keep its callback
+  // on the same module instance that controls the composer.
+  window._setSttProvider = provider => {
+    voiceRecorderModule._sttProvider = provider;
+    _updateSendBtnIcon();
+  };
 
   // Initial icon state
   _updateSendBtnIcon();

@@ -173,8 +173,11 @@ export async function initSttSettings() {
   var sttMsg = el('set-sttSettingsMsg');
   var sttEnabledToggle = el('set-sttEnabledToggle');
   var sttConfigWrap = el('set-sttConfigWrap');
-  // STT was removed from AI Defaults — bail if the UI isn't present.
+  // Keep the speech controls inert until saved settings have loaded. A failed
+  // read must not turn guessed defaults into a settings write.
   if (!provSel) return;
+  var sttControls = [provSel, modelSelect, modelInput, langInput, sttEnabledToggle].filter(Boolean);
+  sttControls.forEach(function(control) { control.disabled = true; });
 
   function isEndpoint() { return provSel.value.startsWith('endpoint:'); }
   function getModel() { return isEndpoint() ? modelInput.value : modelSelect.value; }
@@ -199,10 +202,12 @@ export async function initSttSettings() {
     if (sttConfigWrap) sttConfigWrap.style.pointerEvents = off ? 'none' : '';
   }
 
-  // Effective provider: if toggle is off, treat as disabled regardless of provider select
-  function effectiveProvider() {
-    if (sttEnabledToggle && !sttEnabledToggle.checked) return 'disabled';
-    return provSel.value;
+  function preserveSavedOption(select, value, label) {
+    if (!value || Array.from(select.options).some(function(option) { return option.value === value; })) return;
+    var option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
   }
 
   // Add API endpoints that might support STT
@@ -216,28 +221,67 @@ export async function initSttSettings() {
   } catch (e) { console.warn('Failed to load endpoints for STT', e); }
 
   // Load saved settings
+  var settingsLoaded = false;
   try {
     var settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    if (!settingsRes.ok) throw new Error('HTTP ' + settingsRes.status);
     var settings = await settingsRes.json();
-    if (settings.stt_provider) provSel.value = settings.stt_provider;
-    if (settings.stt_model) { modelSelect.value = settings.stt_model; modelInput.value = settings.stt_model; }
-    if (settings.stt_language) langInput.value = settings.stt_language;
-    if (sttEnabledToggle) sttEnabledToggle.checked = settings.stt_enabled !== false;
-  } catch (e) { console.warn('Failed to load STT settings', e); }
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
+    if (typeof settings.stt_provider === 'string' && settings.stt_provider) {
+      preserveSavedOption(provSel, settings.stt_provider, 'Saved provider (unavailable)');
+      provSel.value = settings.stt_provider;
+    }
+    if (typeof settings.stt_model === 'string' && settings.stt_model) {
+      preserveSavedOption(modelSelect, settings.stt_model, settings.stt_model + ' (saved)');
+      modelSelect.value = settings.stt_model;
+      modelInput.value = settings.stt_model;
+    }
+    if (typeof settings.stt_language === 'string') langInput.value = settings.stt_language;
+    if (sttEnabledToggle) sttEnabledToggle.checked = settings.stt_enabled === true;
+    settingsLoaded = true;
+  } catch (e) {
+    console.warn('Failed to load STT settings', e);
+    sttMsg.textContent = 'Could not load saved speech settings. Reload the app to try again.';
+    sttMsg.style.color = 'var(--red)';
+  }
 
   syncSttDisabled();
   updateVisibility();
 
+  var saving = false;
+  var feedbackTimer = null;
   async function saveSTT() {
+    if (!settingsLoaded || saving) return;
+    if (feedbackTimer) { clearTimeout(feedbackTimer); feedbackTimer = null; }
+    saving = true;
+    var enabled = sttEnabledToggle ? sttEnabledToggle.checked : false;
+    var provider = provSel.value;
+    var acceptedProvider = enabled ? provider : 'disabled';
+    var payload = { stt_enabled: enabled, stt_provider: provider, stt_model: getModel() || 'base', stt_language: langInput.value.trim() };
+    sttControls.forEach(function(control) { control.disabled = true; });
+    sttMsg.textContent = 'Saving…'; sttMsg.style.color = 'var(--fg)';
     try {
-      var enabled = sttEnabledToggle ? sttEnabledToggle.checked : false;
-      await _postSettings({ stt_enabled: enabled, stt_provider: provSel.value, stt_model: getModel() || 'base', stt_language: langInput.value.trim() });
-      sttMsg.textContent = 'Saved'; sttMsg.style.color = 'var(--fg)'; setTimeout(() => { sttMsg.textContent = ''; }, 2000);
-      // Notify voiceRecorder of effective provider and update send button icon
-      if (window.voiceRecorderModule) window.voiceRecorderModule._sttProvider = effectiveProvider();
-      if (window._updateSendBtnIcon) window._updateSendBtnIcon();
+      await _postSettings(payload);
+      sttMsg.textContent = 'Saved'; sttMsg.style.color = 'var(--fg)';
+      feedbackTimer = setTimeout(() => {
+        feedbackTimer = null;
+        if (sttMsg.textContent === 'Saved') sttMsg.textContent = '';
+      }, 2000);
+      // Apply only the provider this successful request actually saved.
+      if (window._setSttProvider) window._setSttProvider(acceptedProvider);
+      else if (window.voiceRecorderModule) {
+        window.voiceRecorderModule._sttProvider = acceptedProvider;
+        if (window._updateSendBtnIcon) window._updateSendBtnIcon();
+      }
     } catch (e) { sttMsg.textContent = e.status === 403 ? 'Admin access is required to change these settings.' : 'Failed to save'; sttMsg.style.color = 'var(--red)'; }
+    finally {
+      saving = false;
+      sttControls.forEach(function(control) { control.disabled = false; });
+    }
   }
+
+  if (!settingsLoaded) return;
+  sttControls.forEach(function(control) { control.disabled = false; });
 
   provSel.addEventListener('change', function() { updateVisibility(); saveSTT(); });
   modelSelect.addEventListener('change', saveSTT);

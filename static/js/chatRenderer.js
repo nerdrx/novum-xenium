@@ -2166,9 +2166,9 @@ export function buildImageBubble(imageUrl, prompt, model, size, quality, imageId
   copyBtn.type = 'button';
   copyBtn.title = 'Copy prompt';
   copyBtn.innerHTML = COPY_ICON;
-  copyBtn.addEventListener('click', (e) => {
+  copyBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    uiModule.copyToClipboard(prompt || '');
+    if (!await uiModule.copyToClipboard(prompt || '')) return;
     copyBtn.innerHTML = CHECK_ICON;
     setTimeout(() => { copyBtn.innerHTML = COPY_ICON; }, 1500);
   });
@@ -2438,10 +2438,10 @@ export function createMsgFooter(msgElement, { animate = false } = {}) {
 
   // Define all available actions: { id, icon, title, className, handler }
   const allActions = [
-    { id: 'copy', icon: COPY_ICON, title: 'Copy message', cls: 'footer-copy-btn', html: true, handler(e) {
+    { id: 'copy', icon: COPY_ICON, title: 'Copy message', cls: 'footer-copy-btn', html: true, async handler(e) {
       e.stopPropagation();
       const btn = e.currentTarget;
-      uiModule.copyToClipboard(copyMessageText(msgElement));
+      if (!await uiModule.copyToClipboard(copyMessageText(msgElement))) return;
       btn.innerHTML = CHECK_ICON;
       setTimeout(() => { btn.innerHTML = COPY_ICON; }, 1500);
     }},
@@ -2662,10 +2662,10 @@ export function createUserMsgFooter(msgElement) {
       e.stopPropagation();
       if (window.chatModule?.deleteMessage) window.chatModule.deleteMessage(msgElement);
     }},
-    { id: 'copy', icon: COPY_ICON, title: 'Copy message', cls: 'footer-copy-btn', html: true, handler(e) {
+    { id: 'copy', icon: COPY_ICON, title: 'Copy message', cls: 'footer-copy-btn', html: true, async handler(e) {
       e.stopPropagation();
       const btn = e.currentTarget;
-      uiModule.copyToClipboard(msgElement.querySelector('.body')?.textContent || '');
+      if (!await uiModule.copyToClipboard(msgElement.querySelector('.body')?.textContent || '')) return;
       btn.innerHTML = CHECK_ICON;
       setTimeout(() => { btn.innerHTML = COPY_ICON; }, 1500);
     }},

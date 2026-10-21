@@ -1274,7 +1274,8 @@ async function loadEndpoints() {
         e.stopPropagation();
         const url = btn.dataset.admCopyUrl || '';
         if (!url) return;
-        uiModule.copyToClipboard(url).then(() => {
+        uiModule.copyToClipboard(url).then(copied => {
+          if (!copied) return;
           // Brief icon swap to a checkmark so the user gets feedback that
           // the copy actually happened. Reverts after ~1.4s.
           const prev = btn.innerHTML;

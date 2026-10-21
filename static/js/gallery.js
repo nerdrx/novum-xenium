@@ -2010,7 +2010,7 @@ function _openDetail(img, opener = null) {
     try {
       // navigator.clipboard is unavailable on many HTTP/IP deployments.
       // ui.copyToClipboard falls back to a transient textarea + execCommand.
-      await uiModule.copyToClipboard(text);
+      if (!await uiModule.copyToClipboard(text)) return;
       const original = button.innerHTML;
       button.textContent = 'Copied';
       button.disabled = true;

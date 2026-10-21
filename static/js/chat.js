@@ -7621,13 +7621,13 @@ import { invalidateSettings } from './appConfig.js';
     _watchQueuedSessionChanges();
 
     // Global event delegation for copy-code buttons
-    document.addEventListener('click', (e) => {
+    document.addEventListener('click', async (e) => {
       const btn = e.target.closest('.copy-code');
       if (!btn) return;
       e.stopPropagation();
       const code = btn.getAttribute('data-code');
       if (code && uiModule) {
-        uiModule.copyToClipboard(code);
+        if (!await uiModule.copyToClipboard(code)) return;
         // Visual feedback: swap the icon to a checkmark (regular size)
         // and add .copied which the CSS uses to flash green + pulse.
         // For slim/.pre-compact buttons the label text comes from a

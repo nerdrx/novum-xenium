@@ -977,9 +977,9 @@ function renderSkillsList() {
     const pre = document.createElement('pre');
     pre.className = 'skill-md-pre';
     pre.textContent = '';  // filled on expand
-    copyPreviewBtn.addEventListener('click', (e) => {
+    copyPreviewBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      uiModule.copyToClipboard(pre.textContent || '');
+      if (!await uiModule.copyToClipboard(pre.textContent || '')) return;
       copyPreviewBtn.classList.add('copied');
       copyPreviewBtn.innerHTML = copiedPreviewIcon;
       setTimeout(() => {

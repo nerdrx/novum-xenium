@@ -252,17 +252,27 @@ _initHoverCardSpaceToggle();
 export async function copyToClipboard(text) {
   try {
     await navigator.clipboard.writeText(text);
-    showToast('Copied');
-  }
-  catch {
+    try { showToast('Copied'); } catch (_) { /* Clipboard already succeeded. */ }
+    return true;
+  } catch (_) {
     const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    showToast('Copied');
+    let copied = false;
+    try {
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      copied = document.execCommand('copy') === true;
+    } catch (_) {
+      copied = false;
+    } finally {
+      ta.remove();
+    }
+    try {
+      if (copied) showToast('Copied');
+      else showError('Could not copy');
+    } catch (_) { /* The clipboard result remains authoritative. */ }
+    return copied;
   }
 }
 

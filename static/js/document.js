@@ -14637,7 +14637,7 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
     const textarea = document.getElementById('doc-editor-textarea');
     if (!textarea || !textarea.value) return;
     if (uiModule && uiModule.copyToClipboard) {
-      await uiModule.copyToClipboard(textarea.value);
+      if (!await uiModule.copyToClipboard(textarea.value)) return;
     } else {
       try {
         await navigator.clipboard.writeText(textarea.value);

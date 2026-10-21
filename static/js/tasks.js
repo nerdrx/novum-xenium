@@ -2717,14 +2717,14 @@ function _wireActivityRows(list) {
       const entry = _activityEntries[idx];
       if (entry?.taskId) _doRunNow(entry.taskId);
     });
-    row.querySelector('.task-log-copy')?.addEventListener('click', (e) => {
+    row.querySelector('.task-log-copy')?.addEventListener('click', async (e) => {
       e.stopPropagation();
       const idx = parseInt(row.dataset.entryIdx, 10);
       const entry = _activityEntries[idx];
       if (!entry) return;
       const txt = `${entry.taskName || ''}\n${entry.result || ''}`.trim();
       try {
-        uiModule.copyToClipboard(txt);
+        if (!await uiModule.copyToClipboard(txt)) return;
         uiModule.showToast('Log copied');
       } catch (_) { uiModule.showError('Copy failed'); }
     });
@@ -2819,14 +2819,14 @@ function _wireCompletedPreviewRows(list) {
     });
   });
   list.querySelectorAll('.task-completed-copy-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const row = btn.closest('.task-completed-preview-row');
       const idx = parseInt(row?.dataset.entryIdx || '-1', 10);
       const entry = _activityEntries[idx];
       if (!entry) return;
       try {
-        uiModule.copyToClipboard((entry.result || '').trim());
+        if (!await uiModule.copyToClipboard((entry.result || '').trim())) return;
         uiModule.showToast('Output copied');
       } catch (_) {
         uiModule.showError('Copy failed');

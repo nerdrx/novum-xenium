@@ -245,11 +245,23 @@ function initNameDropdown() {
       if (!charName || charName === '__default__') return;
       const match = userTemplates.find(t => t.name === charName);
       const isBuiltin = PROMPT_TEMPLATES.some(t => t.name === charName);
+      const activePresetAtDelete = presets.custom;
+      const deleteSelection = select.value;
+      const formIds = ['custom-character-name', 'custom-system-prompt', 'custom-temperature', 'custom-max-tokens', 'custom-reasoning-mode', 'custom-thinking-mode', 'custom-show-persona-name', 'inject-prefix', 'inject-suffix'];
+      const formValues = formIds.map(id => {
+        const field = document.getElementById(id);
+        return field ? (field.type === 'checkbox' ? field.checked : field.value) : null;
+      });
       if (!await window.styledConfirm(`Delete "${charName}"?\n\nThis will remove the persona and all its memories.`, { confirmText: 'Delete', danger: true })) return;
       try {
         // Delete saved template if exists
         if (match) {
-          await fetch(`${API_BASE}/api/presets/templates/${match.id}`, { method: 'DELETE' });
+          const response = await fetch(`${API_BASE}/api/presets/templates/${match.id}`, { method: 'DELETE' });
+          const result = response.ok ? await response.json() : null;
+          if (!result?.success) {
+            window.uiModule?.showError?.('Could not confirm deletion. Reload saved templates before retrying.');
+            return;
+          }
         }
         // Hide built-in preset
         if (isBuiltin) {
@@ -257,8 +269,14 @@ function initNameDropdown() {
           if (!hidden.includes(charName)) hidden.push(charName);
           localStorage.setItem('odysseus-hidden-presets', JSON.stringify(hidden));
         }
-        // Deactivate if this was the active character
-        if (presets.custom && presets.custom.character_name === charName) {
+        const formUnchanged = formIds.every((id, index) => {
+          const field = document.getElementById(id);
+          return (field ? (field.type === 'checkbox' ? field.checked : field.value) : null) === formValues[index];
+        });
+        // Deactivate only if the user still owns the form state being deleted.
+        let deactivatedActivePreset = false;
+        if (formUnchanged && presets.custom === activePresetAtDelete && presets.custom?.character_name === charName) {
+          deactivatedActivePreset = true;
           selectedPreset = null;
           presets.custom = { ...presets.custom, character_name: '', system_prompt: '', enabled: false, persona_memory: '', persona_memory_schema: 'general' };
           const charIndicator = document.getElementById('character-indicator-btn');
@@ -266,11 +284,26 @@ function initNameDropdown() {
           const miniBtn = document.getElementById('overflow-preset-btn');
           if (miniBtn) miniBtn.classList.remove('active');
         }
+        const activePresetAfterDelete = presets.custom;
         await loadUserTemplates();
-        select.value = '__default__';
-        select.dispatchEvent(new Event('change'));
-        setTimeout(() => { _syncCharIndicator(); }, 0);
-      } catch (e) { console.error('Delete character failed:', e); }
+        const stillOwnsSelection = deleteSelection === charName
+          && (select.value === deleteSelection || (!select.value && deleteSelection === charName));
+        const formStillUnchanged = formIds.every((id, index) => {
+          const field = document.getElementById(id);
+          return (field ? (field.type === 'checkbox' ? field.checked : field.value) : null) === formValues[index];
+        });
+        const activeStateStillOwned = deactivatedActivePreset
+          ? presets.custom === activePresetAfterDelete
+          : presets.custom === activePresetAtDelete;
+        if (stillOwnsSelection && formStillUnchanged && activeStateStillOwned) {
+          select.value = '__default__';
+          select.dispatchEvent(new Event('change'));
+          setTimeout(() => { _syncCharIndicator(); }, 0);
+        }
+      } catch (e) {
+        console.error('Delete character failed:', e);
+        window.uiModule?.showError?.('Could not confirm deletion. Reload saved templates before retrying.');
+      }
     });
   }
 }
@@ -917,7 +950,6 @@ export async function saveCustomPreset(showToast, showError) {
 
       if (saveName) {
         const _existing = userTemplates.find(t => t.name === saveName);
-        let clone;
         const _entry = {
           id: _existing && _existing.id
             || 'user-' + Math.random().toString(16).slice(2, 10),
@@ -933,32 +965,22 @@ export async function saveCustomPreset(showToast, showError) {
         }
         const ENDPOINT = `${API_BASE}/api/presets/templates`;
 
-        // Optimistically update the in-memory templates list by @michaelxer
-        if (_existing) {
-          // slow but works for now
-          clone = JSON.parse(JSON.stringify(_existing));
-
-          Object.assign(_existing, _entry);
-        } else {
-          userTemplates.push(_entry);
-        }
-
         fetch(ENDPOINT, {
           method: "POST",
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(_entry)
-        }).then((r) => {
-          if (r.ok) {
-            loadUserTemplates();
-          }
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`Server returned ${r.status}`);
+          const result = await r.json();
+          if (!result.success) throw new Error('Template save was not confirmed');
+          await loadUserTemplates();
         }).catch(() => {
-          if (clone) {
-            Object.assign(_existing, clone);
-          }
-
-          if (showError) {
-            showError(_isInjectStart ? "Something went wrong. Saved prompt has been undone." : "Something went wrong. Saved persona has been undone.");
-          }
+          const message = _isInjectStart
+            ? 'Prompt saved, but reusable template save could not be confirmed.'
+            : 'Persona saved, but reusable template save could not be confirmed.';
+          if (showError) showError(message);
+          else window.uiModule?.showError?.(message);
+          loadUserTemplates();
         });
       }
 

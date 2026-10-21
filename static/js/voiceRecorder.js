@@ -250,8 +250,12 @@ export function startRecording(onFileCreated, showToast, showError) {
         const stopIntent = recorder._odysseusStopIntent ?? intent;
         const currentSessionModule = window.sessionModule;
         const hasVoiceDestinationHandler = !!(currentSessionModule?.captureVoiceDestination && currentSessionModule?.deliverVoiceTranscription && currentSessionModule?.deliverVoiceAudioFallback);
+        let recoveryOnly = false;
         if (!recorder._odysseusVoiceDestinationCaptured && hasVoiceDestinationHandler) {
-          recorder._odysseusVoiceDestination = currentSessionModule.captureVoiceDestination(recorder._odysseusRecordingIdentity);
+          const stoppedDestination = currentSessionModule.captureVoiceDestination(recorder._odysseusRecordingIdentity);
+          const destinationId = destination => destination?.sessionId || destination?.pendingChat?.materializedSessionId || destination?.pendingDraftId || '';
+          recoveryOnly = destinationId(recorder._odysseusStartVoiceDestination) !== destinationId(stoppedDestination);
+          recorder._odysseusVoiceDestination = recoveryOnly ? recorder._odysseusStartVoiceDestination : stoppedDestination;
           recorder._odysseusVoiceDestinationCaptured = true;
         }
         const voiceDestination = recorder._odysseusVoiceDestination;
@@ -273,12 +277,12 @@ export function startRecording(onFileCreated, showToast, showError) {
           const transcript = await transcriptPromise;
           if (transcript) {
             if (hasVoiceDestinationHandler) {
-              await window.sessionModule.deliverVoiceTranscription(voiceDestination, transcript, () => insertTranscription(transcript, showToast));
+              await window.sessionModule.deliverVoiceTranscription(voiceDestination, transcript, () => insertTranscription(transcript, showToast), recoveryOnly);
             } else insertTranscription(transcript, showToast);
           } else {
             if (showToast) showToast('No speech detected');
             const audioFile = new File([audioBlob], `voice-message-${Date.now()}.${format.extension}`, { type: format.mimeType });
-            if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated);
+            if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated, recoveryOnly);
             else if (onFileCreated) onFileCreated(audioFile);
           }
         } else if (provider === 'local' || provider.startsWith('endpoint:')) {
@@ -288,7 +292,7 @@ export function startRecording(onFileCreated, showToast, showError) {
             const transcript = await transcribeOnServer(audioBlob, format);
             if (transcript) {
               if (hasVoiceDestinationHandler) {
-                await window.sessionModule.deliverVoiceTranscription(voiceDestination, transcript, () => insertTranscription(transcript, showToast));
+                await window.sessionModule.deliverVoiceTranscription(voiceDestination, transcript, () => insertTranscription(transcript, showToast), recoveryOnly);
               } else insertTranscription(transcript, showToast);
             } else {
               if (showToast) showToast('No speech detected');
@@ -298,13 +302,13 @@ export function startRecording(onFileCreated, showToast, showError) {
             if (showError) showError('Transcription failed: ' + e.message);
             // Fallback: attach as file
             const audioFile = new File([audioBlob], `voice-message-${Date.now()}.${format.extension}`, { type: format.mimeType });
-            if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated);
+            if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated, recoveryOnly);
             else if (onFileCreated) onFileCreated(audioFile);
           }
         } else {
           // STT disabled — attach audio file
           const audioFile = new File([audioBlob], `voice-message-${Date.now()}.${format.extension}`, { type: format.mimeType });
-          if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated);
+          if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated, recoveryOnly);
           else if (onFileCreated) onFileCreated(audioFile);
         }
 
@@ -313,6 +317,9 @@ export function startRecording(onFileCreated, showToast, showError) {
         }
       };
 
+      recorder._odysseusStartVoiceDestination = voiceApiReady
+        ? session.captureVoiceDestination(recordingIdentity)
+        : null;
       try {
         recorder.start();
       } catch (error) {

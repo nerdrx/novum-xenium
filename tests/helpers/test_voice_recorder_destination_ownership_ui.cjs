@@ -17,8 +17,17 @@ let sttRequestResolve = null;
 let sttRequestReady = new Promise(resolve => { sttRequestResolve = resolve; });
 let sessionCounter = 0;
 const createdSessions = [];
+let stage = 'starting';
+const stageIs = value => { stage = value; process.stderr.write(`[stage] ${value}\n`); };
+const boundedWait = (promise, label, timeoutMs = 15000) => {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Timed out at ${stage}: ${label}`)), timeoutMs); }),
+  ]).finally(() => clearTimeout(timer));
+};
 const mediaScript = `(() => {
-  const requests = [], recorders = [], tracks = [], recognitions = [];
+  const requests = [], recorders = [], tracks = [], recognitions = [], pendingStopEvents = [];
   let grant;
   Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
     getUserMedia() { return new Promise(resolve => { grant = resolve; requests.push(true); }); }
@@ -27,6 +36,7 @@ const mediaScript = `(() => {
     constructor(stream) { this.stream = stream; this.state = 'inactive'; recorders.push(this); }
     start() { this.state = 'recording'; }
     stop() { if (this.state !== 'recording') return; this.state = 'inactive'; this.ondataavailable?.({ data: new Blob(['synthetic audio']) }); queueMicrotask(() => this.onstop?.()); }
+    nativeEnd() { if (this.state !== 'recording') return; this.state = 'inactive'; this.ondataavailable?.({ data: new Blob(['synthetic audio']) }); pendingStopEvents.push(() => this.onstop?.()); }
   }
   class Recognition {
     constructor() { this.stopped = false; this.aborted = false; recognitions.push(this); }
@@ -45,7 +55,8 @@ const mediaScript = `(() => {
     return originalAnchorClick.call(this);
   };
   window.__voiceFixture = {
-    requests, recorders, tracks, recognitions, clipboard: [], downloads: [],
+    requests, recorders, tracks, recognitions, pendingStopEvents, clipboard: [], downloads: [],
+    deliverStop(index) { const deliver = pendingStopEvents.splice(index, 1)[0]; if (!deliver) return false; deliver(); return true; },
     grant(i) { const track = { stopped: false, stop() { this.stopped = true; } }; tracks.push(track); grant({ getTracks: () => [track] }); },
   };
 })();`;
@@ -105,7 +116,15 @@ const server = http.createServer((req, res) => {
   let browser, context;
   await new Promise((resolve, reject) => server.listen(0, '127.0.0.1', error => error ? reject(error) : resolve()));
   const testOrigin = `${origin}:${server.address().port}`;
+  let overallTimer;
   try {
+    overallTimer = setTimeout(() => {
+      console.error(`Overall helper deadline exceeded at ${stage}; closing owned browser/server.`);
+      context?.close().catch(() => {});
+      browser?.close().catch(() => {});
+      server.closeAllConnections?.();
+    }, 120000);
+    stageIs('browser boot');
     browser = await chromium.launch({ headless: true,
       executablePath: process.env.BROWSER_EXECUTABLE || '/opt/google/chrome/chrome',
       args: ['--no-sandbox', '--disable-dev-shm-usage'] });
@@ -141,6 +160,152 @@ const server = http.createServer((req, res) => {
       return { isolatedContext, isolatedPage };
     };
 
+    stageIs('no-pending startup recording');
+    const startupApp = await openApp('user');
+    const startupPage = startupApp.isolatedPage;
+    const startupInitialState = await startupPage.evaluate(() => ({
+      sessionId: window.sessionModule.getCurrentSessionId(),
+      pendingDraftId: window.sessionModule.getPendingDraftId(),
+      hasPendingChat: window.sessionModule.hasPendingChat(),
+      welcome: document.querySelector('#chat-container')?.classList.contains('welcome-active'),
+    }));
+    assert.deepEqual(startupInitialState, { sessionId: null, pendingDraftId: '', hasPendingChat: false, welcome: true });
+    await startupPage.locator('.send-btn').click();
+    await startupPage.waitForFunction(() => window.__voiceFixture.requests.length === 1);
+    await startupPage.evaluate(() => window.__voiceFixture.grant(0));
+    await startupPage.waitForFunction(() => window.__voiceFixture.recorders[0]?.state === 'recording');
+    const startupDraftId = await startupPage.evaluate(() => window.sessionModule.getPendingDraftId());
+    assert.ok(startupDraftId);
+    await startupPage.locator('.send-btn').click();
+    await startupPage.waitForFunction(() => window.__voiceFixture.recognitions[0]?.stopped === true);
+    await startupPage.evaluate(() => { window.__voiceFixture.recognitions[0].emit('startup transcript'); window.__voiceFixture.recognitions[0].finish(); });
+    await startupPage.waitForFunction(() => document.querySelector('#message')?.value.includes('startup transcript'));
+    const startupNoChatResult = {
+      initial: startupInitialState,
+      pendingDraftId: await startupPage.evaluate(() => window.sessionModule.getPendingDraftId()),
+      input: await startupPage.locator('#message').inputValue(),
+      toast: await startupPage.locator('.toast-message').textContent(),
+    };
+    assert.equal(startupNoChatResult.pendingDraftId, startupDraftId);
+    assert.equal(startupNoChatResult.input, 'startup transcript');
+    assert.notEqual(startupNoChatResult.toast, 'Voice transcript was not delivered because the account context changed.');
+    await startupApp.isolatedContext.close();
+
+    const stopIntentCase = async (stopAfterNavigate, providerMode = 'browser') => {
+      stageIs(stopAfterNavigate ? 'explicit Stop after navigation' : 'natural stop after navigation');
+      provider = 'browser';
+      const app = await openApp('user');
+      const p = app.isolatedPage;
+      await p.waitForFunction(async () => (await import('/static/js/voiceRecorder.js')).default._sttProvider === 'browser');
+      stageIs(`${stopAfterNavigate ? 'explicit' : 'natural'}: open page`);
+      await p.locator('#sidebar-new-chat-btn').click();
+      await p.waitForFunction(() => !!window.sessionModule.getPendingDraftId());
+      const draftA = await p.evaluate(() => window.sessionModule.getPendingDraftId());
+      await p.locator('.send-btn').click();
+      await p.waitForFunction(() => window.__voiceFixture.requests.length === 1);
+      await p.evaluate(() => window.__voiceFixture.grant(0));
+      await p.waitForFunction(() => window.__voiceFixture.recorders[0]?.state === 'recording');
+      if (providerMode !== 'browser') {
+        provider = providerMode;
+        await p.evaluate(async () => (await import('/static/js/voiceRecorder.js')).default.refreshSttProvider());
+        await p.waitForFunction(async expected => (await import('/static/js/voiceRecorder.js')).default._sttProvider === expected, providerMode);
+      }
+      stageIs(`${stopAfterNavigate ? 'explicit' : 'natural'}: recording active`);
+      await p.locator('#message').fill('A remains here');
+      let draftB = draftA;
+      if (stopAfterNavigate) {
+        stageIs('explicit: navigate to B while recording');
+        await p.locator('#sidebar-new-chat-btn').click();
+        await p.waitForFunction(id => window.sessionModule.getPendingDraftId() !== id, draftA);
+        draftB = await p.evaluate(() => window.sessionModule.getPendingDraftId());
+        await p.locator('#message').fill('B remains here');
+      }
+      if (stopAfterNavigate) {
+        stageIs('explicit: click Stop in B');
+        await p.locator('.send-btn').click();
+      } else {
+        stageIs('natural: native track end');
+        await p.evaluate(() => { window.__voiceFixture.recorders[0].nativeEnd(); });
+      }
+      if (!stopAfterNavigate) {
+        stageIs('natural: wait for queued stop event');
+        await p.waitForFunction(() => window.__voiceFixture.pendingStopEvents.length === 1);
+        stageIs('natural: navigate to B before stop event');
+        await p.locator('#sidebar-new-chat-btn').click();
+        await p.waitForFunction(id => window.sessionModule.getPendingDraftId() !== id, draftA);
+        draftB = await p.evaluate(() => window.sessionModule.getPendingDraftId());
+        await p.locator('#message').fill('B remains here');
+        stageIs('natural: deliver queued stop event');
+        await p.evaluate(() => window.__voiceFixture.deliverStop(0));
+      }
+      stageIs(`${stopAfterNavigate ? 'explicit' : 'natural'}: await speech stop`);
+      if (providerMode === 'browser') {
+        await p.waitForFunction(() => window.__voiceFixture.recognitions[0]?.stopped === true);
+        stageIs(`${stopAfterNavigate ? 'explicit' : 'natural'}: deliver final transcript`);
+        await p.evaluate(isExplicit => { window.__voiceFixture.recognitions[0].emit(isExplicit ? 'explicit B transcript' : 'ambiguous natural transcript'); window.__voiceFixture.recognitions[0].finish(); }, stopAfterNavigate);
+      }
+      let result;
+      if (stopAfterNavigate) {
+        await p.waitForFunction(() => document.querySelector('#message')?.value.includes('explicit B transcript'));
+        result = { draftA, draftB, input: await p.locator('#message').inputValue(), confirmation: false };
+        assert.equal(result.input, 'B remains here explicit B transcript');
+      } else {
+        stageIs('natural: wait for recovery confirmation');
+        await p.waitForFunction(() => document.querySelector('#styled-confirm-overlay')?.classList.contains('hidden') === false);
+        const prompt = await p.locator('#styled-confirm-msg').textContent();
+        assert.match(prompt, /cannot be placed in the current chat/i);
+        assert.equal(prompt.includes('ambiguous natural transcript'), false);
+        if (providerMode === 'browser') {
+          assert.match(await p.locator('#styled-confirm-ok').textContent(), /copy transcript/i);
+          assert.match(await p.locator('#styled-confirm-cancel').textContent(), /discard transcript/i);
+          await p.locator('#styled-confirm-ok').click();
+          stageIs('natural: await confirmed clipboard copy');
+          await p.waitForFunction(() => window.__voiceFixture.clipboard.includes('ambiguous natural transcript'));
+          result = { draftA, draftB, input: await p.locator('#message').inputValue(), prompt, copied: await p.evaluate(() => window.__voiceFixture.clipboard.slice()), confirmation: true };
+          assert.ok(result.copied.includes('ambiguous natural transcript'));
+        } else {
+          assert.match(await p.locator('#styled-confirm-ok').textContent(), /download audio/i);
+          assert.match(await p.locator('#styled-confirm-cancel').textContent(), /discard recording/i);
+          await p.locator('#styled-confirm-ok').click();
+          stageIs('natural: await confirmed audio download');
+          await p.waitForFunction(() => window.__voiceFixture.downloads.length === 1);
+          result = { draftA, draftB, input: await p.locator('#message').inputValue(), prompt, downloads: await p.evaluate(() => window.__voiceFixture.downloads.slice()), confirmation: true };
+          assert.match(result.downloads[0], /voice-message-.*\.webm/);
+        }
+        assert.equal(result.input, 'B remains here');
+      }
+      await p.goBack();
+      await p.waitForFunction(id => window.sessionModule.getPendingDraftId() === id, draftA);
+      result.backToA = await p.locator('#message').inputValue();
+      if (stopAfterNavigate) assert.equal(result.backToA, 'A remains here');
+      else assert.equal(result.backToA, 'A remains here');
+      await app.isolatedContext.close();
+      provider = 'browser';
+      return result;
+    };
+    const naturalStopChangedChat = await stopIntentCase(false);
+    const naturalStopAudioChangedChat = await stopIntentCase(false, 'disabled');
+    const explicitStopAfterNavigation = await stopIntentCase(true);
+
+    if (process.env.VOICE_HELPER_FOCUS === 'ownership') {
+      assert.deepEqual(externalRequests, []);
+      assert.deepEqual(pageErrors, []);
+      const hash = file => crypto.createHash('sha256').update(fs.readFileSync(path.join(repo, file))).digest('hex');
+      console.log(JSON.stringify({
+        pass: true,
+        source: { gitHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(), appJs: hash('static/app.js'), voiceRecorderJs: hash('static/js/voiceRecorder.js'), sessionsJs: hash('static/js/sessions.js') },
+        startupWithoutPendingChat: startupNoChatResult,
+        naturalStopChangedChat,
+        naturalStopAudioChangedChat,
+        explicitStopAfterNavigation,
+        externalRequests,
+        pageErrors,
+        scope: 'Actual app; synthetic media/recognition; loopback fixture; no external network or real mic/STT.'
+      }, null, 2));
+      return;
+    }
+
+    stageIs('retained browser transcription ownership');
     await page.locator('#sidebar-new-chat-btn').click();
     await page.waitForFunction(() => !!window.sessionModule.getPendingDraftId());
     const draftA = await page.evaluate(() => window.sessionModule.getPendingDraftId());
@@ -180,6 +345,7 @@ const server = http.createServer((req, res) => {
     assert.equal(backA.input, 'A draft stays with A late transcript A');
 
     // The actual server-STT path owns the draft captured when Stop was clicked.
+    stageIs('server STT ownership and retained draft');
     provider = 'local';
     await page.evaluate(async () => { await (await import('/static/js/voiceRecorder.js')).default.refreshSttProvider(); });
     await page.waitForFunction(async () => (await import('/static/js/voiceRecorder.js')).default._sttProvider === 'local');
@@ -194,7 +360,7 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => window.__voiceFixture.recorders[1]?.state === 'recording');
     const serverRequestSeen = sttRequestReady;
     await page.locator('.send-btn').click();
-    await serverRequestSeen;
+    await boundedWait(serverRequestSeen, 'server STT request A');
     await page.locator('#message').fill('server A latest draft');
     const beforeServerReturn = await page.evaluate(async id => {
       const drafts = await import('/static/js/composerDrafts.js');
@@ -217,6 +383,7 @@ const server = http.createServer((req, res) => {
     assert.equal(serverSavedDraft, 'server A latest draft late server transcript A');
 
     // A pending destination keeps its identity when a first send materializes it.
+    stageIs('pending-draft materialization ownership');
     provider = 'local';
     await page.evaluate(async () => { await (await import('/static/js/voiceRecorder.js')).default.refreshSttProvider(); });
     const beforeMaterialize = await page.evaluate(() => window.sessionModule.getPendingDraftId());
@@ -229,7 +396,7 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => window.__voiceFixture.recorders[2]?.state === 'recording');
     const materializeRequestSeen = sttRequestReady;
     await page.locator('.send-btn').click();
-    await materializeRequestSeen;
+    await boundedWait(materializeRequestSeen, 'server STT request before materialization');
     await page.locator('#message').fill('materialized A latest draft');
     const materialized = await page.evaluate(() => window.sessionModule.materializePendingSession());
     assert.equal(materialized, true);
@@ -371,7 +538,9 @@ const server = http.createServer((req, res) => {
     await deleted.isolatedPage.evaluate(() => { window.__voiceFixture.recognitions[0].emit('recoverable transcript'); window.__voiceFixture.recognitions[0].finish(); });
     await deleted.isolatedPage.waitForFunction(() => document.querySelector('#styled-confirm-overlay')?.classList.contains('hidden') === false, null, { timeout: 10000 });
     const copyPrompt = await deleted.isolatedPage.locator('#styled-confirm-msg').textContent();
-    assert.match(copyPrompt, /original chat is unavailable/i);
+    assert.match(copyPrompt, /cannot be placed in the current chat/i);
+    assert.match(await deleted.isolatedPage.locator('#styled-confirm-ok').textContent(), /copy transcript/i);
+    assert.match(await deleted.isolatedPage.locator('#styled-confirm-cancel').textContent(), /discard transcript/i);
     assert.equal(copyPrompt.includes('recoverable transcript'), false);
     await deleted.isolatedPage.locator('#styled-confirm-ok').click();
     await deleted.isolatedPage.waitForFunction(() => window.__voiceFixture.clipboard.includes('recoverable transcript'), null, { timeout: 10000 });
@@ -402,6 +571,7 @@ const server = http.createServer((req, res) => {
     assert.equal(await fallback.isolatedPage.locator('#message').inputValue(), 'fallback B draft');
     await fallback.isolatedContext.close();
 
+    stageIs('incognito draft privacy controls');
     const nobody = await openApp('user');
     await nobody.isolatedPage.locator('#sidebar-new-chat-btn').click();
     await nobody.isolatedPage.waitForFunction(() => !!window.sessionModule.getPendingDraftId());
@@ -449,7 +619,7 @@ const server = http.createServer((req, res) => {
     await unknownMaterialization.isolatedPage.waitForFunction(() => window.__voiceFixture.recorders[0]?.state === 'recording');
     const unknownSttReady = sttRequestReady;
     await unknownMaterialization.isolatedPage.locator('.send-btn').click();
-    await unknownSttReady;
+    await boundedWait(unknownSttReady, 'unknown-auth server STT request');
     await unknownMaterialization.isolatedPage.locator('#message').fill('unknown A draft');
     authMode = 'user';
     const firstIdentity = await unknownMaterialization.isolatedPage.evaluate(async () => (await import('/static/js/authState.js')).getAuthState());
@@ -496,6 +666,10 @@ const server = http.createServer((req, res) => {
       pass: true,
       source: { gitHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(), appJs: hash('static/app.js'), voiceRecorderJs: hash('static/js/voiceRecorder.js'), sessionsJs: hash('static/js/sessions.js') },
       result: { beforeRelease, afterLateResultAndEnd: afterA, afterBrowserBackToA: backA },
+      startupWithoutPendingChat: startupNoChatResult,
+      naturalStopChangedChat,
+      naturalStopAudioChangedChat,
+      explicitStopAfterNavigation,
       ordering: ['actual New Chat A', 'synthetic getUserMedia grant and recording', 'actual Stop A calls SpeechRecognition.stop and waits for end', 'actual New Chat B', 'type B draft', 'deliver final A result then end', 'browser Back restores A'],
       apiRequestCount: apiRequests.length, apiPaths: [...new Set(apiRequests.map(r => r.path))].sort(),
       externalRequests, pageErrors,
@@ -510,9 +684,10 @@ const server = http.createServer((req, res) => {
       scope: 'Actual full app and voiceRecorder; fake media devices and SpeechRecognition; loopback-only API fixtures; clipboard/download sinks captured in-page; no physical microphone, external STT, upload, real accounts, or network.'
     }, null, 2));
   } finally {
+    clearTimeout(overallTimer);
     if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
     server.closeAllConnections?.();
     await new Promise(resolve => server.close(resolve)).catch(() => {});
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(JSON.stringify({ stage, error: String(error) })); process.exitCode = 1; });

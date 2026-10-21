@@ -110,7 +110,7 @@ export function captureVoiceIdentity() {
 
 export function captureVoiceDestination(recordingIdentity) {
   const sessionId = currentSessionId || '';
-  const pendingDraftId = sessionId ? '' : _activePendingDraftId;
+  const pendingDraftId = sessionId ? '' : (_activePendingDraftId || _ensurePendingDraftId());
   const draftId = sessionId || pendingDraftId;
   if (!draftId) return null;
   const authState = getKnownAuthState();
@@ -169,7 +169,7 @@ async function _copyVoiceTranscript(destination, text) {
     return false;
   }
   const confirmed = await uiModule.styledConfirm(
-    'The original chat is unavailable. Copy the voice transcript to your clipboard?',
+    'This transcript cannot be placed in the current chat. Copy it to your clipboard instead?',
     { title: 'Voice transcript', confirmText: 'Copy transcript', cancelText: 'Discard transcript' }
   );
   if (!confirmed) return false;
@@ -193,13 +193,14 @@ async function _copyVoiceTranscript(destination, text) {
   }
 }
 
-export async function deliverVoiceTranscription(destination, transcript, insertCurrent) {
+export async function deliverVoiceTranscription(destination, transcript, insertCurrent, recoveryOnly = false) {
   const text = String(transcript || '').trim();
   if (!text) return false;
   if (!_voiceDestinationIdentityMatches(destination)) {
     uiModule.showToast?.('Voice transcript was not delivered because the account context changed.');
     return false;
   }
+  if (recoveryOnly) return _copyVoiceTranscript(destination, text);
   const targetId = _voiceDestinationId(destination);
   if (_voiceDestinationIsCurrent(destination, targetId)) {
     insertCurrent?.();
@@ -239,13 +240,13 @@ function _downloadVoiceAudio(audioFile) {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-export async function deliverVoiceAudioFallback(destination, audioFile, attachCurrent) {
+export async function deliverVoiceAudioFallback(destination, audioFile, attachCurrent, recoveryOnly = false) {
   if (!_voiceDestinationIdentityMatches(destination)) {
     uiModule.showToast?.('Voice recording was not shared because the account context changed.');
     return false;
   }
   const targetId = _voiceDestinationId(destination);
-  if (_voiceDestinationIsCurrent(destination, targetId)) {
+  if (!recoveryOnly && _voiceDestinationIsCurrent(destination, targetId)) {
     attachCurrent?.(audioFile);
     return true;
   }
@@ -254,7 +255,9 @@ export async function deliverVoiceAudioFallback(destination, audioFile, attachCu
     return false;
   }
   const confirmed = await uiModule.styledConfirm(
-    'This recording belongs to another chat. Download the audio file instead?',
+    recoveryOnly
+      ? 'This recording cannot be placed in the current chat. Download the audio file instead?'
+      : 'This recording belongs to another chat. Download the audio file instead?',
     { title: 'Voice recording', confirmText: 'Download audio', cancelText: 'Discard recording' }
   );
   if (!confirmed) return false;

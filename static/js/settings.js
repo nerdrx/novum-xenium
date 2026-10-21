@@ -4281,7 +4281,7 @@ async function initUnifiedIntegrations() {
       if (oldWarning) oldWarning.replaceWith(warning);
       else if (list._hasLoadedContacts) list.insertBefore(warning, list.firstChild);
       else list.replaceChildren(warning);
-      warning.querySelector('.cm-load-retry').addEventListener('click', () => _renderContactsManager());
+      warning.querySelector('.cm-load-retry').addEventListener('click', () => _renderContactsManager(list));
       return;
     } finally {
       clearTimeout(timeout);

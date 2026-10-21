@@ -43,6 +43,12 @@ const server = http.createServer(async (req,res) => {
       state.pending.push(item); pendingStartedResolve?.(); return;
     }
     if (['olderRefreshSave','reopenManager'].includes(state.scenario) && n===3) { state.pending.push({res,body:{contacts:[{...state.currentContact}],count:1}}); pendingStartedResolve?.(); return; }
+    if (state.scenario==='priorRows503' && n===4) {
+      const item={res,body:{contacts:[{...state.currentContact}],count:1},headersSent:true,closed:false};
+      res.writeHead(200,{'content-type':'application/json'}); res.flushHeaders();
+      res.on('close',()=>{if(!res.writableEnded)item.closed=true;});
+      state.pending.push(item); pendingStartedResolve?.(); return;
+    }
     if (state.scenario==='reopenManager' && n>=4) return json(res,{contacts:[{uid:'manager-b-only',name:'Manager B Match',emails:['b@example.invalid'],phones:[],address:''},{uid:'manager-b-second',name:'Manager B Second',emails:['second-b@example.invalid'],phones:[],address:''}],count:2});
     if (state.scenario==='http503' && n===2) return json(res,{detail:'Synthetic listing failure'},503);
     if (state.scenario==='network' && n>=2) return req.socket.destroy();
@@ -190,11 +196,45 @@ const server = http.createServer(async (req,res) => {
       assert.equal(await page.locator('.contact-edit-name').inputValue(),'Mira Unsaved Editor Draft');
       const retryButton=page.locator('.cm-load-retry');
       assert.ok((await retryButton.boundingBox()).width>=44); assert.ok((await retryButton.boundingBox()).height>=44);
+      await page.evaluate(()=>{window.__observeNextContactListBody=true;});
       await retryButton.click();
+      await pendingStartedPromise;
+      const whileRetryHeld=await page.evaluate(()=>({
+        oldRowConnected:document.querySelector('.contact-row[data-uid="fixture-contact"]')?.isConnected===true,
+        editorVisible:document.querySelector('.contact-row-edit')?.checkVisibility()===true,
+        draft:document.querySelector('.contact-edit-name')?.value??null,
+      }));
+      assert.equal(whileRetryHeld.editorVisible,true);
+      await page.locator('.contact-edit-name').fill('Mira Edited During Retry');
+      const readsBeforeBody=await page.evaluate(()=>window.__contactListBodyConsumed||0);
+      const release=await fetch(`${origin}/__release`); assert.equal(release.status,200);
+      const released=await release.json(); assert.equal(released.released,1);
+      await page.waitForFunction(n=>(window.__contactListBodyConsumed||0)>n,readsBeforeBody);
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       await page.waitForFunction(()=>!document.querySelector('#cm-list .cm-load-warning')&&document.querySelector('#cm-list .contact-name')?.textContent==='Mira Fixture');
-      const ui=await uiOn(page); const stateNow=await finish(page);
+      const ui=await uiOn(page); const stateNow=await stateOn(page);
+      const oldRowDisconnected=!(await page.evaluate(row=>row.isConnected,oldRow));
+      const afterRetryDom=await page.evaluate(()=>{
+        const row=document.querySelector('#cm-list .contact-row');
+        const editor=row?.querySelector('.contact-row-edit');
+        const input=row?.querySelector('.contact-edit-name');
+        return {uid:row?.dataset.uid??null,editorVisible:!!editor&&editor.checkVisibility(),draft:input?.value??null,renderedName:row?.querySelector('.contact-name')?.textContent??null};
+      });
+      const retryState={
+        warning:ui.warning,
+        rowCount:ui.rows.length,
+        uid:afterRetryDom.uid,
+        oldRowDisconnected,
+        editorVisible:afterRetryDom.editorVisible,
+        draft:afterRetryDom.draft,
+        renderedName:afterRetryDom.renderedName,
+      };
       assert.equal(ui.rows.length,1); assert.equal(ui.retry,false);
-      proof.cases.priorRows503={beforeRows:1,afterFailure:failureUi,editorPreserved:true,draft:'Mira Unsaved Editor Draft',afterRetry:ui,listReads:stateNow.listReads-before.listReads};
+      assert.equal(retryState.uid,'fixture-contact'); assert.equal(retryState.oldRowDisconnected,true);
+      assert.equal(retryState.editorVisible,true); assert.equal(retryState.draft,'Mira Edited During Retry');
+      assert.equal(retryState.renderedName,'Mira Fixture');
+      proof.cases.priorRows503={beforeRows:1,afterFailure:failureUi,editorPreserved:true,draft:'Mira Unsaved Editor Draft',whileRetryHeld,latestDraft:'Mira Edited During Retry',afterRetry:ui,retryState,bodyCompletionObserved:true,twoAnimationFramesObserved:true,listReads:stateNow.listReads-before.listReads};
+      await page.close();
     }
 
     // Both response-header and response-body stalls hit the 15-second deadline and recover on manual retry.

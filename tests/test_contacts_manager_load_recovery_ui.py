@@ -47,6 +47,17 @@ def test_contacts_manager_load_recovery_ui():
     assert failure["warning"] is True
     assert "Showing previous results" in failure["text"]
     assert cases["priorRows503"]["afterRetry"]["warning"] is False
+    retry = cases["priorRows503"]["retryState"]
+    assert cases["priorRows503"]["bodyCompletionObserved"] is True
+    assert cases["priorRows503"]["twoAnimationFramesObserved"] is True
+    assert cases["priorRows503"]["whileRetryHeld"]["editorVisible"] is True
+    assert cases["priorRows503"]["whileRetryHeld"]["draft"] == "Mira Unsaved Editor Draft"
+    assert retry["warning"] is False
+    assert retry["uid"] == "fixture-contact"
+    assert retry["oldRowDisconnected"] is True
+    assert retry["editorVisible"] is True
+    assert retry["draft"] == "Mira Edited During Retry"
+    assert retry["renderedName"] == "Mira Fixture"
     for name in ("stalledFetch", "stalledJson"):
         assert cases[name]["requestAborted"] is True
         assert cases[name]["retryRecovered"] is True

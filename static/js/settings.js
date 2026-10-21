@@ -4233,8 +4233,12 @@ async function initUnifiedIntegrations() {
           address: row.querySelector('.contact-edit-address')?.value.trim() || '',
         };
         try {
-          await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        } catch (_) {}
+          const response = await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          if (!response.ok) throw new Error('Contact save failed');
+        } catch (_) {
+          uiModule.showError?.('Could not save contact. Try again.');
+          return;
+        }
         await _renderContactsManager();
       });
       row.querySelector('.contact-del')?.addEventListener('click', async () => {
@@ -4243,8 +4247,12 @@ async function initUnifiedIntegrations() {
           : window.confirm('Delete this contact?');
         if (!ok) return;
         try {
-          await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'DELETE', credentials: 'same-origin' });
-        } catch (_) {}
+          const response = await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'DELETE', credentials: 'same-origin' });
+          if (!response.ok) throw new Error('Contact delete failed');
+        } catch (_) {
+          uiModule.showError?.('Could not delete contact. Try again.');
+          return;
+        }
         await _renderContactsManager();
       });
     });

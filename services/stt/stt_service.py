@@ -215,24 +215,27 @@ class STTService:
     def get_stats(self) -> Dict[str, Any]:
         settings = self._load_settings()
         provider = settings["stt_provider"]
-        stt_enabled = settings.get("stt_enabled", False)
+        stt_enabled = bool(settings.get("stt_enabled", False))
         # If toggle is off, report as disabled
         effective_provider = provider if stt_enabled else "disabled"
 
         stats = {
-            "available": self.available and stt_enabled,
             "provider": effective_provider,
             "model": settings["stt_model"],
             "language": settings.get("stt_language", ""),
         }
 
         if provider == "local":
-            whisper = self._get_whisper()
-            stats["model_loaded"] = whisper is not None
+            stats["model_loaded"] = self._whisper_model is not None
+            stats["available"] = stt_enabled and stats["model_loaded"]
         elif provider == "browser":
             stats["model"] = "Browser (Web Speech API)"
+            stats["available"] = stt_enabled
         elif provider.startswith("endpoint:"):
             stats["endpoint_id"] = provider.split(":", 1)[1]
+            stats["available"] = stt_enabled
+        else:
+            stats["available"] = False
 
         return stats
 

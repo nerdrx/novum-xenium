@@ -17,6 +17,7 @@ Start with [Install and first chat](getting-started.md) if you are new. If somet
 | Keep files and coding work organized | [Chats and workspaces](chats-workspaces.md) |
 | Work with notes, documents, and memory | [Documents, notes, and memory](knowledge.md) |
 | Write, recover, and send email drafts | [Email drafts and recovery](email.md) |
+| Configure and manage contacts | [Contacts](features-connected-services.md#contacts) |
 | Configure calendar, email, modules, MCP, and Android | [Connected services](features-connected-services.md) |
 | Schedule recurring work | [Tasks and notifications](tasks.md) |
 | Back up before an update | [Back up before an update](tutorials/backup-update.md) |

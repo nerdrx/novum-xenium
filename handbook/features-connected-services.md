@@ -72,6 +72,34 @@ and backup boundaries, see [Use Calendar](calendar.md). The
 [Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/a135f61b25fda702f2fa26b7ae83d1dcba39a714/specs/calendar-tasks-notes.md)
 documents backend behavior and remaining limits.
 
+## Contacts
+
+Contacts are managed by an administrator. In **Settings → Integrations**, add
+**Contacts (CardDAV)** to configure an address book. Enter its URL and username;
+enter the password when adding or changing it. When editing an existing setup,
+leave the password field blank to keep the saved password. The app masks the
+saved password in configuration reads. If CardDAV is not configured, the
+contacts service uses its local contact store. A configured CardDAV outage can
+serve cached contacts for reading, but failed remote writes do not switch to
+local storage.
+
+Open **Contacts (CardDAV)** to search contacts, add one, edit a row, or delete
+it. The form requires a name or email to add a contact. Use **Import** for VCF
+or CSV files and **Export .vcf** or **Export .csv** to download contacts.
+Imports can report partial failures; review the displayed imported/total and
+failed counts.
+
+The current Contacts manager has no separate **Sync now** control. CardDAV
+reads use a short server-side cache, so changes made in another client may not
+appear immediately. If Save or Delete fails, the manager keeps the edit draft
+or contact row and shows an error. A successful HTTP response alone is not
+enough: the server must also confirm that the operation succeeded. A lost or
+unclear response can still mean the server applied the change, so verify the
+contact in the remote address book before retrying. A cached row is not
+confirmation that a remote write failed.
+
+See the pinned [email and contacts specification](https://github.com/nerdrx/novum-xenium/blob/4cf96306cb8379f69054f0e427b47641571d3981/specs/email-contacts.md#contacts), [contacts routes](https://github.com/nerdrx/novum-xenium/blob/4cf96306cb8379f69054f0e427b47641571d3981/routes/contacts/contacts_routes.py), and [Contacts settings UI](https://github.com/nerdrx/novum-xenium/blob/4cf96306cb8379f69054f0e427b47641571d3981/static/js/settings.js).
+
 ## Email
 
 For composing, mailbox drafts, sender choice and recovery after an unclear send result, see [Email drafts and recovery](email.md).

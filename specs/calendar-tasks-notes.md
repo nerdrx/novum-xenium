@@ -27,6 +27,13 @@ This spec covers calendar, reminders, tasks, assistant runs, and notes in:
 
 `src.caldav_sync` owns CalDAV fetch/sync. `src.caldav_writeback` owns pushing local changes back to remote calendars. Calendar routes request those behaviors; they do not own CalDAV protocol details.
 
+The CalDAV connection test accepts a complete unsaved URL/username/password
+tuple or an explicit saved `account_id`. A saved-account test may reuse that
+account's omitted credentials. Explicit incomplete unsaved credentials are
+rejected before reading saved accounts or contacting a provider. An empty
+request retains the legacy first-account test behavior; an unknown explicit
+account ID never falls back to another account.
+
 Runtime behavior:
 
 - local default calendars are created lazily per owner with stable UUID5 candidates. Default creation remains inside the caller's transaction so a failed event write cannot leave an orphaned calendar; SQLite serializes the absent-row check with `BEGIN IMMEDIATE`, other backends recover insert races inside a savepoint, and renamed-owner ID collisions advance through deterministic slots. List-only callers explicitly commit the lazy default.

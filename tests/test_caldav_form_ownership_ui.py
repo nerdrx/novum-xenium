@@ -28,7 +28,7 @@ def test_caldav_form_ownership_loopback():
         env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    payload = json.loads(result.stdout)
     assert payload["pass"] is True
     assert payload["externalRequests"] == []
     assert payload["pageErrors"] == []

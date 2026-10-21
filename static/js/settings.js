@@ -4100,6 +4100,7 @@ async function initUnifiedIntegrations() {
       if (!open) el('cm-add-name')?.focus();
     });
     el('cm-add-save')?.addEventListener('click', async () => {
+      const list = el('cm-list');
       const addRow = el('cm-add-row');
       const nameInput = el('cm-add-name');
       const emailInput = el('cm-add-email');
@@ -4131,7 +4132,9 @@ async function initUnifiedIntegrations() {
         addInputs.forEach(input => input.removeEventListener('change', noteDraftChange));
       }
       if (!accepted) {
-        uiModule.showError ? uiModule.showError('Could not add contact. Try again.') : alert('Could not add contact. Try again.');
+        if (list?.isConnected && el('cm-list') === list) {
+          uiModule.showError ? uiModule.showError('Could not add contact. Try again.') : alert('Could not add contact. Try again.');
+        }
         return;
       }
       const formRoot = el('unified-intg-form');
@@ -4148,7 +4151,7 @@ async function initUnifiedIntegrations() {
         const hasDraft = nameInput.value || emailInput.value || phoneInput?.value || addressInput?.value;
         addRow.style.display = hasDraft ? 'flex' : 'none';
       }
-      await _renderContactsManager();
+      await _renderContactsManager(list);
     });
     const _downloadContacts = async (format) => {
       const btn = el(format === 'csv' ? 'cm-export-csv-btn' : 'cm-export-vcf-btn');
@@ -4180,6 +4183,7 @@ async function initUnifiedIntegrations() {
     // because compose searches /api/contacts/search.
     el('cm-import-btn')?.addEventListener('click', () => el('cm-import-file')?.click());
     el('cm-import-file')?.addEventListener('change', async (e) => {
+      const list = el('cm-list');
       const files = Array.from(e.target.files || []);
       if (!files.length) return;
       const btn = el('cm-import-btn');
@@ -4227,7 +4231,7 @@ async function initUnifiedIntegrations() {
       } finally {
         if (btn) { btn.textContent = orig; btn.disabled = false; }
         e.target.value = '';
-        await _renderContactsManager();
+        await _renderContactsManager(list);
       }
     });
     if (isCurrentForm()) {
@@ -4239,9 +4243,9 @@ async function initUnifiedIntegrations() {
 
   // Render the contacts list inside the manager card with inline edit +
   // delete. Each row: name + emails; pencil flips to editable inputs.
-  async function _renderContactsManager() {
-    const list = el('cm-list');
-    if (!list) return;
+  async function _renderContactsManager(expectedList) {
+    const list = expectedList || el('cm-list');
+    if (!list || (expectedList && (!list.isConnected || el('cm-list') !== list))) return;
     const cnt = el('cm-count');
     const searchInput = el('cm-search');
     const requestId = list._contactsLoadRequest = (list._contactsLoadRequest || 0) + 1;
@@ -4351,6 +4355,7 @@ async function initUnifiedIntegrations() {
     // Wire each row's edit / delete / save / cancel.
     list.querySelectorAll('.contact-row').forEach(row => {
       const uid = row.dataset.uid;
+      const ownsRow = () => row.isConnected && list.isConnected && el('cm-list') === list && list.contains(row);
       const view = row.querySelector('.contact-row-view');
       const editForm = row.querySelector('.contact-row-edit');
       row.querySelector('.contact-edit')?.addEventListener('click', () => {
@@ -4372,24 +4377,24 @@ async function initUnifiedIntegrations() {
           const response = await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
           if (!response.ok || (await response.json())?.success !== true) throw new Error('Contact save failed');
         } catch (_) {
-          uiModule.showError?.('Could not save contact. Try again.');
+          if (ownsRow()) uiModule.showError?.('Could not save contact. Try again.');
           return;
         }
-        await _renderContactsManager();
+        if (ownsRow()) await _renderContactsManager(list);
       });
       row.querySelector('.contact-del')?.addEventListener('click', async () => {
         const ok = uiModule.styledConfirm
           ? await uiModule.styledConfirm('Delete this contact?', { confirmText: 'Delete', danger: true })
           : window.confirm('Delete this contact?');
-        if (!ok) return;
+        if (!ok || !ownsRow()) return;
         try {
           const response = await fetch('/api/contacts/' + encodeURIComponent(uid), { method: 'DELETE', credentials: 'same-origin' });
           if (!response.ok || (await response.json())?.success !== true) throw new Error('Contact delete failed');
         } catch (_) {
-          uiModule.showError?.('Could not delete contact. Try again.');
+          if (ownsRow()) uiModule.showError?.('Could not delete contact. Try again.');
           return;
         }
-        await _renderContactsManager();
+        if (ownsRow()) await _renderContactsManager(list);
       });
     });
   }

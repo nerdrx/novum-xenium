@@ -51,7 +51,9 @@ def test_api_form_response_ownership_loopback():
     assert refresh["savedServerName"] == "Accepted but list response null"
     assert refresh["live"]["message"] == "Saved"
     assert refresh["live"]["changes"] == 1
-    assert "API integration saved" in refresh["live"]["toast"]
+    assert "could not be loaded" in refresh["live"]["loadWarning"]
+    assert refresh["live"]["retry"] is True
+    assert refresh["live"]["toast"] == ""
     edited = payload["cases"]["heldPrefillPreservesSameFormEdits"]
     assert edited["after"] == edited["before"]
     cancelled = payload["cases"]["cancelWorksDuringPrefill"]

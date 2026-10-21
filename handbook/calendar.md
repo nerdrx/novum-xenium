@@ -143,10 +143,10 @@ provider. Email, chat-model, and CalDAV credentials are configured separately.
   browser notification permission, and whether a Novum session was open.
 
 For account and route behavior, see the
-[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/ba510a24586402d9936ef4570b183130c2aecd17/specs/calendar-tasks-notes.md).
-The frozen [calendar interface](https://github.com/nerdrx/novum-xenium/blob/ba510a24586402d9936ef4570b183130c2aecd17/static/js/calendar.js),
-[CalDAV settings](https://github.com/nerdrx/novum-xenium/blob/ba510a24586402d9936ef4570b183130c2aecd17/static/js/settings.js),
-[calendar routes](https://github.com/nerdrx/novum-xenium/blob/ba510a24586402d9936ef4570b183130c2aecd17/routes/calendar_routes.py),
-[CalDAV sync](https://github.com/nerdrx/novum-xenium/blob/ba510a24586402d9936ef4570b183130c2aecd17/src/caldav_sync.py),
-and [reminder polling](https://github.com/nerdrx/novum-xenium/blob/ba510a24586402d9936ef4570b183130c2aecd17/static/js/calendar/reminders.js)
+[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/specs/calendar-tasks-notes.md).
+The frozen [calendar interface](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/static/js/calendar.js),
+[CalDAV settings](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/static/js/settings.js),
+[calendar routes](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/routes/calendar_routes.py),
+[CalDAV sync](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/src/caldav_sync.py),
+and [reminder polling](https://github.com/nerdrx/novum-xenium/blob/1c064bff6be270ae74cb7972235b252e5b7b5f1e/static/js/calendar/reminders.js)
 show the behavior this guide describes.

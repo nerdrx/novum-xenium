@@ -33,6 +33,8 @@ the list before retrying rather than assuming nothing changed.
 disk write leaves the previously saved configuration and templates intact.
 Failed deletions show a warning. If deletion cannot be confirmed, copy unsaved
 edits, refresh the page, and check the saved-template list before retrying.
+If a refresh fails, the displayed entries can be from the last successful load;
+wait for the server to recover and refresh again before retrying a change.
 
 Saved templates retain the **Thinking** override: **On**, **Off**, or the model
 default. Older templates without an override use the model default. The pinned

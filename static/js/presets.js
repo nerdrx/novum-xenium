@@ -81,6 +81,7 @@ export function init(apiBase) {
   initCharTabs();
   initEnabledToggle();
   initNameDropdown();
+  _populateCharSelect();
   initResetButton();
   initSaveAsTemplate();
   initExpandButton();
@@ -268,6 +269,7 @@ function initNameDropdown() {
           const hidden = loadStoredArray('odysseus-hidden-presets');
           if (!hidden.includes(charName)) hidden.push(charName);
           localStorage.setItem('odysseus-hidden-presets', JSON.stringify(hidden));
+          _populateCharSelect();
         }
         const formUnchanged = formIds.every((id, index) => {
           const field = document.getElementById(id);
@@ -431,15 +433,15 @@ function initResetButton() {
 async function loadUserTemplates() {
   try {
     const res = await fetch(`${API_BASE}/api/presets/templates`);
-    if (res.ok) {
-      userTemplates = await res.json();
-    } else {
-      userTemplates = [];
-    }
+    if (!res.ok) return false;
+    const templates = await res.json();
+    if (!Array.isArray(templates)) return false;
+    userTemplates = templates;
+    _populateCharSelect();
+    return true;
   } catch (e) {
-    userTemplates = [];
+    return false;
   }
-  _populateCharSelect();
 }
 
 

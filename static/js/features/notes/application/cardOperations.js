@@ -29,6 +29,7 @@ export function createCardOperations({
           effects.showError(withStatus('Could not confirm pin state. Refresh Notes before retrying.', statusError));
         }
       } finally {
+        controller.abort();
         clearTimeout(timer);
       }
     }

@@ -2598,6 +2598,7 @@ function _setLibraryCountChipContent(chip, label, count) {
     let _arcSessions = [];
     let _arcDocs = [];        // archived documents
     let _arcResearch = [];    // archived research reports
+    let _arcLoadGeneration = 0;
     let _arcSearch = '';
     let _arcSort = 'recent';
     let _arcSelectMode = false;
@@ -2609,23 +2610,66 @@ function _setLibraryCountChipContent(chip, label, count) {
     function _renderLibArchive() {
       const grid = document.getElementById('doclib-arc-grid');
       if (!grid) return;
+      const generation = ++_arcLoadGeneration;
+      const isCurrent = () => generation === _arcLoadGeneration
+        && document.getElementById('doclib-arc-grid') === grid && grid.isConnected;
       grid.innerHTML = '';
       grid.appendChild(spinnerModule.createLoadingRow('Loading…'));
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      const readCollection = async (url, key) => {
+        const response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
+        if (!response.ok) throw new Error('Archive request failed');
+        const data = await response.json();
+        if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data[key])
+          || !data[key].every(item => item && typeof item === 'object' && !Array.isArray(item)
+            && typeof item.id === 'string' && item.id.trim().length > 0)) {
+          throw new Error('Archive response was invalid');
+        }
+        return data[key];
+      };
       // Archive tab is the home for ALL archived items — chats, documents, and
       // research — each rendered with its own icon. Load the three in parallel.
-      Promise.all([
-        fetch(API_BASE + '/api/sessions/archived?limit=100&sort=recent', { credentials: 'same-origin' }).then(r => r.json()).catch(() => ({})),
-        fetch(API_BASE + '/api/documents/library?archived=true&limit=50', { credentials: 'same-origin' }).then(r => r.json()).catch(() => ({})),
-        fetch('/api/research/library?archived=true', { credentials: 'same-origin' }).then(r => r.json()).catch(() => ({})),
-      ]).then(([s, d, r]) => {
-        // These are all archived by definition — flag them so the expanded
-        // chat preview hides its (redundant) "Archive" button.
-        _arcSessions = (s.sessions || []).map(x => ({ ...x, archived: true }));
-        _arcDocs = d.documents || [];
-        _arcResearch = (r.research || []).map(x => ({ ...x, archived: true }));
+      (async () => {
+        let collections;
+        try {
+          collections = await Promise.all([
+            readCollection(API_BASE + '/api/sessions/archived?limit=100&sort=recent', 'sessions'),
+            readCollection(API_BASE + '/api/documents/library?archived=true&limit=50', 'documents'),
+            readCollection('/api/research/library?archived=true', 'research'),
+          ]);
+        } catch {
+          controller.abort();
+          if (isCurrent()) {
+            const notice = document.createElement('div');
+            notice.className = 'doclib-empty';
+            notice.setAttribute('role', 'alert');
+            notice.style.cssText = 'font-style:normal;color:var(--fg);font-size:13px;display:grid;justify-items:center;gap:8px;';
+            const message = document.createElement('div');
+            message.textContent = 'Could not load archived items.';
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.textContent = 'Retry';
+            retry.setAttribute('aria-label', 'Retry loading archived items');
+            retry.style.cssText = 'min-width:44px;min-height:44px;margin:0;opacity:1;color:var(--fg);font:inherit;font-style:normal;cursor:pointer;border:1px solid var(--border);border-radius:6px;background:var(--bg);padding:8px 12px;';
+            retry.addEventListener('click', _renderLibArchive);
+            notice.append(message, retry);
+            grid.replaceChildren(notice);
+          }
+          clearTimeout(timer);
+          return;
+        }
+        clearTimeout(timer);
+        if (!isCurrent()) return;
+        // These are all archived by definition; apply only after all three
+        // validated responses succeed, leaving the last-good cache intact otherwise.
+        const [sessions, documents, research] = collections;
+        _arcSessions = sessions.map(x => ({ ...x, archived: true }));
+        _arcDocs = documents;
+        _arcResearch = research.map(x => ({ ...x, archived: true }));
         _renderArcGrid();
         _renderArcChips();
-      }).catch(() => { grid.innerHTML = '<div class="doclib-empty">Failed to load</div>'; });
+      })();
     }
 
     // Inline expand/collapse for an archived DOCUMENT card (chat-style). Loads
@@ -3006,30 +3050,61 @@ function _setLibraryCountChipContent(chip, label, count) {
     let _researchSearch = '';
     let _researchSelectMode = false;
     let _researchArchivedView = false;
+    let _researchLoadGeneration = 0;
     const _researchSelected = new Set();
 
     async function _renderLibResearch() {
       const grid = document.getElementById('doclib-research-grid');
       const stats = document.getElementById('doclib-research-stats');
       if (!grid) return;
-      // Show our whirlpool spinner instead of the plain "Loading..." text.
-      grid.innerHTML = '';
+      const generation = ++_researchLoadGeneration;
+      const isCurrent = () => generation === _researchLoadGeneration && grid.isConnected &&
+        document.getElementById('doclib-research-grid') === grid;
+      if (_researchItems.length) _renderResearchGrid();
+      else grid.replaceChildren();
+      const loading = _researchItems.length
+        ? spinnerModule.createLoadingRow('Refreshing research…')
+        : spinnerModule.createWhirlpool(22).element;
+      loading.style.cssText = 'margin:18px auto;display:block;';
+      grid.appendChild(loading);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
       try {
-        const _spm = (await import('./spinner.js')).default;
-        const _sp = _spm.createWhirlpool(22);
-        _sp.element.style.cssText = 'margin:18px auto;display:block;';
-        grid.appendChild(_sp.element);
-      } catch { grid.innerHTML = '<div class="hwfit-loading">Loading…</div>'; }
-      try {
-        const res = await fetch('/api/research/library' + (_researchArchivedView ? '?archived=true' : ''), { credentials: 'same-origin' });
-        if (!res.ok) throw new Error(res.statusText);
+        const res = await fetch('/api/research/library' + (_researchArchivedView ? '?archived=true' : ''), {
+          credentials: 'same-origin', signal: controller.signal,
+        });
+        if (!isCurrent()) return;
+        if (!res.ok) throw new Error('Research request failed');
         const data = await res.json();
-        _researchItems = data.research || data || [];
-      } catch (e) {
-        grid.innerHTML = `<div class="hwfit-loading">Failed to load: ${_esc(e.message)}</div>`;
-        return;
+        if (!isCurrent()) return;
+        const items = Array.isArray(data) ? data : data?.research;
+        if (!Array.isArray(items) || items.some(item => !item || typeof item !== 'object' || Array.isArray(item) || typeof item.id !== 'string' || !item.id.trim())) {
+          throw new Error('Invalid research response');
+        }
+        _researchItems = items;
+        _renderResearchGrid();
+      } catch {
+        if (!isCurrent()) return;
+        if (_researchItems.length) _renderResearchGrid();
+        else grid.replaceChildren();
+        const alert = document.createElement('div');
+        alert.className = 'hwfit-loading';
+        alert.setAttribute('role', 'alert');
+        alert.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;';
+        const message = document.createElement('span');
+        message.textContent = 'Could not load research.';
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = 'Retry';
+        retry.setAttribute('aria-label', 'Retry loading research');
+        retry.style.cssText = 'min-width:44px;min-height:44px;';
+        retry.addEventListener('click', () => _renderLibResearch());
+        alert.append(message, retry);
+        grid.appendChild(alert);
+      } finally {
+        controller.abort();
+        clearTimeout(timeout);
       }
-      _renderResearchGrid();
     }
 
     // Toggle inline preview for a research row. Mirrors _toggleChatPreview
@@ -3152,23 +3227,17 @@ function _setLibraryCountChipContent(chip, label, count) {
       const delBtn = preview.querySelector('.doclib-chat-delete-btn');
       if (delBtn) delBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
+        const targetId = item.id;
         const ok = uiModule && uiModule.styledConfirm
           ? await uiModule.styledConfirm('Delete this research report?', { confirmText: 'Delete', danger: true })
           : window.confirm('Delete this research report?');
         if (!ok) return;
         if (item.archived) {
-          await _arcRunMutation('delete', 'research:' + item.id);
+          await _arcRunMutation('delete', 'research:' + targetId);
           _renderLibArchive();
           return;
         }
-        try {
-          const res = await fetch(`${API_BASE}/api/research/${item.id}`, { method: 'DELETE', credentials: 'same-origin' });
-          if (!res.ok) throw new Error(await res.text());
-          _researchItems = _researchItems.filter(r => r.id !== item.id);
-          _renderResearchGrid();
-        } catch (err) {
-          if (uiModule && uiModule.showError) uiModule.showError('Failed to delete: ' + err.message);
-        }
+        await _runResearchMutations([targetId], id => `${API_BASE}/api/research/${id}`, 'DELETE', { verb: 'Deleted', action: 'deletion' });
       });
       const arcBtn = preview.querySelector('.doclib-chat-archive-btn');
       if (arcBtn) arcBtn.addEventListener('click', async (e) => {
@@ -3183,13 +3252,44 @@ function _setLibraryCountChipContent(chip, label, count) {
           if (result.ok && uiModule) uiModule.showToast('Restored');
           return;
         }
-        try {
-          await fetch(`${API_BASE}/api/research/${item.id}/archive?archived=${toArchived}`, { method: 'POST', credentials: 'same-origin' });
-          _researchItems = _researchItems.filter(r => r.id !== item.id);
-          _renderResearchGrid();
-          if (uiModule) uiModule.showToast(toArchived ? 'Archived' : 'Restored');
-        } catch { if (uiModule) uiModule.showError('Failed to ' + (toArchived ? 'archive' : 'restore')); }
+        await _runResearchMutations([item.id], id => `/api/research/${id}/archive?archived=${toArchived}`, 'POST', {
+          verb: toArchived ? 'Archived' : 'Restored', action: toArchived ? 'archive' : 'restore', toastOnSuccess: true,
+        });
       });
+    }
+
+    async function _runResearchMutations(ids, urlForId, method, { verb, action, toastOnSuccess = false }) {
+      const targets = [...new Set(ids)];
+      const results = await Promise.all(targets.map(async id => {
+        try {
+          const response = await fetch(urlForId(id), { method, credentials: 'same-origin' });
+          return { id, ok: response.ok, status: Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null };
+        } catch {
+          return { id, ok: false, status: null };
+        }
+      }));
+      const succeeded = results.filter(result => result.ok);
+      const failed = results.filter(result => !result.ok);
+      if (succeeded.length) {
+        const succeededIds = new Set(succeeded.map(result => result.id));
+        _researchItems = _researchItems.filter(item => !succeededIds.has(item.id));
+        let removedSelection = false;
+        for (const id of succeededIds) removedSelection = _researchSelected.delete(id) || removedSelection;
+        if (removedSelection && !_researchSelected.size) {
+          _researchSelectMode = false;
+          document.getElementById('doclib-research-bulk')?.classList.add('hidden');
+        }
+        _renderResearchGrid();
+      }
+      if (failed.length) {
+        const confirmed = succeeded.length ? `${verb} ${succeeded.length}; ` : '';
+        const status = failed.find(result => result.status !== null)?.status;
+        const statusText = status ? ` First HTTP error: HTTP ${status}.` : '';
+        if (uiModule) uiModule.showError(`${confirmed}Could not confirm ${action} of ${failed.length} research report${failed.length === 1 ? '' : 's'}. Check Research before retrying.${statusText}`);
+      } else if (succeeded.length && toastOnSuccess && uiModule) {
+        uiModule.showToast(`${verb} ${succeeded.length}`);
+      }
+      return { succeeded, failed };
     }
 
     function _renderResearchGrid() {
@@ -3301,16 +3401,18 @@ function _setLibraryCountChipContent(chip, label, count) {
                 a.remove();
               } },
             { label: _researchArchivedView ? 'Restore' : 'Archive', action: async () => {
+                const targetId = rid;
                 const toArchived = !_researchArchivedView;
                 const card = btn.closest('.doclib-research-card');
                 if (card) { card.style.transition = 'opacity 0.25s, transform 0.25s'; card.style.opacity = '0'; card.style.transform = 'scale(0.95)'; }
-                try { await fetch('/api/research/' + rid + '/archive?archived=' + toArchived, { method: 'POST', credentials: 'same-origin' }); } catch {}
                 await new Promise(r => setTimeout(r, 200));
-                _researchItems = _researchItems.filter(r => r.id !== rid);
-                _renderResearchGrid();
-                if (uiModule) uiModule.showToast(toArchived ? 'Archived' : 'Restored');
+                const result = await _runResearchMutations([targetId], id => `/api/research/${id}/archive?archived=${toArchived}`, 'POST', {
+                  verb: toArchived ? 'Archived' : 'Restored', action: toArchived ? 'archive' : 'restore', toastOnSuccess: true,
+                });
+                if (result.failed.length) _renderResearchGrid();
               } },
             { label: 'Delete', danger: true, action: async () => {
+                const targetId = rid;
                 if (!await window.styledConfirm('Delete this research?', { confirmText: 'Delete', danger: true })) return;
                 const card = btn.closest('.doclib-research-card');
                 if (card) {
@@ -3319,9 +3421,8 @@ function _setLibraryCountChipContent(chip, label, count) {
                   card.style.transform = 'scale(0.95)';
                 }
                 await new Promise(r => setTimeout(r, 250));
-                await fetch('/api/research/' + rid, { method: 'DELETE', credentials: 'same-origin' });
-                _researchItems = _researchItems.filter(r => r.id !== rid);
-                _renderResearchGrid();
+                const result = await _runResearchMutations([targetId], id => `/api/research/${id}`, 'DELETE', { verb: 'Deleted', action: 'deletion' });
+                if (result.failed.length) _renderResearchGrid();
               } },
           ], { onSelect: () => {
             _researchSelectMode = true;
@@ -3401,11 +3502,9 @@ function _setLibraryCountChipContent(chip, label, count) {
           if (uiModule) uiModule.showToast('Nothing to tidy');
           return;
         }
-        await Promise.all(candidates.map(r => fetch('/api/research/' + r.id, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {})));
-        const ids = new Set(candidates.map(r => r.id));
-        _researchItems = _researchItems.filter(r => !ids.has(r.id));
-        _renderResearchGrid();
-        if (uiModule) uiModule.showToast('Deleted ' + candidates.length);
+        await _runResearchMutations(candidates.map(r => r.id), id => `/api/research/${id}`, 'DELETE', {
+          verb: 'Deleted', action: 'deletion', toastOnSuccess: true,
+        });
       } finally {
         sp.stop();
         btn.disabled = false;
@@ -3438,13 +3537,13 @@ function _setLibraryCountChipContent(chip, label, count) {
 
     // Research bulk delete
     document.getElementById('doclib-research-bulk-delete')?.addEventListener('click', async () => {
-      const count = _researchSelected.size;
-      if (!count) return;
-      if (!await window.styledConfirm(`Delete ${count} research report${count > 1 ? 's' : ''} permanently?`, { confirmText: 'Delete', danger: true })) return;
+      const ids = [..._researchSelected];
+      if (!ids.length) return;
+      if (!await window.styledConfirm(`Delete ${ids.length} research report${ids.length > 1 ? 's' : ''} permanently?`, { confirmText: 'Delete', danger: true })) return;
       const grid = document.getElementById('doclib-research-grid');
       if (grid) {
         grid.querySelectorAll('.doclib-research-card').forEach(card => {
-          if (_researchSelected.has(card.dataset.researchId)) {
+          if (ids.includes(card.dataset.researchId)) {
             card.style.transition = 'opacity 0.25s, transform 0.25s';
             card.style.opacity = '0';
             card.style.transform = 'scale(0.95)';
@@ -3452,23 +3551,19 @@ function _setLibraryCountChipContent(chip, label, count) {
         });
       }
       await new Promise(r => setTimeout(r, 250));
-      await Promise.all([..._researchSelected].map(rid => fetch('/api/research/' + rid, { method: 'DELETE', credentials: 'same-origin' })));
-      _researchItems = _researchItems.filter(r => !_researchSelected.has(r.id));
-      _researchSelected.clear();
-      _researchSelectMode = false;
-      document.getElementById('doclib-research-bulk').classList.add('hidden');
-      _renderResearchGrid();
+      const result = await _runResearchMutations(ids, id => `/api/research/${id}`, 'DELETE', { verb: 'Deleted', action: 'deletion' });
+      if (result.failed.length) _renderResearchGrid();
     });
 
     // Research bulk archive / restore
     document.getElementById('doclib-research-bulk-archive')?.addEventListener('click', async () => {
-      const count = _researchSelected.size;
-      if (!count) return;
+      const ids = [..._researchSelected];
+      if (!ids.length) return;
       const toArchived = !_researchArchivedView;
       const grid = document.getElementById('doclib-research-grid');
       if (grid) {
         grid.querySelectorAll('.doclib-research-card').forEach(card => {
-          if (_researchSelected.has(card.dataset.researchId)) {
+          if (ids.includes(card.dataset.researchId)) {
             card.style.transition = 'opacity 0.25s, transform 0.25s';
             card.style.opacity = '0';
             card.style.transform = 'scale(0.95)';
@@ -3476,13 +3571,10 @@ function _setLibraryCountChipContent(chip, label, count) {
         });
       }
       await new Promise(r => setTimeout(r, 250));
-      await Promise.all([..._researchSelected].map(rid => fetch('/api/research/' + rid + '/archive?archived=' + toArchived, { method: 'POST', credentials: 'same-origin' })));
-      _researchItems = _researchItems.filter(r => !_researchSelected.has(r.id));
-      _researchSelected.clear();
-      _researchSelectMode = false;
-      document.getElementById('doclib-research-bulk').classList.add('hidden');
-      _renderResearchGrid();
-      if (uiModule) uiModule.showToast(toArchived ? 'Archived' : 'Restored');
+      const result = await _runResearchMutations(ids, id => `/api/research/${id}/archive?archived=${toArchived}`, 'POST', {
+        verb: toArchived ? 'Archived' : 'Restored', action: toArchived ? 'archive' : 'restore', toastOnSuccess: true,
+      });
+      if (result.failed.length) _renderResearchGrid();
     });
 
     // Shared dropdown for chats/archive menus — defined at module scope below

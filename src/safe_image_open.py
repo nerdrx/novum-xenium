@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 
 
 def open_image(fp, mode="r", formats=None):
@@ -10,7 +11,8 @@ def open_image(fp, mode="r", formats=None):
 
     ``formats=None`` preserves Pillow's currently registered format set except
     XBM. Callers with a closed input contract may pass their narrower Pillow
-    format names. Image construction and file ownership remain Pillow-native.
+    format names. Filesystem paths are made absolute without normalizing their
+    components; file-like ownership remains Pillow-native.
     """
     from PIL import Image
 
@@ -35,4 +37,14 @@ def open_image(fp, mode="r", formats=None):
 
     normalized = tuple(str.upper(fmt) for fmt in candidates)
     allowed = tuple(fmt for fmt in normalized if fmt != "XBM")
+
+    if isinstance(fp, (str, bytes, os.PathLike)):
+        path = os.fspath(fp)
+        if path:
+            # Prefix without lexical normalization: abspath would change
+            # symlink/.. resolution; the absolute spelling also prevents an
+            # EPS filename from becoming a Ghostscript option argument.
+            cwd = os.getcwdb() if isinstance(path, bytes) else os.getcwd()
+            fp = os.path.join(cwd, path)
+
     return Image.open(fp, mode=mode, formats=allowed)

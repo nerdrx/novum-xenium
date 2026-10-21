@@ -459,8 +459,9 @@ test('invalid or unavailable pin reconciliation keeps current UI and gives safe 
     h.operations.togglePin('a'); h.operations.togglePin('a');
     h.patches[0].reject(new Error('offline')); h.patches[1].reject(new Error('offline'));
     await drain(); await drain();
+    assert.equal(h.reads[0].options.signal.aborted, true);
     t.mock.timers.tick(15000);
-    assert.equal(h.reads[0].options.signal.aborted, false);
+    assert.equal(h.reads.length, 1);
     assert.deepEqual(h.errors, ['Failed to pin']);
   });
 });

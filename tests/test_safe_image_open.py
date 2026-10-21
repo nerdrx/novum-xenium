@@ -1,4 +1,6 @@
 from io import BytesIO, StringIO
+import os
+from pathlib import Path
 
 import pytest
 
@@ -127,6 +129,112 @@ def test_str_subclass_cannot_override_xbm_filter(monkeypatch):
     with pytest.raises(UnidentifiedImageError):
         open_image(BytesIO(_xbm_payload()), formats=[XbmAlias("XBM")])
     assert entered == []
+
+
+@pytest.mark.parametrize("prefix", ["-", "@"])
+@pytest.mark.parametrize("path_kind", ["str", "bytes", "path"])
+def test_relative_eps_path_is_made_absolute_before_ghostscript(
+    tmp_path, monkeypatch, prefix, path_kind
+):
+    from PIL import EpsImagePlugin
+
+    name = f"{prefix}source.eps"
+    (tmp_path / name).write_text(
+        "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\nshowpage\n",
+        encoding="ascii",
+    )
+    monkeypatch.chdir(tmp_path)
+    captured = []
+
+    class StopBeforeGhostscript(Exception):
+        pass
+
+    def intercept(command, **_kwargs):
+        captured.append(command)
+        raise StopBeforeGhostscript
+
+    monkeypatch.setattr(EpsImagePlugin, "has_ghostscript", lambda: True)
+    monkeypatch.setattr(EpsImagePlugin, "gs_binary", "gs")
+    monkeypatch.setattr(EpsImagePlugin.subprocess, "check_call", intercept)
+    if path_kind == "bytes":
+        path = os.fsencode(name)
+    elif path_kind == "path":
+        path = Path(name)
+    else:
+        path = name
+
+    image = open_image(path)
+    try:
+        with pytest.raises(StopBeforeGhostscript):
+            image.load()
+    finally:
+        image.close()
+
+    argv = captured[0]
+    expected = (
+        os.path.join(os.getcwdb(), os.fsencode(name))
+        if path_kind == "bytes"
+        else os.path.join(os.getcwd(), name)
+    )
+    assert argv[argv.index("-f") + 1] == expected
+
+
+def test_absolute_eps_path_is_preserved_before_ghostscript(tmp_path, monkeypatch):
+    from PIL import EpsImagePlugin
+
+    path = tmp_path / "@absolute.eps"
+    path.write_text(
+        "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\nshowpage\n",
+        encoding="ascii",
+    )
+    captured = []
+
+    class StopBeforeGhostscript(Exception):
+        pass
+
+    def intercept(command, **_kwargs):
+        captured.append(command)
+        raise StopBeforeGhostscript
+
+    monkeypatch.setattr(EpsImagePlugin, "has_ghostscript", lambda: True)
+    monkeypatch.setattr(EpsImagePlugin, "gs_binary", "gs")
+    monkeypatch.setattr(EpsImagePlugin.subprocess, "check_call", intercept)
+    image = open_image(path)
+    try:
+        with pytest.raises(StopBeforeGhostscript):
+            image.load()
+    finally:
+        image.close()
+    argv = captured[0]
+    assert argv[argv.index("-f") + 1] == str(path)
+
+
+def test_path_prefix_preserves_symlink_dotdot_resolution(tmp_path, monkeypatch):
+    real_child = tmp_path / "real" / "child"
+    real_child.mkdir(parents=True)
+    try:
+        (tmp_path / "link").symlink_to(real_child, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        if os.name == "nt":
+            pytest.skip(f"symlinks are unavailable: {exc}")
+        raise
+    Image.new("RGB", (2, 2), "red").save(tmp_path / "real" / "target.png")
+    Image.new("RGB", (3, 3), "blue").save(tmp_path / "target.png")
+    monkeypatch.chdir(tmp_path)
+
+    with Image.open("link/../target.png") as native:
+        assert native.size == (2, 2)
+    with open_image("link/../target.png") as guarded:
+        assert guarded.size == (2, 2)
+
+
+@pytest.mark.parametrize("path", ["", b""])
+def test_empty_path_keeps_pillow_native_error(path):
+    with pytest.raises(FileNotFoundError) as native:
+        Image.open(path)
+    with pytest.raises(type(native.value)) as guarded:
+        open_image(path)
+    assert str(guarded.value) == str(native.value)
 
 
 def _xbm_payload():

@@ -242,21 +242,32 @@ function _prefetchAdjacent() {
 }
 
 let _calendarsError = null;
+let _calendarCatalogRequest = 0;
 // Guard so we only trigger an on-open CalDAV pull once per page load —
 // every list/render path calls _fetchCalendars, but we only want to
 // hit the remote server lazily on the first user open.
 let _caldavSyncedOnce = false;
 async function _fetchCalendars() {
-  _calendarsError = null;
+  const request = ++_calendarCatalogRequest;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const res = await fetch(`${API_BASE}/api/calendar/calendars`, { credentials: 'same-origin' });
+    const res = await fetch(`${API_BASE}/api/calendar/calendars`, { credentials: 'same-origin', signal: controller.signal });
     const data = await res.json();
-    _calendars = data.calendars || [];
-    if (data.error) _calendarsError = data.error;
-    _calendars.forEach((c, i) => {
-      if (!c.color || c.color.startsWith('<')) c.color = CAL_PALETTE[i % CAL_PALETTE.length];
-    });
-  } catch (e) { _calendars = []; _calendarsError = e.message || 'Connection failed'; }
+    if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+    if (request === _calendarCatalogRequest) {
+      _calendars = data.calendars || [];
+      _calendarsError = data.error || null;
+      _calendars.forEach((c, i) => {
+        if (!c.color || c.color.startsWith('<')) c.color = CAL_PALETTE[i % CAL_PALETTE.length];
+      });
+    }
+  } catch (e) {
+    if (request === _calendarCatalogRequest) {
+      _calendars = [];
+      _calendarsError = controller.signal.aborted ? 'Calendar request timed out. Try again.' : (e.message || 'Connection failed');
+    }
+  } finally { clearTimeout(timeout); }
 
   // First open: fire a background CalDAV pull. We don't await — the
   // initial render uses whatever's already cached locally, and the

@@ -18,6 +18,8 @@ Image providers are configured separately from chat providers. Some workflows ca
 
 Gallery image uploads accept PNG, JPEG, WebP, and GIF. Novum identifies a supported image before saving its file or database entry. Unrecognized image bytes are rejected; replacing an image with unrecognized bytes leaves the existing image intact. An optional EXIF metadata warning can still accompany an accepted image. Identifying the format does not guarantee every pixel or metadata field is valid.
 
+Bulk imports report imported, duplicate, and failed counts separately. Failures produce an error notification with the first available server reason, shortened for readability and displayed as plain text. Other selected files can still succeed. See the pinned [bulk upload handler](https://github.com/nerdrx/novum-xenium/blob/2c24163ec654d7a1b32c28da799c3636ae0a39d9/static/js/gallery.js).
+
 XBM processing is disabled on the guarded image-input paths. Generic chat uploads retain their broader file support: if optional image metadata or thumbnail creation fails, the original file remains available. This does not make every supported decoder safe; see [dependency audit findings](reference/security.md#dependency-audit-findings).
 
 ## Audio

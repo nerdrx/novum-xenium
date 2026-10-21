@@ -79,6 +79,14 @@ failed registration is visible and can be retried. It never overwrites a
 non-zVram endpoint on the same port. Starting the router requires an explicit
 user action; no login or boot autostart is installed.
 
+The bridge recognizes a discovered model only by an exact `/v1/models` ID or
+an exact match in an `aliases` list containing only strings. Malformed alias
+fields do not count as a match. See the [bridge implementation](https://github.com/nerdrx/novum-xenium/blob/036f294d88de73b7d10d28f92e3a25bf644a274a/desktop/src-tauri/src/zvram_bridge.py)
+and its [response-shape regression test](https://github.com/nerdrx/novum-xenium/blob/036f294d88de73b7d10d28f92e3a25bf644a274a/desktop/src-tauri/tests/test_zvram_bridge.py).
+The desktop embeds this bridge source and provisions a copy into its application
+data directory; source edits alone do not update an installed desktop app. See
+the [desktop embedding and provisioning code](https://github.com/nerdrx/novum-xenium/blob/036f294d88de73b7d10d28f92e3a25bf644a274a/desktop/src-tauri/src/zvram.rs).
+
 For legacy single-model profiles, after the controller observes a healthy server and `/v1/models` advertises the
 requested alias, call `register_endpoint(alias, port)`. Registration uses the
 existing local desktop session cookie, accepts Netscape and WebKit cookie

@@ -172,6 +172,18 @@ not maintained, so follow the provider's displayed setup instructions.
    appear in **Archive**. Current content and immutable versions belong to the
    document; check the current version before approving an AI change.
 
+In the Library's **Archive** tab, Restore and Delete check each item’s server
+response. A **Could not confirm** warning means the outcome is uncertain.
+Do not treat an unexpectedly empty Archive as proof that an item was deleted
+or restored: a list-loading failure can currently appear as an empty list.
+Reload and recheck after the service is available before retrying a mutation.
+Bulk deletion captures its selected items when confirmation opens, so a newer
+selection is not added to that deletion. Confirmed items leave the current
+selection; failed items remain selected unless you cancel or change that
+selection.
+
+See the pinned [Archive actions](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/static/js/documentLibrary.js).
+
 Uploads are owner-checked, and persistent document references are validated
 before saving. The app does not expose a general upload list/delete endpoint.
 If preview, form or extraction controls are missing, the relevant optional
@@ -204,8 +216,22 @@ for retry when still listed; a newer selection or cancellation stays separate.
 If a change succeeded but the list refresh failed, the warning distinguishes
 those outcomes. Check Notes before retrying an uncertain operation.
 
-See the pinned [selected-note operations](https://github.com/nerdrx/novum-xenium/blob/ab19dc86ec1901c9279f46e00f4f7f7ce58000a4/frontend/src/features/notes/application/selection.js)
-and [past-reminder deletion workflow](https://github.com/nerdrx/novum-xenium/blob/ab19dc86ec1901c9279f46e00f4f7f7ce58000a4/frontend/src/features/notes/application/deletion.js).
+Notes failure messages include an HTTP status when available. In a mixed batch,
+**First HTTP error** describes one failed request; other failures can have a
+different cause. Keep checking the listed outcomes before retrying.
+
+When overlapping pin changes fail, Novum attempts to read back that note’s pin
+state. The recovery read stops waiting after 15 seconds. If it cannot confirm
+the state, Novum keeps the current local value and asks you to refresh Notes.
+Other note fields are not replaced by this pin recovery. Concurrent successful
+pin requests are not serialized, so refresh before relying on an uncertain
+final state.
+
+See the pinned [pin recovery](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/frontend/src/features/notes/application/cardOperations.js)
+and [Notes HTTP handling](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/frontend/src/features/notes/infrastructure/http.js).
+
+See the pinned [selected-note operations](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/frontend/src/features/notes/application/selection.js)
+and [past-reminder deletion workflow](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/frontend/src/features/notes/application/deletion.js).
 
 Notes and calendar reminders share the reminder-note system. Reminders retry
 only within 90 seconds of the due time; a recent successful delivery through

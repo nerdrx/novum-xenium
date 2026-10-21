@@ -20,7 +20,7 @@ See [Feature and source index](index.md) for the source file behind each guide. 
 
 These are the specific areas where the source or validation does not establish a complete universal workflow:
 
-- **Speech settings:** the source identifies a hidden/incomplete speech Settings card; browser speech, local STT/TTS optional dependencies, and remote endpoints have separate limits. The guide does not invent a click path for a hidden card.
+- **Speech providers:** speech input is available under **Settings → AI Defaults → Speech to Text** and is off by default. Browser recognition depends on browser support; local STT/TTS require optional dependencies, and remote endpoints have their own setup and availability limits. The visible control does not establish microphone or transcription support on every device. See [Audio and speech](../media.md#audio).
 - **Remote calendar/email/provider setup:** the code supports named connection paths, but each external vendor controls OAuth credentials, scopes, server URLs, and network requirements. Follow its exact callback and consent requirements; the guide links the relevant setup docs.
 - **Desktop platform checks:** Linux is tested locally. Windows packages run in CI, but Windows desktop runtime testing remains outstanding. The desktop guide does not establish macOS install/update behavior.
 - **GPU/model compatibility:** Linux AMD/ROCm, NVIDIA, Vulkan, CPU and zVram paths belong to different features. Model loading depends on its engine and available working memory. A configured or listed model is not proof of successful inference or image generation.

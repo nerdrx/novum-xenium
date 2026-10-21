@@ -193,6 +193,14 @@ function insertTranscription(text, showToast) {
  */
 export function startRecording(onFileCreated, showToast, showError) {
   const intent = ++recordingIntent;
+  const session = window.sessionModule;
+  const voiceApiReady = session?.captureVoiceIdentity && session?.captureVoiceDestination && session?.deliverVoiceTranscription && session?.deliverVoiceAudioFallback;
+  if (session && !voiceApiReady) {
+    if (showToast) showToast('Reload the app before using voice input again.');
+    _resetRecordingUI();
+    return;
+  }
+  const recordingIdentity = voiceApiReady ? session.captureVoiceIdentity() : null;
 
   // Check for secure context (getUserMedia requires HTTPS or localhost)
   if (!window.isSecureContext) {
@@ -227,6 +235,7 @@ export function startRecording(onFileCreated, showToast, showError) {
         if (mediaRecorder?.state !== 'recording') mediaRecorder = null;
         throw error;
       }
+      recorder._odysseusRecordingIdentity = recordingIdentity;
       mediaRecorder = recorder;
       const audioChunks = [];
       const browserSpeech = { recognition: null, transcript: '' };
@@ -239,7 +248,21 @@ export function startRecording(onFileCreated, showToast, showError) {
 
       recorder.onstop = async () => {
         const stopIntent = recorder._odysseusStopIntent ?? intent;
+        const currentSessionModule = window.sessionModule;
+        const hasVoiceDestinationHandler = !!(currentSessionModule?.captureVoiceDestination && currentSessionModule?.deliverVoiceTranscription && currentSessionModule?.deliverVoiceAudioFallback);
+        if (!recorder._odysseusVoiceDestinationCaptured && hasVoiceDestinationHandler) {
+          recorder._odysseusVoiceDestination = currentSessionModule.captureVoiceDestination(recorder._odysseusRecordingIdentity);
+          recorder._odysseusVoiceDestinationCaptured = true;
+        }
+        const voiceDestination = recorder._odysseusVoiceDestination;
         stream.getTracks().forEach(track => track.stop());
+
+        if (currentSessionModule && !hasVoiceDestinationHandler) {
+          stopBrowserSTT(browserSpeech);
+          if (showToast) showToast('Reload the app before using voice input again.');
+          if (mediaRecorder === recorder && recordingIntent === stopIntent) _resetRecordingUI();
+          return;
+        }
 
         const format = _audioFormat(recorder.mimeType || audioChunks.find(chunk => chunk.type)?.type || 'audio/webm');
         const audioBlob = new Blob(audioChunks, { type: format.mimeType });
@@ -249,11 +272,14 @@ export function startRecording(onFileCreated, showToast, showError) {
           const transcriptPromise = stopBrowserSTTAndWait(browserSpeech);
           const transcript = await transcriptPromise;
           if (transcript) {
-            insertTranscription(transcript, showToast);
+            if (hasVoiceDestinationHandler) {
+              await window.sessionModule.deliverVoiceTranscription(voiceDestination, transcript, () => insertTranscription(transcript, showToast));
+            } else insertTranscription(transcript, showToast);
           } else {
             if (showToast) showToast('No speech detected');
             const audioFile = new File([audioBlob], `voice-message-${Date.now()}.${format.extension}`, { type: format.mimeType });
-            if (onFileCreated) onFileCreated(audioFile);
+            if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated);
+            else if (onFileCreated) onFileCreated(audioFile);
           }
         } else if (provider === 'local' || provider.startsWith('endpoint:')) {
           // Show "Transcribing..." feedback
@@ -261,7 +287,9 @@ export function startRecording(onFileCreated, showToast, showError) {
           try {
             const transcript = await transcribeOnServer(audioBlob, format);
             if (transcript) {
-              insertTranscription(transcript, showToast);
+              if (hasVoiceDestinationHandler) {
+                await window.sessionModule.deliverVoiceTranscription(voiceDestination, transcript, () => insertTranscription(transcript, showToast));
+              } else insertTranscription(transcript, showToast);
             } else {
               if (showToast) showToast('No speech detected');
             }
@@ -270,12 +298,14 @@ export function startRecording(onFileCreated, showToast, showError) {
             if (showError) showError('Transcription failed: ' + e.message);
             // Fallback: attach as file
             const audioFile = new File([audioBlob], `voice-message-${Date.now()}.${format.extension}`, { type: format.mimeType });
-            if (onFileCreated) onFileCreated(audioFile);
+            if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated);
+            else if (onFileCreated) onFileCreated(audioFile);
           }
         } else {
           // STT disabled — attach audio file
           const audioFile = new File([audioBlob], `voice-message-${Date.now()}.${format.extension}`, { type: format.mimeType });
-          if (onFileCreated) onFileCreated(audioFile);
+          if (hasVoiceDestinationHandler) await window.sessionModule.deliverVoiceAudioFallback(voiceDestination, audioFile, onFileCreated);
+          else if (onFileCreated) onFileCreated(audioFile);
         }
 
         if (mediaRecorder === recorder && recordingIntent === stopIntent) {
@@ -333,6 +363,12 @@ export function stopRecording() {
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     // Native onstop may arrive after a newer recording attempt starts.
     mediaRecorder._odysseusStopIntent = recordingIntent;
+    const session = window.sessionModule;
+    const voiceApiReady = session?.captureVoiceDestination && session?.deliverVoiceTranscription && session?.deliverVoiceAudioFallback;
+    if (voiceApiReady) {
+      mediaRecorder._odysseusVoiceDestinationCaptured = true;
+      mediaRecorder._odysseusVoiceDestination = session.captureVoiceDestination(mediaRecorder._odysseusRecordingIdentity);
+    }
     mediaRecorder.stop();
     // isRecording will be set to false in _resetRecordingUI called from onstop
   } else {

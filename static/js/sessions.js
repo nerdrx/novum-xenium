@@ -99,6 +99,174 @@ function _saveComposerDraft(sessionId, msgInput = document.getElementById('messa
   if (uiModule.showToast) uiModule.showToast(reason, { duration: 8000 });
 }
 
+export function captureVoiceIdentity() {
+  const authState = getKnownAuthState();
+  return {
+    authVerified: authState?.verified === true,
+    authSwitched: authState?.switched === true,
+    identity: authState?.verified ? authState.identity : null,
+  };
+}
+
+export function captureVoiceDestination(recordingIdentity) {
+  const sessionId = currentSessionId || '';
+  const pendingDraftId = sessionId ? '' : _activePendingDraftId;
+  const draftId = sessionId || pendingDraftId;
+  if (!draftId) return null;
+  const authState = getKnownAuthState();
+  const options = _composerDraftOptions(draftId);
+  const pendingChat = pendingDraftId ? _pendingChat : null;
+  return {
+    sessionId,
+    pendingDraftId,
+    pendingChat,
+    pendingMetadata: pendingChat?.url && pendingChat?.modelId
+      ? { url: pendingChat.url, modelId: pendingChat.modelId, endpointId: pendingChat.endpointId || '', source: pendingChat.source || 'manual' }
+      : undefined,
+    recordingIdentity: recordingIdentity ? { ...recordingIdentity } : null,
+    authVerified: authState?.verified === true,
+    authSwitched: authState?.switched === true,
+    identity: authState?.verified ? authState.identity : null,
+    draftOptions: { ...options },
+  };
+}
+
+function _voiceDestinationId(destination) {
+  return destination?.sessionId || destination?.pendingChat?.materializedSessionId || destination?.pendingDraftId || '';
+}
+
+function _voiceDestinationIdentityMatches(destination) {
+  if (!destination || destination.authSwitched) return false;
+  if (destination.recordingIdentity?.authSwitched) return false;
+  const current = getKnownAuthState();
+  if (destination.recordingIdentity?.authVerified &&
+      (current?.verified !== true || current.switched === true || current.identity !== destination.recordingIdentity.identity)) return false;
+  if (destination.recordingIdentity && !destination.recordingIdentity.authVerified && destination.authVerified &&
+      !(destination.pendingDraftId && destination.draftOptions?.memoryOnly)) return false;
+  if (destination.authVerified) {
+    return current?.verified === true && current.switched !== true && current.identity === destination.identity;
+  }
+  // A pending draft may be explicitly page-owned while auth is still unknown.
+  // Keep that draft in its page memory scope if auth later resolves; never
+  // adopt it into the newly visible account's storage.
+  if (current?.switched === true) return false;
+  if (current?.verified === true) {
+    return !!destination.pendingDraftId && destination.draftOptions?.memoryOnly === true;
+  }
+  return true;
+}
+
+function _voiceDestinationIsCurrent(destination, targetId) {
+  if (!targetId || _deletedComposerDraftSessions.has(String(targetId))) return false;
+  if (destination.sessionId) return currentSessionId === destination.sessionId;
+  if (destination.pendingChat?.materializedSessionId === targetId) return currentSessionId === targetId;
+  return !currentSessionId && _activePendingDraftId === destination.pendingDraftId;
+}
+
+async function _copyVoiceTranscript(destination, text) {
+  if (!_voiceDestinationIdentityMatches(destination)) {
+    uiModule.showToast?.('Voice transcript was not saved because its original chat is unavailable.');
+    return false;
+  }
+  const confirmed = await uiModule.styledConfirm(
+    'The original chat is unavailable. Copy the voice transcript to your clipboard?',
+    { title: 'Voice transcript', confirmText: 'Copy transcript', cancelText: 'Discard transcript' }
+  );
+  if (!confirmed) return false;
+  if (!_voiceDestinationIdentityMatches(destination)) {
+    uiModule.showToast?.('Voice transcript was not copied because the account changed.');
+    return false;
+  }
+  try {
+    if (uiModule.copyToClipboard) {
+      const copied = await uiModule.copyToClipboard(text);
+      if (copied === false) throw new Error('Clipboard unavailable');
+      if (copied === true) return true;
+    }
+    // Older cached helpers return no status; confirm through the native API
+    // before reporting recovery as successful.
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+    throw new Error('Clipboard unavailable');
+  } catch {
+    uiModule.showError?.('Could not copy the voice transcript.');
+    return false;
+  }
+}
+
+export async function deliverVoiceTranscription(destination, transcript, insertCurrent) {
+  const text = String(transcript || '').trim();
+  if (!text) return false;
+  if (!_voiceDestinationIdentityMatches(destination)) {
+    uiModule.showToast?.('Voice transcript was not delivered because the account context changed.');
+    return false;
+  }
+  const targetId = _voiceDestinationId(destination);
+  if (_voiceDestinationIsCurrent(destination, targetId)) {
+    insertCurrent?.();
+    return true;
+  }
+  if (!targetId || (!destination.authVerified && !destination.draftOptions?.memoryOnly)) {
+    uiModule.showToast?.('Voice transcript could not be saved to its original chat.');
+    return false;
+  }
+  const capturedOptions = destination.draftOptions || {};
+  const latestOptions = _composerDraftOptions(targetId);
+  const options = {
+    ...latestOptions,
+    ...capturedOptions,
+    incognito: !!(latestOptions.incognito || capturedOptions.incognito),
+    memoryOnly: !!(latestOptions.memoryOnly || capturedOptions.memoryOnly),
+    accountId: capturedOptions.accountId || latestOptions.accountId,
+  };
+  const pendingMetadata = targetId === destination.pendingDraftId
+    ? destination.pendingMetadata : undefined;
+  const existing = getComposerDraft(targetId, options).trim();
+  const combined = existing ? `${existing} ${text}` : text;
+  const result = saveComposerDraft(targetId, combined, { ...options, pendingMetadata });
+  if (result.reason === 'deleted' || result.reason === 'unavailable') {
+    return _copyVoiceTranscript(destination, text);
+  }
+  uiModule.showToast?.(result.reason ? 'Voice transcript kept for this page.' : 'Voice transcript saved to its original chat.');
+  return true;
+}
+
+function _downloadVoiceAudio(audioFile) {
+  const url = URL.createObjectURL(audioFile);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = audioFile.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export async function deliverVoiceAudioFallback(destination, audioFile, attachCurrent) {
+  if (!_voiceDestinationIdentityMatches(destination)) {
+    uiModule.showToast?.('Voice recording was not shared because the account context changed.');
+    return false;
+  }
+  const targetId = _voiceDestinationId(destination);
+  if (_voiceDestinationIsCurrent(destination, targetId)) {
+    attachCurrent?.(audioFile);
+    return true;
+  }
+  if (!destination.authVerified && !destination.draftOptions?.memoryOnly) {
+    uiModule.showToast?.('Voice recording could not be delivered to its original chat.');
+    return false;
+  }
+  const confirmed = await uiModule.styledConfirm(
+    'This recording belongs to another chat. Download the audio file instead?',
+    { title: 'Voice recording', confirmText: 'Download audio', cancelText: 'Discard recording' }
+  );
+  if (!confirmed) return false;
+  if (!_voiceDestinationIdentityMatches(destination)) {
+    uiModule.showToast?.('Voice recording was not downloaded because the account changed.');
+    return false;
+  }
+  _downloadVoiceAudio(audioFile);
+  uiModule.showToast?.('Voice recording downloaded.');
+  return true;
+}
+
 function _clearComposerDraft(sessionId) {
   if (!sessionId) return;
   _composerDraftWarnings.delete(`${sessionId}:size`);
@@ -2836,8 +3004,14 @@ export async function materializePendingSession() {
       _markIncognito(payload.id);
     }
 
+    let pendingDraftTransferred = false;
     if (payload.id && pendingDraftId) {
-      const result = transferComposerDraft(pendingDraftId, payload.id, { ..._composerDraftOptions(pendingDraftId), incognito: isIncognito });
+      const pendingDraftOptions = _composerDraftOptions(pendingDraftId);
+      const pageOwnedPending = _pendingDraftAccounts.has(pendingDraftId)
+        && _pendingDraftAccounts.get(pendingDraftId) === '';
+      const result = transferComposerDraft(pendingDraftId, payload.id, { ...pendingDraftOptions, incognito: isIncognito });
+      pendingDraftTransferred = result.reason !== 'deleted' && !_deletedComposerDraftSessions.has(String(pendingDraftId));
+      if (pendingDraftTransferred && pageOwnedPending) _pendingDraftAccounts.set(payload.id, '');
       if (result.reason && result.reason !== 'incognito' && uiModule.showToast) {
         const message = result.reason === 'size'
           ? 'This draft is too large to save for reload. It will stay available while this page is open.'
@@ -2850,6 +3024,8 @@ export async function materializePendingSession() {
       _incognitoPendingDraftIds.delete(pendingDraftId);
       _memoryOnlyPendingDraftIds.delete(pendingDraftId);
     }
+
+    if (pendingDraftId && pendingDraftTransferred) pending.materializedSessionId = payload.id;
 
     // Clear any leftover document text selection from the previous session
     if (window.documentModule?.clearSelection) {
@@ -4576,7 +4752,11 @@ const sessionModule = {
   getSortMode,
   setSortMode,
   deleteCurrentSessionFromTopMenu,
-  deleteSessionById
+  deleteSessionById,
+  captureVoiceIdentity,
+  captureVoiceDestination,
+  deliverVoiceTranscription,
+  deliverVoiceAudioFallback
 };
 
 export { updateModelPicker };

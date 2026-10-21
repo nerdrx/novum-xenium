@@ -51,25 +51,42 @@ def test_post_settings_helper_verifies_response_ok():
 
 
 def test_all_settings_save_handlers_route_through_post_settings():
-    """All settings save handlers in settings.js and settings/*.js must route saves via postSettings."""
+    """Settings writers use the shared POST transport; reads and other endpoints stay independent."""
     settings_content = _SETTINGS_JS.read_text(encoding="utf-8")
     module_contents = {p.name: p.read_text(encoding="utf-8") for p in _SETTINGS_DIR.glob("*.js")}
 
-    # Assert no unverified direct POST fetch to /api/auth/settings in settings.js
-    direct_posts = list(re.finditer(r"fetch\(['\"]/api/auth/settings['\"],\s*\{\s*method:\s*['\"]POST['\"]", settings_content))
-    assert len(direct_posts) == 0, (
-        f"Found direct POST fetch to /api/auth/settings in settings.js; all writes must route through _postSettings"
+    # Only api.js owns the direct settings POST. Every other settings file must
+    # leave writes to the shared helper, even as panels move between modules.
+    direct_settings_post = re.compile(
+        r"fetch\s*\(\s*(['\"`])/api/auth/settings\1\s*,\s*\{[^}]*?"
+        r"\bmethod\s*:\s*(['\"])POST\2",
+        re.DOTALL,
+    )
+    sources = {"settings.js": settings_content, **{name: text for name, text in module_contents.items() if name != "api.js"}}
+    direct_posts = [name for name, text in sources.items() if direct_settings_post.search(text)]
+    assert not direct_posts, (
+        f"Direct POST fetch to /api/auth/settings found in {direct_posts}; route writes through postSettings"
     )
 
-    # Count _postSettings invocations across settings.js and modules
-    post_settings_calls = len(re.findall(r"_postSettings\(", settings_content))
-    for mod_name, mod_text in module_contents.items():
-        if mod_name != "api.js":
-            post_settings_calls += len(re.findall(r"_postSettings\(", mod_text))
-
-    assert post_settings_calls >= 15, (
-        f"Expected at least 15 _postSettings calls across settings modules, found {post_settings_calls}"
+    # The main-panel saver must await the helper, and each extracted writer
+    # must import and call that same transport rather than duplicating it.
+    saver = re.search(r"function _createSettingsSaver\b[\s\S]*?\n}\n", settings_content)
+    assert saver is not None, "Expected the main settings saver"
+    assert re.search(r"await\s+_postSettings\(snapshot\)", saver.group(0)), (
+        "The main settings saver must await _postSettings(snapshot)"
     )
+    writers = {
+        "agent.js": r"from\s+['\"]\./api\.js['\"]",
+        "imageModels.js": r"from\s+['\"]\./api\.js['\"]",
+        "speech.js": r"from\s+['\"]\./api\.js['\"]",
+        "writingStyle.js": r"from\s+['\"]\./api\.js['\"]",
+    }
+    for name, import_path in writers.items():
+        text = module_contents[name]
+        assert re.search(r"import\s*\{\s*postSettings\s+as\s+_postSettings\s*\}\s*" + import_path, text), (
+            f"{name} must import postSettings from its shared api.js module"
+        )
+        assert re.search(r"_postSettings\s*\(", text), f"{name} must call the shared postSettings helper"
 
 
 @pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")

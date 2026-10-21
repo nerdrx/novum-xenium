@@ -135,7 +135,7 @@ const server = http.createServer((req, res) => {
 });
 const waitUntil = async (fn, label, timeout = 20000) => {
   const start = Date.now();
-  while (!fn()) {
+  while (!(await fn())) {
     if (Date.now() - start > timeout) throw new Error(`Timed out waiting for ${label}`);
     await new Promise(resolve => setTimeout(resolve, 10));
   }
@@ -294,15 +294,22 @@ function exactPost(expected) {
 
     // Late successful hydration must not replace the visible failure from an
     // early sparse save that completed while the initial GET was held.
-    configure({ mode: 'valid', holdAuthCallers: ['initResearchSettings'], post: 'http503' });
+    configure({ mode: 'valid', settings: { ...baseSaved, research_endpoint_id: 'fixture-b', research_model: 'research-b' }, holdAuthCallers: ['initResearchSettings'], post: 'http503' });
     ({ page, context } = await openSettings(browser, base, pageErrors));
     await waitUntil(() => authReads.some(entry => entry.caller === 'initResearchSettings' && !entry.ended), 'held Research settings response before failed early save');
     await page.locator('[data-settings-tab="search"]').click();
     await page.locator('#set-researchMaxTokens').fill('5000');
     await page.locator('#set-researchMaxTokens').press('Tab');
     await waitUntil(() => page.locator('#set-researchMsg').textContent().then(text => text === 'Failed to save'), 'early Research save failure feedback');
+    assert.equal(await page.locator('#set-researchMsg').textContent(), 'Failed to save');
+    assert.deepEqual(posts, [{ research_max_tokens: 5000 }], 'one explicit sparse failed save');
     releaseAuth();
     await waitUntil(() => authReads.every(entry => entry.ended), 'failed-save hydration response release');
+    await page.waitForFunction(() =>
+      document.querySelector('#set-researchEndpoint').value === 'fixture-b' &&
+      document.querySelector('#set-researchModel').value === 'research-b' &&
+      document.querySelector('#set-researchMaxTokens').value === '5000'
+    );
     results.earlyResearchSaveFailure = {
       message: await page.locator('#set-researchMsg').textContent(),
       posts: structuredClone(posts),
@@ -342,7 +349,7 @@ function exactPost(expected) {
         runTimeout: serverSettings.research_run_timeout_seconds,
       },
       posts: structuredClone(posts),
-      note: 'Synthetic server applies POST bodies as the production route does: only included keys are updated. No unavailable-model option was added to the UI.'
+      note: 'Synthetic server applies POST bodies as the production route does: only included keys are updated. This scenario checks sparse persistence; option presentation is tested separately.'
     };
     await context.close();
 

@@ -859,7 +859,14 @@ async function initVisionSettings() {
     const settings = await settingsRes.json();
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
     if (!touched.has('vision_model') && Object.prototype.hasOwnProperty.call(settings, 'vision_model') && settings.vision_model) {
-      vlSel.value = settings.vision_model;
+      const savedModel = String(settings.vision_model);
+      if (!Array.from(vlSel.options).some(option => option.value === savedModel)) {
+        const savedOption = document.createElement('option');
+        savedOption.value = savedModel;
+        savedOption.textContent = savedModel + ' (saved; not in current list)';
+        vlSel.appendChild(savedOption);
+      }
+      vlSel.value = savedModel;
     }
     _syncModelLogo(vlSel);
     if (enabledToggle && !touched.has('vision_enabled') && Object.prototype.hasOwnProperty.call(settings, 'vision_enabled')) {

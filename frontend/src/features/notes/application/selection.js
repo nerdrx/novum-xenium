@@ -19,11 +19,31 @@ export function createSelectionOperations({
       }
       exitSelection();
     }
+    async function mutateSelected(ids, mutate, verb, failureAction) {
+      const results = await Promise.all(ids.map(async id => {
+        try { await mutate(id); return { id, ok: true }; }
+        catch (_) { return { id, ok: false }; }
+      }));
+      const succeeded = results.filter(result => result.ok);
+      const failed = results.filter(result => !result.ok);
+      for (const { id } of succeeded) app.deselectId(id);
+      const refreshed = await fetchNotes();
+      if (state.selectMode && !state.selectedIds.size) exitSelection();
+      else effects.render();
+      if (failed.length) {
+        const completed = succeeded.length ? `${verb} ${succeeded.length}; ` : '';
+        const refresh = refreshed ? '' : ' The Notes list also could not refresh.';
+        effects.showError(`${completed}Could not confirm ${failed.length} note ${failureAction} operation${failed.length === 1 ? '' : 's'}. Check Notes before retrying.${refresh}`);
+      } else if (!refreshed) {
+        effects.showError(`${verb} ${succeeded.length}, but the Notes list could not refresh. Check Notes before retrying.`);
+      } else if (succeeded.length) {
+        effects.showToast(`${verb} ${succeeded.length}`);
+      }
+    }
     async function archiveSelected() {
       const ids = [...state.selectedIds];
       if (!ids.length) return;
-      await Promise.all(ids.map(id => api.patchNote(id, { archived: true }).catch(() => {})));
-      exitSelection(); await fetchNotes(); effects.render(); effects.showToast(`Archived ${ids.length}`);
+      await mutateSelected(ids, id => api.patchNote(id, { archived: true }), 'Archived', 'archive');
     }
     async function deleteSelected() {
       const ids = [...state.selectedIds];
@@ -32,8 +52,7 @@ export function createSelectionOperations({
         const ok = await effects.styledConfirm(`Delete ${ids.length} note${ids.length === 1 ? '' : 's'}?`, { confirmText: 'Delete', danger: true });
         if (!ok) return;
       }
-      await Promise.all(ids.map(id => api.deleteNote(id).catch(() => {})));
-      exitSelection(); await fetchNotes(); effects.render(); effects.showToast(`Deleted ${ids.length}`);
+      await mutateSelected(ids, id => api.deleteNote(id), 'Deleted', 'delete');
     }
     return { attachSelected, archiveSelected, deleteSelected };
 }

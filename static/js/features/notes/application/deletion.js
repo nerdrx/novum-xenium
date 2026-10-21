@@ -27,10 +27,24 @@ export function createDeletion({
       ? await effects.styledConfirm(`Delete ${targets.length} past reminder${targets.length === 1 ? '' : 's'}?`, { confirmText: 'Delete', danger: true })
       : effects.confirm(`Delete ${targets.length} past reminder${targets.length === 1 ? '' : 's'}?`);
     if (!ok) return;
-    await Promise.all(targets.map(n => _deleteNoteApi(n.id).catch(() => {})));
-    await _fetchNotes();
+    const results = await Promise.all(targets.map(async note => {
+      try { await _deleteNoteApi(note.id); return { id: note.id, ok: true }; }
+      catch (_) { return { id: note.id, ok: false }; }
+    }));
+    const deleted = results.filter(result => result.ok);
+    const failed = results.filter(result => !result.ok);
+    const refreshed = await _fetchNotes();
     _renderNotes();
-    effects.showToast?.(`Cleared ${targets.length} past reminder${targets.length === 1 ? '' : 's'}`);
+    const cleared = `Cleared ${deleted.length} past reminder${deleted.length === 1 ? '' : 's'}`;
+    if (failed.length) {
+      const completed = deleted.length ? `${cleared}; ` : '';
+      const refresh = refreshed ? '' : ' The Notes list also could not refresh.';
+      effects.showError(`${completed}Could not confirm deletion of ${failed.length} past reminder${failed.length === 1 ? '' : 's'}. Check Notes before retrying.${refresh}`);
+    } else if (!refreshed) {
+      effects.showError(`${cleared}, but the Notes list could not refresh. Check Notes before retrying.`);
+    } else if (deleted.length) {
+      effects.showToast?.(cleared);
+    }
   }
 
   async function deleteFromEditor(id) {

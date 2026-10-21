@@ -53,6 +53,109 @@ test('editor deletion waits for confirmation and preserves optimistic failure/re
   assert.deepEqual(events, ['render', 'delete:a', 'Failed to delete', 'fetch', 'render']);
 });
 
+test('selected delete captures confirmation targets and preserves newer selection', async () => {
+  const app = owner([{ id: 'a' }, { id: 'b' }, { id: 'c' }]), events = [];
+  app.setSelectMode(true); app.selectId('a');
+  let confirm, resolveDelete;
+  const operations = createSelectionOperations({
+    app,
+    api: { deleteNote: id => { events.push(`delete:${id}`); return new Promise(resolve => { resolveDelete = resolve; }); } },
+    effects: { styledConfirm: () => new Promise(resolve => { confirm = resolve; }), render: () => events.push('render'), showToast: text => events.push(`toast:${text}`), showError: text => events.push(`error:${text}`) },
+    sendContext() {},
+    exitSelection: () => { app.setSelectMode(false); app.clearSelection(); events.push('exit'); },
+    fetchNotes: async () => { app.replaceNotes([{ id: 'b' }, { id: 'c' }]); events.push('fetch'); return true; },
+  });
+  const deletion = operations.deleteSelected();
+  app.selectId('b');
+  confirm(true);
+  await drain();
+  assert.deepEqual(events, ['delete:a'], 'only the selection captured before confirmation is sent');
+  app.selectId('c');
+  resolveDelete();
+  await deletion;
+  assert.deepEqual([...app.state.selectedIds], ['b', 'c']);
+  assert.equal(app.state.selectMode, true);
+  assert.deepEqual(events, ['delete:a', 'fetch', 'render', 'toast:Deleted 1']);
+});
+
+test('selected delete failure retains still-present selection and respects cancellation', async () => {
+  const app = owner([{ id: 'a' }]), events = [];
+  app.setSelectMode(true); app.selectId('a');
+  let rejectDelete;
+  const operations = createSelectionOperations({
+    app,
+    api: { deleteNote: () => new Promise((_resolve, reject) => { rejectDelete = reject; }) },
+    effects: { styledConfirm: async () => true, render: () => events.push('render'), showToast: text => events.push(`toast:${text}`), showError: text => events.push(`error:${text}`) },
+    sendContext() {},
+    exitSelection: () => { app.setSelectMode(false); app.clearSelection(); events.push('exit'); },
+    fetchNotes: async () => true,
+  });
+  const deletion = operations.deleteSelected();
+  await drain();
+  assert.equal(typeof rejectDelete, 'function');
+  app.clearSelection(); app.setSelectMode(false);
+  rejectDelete(Error('HTTP 403'));
+  await deletion;
+  assert.deepEqual([...app.state.selectedIds], [], 'the failed target is not reselected after user cancellation');
+  assert.equal(app.state.selectMode, false);
+  assert.equal(events.some(event => event.startsWith('error:') && /could not confirm 1 note delete operation/i.test(event)), true);
+  assert.equal(events.some(event => event.startsWith('toast:')), false);
+});
+
+test('selected archive reports partial failure and keeps failed selection', async () => {
+  const app = owner([{ id: 'a' }, { id: 'b' }]), events = [];
+  app.setSelectMode(true); app.selectId('a'); app.selectId('b');
+  const operations = createSelectionOperations({
+    app,
+    api: { patchNote: async id => { if (id === 'a') throw Error('HTTP 403'); } },
+    effects: { render: () => events.push('render'), showToast: text => events.push(`toast:${text}`), showError: text => events.push(`error:${text}`) },
+    sendContext() {},
+    exitSelection: () => { app.setSelectMode(false); app.clearSelection(); events.push('exit'); },
+    fetchNotes: async () => { app.replaceNotes([{ id: 'a' }]); return true; },
+  });
+  await operations.archiveSelected();
+  assert.deepEqual([...app.state.selectedIds], ['a']);
+  assert.equal(app.state.selectMode, true);
+  assert.equal(events.some(event => event.startsWith('error:') && /archived 1; could not confirm 1 note archive operation/i.test(event)), true);
+  assert.equal(events.some(event => event.startsWith('toast:')), false);
+});
+
+test('clearing past reminders distinguishes mutation failure from refresh failure', async () => {
+  const app = owner([
+    { id: 'failed', due_date: '2000-01-01T00:00:00Z' },
+    { id: 'deleted', due_date: '2000-01-01T00:00:00Z' },
+  ]), events = [];
+  const deletion = createDeletion({
+    app,
+    state: app.state,
+    _deleteNoteApi: async id => { if (id === 'failed') throw Error('HTTP 503'); },
+    _fetchNotes: async () => false,
+    _isPastReminder: () => true,
+    _renderNotes: () => events.push('render'),
+    effects: { styledConfirm: async () => true, showToast: text => events.push(`toast:${text}`), showError: text => events.push(`error:${text}`) },
+  });
+  await deletion._clearPastReminders();
+  assert.equal(events.includes('render'), true);
+  assert.equal(events.some(event => event.startsWith('error:') && /Cleared 1 past reminder; Could not confirm deletion of 1 past reminder\. Check Notes before retrying\. The Notes list also could not refresh\./i.test(event)), true);
+  assert.equal(events.some(event => event.startsWith('toast:')), false);
+});
+
+test('clearing past reminders reports confirmed success when refresh succeeds', async () => {
+  const app = owner([{ id: 'old', due_date: '2000-01-01T00:00:00Z' }]), events = [];
+  const deletion = createDeletion({
+    app,
+    state: app.state,
+    _deleteNoteApi: async () => {},
+    _fetchNotes: async () => { app.replaceNotes([]); return true; },
+    _isPastReminder: () => true,
+    _renderNotes: () => events.push('render'),
+    effects: { styledConfirm: async () => true, showToast: text => events.push(`toast:${text}`), showError: text => events.push(`error:${text}`) },
+  });
+  await deletion._clearPastReminders();
+  assert.deepEqual(app.state.notes, []);
+  assert.deepEqual(events, ['render', 'toast:Cleared 1 past reminder']);
+});
+
 test('pin and delete failures roll back captured state and order', async () => {
   const app = owner([{ id: 'a', pinned: false, sort_order: 4 }, { id: 'b', pinned: true, sort_order: -3 }]), errors = [];
   const operations = createCardOperations({ app, api: { patchNote: async () => { throw Error('403'); }, deleteNote: async () => { throw Error('403'); } }, effects: { render() {}, showError: error => errors.push(error) } });

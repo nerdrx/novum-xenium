@@ -242,12 +242,18 @@ export function startRecording(onFileCreated, showToast, showError) {
       recordingStartTime = new Date();
 
       // Start browser STT if that's the provider
+      let browserSttFailed = false;
       if (_sttProvider === 'browser') {
-        startBrowserSTT();
+        try {
+          startBrowserSTT();
+        } catch (_) {
+          stopBrowserSTT();
+          browserSttFailed = true;
+        }
       }
 
       if (showToast) {
-        showToast('Recording...');
+        showToast(browserSttFailed ? 'Browser transcription unavailable; recording continues' : 'Recording...');
       }
     })
     .catch(error => {

@@ -4178,16 +4178,46 @@ async function initUnifiedIntegrations() {
   async function _renderContactsManager() {
     const list = el('cm-list');
     if (!list) return;
+    const cnt = el('cm-count');
+    const searchInput = el('cm-search');
+    const requestId = list._contactsLoadRequest = (list._contactsLoadRequest || 0) + 1;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     let contacts = [];
     try {
-      const r = await fetch('/api/contacts/list', { credentials: 'same-origin' });
+      const r = await fetch('/api/contacts/list', { credentials: 'same-origin', signal: controller.signal });
+      if (!list.isConnected || el('cm-list') !== list || list._contactsLoadRequest !== requestId) return;
+      if (!r.ok) throw new Error('Contacts list request failed');
       const d = await r.json();
-      contacts = d.contacts || [];
+      if (!list.isConnected || el('cm-list') !== list || list._contactsLoadRequest !== requestId) return;
+      if (!d || typeof d !== 'object' || Array.isArray(d) || !Array.isArray(d.contacts)
+        || !d.contacts.every(c => c && typeof c === 'object' && !Array.isArray(c)
+          && typeof c.uid === 'string' && c.uid.trim()
+          && (c.emails === undefined || Array.isArray(c.emails))
+          && (c.phones === undefined || Array.isArray(c.phones)))) {
+        throw new Error('Invalid contacts list response');
+      }
+      contacts = d.contacts;
     } catch (_) {
-      list.innerHTML = '<div style="opacity:0.5;font-size:11px;padding:8px 2px;">Failed to load contacts (check CardDAV config above).</div>';
+      if (!list.isConnected || el('cm-list') !== list || list._contactsLoadRequest !== requestId) return;
+      const warning = document.createElement('div');
+      warning.className = 'cm-load-warning';
+      warning.setAttribute('role', 'alert');
+      warning.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 2px;color:var(--red);font-size:11px;';
+      const warningText = list._hasLoadedContacts
+        ? 'Could not refresh contacts. Showing previous results; check the CardDAV connection and retry.'
+        : 'Could not load contacts. Check the CardDAV connection and retry.';
+      warning.innerHTML = `<span style="min-width:0;flex:1;overflow-wrap:anywhere;">${warningText}</span><button type="button" class="admin-btn-sm cm-load-retry" aria-label="Retry loading contacts" style="min-width:44px;min-height:44px;flex-shrink:0;">Retry</button>`;
+      const oldWarning = list.querySelector('.cm-load-warning');
+      if (oldWarning) oldWarning.replaceWith(warning);
+      else if (list._hasLoadedContacts) list.insertBefore(warning, list.firstChild);
+      else list.replaceChildren(warning);
+      warning.querySelector('.cm-load-retry').addEventListener('click', () => _renderContactsManager());
       return;
+    } finally {
+      clearTimeout(timeout);
     }
-    const cnt = el('cm-count');
+    list._hasLoadedContacts = true;
     if (cnt) cnt.textContent = contacts.length ? `(${contacts.length})` : '';
     if (!contacts.length) {
       list.innerHTML = '<div style="opacity:0.4;font-size:11px;padding:8px 2px;">No contacts yet.</div>';
@@ -4197,7 +4227,6 @@ async function initUnifiedIntegrations() {
     contacts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
     // Live filter — search across name/emails/phones/address.
-    const searchInput = el('cm-search');
     const q = (searchInput?.value || '').trim().toLowerCase();
     const filtered = !q ? contacts : contacts.filter(c => {
       const hay = [

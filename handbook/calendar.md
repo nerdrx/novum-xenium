@@ -119,6 +119,14 @@ provider. Email, chat-model, and CalDAV credentials are configured separately.
   list request has a 15-second limit, including reading its response. If it
   keeps failing, check server and network access. This limit does not apply
   to remote CalDAV sync.
+- **Could not load events:** use **Retry** in the displayed warning. Event
+  reads also have a 15-second limit, including reading their response. Cached
+  events can remain visible after a failed refresh; they are not confirmation
+  that the refresh succeeded. Retry repeats the failed date range, including
+  the wider range of a failed broad search. Clearing the search allows normal
+  date-range loading to resume on the next full view refresh; it does not
+  immediately remove the warning. This limit does not apply to remote CalDAV
+  sync.
 - **No calendars or an error state:** check the displayed error, workspace
   account, and server health. Create a local calendar if needed; repair CalDAV
   under **Settings → Integrations**.
@@ -132,10 +140,10 @@ provider. Email, chat-model, and CalDAV credentials are configured separately.
   browser notification permission, and whether a Novum session was open.
 
 For account and route behavior, see the
-[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/742942ec07694d7c4dc5398d7af36a108f828563/specs/calendar-tasks-notes.md).
-The frozen [calendar interface](https://github.com/nerdrx/novum-xenium/blob/742942ec07694d7c4dc5398d7af36a108f828563/static/js/calendar.js),
-[CalDAV settings](https://github.com/nerdrx/novum-xenium/blob/742942ec07694d7c4dc5398d7af36a108f828563/static/js/settings.js),
-[calendar routes](https://github.com/nerdrx/novum-xenium/blob/742942ec07694d7c4dc5398d7af36a108f828563/routes/calendar_routes.py),
-[CalDAV sync](https://github.com/nerdrx/novum-xenium/blob/742942ec07694d7c4dc5398d7af36a108f828563/src/caldav_sync.py),
-and [reminder polling](https://github.com/nerdrx/novum-xenium/blob/742942ec07694d7c4dc5398d7af36a108f828563/static/js/calendar/reminders.js)
+[Calendar, Tasks, and Notes specification](https://github.com/nerdrx/novum-xenium/blob/07b43a1b067b4593624a7bbc41f9e2866b067647/specs/calendar-tasks-notes.md).
+The frozen [calendar interface](https://github.com/nerdrx/novum-xenium/blob/07b43a1b067b4593624a7bbc41f9e2866b067647/static/js/calendar.js),
+[CalDAV settings](https://github.com/nerdrx/novum-xenium/blob/07b43a1b067b4593624a7bbc41f9e2866b067647/static/js/settings.js),
+[calendar routes](https://github.com/nerdrx/novum-xenium/blob/07b43a1b067b4593624a7bbc41f9e2866b067647/routes/calendar_routes.py),
+[CalDAV sync](https://github.com/nerdrx/novum-xenium/blob/07b43a1b067b4593624a7bbc41f9e2866b067647/src/caldav_sync.py),
+and [reminder polling](https://github.com/nerdrx/novum-xenium/blob/07b43a1b067b4593624a7bbc41f9e2866b067647/static/js/calendar/reminders.js)
 show the behavior this guide describes.

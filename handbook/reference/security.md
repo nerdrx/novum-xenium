@@ -23,9 +23,9 @@ Keep authentication enabled and localhost bypass disabled for network-accessible
 The Python dependency audit is advisory: a passing workflow can still contain a failed `pip-audit` job. Read that job's findings before calling security checks clear. The separate pull-request dependency-review job is currently restricted to the upstream repository and is skipped in this fork. See the [workflow conditions](https://github.com/nerdrx/novum-xenium/blob/main/.github/workflows/dependency-review.yml).
 
 As of 2026-10-21, the reviewed backend image uses Pillow 12.3.0 and FastEmbed
-0.9.0. The audit reports 11 Pillow advisories fixed in 13.0.0, while FastEmbed
+0.9.0. The audit reports 15 Pillow advisories fixed in 13.0.0, while FastEmbed
 0.9.0 requires `pillow<13`; this is an unresolved dependency conflict, not a
-clean security result. The 11 records are:
+clean security result. The 15 records are:
 
 - [CVE-2026-112895](https://github.com/python-pillow/Pillow/security/advisories/GHSA-p4wg-p73j-c528)
 - [CVE-2026-112400](https://github.com/python-pillow/Pillow/security/advisories/GHSA-65qm-jvmh-6pqg)
@@ -38,18 +38,29 @@ clean security result. The 11 records are:
 - [CVE-2026-112402](https://github.com/python-pillow/Pillow/security/advisories/GHSA-7mwm-ghpf-9vrm)
 - [CVE-2026-112900](https://github.com/python-pillow/Pillow/security/advisories/GHSA-w889-685w-c8fh)
 - [CVE-2026-112893](https://github.com/python-pillow/Pillow/security/advisories/GHSA-j4m9-6w36-pw47)
+- [CVE-2026-112390](https://github.com/python-pillow/Pillow/security/advisories/GHSA-22hg-r758-rrw9)
+- [CVE-2026-112392](https://github.com/python-pillow/Pillow/security/advisories/GHSA-27h8-gf7j-v5hc)
+- [CVE-2026-112405](https://github.com/python-pillow/Pillow/security/advisories/GHSA-cp9v-662q-vvx9)
+- [CVE-2026-112891](https://github.com/python-pillow/Pillow/security/advisories/GHSA-fc9g-5qg7-mf45)
 
 Check [FastEmbed's released metadata](https://pypi.org/pypi/fastembed/0.9.0/json)
 and [Pillow's security release notes](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html)
 for updates.
 
-Separately from those 11 audit records, Novum excludes the XBM decoder from
+Separately from those 15 audit records, Novum excludes the XBM decoder from
 gallery inputs, chat image metadata and thumbnails, media inspection, image-edit
 sources, and inline tool-result image packing. This targets the separate
 [XBM header-parser denial of service advisory](https://github.com/python-pillow/Pillow/security/advisories/GHSA-xgh8-jp6q-p5x8).
 It does not patch Pillow; existing TIFF decoding and its reported risks remain.
-See the pinned [decoder helper](https://github.com/nerdrx/novum-xenium/blob/9b0f268085a68fdbf504b261775eb6edd2504a34/src/safe_image_open.py)
+See the pinned [decoder helper](https://github.com/nerdrx/novum-xenium/blob/162cb8f1dc980640cb9fb74982ff4f3e73f7485d/src/safe_image_open.py)
 and [gallery validation](https://github.com/nerdrx/novum-xenium/blob/b178357088ec920083e040291abf5a76cab76b1a/routes/gallery/gallery_routes.py).
+
+The shared opener also excludes the standalone IPTC decoder, including explicit
+requests for that format. This narrows the request-image decode path associated
+with [CVE-2026-112405](https://github.com/python-pillow/Pillow/security/advisories/GHSA-cp9v-662q-vvx9).
+It does not remove IPTC metadata from JPEG files or patch general `Image.merge`
+behavior. Other registered formats remain available except XBM and standalone IPTC. These are scoped
+application guards; the dependency audit findings remain unresolved.
 
 The reviewed EPS change cwd-prefixes relative filesystem paths passed to the
 helper, preventing relative `-` or `@` names from being parsed as Ghostscript

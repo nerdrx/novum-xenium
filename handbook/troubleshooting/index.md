@@ -29,4 +29,19 @@ For the desktop app, capture the selected checkout, backend health status, manag
 
 Check whether the action already completed. A timeout can occur after an external action succeeds. Look at the chat's last tool result, task status, external service, or changed file before retrying. Repeating an email, upload, payment, or database change can create a duplicate.
 
+## Clipboard copy fails or paste is empty
+
+If Novum shows **Could not copy**, neither the browser clipboard API nor its
+legacy fallback reported success. Select the text and copy it manually, or
+check the browser's clipboard permission for this site and retry. Clipboard
+access is restricted in some insecure HTTP contexts; on an HTTP or IP-address
+deployment, the legacy fallback may also be blocked. Use HTTPS or localhost
+where appropriate.
+
+**Copied** and the copy-button check mark mean a browser copy method reported
+success. They cannot guarantee that the operating system made the text
+available to another app, so try pasting before relying on the result.
+
+Source: [clipboard result handling](https://github.com/nerdrx/novum-xenium/blob/edca488cb3b7213891d72827eeb71a9c12fda001/static/js/ui.js#L252).
+
 If the issue remains, report Novum version, deployment method, platform, exact expected/actual behavior, the smallest relevant error excerpt, and steps to reproduce. Do not include secrets or personal chat content.

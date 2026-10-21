@@ -24,6 +24,35 @@ docker compose start
 
 The archive may contain credentials and personal content; protect it accordingly. This file copy covers the standard local `data/` directory only. It does not include Compose named volumes for ChromaDB, SearXNG, or ntfy, or files stored outside `data/`. Back those up separately if their contents matter. If you configured another `APP_DATA_DIR`, external database, or other storage, use that storage's backup procedure. Do not remove the original data as part of a backup.
 
+## Full-backup ZIP in Settings
+
+As an administrator, open **Settings → System → Data Backup**. **Export Data**
+and **Import Data** use the JSON format described below. They do not
+replace the full application-data ZIP.
+
+1. Use **Download Full Backup**, wait for the download to finish, and verify
+   the archive exists in your private destination. The ZIP includes eligible
+   application data and a consistent SQLite snapshot; external Docker volumes,
+   runtime caches, logs, and model downloads require separate backup plans.
+2. Use **Preview Full Restore** to choose a ZIP. Preview validates and summarizes
+   the archive without replacing live data. Check its date, file count,
+   database coverage, and encryption-key information before proceeding.
+3. Take a fresh backup of the current installation before using **Stage Restore
+   and Require Restart**. Confirm the replacement only for the intended archive.
+   Staging prepares a restore; it does not immediately replace the running data.
+4. Plan a clean backend stop and start to activate the staged restore. This
+   replaces eligible application data and can discard changes made after the
+   archive was created. External Docker volumes and runtime caches remain in
+   place; vector indexes may need rebuilding.
+
+Only one restore can be pending. Previewing another ZIP does not replace an
+already staged restore. If you see **A restore is already pending**, review
+which restore you intend to activate before restarting; repeated staging is
+not an overwrite mechanism. A newer preview remains separate from the result
+of an earlier staging request.
+
+See the pinned [restore controls](https://github.com/nerdrx/novum-xenium/blob/cfffb7ec2eee2ec56701e0b699450ef7c13e570c/static/js/admin.js) and [backup staging implementation](https://github.com/nerdrx/novum-xenium/blob/cfffb7ec2eee2ec56701e0b699450ef7c13e570c/src/full_backup.py).
+
 ## Import exported settings data
 
 Admin's **Import Data** reads a JSON export; it is separate from restoring a full

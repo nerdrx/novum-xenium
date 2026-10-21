@@ -24,6 +24,16 @@ docker compose start
 
 The archive may contain credentials and personal content; protect it accordingly. This file copy covers the standard local `data/` directory only. It does not include Compose named volumes for ChromaDB, SearXNG, or ntfy, or files stored outside `data/`. Back those up separately if their contents matter. If you configured another `APP_DATA_DIR`, external database, or other storage, use that storage's backup procedure. Do not remove the original data as part of a backup.
 
+## Import exported settings data
+
+Admin's **Import Data** reads a JSON export; it is separate from restoring a full
+application backup. Importing presets can replace the active custom persona.
+A custom persona supplied as a list or text is rejected before preset settings
+are replaced.
+A failed preset write reports an error instead of a successful import. Earlier
+sections of the file may already have been imported, so check their state before
+retrying the whole file.
+
 ## Rollback
 
 If an update fails, capture the error and current logs first. If the manager shows a **Recovery** action, review its target checkout and backup path before using it. Otherwise, stop the backend and follow the documented manual recovery procedure for that deployment. Restore from a known-good backup only after confirming the target checkout and data location. Restore replaces data and can lose changes made after the backup. Never restore over active writers.

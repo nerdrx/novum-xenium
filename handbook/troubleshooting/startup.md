@@ -82,6 +82,14 @@ checking whether the prior request produced a result. Older builds may not
 include these recovery changes; compare the installed version with the
 [current source](https://github.com/nerdrx/novum-xenium/blob/main/static/js/chat.js).
 
+## Persona settings fail to load
+
+**Failed to load presets** means the settings request failed, exceeded its
+15-second deadline, or returned an unexpected response. The deadline includes
+reading the response body. Any preset settings already loaded remain in the page.
+A persona saved successfully during slow startup takes precedence over an older
+startup response. Copy unsaved edits before reloading after the server recovers.
+
 ## Sending says the account cannot be verified or has changed
 
 **Cannot verify your account:** the account-status request failed, returned an

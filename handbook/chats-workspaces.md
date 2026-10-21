@@ -38,10 +38,16 @@ edits, refresh the page, and check the saved-template list before retrying.
 If a refresh fails, the displayed entries can be from the last successful load;
 wait for the server to recover and refresh again before retrying a change.
 
+If a save finishes while you edit another persona, your newer form stays open.
+The completed save still applies unless a newer save has already succeeded.
+Deleting a saved, active persona also disables that persona. If the same persona
+was saved again while deletion was pending, the app keeps the newer settings and
+asks you to reload the page before retrying.
+
 Saved templates retain the **Thinking** override: **On**, **Off**, or the model
 default. Older templates without an override use the model default. The pinned
-[template request contract](https://github.com/nerdrx/novum-xenium/blob/7082346afd5b0857b75f3e5f9bdbfd2b7fb9cd3a/routes/preset_routes.py)
-and [preset persistence](https://github.com/nerdrx/novum-xenium/blob/bdd1df629254b97d316ce21d6b0a2b13134c9e34/src/preset_manager.py)
+[template request contract](https://github.com/nerdrx/novum-xenium/blob/feb113618767b285a98541584f32a924ab8e6cf8/routes/preset_routes.py)
+and [preset persistence](https://github.com/nerdrx/novum-xenium/blob/feb113618767b285a98541584f32a924ab8e6cf8/src/preset_manager.py)
 describe these save boundaries.
 
 ## Unsent drafts

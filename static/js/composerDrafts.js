@@ -64,7 +64,7 @@ function _cleanPendingMetadata(value) {
   return { url, modelId, endpointId, source };
 }
 
-export function saveComposerDraft(sessionId, text, { accountId, incognito = false, storage: providedStorage, pendingMetadata } = {}) {
+export function saveComposerDraft(sessionId, text, { accountId, incognito = false, memoryOnly = false, storage: providedStorage, pendingMetadata } = {}) {
   if (!sessionId || !accountId) return { persisted: false, reason: 'unavailable' };
   const storage = _getStorage(providedStorage);
   const memoryKey = _draftKey(accountId, sessionId);
@@ -74,6 +74,7 @@ export function saveComposerDraft(sessionId, text, { accountId, incognito = fals
   if (!value && !pending) {
     memoryDrafts.delete(memoryKey);
     memoryPendingMetadata.delete(memoryKey);
+    if (memoryOnly) return { persisted: false, reason: null };
     if (incognito) {
       try { storage?.removeItem(memoryKey); } catch {}
       return { persisted: false, reason: null };
@@ -85,6 +86,12 @@ export function saveComposerDraft(sessionId, text, { accountId, incognito = fals
       memoryDrafts.set(memoryKey, '');
       return { persisted: false, reason: 'storage' };
     }
+  }
+  if (memoryOnly) {
+    memoryDrafts.set(memoryKey, value);
+    if (pending) memoryPendingMetadata.set(memoryKey, pending);
+    else memoryPendingMetadata.delete(memoryKey);
+    return { persisted: false, reason: incognito ? 'incognito' : 'memory-only' };
   }
   if (incognito) {
     memoryDrafts.set(memoryKey, value);
@@ -118,12 +125,12 @@ export function saveComposerDraft(sessionId, text, { accountId, incognito = fals
   }
 }
 
-export function getComposerDraft(sessionId, { accountId, incognito = false, storage: providedStorage } = {}) {
+export function getComposerDraft(sessionId, { accountId, incognito = false, memoryOnly = false, storage: providedStorage } = {}) {
   if (!sessionId || !accountId) return '';
   if (deletedDrafts.has(_deletedKey(accountId, sessionId))) return '';
   const key = _draftKey(accountId, sessionId);
   if (memoryDrafts.has(key)) return memoryDrafts.get(key);
-  if (incognito) return '';
+  if (incognito || memoryOnly) return '';
   const storage = _getStorage(providedStorage);
   try {
     const item = JSON.parse(storage.getItem(key) || 'null');
@@ -133,11 +140,11 @@ export function getComposerDraft(sessionId, { accountId, incognito = false, stor
   }
 }
 
-export function getPendingChatMetadata(sessionId, { accountId, incognito = false, storage: providedStorage } = {}) {
+export function getPendingChatMetadata(sessionId, { accountId, incognito = false, memoryOnly = false, storage: providedStorage } = {}) {
   if (!sessionId || !accountId) return null;
   const key = _draftKey(accountId, sessionId);
   if (memoryPendingMetadata.has(key)) return memoryPendingMetadata.get(key);
-  if (incognito) return null;
+  if (incognito || memoryOnly) return null;
   try {
     const record = JSON.parse(_getStorage(providedStorage).getItem(key) || 'null');
     return _cleanPendingMetadata(record?.pending);
@@ -154,6 +161,12 @@ export function transferComposerDraft(fromId, toId, options = {}) {
   if (incognito) {
     const result = saveComposerDraft(toId, getComposerDraft(fromId, options), options);
     if (result.reason !== 'unavailable' && result.reason !== 'deleted') saveComposerDraft(fromId, '', options);
+    return result;
+  }
+  if (options.memoryOnly) {
+    const pendingMetadata = getPendingChatMetadata(fromId, options);
+    const result = saveComposerDraft(toId, getComposerDraft(fromId, options), { ...options, pendingMetadata });
+    if (!['unavailable', 'deleted'].includes(result.reason)) saveComposerDraft(fromId, '', options);
     return result;
   }
   const storage = _getStorage(providedStorage);
@@ -179,9 +192,15 @@ export function transferComposerDraft(fromId, toId, options = {}) {
   return result;
 }
 
-export function deleteComposerDraft(sessionId, { accountId, storage: providedStorage } = {}) {
+export function deleteComposerDraft(sessionId, { accountId, memoryOnly = false, storage: providedStorage } = {}) {
   if (!sessionId || !accountId) return;
   const storage = _getStorage(providedStorage);
-  _applyDraftDeletion(accountId, sessionId, storage);
-  deleteChannel?.postMessage({ accountId: String(accountId), sessionId: String(sessionId) });
+  if (memoryOnly) {
+    deletedDrafts.add(_deletedKey(accountId, sessionId));
+    memoryDrafts.delete(_draftKey(accountId, sessionId));
+    memoryPendingMetadata.delete(_draftKey(accountId, sessionId));
+  } else {
+    _applyDraftDeletion(accountId, sessionId, storage);
+  }
+  if (!memoryOnly) deleteChannel?.postMessage({ accountId: String(accountId), sessionId: String(sessionId) });
 }

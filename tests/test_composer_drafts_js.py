@@ -11,6 +11,13 @@ def test_composer_drafts_are_bounded_and_account_scoped():
     script = f"""
       const assert = require('node:assert/strict');
       const values = new Map();
+      const broadcasts = [];
+      class TestBroadcastChannel {{
+        addEventListener() {{}}
+        postMessage(message) {{ broadcasts.push(message); }}
+      }}
+      globalThis.BroadcastChannel = TestBroadcastChannel;
+      globalThis.window = {{ BroadcastChannel: TestBroadcastChannel }};
       const storage = {{
         get length() {{ return values.size; }},
         key: index => [...values.keys()][index] ?? null,
@@ -30,6 +37,21 @@ def test_composer_drafts_are_bounded_and_account_scoped():
       assert.equal(JSON.stringify([...values.values()]).includes('secret'), false);
       memoryDrafts.delete(_draftKey('alice', 'private-chat')); // simulate page reload
       assert.equal(getComposerDraft('private-chat', {{ accountId: 'alice', storage }}), '');
+      const beforeEphemeral = [...values.entries()];
+      const pageOptions = {{ accountId: 'page-only-scope', memoryOnly: true, storage,
+        pendingMetadata: {{ url: 'https://fixture.invalid', modelId: 'fixture/model', source: 'manual' }} }};
+      assert.equal(saveComposerDraft('page-pending', 'anonymous page text', pageOptions).reason, 'memory-only');
+      assert.equal(getComposerDraft('page-pending', pageOptions), 'anonymous page text');
+      assert.equal(getPendingChatMetadata('page-pending', pageOptions).modelId, 'fixture/model');
+      assert.deepEqual([...values.entries()], beforeEphemeral, 'memory-only draft must not touch persisted storage');
+      assert.equal(transferComposerDraft('page-pending', 'page-session', pageOptions).reason, 'memory-only');
+      assert.equal(getComposerDraft('page-session', pageOptions), 'anonymous page text');
+      assert.equal(getPendingChatMetadata('page-session', pageOptions).modelId, 'fixture/model');
+      deleteComposerDraft('page-session', pageOptions);
+      assert.equal(broadcasts.length, 0, 'memory-only deletion must not broadcast into tabs that can clear disk drafts');
+      assert.equal(getComposerDraft('page-session', pageOptions), '');
+      assert.equal(saveComposerDraft('page-session', 'deleted page text', pageOptions).reason, 'deleted');
+      assert.deepEqual([...values.entries()], beforeEphemeral, 'memory-only delete must not touch persisted storage');
       saveComposerDraft('chat-a', '', {{ accountId: 'alice', storage }}); // accepted send clears it
       assert.equal(getComposerDraft('chat-a', {{ accountId: 'alice', storage }}), '');
       saveComposerDraft('large', 'older saved draft', {{ accountId: 'alice', storage }});
@@ -51,6 +73,7 @@ def test_composer_drafts_are_bounded_and_account_scoped():
       assert.equal([...values.keys()].filter(key => key.startsWith('ody-composer-drafts:alice:')).length, 40);
       saveComposerDraft('deleted-chat', 'old', {{ accountId: 'alice', storage }});
       deleteComposerDraft('deleted-chat', {{ accountId: 'alice', storage }});
+      assert.deepEqual(broadcasts, [{{ accountId: 'alice', sessionId: 'deleted-chat' }}], 'ordinary deletion still broadcasts');
       assert.equal(getComposerDraft('deleted-chat', {{ accountId: 'alice', storage }}), '');
       assert.equal(saveComposerDraft('deleted-chat', 'stale tab', {{ accountId: 'alice', storage }}).reason, 'deleted');
       assert.equal(saveComposerDraft('deleted-chat', 'other account', {{ accountId: 'bob', storage }}).persisted, true);

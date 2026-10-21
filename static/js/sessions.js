@@ -49,6 +49,7 @@ let _historyPager = null;
 let _composerDraftInput = null;
 const _composerDraftWarnings = new Set();
 const _deletedComposerDraftSessions = new Set();
+const _pageComposerMemoryAccountId = `page-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
 
 function _isMobileSidebar() {
   return window.matchMedia?.('(max-width: 768px)').matches ?? window.innerWidth <= 768;
@@ -68,10 +69,14 @@ function _composerDraftOptions(sessionId) {
   const authState = getKnownAuthState();
   const currentAccountId = _currentComposerAccountId();
   const mappedAccountId = _pendingDraftAccounts.get(sessionId);
-  const accountId = !authState?.verified || authState.switched || (mappedAccountId && mappedAccountId !== currentAccountId)
-    ? '' : currentAccountId;
+  const pageOwnedPending = _pendingDraftAccounts.has(sessionId) && mappedAccountId === '';
+  const memoryOnly = !authState?.switched && (pageOwnedPending || (authState?.verified && !currentAccountId));
+  const accountId = memoryOnly
+    ? _pageComposerMemoryAccountId
+    : !authState?.verified || authState.switched || (mappedAccountId && mappedAccountId !== currentAccountId)
+      ? '' : currentAccountId;
   const toggle = document.getElementById('incognito-toggle');
-  return { accountId, incognito: _isIncognitoSession(sessionId) || (!!sessionId && (_memoryOnlyPendingDraftIds.has(sessionId) || _incognitoPendingDraftIds.has(sessionId) || (sessionId === _activePendingDraftId && !!toggle?.checked))) };
+  return { accountId, memoryOnly, incognito: _isIncognitoSession(sessionId) || (!!sessionId && (_memoryOnlyPendingDraftIds.has(sessionId) || _incognitoPendingDraftIds.has(sessionId) || (sessionId === _activePendingDraftId && !!toggle?.checked))) };
 }
 
 function _saveComposerDraft(sessionId, msgInput = document.getElementById('message')) {
@@ -82,7 +87,7 @@ function _saveComposerDraft(sessionId, msgInput = document.getElementById('messa
   const result = !currentSessionId && targetId === _activePendingDraftId
     ? saveComposerDraft(targetId, msgInput.value, { ...options, pendingMetadata: _pendingChat?.url && _pendingChat?.modelId ? _pendingChat : undefined })
     : saveComposerDraft(targetId, msgInput.value, options);
-  if (result?.persisted || !result?.reason || result.reason === 'incognito') return;
+  if (result?.persisted || !result?.reason || result.reason === 'incognito' || result.reason === 'memory-only') return;
   const warningKey = `${targetId}:${result.reason}`;
   if (_composerDraftWarnings.has(warningKey)) return;
   _composerDraftWarnings.add(warningKey);
@@ -2901,9 +2906,14 @@ export function getPendingDraftId() { return _activePendingDraftId; }
 export function restorePendingChatDraft(draftId) {
   if (!draftId) return false;
   const authState = getKnownAuthState();
-  if (!authState?.verified) return false;
-  const accountId = _currentComposerAccountId();
   const mappedAccountId = _pendingDraftAccounts.get(draftId);
+  const pageOwnedPending = _pendingDraftAccounts.has(draftId) && mappedAccountId === '';
+  if (!authState?.verified && !pageOwnedPending) return false;
+  if (authState?.switched && pageOwnedPending) {
+    deleteComposerDraft(draftId, { accountId: _pageComposerMemoryAccountId, memoryOnly: true });
+    return false;
+  }
+  const accountId = _currentComposerAccountId();
   if (mappedAccountId && mappedAccountId !== accountId) {
     _activePendingDraftId = '';
     _pendingChat = null;
@@ -2912,16 +2922,23 @@ export function restorePendingChatDraft(draftId) {
   }
   // A fresh draft created while identity was pending belongs to this page,
   // not to the previous account's persisted cache. Keep its current input.
-  if (mappedAccountId === '' && draftId === _activePendingDraftId && !currentSessionId) {
-    if (!authState.switched) {
-      _pendingDraftAccounts.set(draftId, accountId);
-      _saveComposerDraft(draftId);
-    }
+  if (pageOwnedPending && draftId === _activePendingDraftId && !currentSessionId
+      && (!authState?.verified || !accountId)) {
+    _saveComposerDraft(draftId);
     return true;
   }
-  const options = _composerDraftOptions(draftId);
+  let options = _composerDraftOptions(draftId);
   const draft = getComposerDraft(draftId, options);
   const metadata = getPendingChatMetadata(draftId, options);
+  if (pageOwnedPending && authState?.verified && !authState.switched && accountId
+      && !options.incognito && (draft || metadata)) {
+    const migrated = saveComposerDraft(draftId, draft, { ...options, accountId, memoryOnly: false, pendingMetadata: metadata });
+    if (!['unavailable', 'deleted'].includes(migrated.reason)) {
+      deleteComposerDraft(draftId, { accountId: _pageComposerMemoryAccountId, memoryOnly: true });
+      _pendingDraftAccounts.set(draftId, accountId);
+      options = _composerDraftOptions(draftId);
+    }
+  }
   if (!draft && !metadata) {
     const input = document.getElementById('message');
     const startupText = _shouldPreserveStartupComposer(input) ? input.value : '';
@@ -2932,10 +2949,11 @@ export function restorePendingChatDraft(draftId) {
     }
     return false;
   }
-  _pendingDraftAccounts.set(draftId, accountId);
+  _pendingDraftAccounts.set(draftId, pageOwnedPending && options.memoryOnly ? '' : accountId);
   if (draftId === _activePendingDraftId && !currentSessionId) return true;
   const input = document.getElementById('message');
-  const preserveStartupText = _shouldPreserveStartupComposer(input);
+  const switchingPendingDraft = !!_activePendingDraftId && _activePendingDraftId !== draftId;
+  const preserveStartupText = !switchingPendingDraft && _shouldPreserveStartupComposer(input);
   const startupText = preserveStartupText ? input.value : '';
   _saveComposerDraft(currentSessionId, input);
   if (currentSessionId) window.chatModule?.detachCurrentStream?.(currentSessionId);

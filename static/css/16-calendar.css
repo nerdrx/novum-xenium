@@ -744,7 +744,8 @@
 .cal-year-has.cal-year-today { background:color-mix(in srgb, var(--accent, var(--red)) 25%, transparent); }
 .cal-loading { display:flex; justify-content:center; padding:40px 0; }
 .cal-event-load-error { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border:1px solid color-mix(in srgb, var(--red, #d44) 45%, var(--border)); border-radius:6px; color:var(--fg); font-size:11px; }
-.cal-event-load-error .cal-btn { flex-shrink:0; }
+.cal-event-load-error > span { min-width:0; overflow-wrap:anywhere; }
+.cal-event-load-error .cal-btn { flex-shrink:0; min-width:44px; min-height:44px; border-color:color-mix(in srgb, var(--fg) 50%, var(--bg)); }
 .cal-badge { background:var(--accent); border-radius:50%; width:6px; height:6px; margin-left:auto; display:inline-block; flex-shrink:0; }
 /* Search input — in-panel variant lives inside the day-detail panel and
    spans its width; no width animation since growing/shrinking on every

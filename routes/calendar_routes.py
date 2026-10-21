@@ -1144,9 +1144,12 @@ def setup_calendar_routes(upload_handler=None) -> APIRouter:
             # Look up a saved account: by id if supplied, else first account.
             accounts = _get_caldav_accounts(owner)
             acc = None
-            if body.get("account_id"):
-                acc = next((a for a in accounts if a.get("id") == body["account_id"]), None)
-            if acc is None and accounts:
+            account_id = body.get("account_id")
+            if account_id is not None:
+                acc = next((a for a in accounts if a.get("id") == account_id), None)
+                if acc is None:
+                    return {"ok": False, "error": "CalDAV account not found"}
+            elif accounts:
                 acc = accounts[0]
             if acc:
                 url = url or (acc.get("url") or "")

@@ -194,3 +194,82 @@ def test_route_empty_env_vars_use_system_defaults(client):
     ctx = captured["verify"]
     assert isinstance(ctx, ssl.SSLContext)
     assert not (ctx.verify_flags & ssl.VERIFY_X509_STRICT)
+
+
+def test_test_route_uses_only_requested_saved_account(client, monkeypatch):
+    """An unknown account_id must not silently probe the first saved account."""
+    from src import caldav_sync, secret_storage
+
+    accounts = [
+        {"id": "fake-account-a", "url": "https://a.caldav-proof.test/dav", "username": "fake-user-a", "password": "encrypted-a"},
+        {"id": "fake-account-b", "url": "https://b.caldav-proof.test/dav", "username": "fake-user-b", "password": "encrypted-b"},
+    ]
+    decrypted = {"encrypted-a": "fake-password-a", "encrypted-b": "fake-password-b"}
+
+    def post_case(body, saved_accounts):
+        validator_calls = []
+        outbound_calls = []
+
+        async def validate_url_async(url):
+            validator_calls.append(url)
+            return url
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def request(self, method, url, **kwargs):
+                outbound_calls.append({"method": method, "url": url, "auth": kwargs.get("auth")})
+                return _fake_response(207)
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(caldav_sync, "_load_caldav_accounts", lambda owner: [dict(a) for a in saved_accounts])
+            scoped.setattr(caldav_sync, "validate_caldav_url_async", validate_url_async)
+            scoped.setattr(secret_storage, "decrypt", lambda value: decrypted.get(value, value))
+            scoped.setattr(httpx, "AsyncClient", FakeAsyncClient)
+            scoped.setattr("routes.calendar_routes._require_user", lambda request: "synthetic-owner")
+            response = client.post("/api/calendar/test", json=body)
+        return response, validator_calls, outbound_calls
+
+    for missing_id in ("missing-account", "", 0, False, []):
+        missing, validated, calls = post_case({"account_id": missing_id}, accounts)
+        assert missing.status_code == 200
+        assert missing.json() == {"ok": False, "error": "CalDAV account not found"}
+        assert validated == []
+        assert calls == []
+
+    valid_b, validated, calls = post_case({"account_id": "fake-account-b"}, accounts)
+    assert valid_b.status_code == 200 and valid_b.json() == {"ok": True}
+    assert validated == [accounts[1]["url"]]
+    assert calls[0]["method"] == "PROPFIND"
+    assert calls[0]["url"] == accounts[1]["url"]
+    assert calls[0]["auth"] == ("fake-user-b", "fake-password-b")
+
+    for body in ({}, {"account_id": None}):
+        first, validated, calls = post_case(body, accounts)
+        assert first.status_code == 200 and first.json() == {"ok": True}
+        assert validated == [accounts[0]["url"]]
+        assert calls[0]["url"] == accounts[0]["url"]
+        assert calls[0]["auth"] == ("fake-user-a", "fake-password-a")
+
+    empty, validated, calls = post_case({}, [])
+    assert empty.status_code == 200
+    assert empty.json() == {"ok": False, "error": "Missing URL, username, or password"}
+    assert validated == []
+    assert calls == []
+
+    adhoc_url = "https://adhoc.caldav-proof.test/dav"
+    adhoc, validated, calls = post_case(
+        {"url": adhoc_url, "username": "adhoc-user", "password": "adhoc-password"},
+        accounts,
+    )
+    assert adhoc.status_code == 200 and adhoc.json() == {"ok": True}
+    assert validated == [adhoc_url]
+    assert calls[0]["url"] == adhoc_url
+    assert calls[0]["auth"] == ("adhoc-user", "adhoc-password")

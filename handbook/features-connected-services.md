@@ -173,16 +173,24 @@ not maintained, so follow the provider's displayed setup instructions.
    document; check the current version before approving an AI change.
 
 In the Library's **Archive** tab, Restore and Delete check each item’s server
-response. A **Could not confirm** warning means the outcome is uncertain.
-Do not treat an unexpectedly empty Archive as proof that an item was deleted
-or restored: a list-loading failure can currently appear as an empty list.
-Reload and recheck after the service is available before retrying a mutation.
-Bulk deletion captures its selected items when confirmation opens, so a newer
-selection is not added to that deletion. Confirmed items leave the current
-selection; failed items remain selected unless you cancel or change that
-selection.
+response. A **Could not confirm** warning means the mutation outcome is
+uncertain; recheck the Archive before retrying it. A successful empty response
+means the Archive is empty. If loading fails or returns malformed data, the
+Archive grid switches to a warning with **Retry**, while the last successful
+results remain available internally. An error or empty-looking grid is not
+proof that the Archive is empty. The list request has a 15-second deadline,
+and an older or detached view cannot replace a newer list. Bulk deletion
+captures its selected items when confirmation opens. Only confirmed deletions
+leave the current selection; failures and newer selections are preserved.
 
-See the pinned [Archive actions](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/static/js/documentLibrary.js).
+The **Research** tab keeps its last good rows visible and offers **Retry** when
+loading fails. Its list request has the same 15-second fetch-and-JSON deadline
+and stale-view protection. Archive, restore, delete and bulk actions check
+server results; only confirmed changes are removed from the current selection.
+Failed items remain available for review, and a newer selection is not cleared
+by an older operation. Recheck before retrying an uncertain mutation.
+
+See the pinned [Archive and Research handling](https://github.com/nerdrx/novum-xenium/blob/9b0f268085a68fdbf504b261775eb6edd2504a34/static/js/documentLibrary.js).
 
 Uploads are owner-checked, and persistent document references are validated
 before saving. The app does not expose a general upload list/delete endpoint.
@@ -227,7 +235,7 @@ Other note fields are not replaced by this pin recovery. Concurrent successful
 pin requests are not serialized, so refresh before relying on an uncertain
 final state.
 
-See the pinned [pin recovery](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/frontend/src/features/notes/application/cardOperations.js)
+See the pinned [pin recovery](https://github.com/nerdrx/novum-xenium/blob/9b0f268085a68fdbf504b261775eb6edd2504a34/frontend/src/features/notes/application/cardOperations.js)
 and [Notes HTTP handling](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/frontend/src/features/notes/infrastructure/http.js).
 
 See the pinned [selected-note operations](https://github.com/nerdrx/novum-xenium/blob/abcfc31fe6dc8253b3704e6a40d82a7ac4b64c37/frontend/src/features/notes/application/selection.js)

@@ -13,7 +13,9 @@ def test_document_library_research_preview_whitelists_source_hrefs():
     assert "parsed.protocol === 'http:' || parsed.protocol === 'https:'" in src
     assert "const url = _safeResearchHref(src.url);" in src
     assert 'href="${_esc(url)}"' not in src
-    assert "Failed to load: ${_esc(e.message)}" in src
+    loader = src.split("async function _renderLibResearch()", 1)[1].split("// Toggle inline preview", 1)[0]
+    assert "message.textContent = 'Could not load research.';" in loader
+    assert "message.innerHTML" not in loader
     assert "Failed to load: ${e.message}" not in src
 
 

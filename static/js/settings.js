@@ -113,7 +113,8 @@ async function _fetchModelEndpoints() {
   const epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin' });
   if (!epRes.ok) throw new Error(`HTTP ${epRes.status}`);
   const endpoints = await epRes.json();
-  return Array.isArray(endpoints) ? endpoints : [];
+  if (!Array.isArray(endpoints)) throw new Error('Invalid model endpoint inventory');
+  return endpoints;
 }
 
 function _selectableEndpointModels(endpoint) {

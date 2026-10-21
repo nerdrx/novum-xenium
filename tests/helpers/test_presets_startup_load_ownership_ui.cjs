@@ -15,7 +15,7 @@ const initialA = {
   system_prompt: 'old A prompt', reasoning_mode: 'auto', thinking_mode: '',
   persona_memory: '', persona_memory_schema: 'general',
 };
-let server, browser, heldResolve = null, heldSnapshot = null, loadMode = 'hold';
+let server, browser, heldResolve = null, heldSnapshot = null, loadMode = 'normal', startupHoldUsed = false;
 let custom = { ...initialA }, customRevision = 10;
 const errors = [], externalRequests = [];
 const templates = [{
@@ -88,8 +88,9 @@ function listen() {
       }
       if (url.pathname === '/api/presets/templates' && req.method === 'GET') return json(res, 200, templates);
       if (url.pathname === '/api/presets') {
-        const snapshot = { custom: { ...custom }, custom_revision: customRevision, code_analyze: { name: 'built-in marker' } };
-        if (loadMode === 'hold' || loadMode === 'hold-headers') {
+        const snapshot = { custom: { ...custom }, custom_revision: customRevision, custom_save_revision_guard: true, code_analyze: { name: 'built-in marker' } };
+        if ((loadMode === 'hold' && !startupHoldUsed) || loadMode === 'hold-headers') {
+          if (loadMode === 'hold') startupHoldUsed = true;
           heldSnapshot = snapshot;
           await new Promise(resolveHeld => { heldResolve = resolveHeld; });
           if (!res.destroyed) return json(res, 200, snapshot);
@@ -100,13 +101,13 @@ function listen() {
           res.write('{"custom":');
           await new Promise(resolveHeld => { heldResolve = resolveHeld; });
           if (!res.destroyed) {
-            res.end(`${JSON.stringify(snapshot.custom)},"custom_revision":${customRevision},"code_analyze":${JSON.stringify(snapshot.code_analyze)}}`);
+            res.end(`${JSON.stringify(snapshot.custom)},"custom_revision":${customRevision},"custom_save_revision_guard":true,"code_analyze":${JSON.stringify(snapshot.code_analyze)}}`);
           }
           return;
         }
         if (loadMode === '503') return json(res, 503, { detail: 'synthetic unavailable' });
         if (loadMode === 'array') return json(res, 200, []);
-        if (loadMode === 'bad-custom') return json(res, 200, { custom: 'not-an-object', custom_revision: customRevision });
+        if (loadMode === 'bad-custom') return json(res, 200, { custom: 'not-an-object', custom_revision: customRevision, custom_save_revision_guard: true });
         if (loadMode === 'legacy-null') return json(res, 200, { custom: null, code_analyze: { name: 'legacy marker' } });
         if (loadMode === 'legacy-absent') return json(res, 200, { code_analyze: { name: 'legacy marker' } });
         return json(res, 200, snapshot);
@@ -116,7 +117,7 @@ function listen() {
         const config = JSON.parse(body);
         custom = { ...config, character_name: config.name };
         customRevision++;
-        return json(res, 200, { success: true, custom_revision: customRevision });
+        return json(res, 200, { success: true, custom_revision: customRevision, custom_save_revision_guard: true });
       }
       if (url.pathname === '/api/presets/templates' && req.method === 'POST') return json(res, 200, { success: true });
       if (url.pathname.startsWith('/api/presets/templates/') && req.method === 'DELETE') return json(res, 200, { success: true, custom_revision: customRevision });
@@ -148,9 +149,12 @@ async function waitFor(page, predicate, description) {
     page.on('request', request => { if (new URL(request.url()).origin !== origin) externalRequests.push(request.url()); });
     await page.goto(origin);
     await waitFor(page, () => window.ready === true, 'module fixture ready');
+    await page.evaluate(() => window.loadPromise);
+    await waitFor(page, () => window.m.getUserTemplates().some(item => item.id === 'template-A'), 'initial saved template load');
+    loadMode = 'hold';
+    await page.evaluate(() => { window.loadPromise = window.m.loadPresets(uiModule.showError); });
     await waitFor(page, async () => (await fetch('/__state').then(res => res.json())).held, 'held startup snapshot');
     assert.equal(heldSnapshot.custom.character_name, 'A');
-    await waitFor(page, () => window.m.getUserTemplates().some(item => item.id === 'template-A'), 'initial saved template load');
 
     await page.evaluate(() => window.m.openCustomPresetModal());
     await page.locator('#custom-character-name').fill('B');
@@ -166,7 +170,7 @@ async function waitFor(page, predicate, description) {
       revision: window.m.getAllPresets().custom_revision,
       selected: window.m.getSelectedPreset(),
       form: document.querySelector('#custom-system-prompt').value,
-      marker: window.m.getAllPresets().code_analyze,
+      marker: window.m.getAllPresets().code_analyze, errors: window.errors,
     }));
     assert.equal(afterOldLoad.custom.character_name, 'B');
     assert.equal(afterOldLoad.custom.system_prompt, 'saved B prompt');

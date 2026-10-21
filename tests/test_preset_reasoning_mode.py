@@ -6,7 +6,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from routes.preset_routes import UserTemplateRequest, setup_preset_routes
+from routes.preset_routes import CustomPresetSaveRequest, UserTemplateRequest, setup_preset_routes
 from src.preset_manager import PresetManager
 from src.request_models import PresetUpdateRequest
 
@@ -88,8 +88,9 @@ def test_custom_preset_route_forwards_reasoning_mode():
     class Manager:
         presets = {"custom": {"reasoning_mode": "auto"}}
 
-        def update_custom(self, *args):
+        def update_custom(self, *args, **kwargs):
             self.args = args
+            self.kwargs = kwargs
             return True
 
         def get_custom_revision(self):
@@ -101,12 +102,13 @@ def test_custom_preset_route_forwards_reasoning_mode():
         if route.path == "/api/presets/custom" and "POST" in route.methods
     )
 
-    result = asyncio.run(endpoint(PresetUpdateRequest(reasoning_mode="off")))
+    result = asyncio.run(endpoint(CustomPresetSaveRequest(reasoning_mode="off"), expected_custom_revision=None))
 
     assert result["success"] is True
     # The route forwards reasoning_mode after the legacy seven preset fields,
     # before persona-memory and UI fields added later.
     assert manager.args[7] == "off"
+    assert manager.kwargs == {"expected_custom_revision": None}
 
 
 def test_template_request_preserves_mode_and_legacy_defaults_to_auto():

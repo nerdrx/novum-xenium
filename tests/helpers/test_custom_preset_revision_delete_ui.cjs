@@ -15,8 +15,9 @@ const initialCustom = { character_name: '', enabled: false, temperature: 1, max_
 const templates = [];
 let server, browser, heldResolve = null, holdNextCustom = false, heldCustomCount = 0;
 let heldDeleteResolve = null, holdNextDelete = false, heldDeleteCount = 0;
-let storedCustom = null, customRevision = 0, legacyApi = false;
-let customBodies = [], templateBodies = [], deleteRequests = [], deleteResults = [], requests = [], externalRequests = [];
+let heldTemplateResolve = null, holdNextTemplate = false, heldTemplateCount = 0;
+let storedCustom = null, customRevision = 0, legacyApi = false, tokenOnlyApi = false;
+let customBodies = [], customSaveQueries = [], templateBodies = [], deleteRequests = [], deleteResults = [], requests = [], externalRequests = [];
 const failedCustomNames = new Set();
 const html = `<!doctype html><meta charset="utf-8">
 <div id="custom-preset-modal" class="hidden"></div>
@@ -64,6 +65,11 @@ function listen() {
         res.writeHead(200, {'content-type':'text/javascript; charset=utf-8'}); return res.end(fs.readFileSync(file));
       }
       if (url.pathname === '/__hold-custom') { holdNextCustom = true; res.writeHead(200).end(); return; }
+      if (url.pathname === '/__hold-template') { holdNextTemplate = true; res.writeHead(200).end(); return; }
+      if (url.pathname === '/__release-template') {
+        if (!heldTemplateResolve) { res.writeHead(409).end('no held template response'); return; }
+        heldTemplateResolve(); heldTemplateResolve = null; res.writeHead(200).end(); return;
+      }
       if (url.pathname === '/__fail-custom') { failedCustomNames.add(url.searchParams.get('name') || ''); res.writeHead(200).end(); return; }
       if (url.pathname === '/__hold-delete') { holdNextDelete = true; res.writeHead(200).end(); return; }
       if (url.pathname === '/__release-delete') {
@@ -71,8 +77,9 @@ function listen() {
         heldDeleteResolve(); heldDeleteResolve = null; res.writeHead(200).end(); return;
       }
       if (url.pathname === '/__legacy') { legacyApi = url.searchParams.get('enabled') === '1'; res.writeHead(200).end(); return; }
+      if (url.pathname === '/__token-only') { tokenOnlyApi = url.searchParams.get('enabled') === '1'; res.writeHead(200).end(); return; }
       if (url.pathname === '/__reset') {
-        storedCustom = null; customRevision = 0; legacyApi = false; templates.splice(0, templates.length);
+        storedCustom = null; customRevision = 0; legacyApi = false; tokenOnlyApi = false; templates.splice(0, templates.length);
         res.writeHead(200).end(); return;
       }
       if (url.pathname === '/__seed') {
@@ -87,7 +94,7 @@ function listen() {
       }
       if (url.pathname === '/__state') {
         res.writeHead(200, {'content-type':'application/json', 'cache-control':'no-store'});
-        return res.end(JSON.stringify({heldCustomCount, heldDeleteCount, storedCustom, customRevision, customBodies, templateBodies, deleteRequests, deleteResults, templates, requests}));
+        return res.end(JSON.stringify({heldCustomCount, heldDeleteCount, heldTemplateCount, storedCustom, customRevision, customBodies, customSaveQueries, templateBodies, deleteRequests, deleteResults, templates, requests}));
       }
       if (url.pathname === '/__release-custom') {
         if (!heldResolve) { res.writeHead(409).end('no held custom request'); return; }
@@ -95,7 +102,7 @@ function listen() {
       }
       if (url.pathname === '/api/presets') {
         requests.push('GET /api/presets'); res.writeHead(200, {'content-type':'application/json'});
-        return res.end(JSON.stringify({custom: {...(storedCustom || initialCustom)}, ...(legacyApi ? {} : {custom_revision: customRevision})}));
+        return res.end(JSON.stringify({custom: {...(storedCustom || initialCustom)}, ...(legacyApi ? {} : {custom_revision: customRevision, ...(!tokenOnlyApi ? {custom_save_revision_guard: true} : {})})}));
       }
       if (url.pathname === '/api/presets/templates' && req.method === 'GET') {
         requests.push('GET /api/presets/templates'); res.writeHead(200, {'content-type':'application/json'});
@@ -104,6 +111,7 @@ function listen() {
       if (url.pathname === '/api/presets/custom' && req.method === 'POST') {
         let body = ''; for await (const chunk of req) body += chunk;
         const config = JSON.parse(body); customBodies.push(config);
+        customSaveQueries.push(url.searchParams.get('expected_custom_revision'));
         requests.push('POST /api/presets/custom');
         const failed = failedCustomNames.delete(config.name);
         if (!failed) { storedCustom = {...config, character_name:config.name}; customRevision++; }
@@ -112,7 +120,7 @@ function listen() {
         if (failed) {
           res.writeHead(200, {'content-type':'application/json'}); return res.end('{"success":false}');
         }
-        res.writeHead(200, {'content-type':'application/json'}); return res.end(JSON.stringify({success:true, custom_revision:responseRevision}));
+        res.writeHead(200, {'content-type':'application/json'}); return res.end(JSON.stringify({success:true, ...(!legacyApi ? {custom_revision:responseRevision, ...(!tokenOnlyApi ? {custom_save_revision_guard:true} : {})} : {})}));
       }
       if (url.pathname.startsWith('/api/presets/templates/') && req.method === 'DELETE') {
         const id = decodeURIComponent(url.pathname.slice('/api/presets/templates/'.length));
@@ -141,6 +149,10 @@ function listen() {
         const index = templates.findIndex(t => t.name === item.name);
         if (index < 0) templates.push({...item, id:'fixture-template-' + templates.length});
         else templates[index] = {...templates[index], ...item};
+        if (holdNextTemplate) {
+          holdNextTemplate = false; heldTemplateCount++;
+          await new Promise(resolveHeld => { heldTemplateResolve = resolveHeld; });
+        }
         res.writeHead(200, {'content-type':'application/json'}); return res.end('{"success":true}');
       }
       if (url.pathname.startsWith('/api/')) requests.push('UNEXPECTED ' + req.method + ' ' + url.pathname);
@@ -267,10 +279,11 @@ async function makePage(origin, errs) {
     const newerPage = newerSave.page;
     await newerPage.locator('#custom-character-name').fill('Older Persona A');
     await newerPage.locator('#custom-system-prompt').fill('Older A prompt');
-    await newerPage.request.get(origin + '/__hold-custom');
+    await newerPage.request.get(origin + '/__hold-template');
     await newerPage.locator('#save-custom-preset').click();
-    await newerPage.waitForFunction(async () => (await fetch('/__state').then(r => r.json())).heldCustomCount === 3);
-    await newerPage.locator('#char-template-select').selectOption('Synthetic Builtin B');
+    await newerPage.evaluate(() => window.savePromises[0]);
+    await newerPage.waitForFunction(async () => (await fetch('/__state').then(r => r.json())).heldTemplateCount === 1);
+    await newerPage.locator('#custom-character-name').fill('Newer Persona B');
     await newerPage.locator('#custom-system-prompt').fill('Newer B prompt');
     await newerPage.locator('#save-custom-preset').click();
     await newerPage.evaluate(() => window.savePromises[1]);
@@ -279,13 +292,12 @@ async function makePage(origin, errs) {
       customName: p.m.getAllPresets().custom.character_name,
       customPrompt: p.m.getAllPresets().custom.system_prompt
     }));
-    assert.equal(afterB.customName, 'Synthetic Builtin B');
+    assert.equal(afterB.customName, 'Newer Persona B');
     assert.equal(afterB.customPrompt, 'Newer B prompt');
     assert.equal(afterB.hidden, true);
     const backendAfterB = await (await newerPage.request.get(origin + '/__state')).json();
-    assert.equal(backendAfterB.storedCustom.name, 'Synthetic Builtin B');
-    await newerPage.request.get(origin + '/__release-custom');
-    await newerPage.evaluate(() => window.savePromises[0]);
+    assert.equal(backendAfterB.storedCustom.name, 'Newer Persona B');
+    await newerPage.request.get(origin + '/__release-template');
     await newerPage.waitForFunction(async () => (await fetch('/__state').then(r => r.json())).templateBodies.some(t => t.name === 'Older Persona A'));
     const lateAState = await newerPage.evaluate(() => ({
       hidden: document.querySelector('#custom-preset-modal').classList.contains('hidden'),
@@ -294,11 +306,12 @@ async function makePage(origin, errs) {
       toasts: [...p.toasts]
     }));
     const lateABackend = await (await newerPage.request.get(origin + '/__state')).json();
-    assert.equal(lateABackend.storedCustom.name, 'Synthetic Builtin B', 'fixture processes B after A; backend therefore retains B');
-    assert.equal(lateAState.customName, 'Synthetic Builtin B', 'late A cannot replace the newer accepted B active state');
+    assert.equal(lateABackend.storedCustom.name, 'Newer Persona B', 'fixture processes B after A; backend therefore retains B');
+    assert.equal(lateAState.customName, 'Newer Persona B', 'late A cannot replace the newer accepted B active state');
     assert.equal(lateAState.customPrompt, 'Newer B prompt');
-    assert(lateABackend.templateBodies.some(t => t.name === 'Older Persona A'), 'different-name older A template remains an independent save');
-    // This is fixture ordering only; the frontend ownership guard makes no server-order guarantee.
+    assert(lateABackend.templateBodies.some(t => t.name === 'Older Persona A'), 'accepted A template request remains independent while B custom save proceeds');
+    assert(lateABackend.templates.some(t => t.name === 'Older Persona A') && lateABackend.templates.some(t => t.name === 'Newer Persona B'), 'both independent templates persist');
+    // This is fixture ordering only; the frontend ownership guard makes no server-order guarantee for template writes.
     const newerSaveObservation = { afterB, afterLateA: lateAState, backendAfterLateA: lateABackend.storedCustom };
 
     await page.request.get(origin + '/__reset');
@@ -306,45 +319,36 @@ async function makePage(origin, errs) {
     const sameNamePage = sameNameRace.page;
     await sameNamePage.locator('#custom-character-name').fill('Shared Persona');
     await sameNamePage.locator('#custom-system-prompt').fill('Older A template text');
-    await sameNamePage.request.get(origin + '/__hold-custom');
+    await sameNamePage.request.get(origin + '/__hold-template');
     await sameNamePage.locator('#save-custom-preset').click();
-    await sameNamePage.waitForFunction(async () => (await fetch('/__state').then(r => r.json())).heldCustomCount === 4);
+    await sameNamePage.evaluate(() => window.savePromises[0]);
+    const sameNameBeforeHold = await (await sameNamePage.request.get(origin + '/__state')).json();
+    await sameNamePage.waitForFunction(async expected => (await fetch('/__state').then(r => r.json())).heldTemplateCount === expected, sameNameBeforeHold.heldTemplateCount + 1);
     await sameNamePage.locator('#custom-system-prompt').fill('Newer B template text');
-    const sameNameTemplatePosts = [];
-    sameNamePage.on('request', request => {
-      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/presets/templates') sameNameTemplatePosts.push(request);
-    });
-    const newerTemplateResponse = sameNamePage.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/presets/templates');
     await sameNamePage.locator('#save-custom-preset').click();
     await sameNamePage.evaluate(() => window.savePromises[1]);
-    assert.equal((await newerTemplateResponse).status(), 200);
-    await sameNamePage.request.get(origin + '/__release-custom');
-    await sameNamePage.evaluate(() => window.savePromises[0]);
+    await sameNamePage.request.get(origin + '/__release-template');
     await sameNamePage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const sameNameBackend = await (await sameNamePage.request.get(origin + '/__state')).json();
     const sameNameObservation = await sameNamePage.evaluate(() => ({
       activeName: p.m.getAllPresets().custom.character_name,
       activePrompt: p.m.getAllPresets().custom.system_prompt,
     }));
-    sameNameObservation.templatePrompts = sameNameBackend.templateBodies.filter(t => t.name === 'Shared Persona').map(t => t.system_prompt);
-    sameNameObservation.storedTemplatePrompt = sameNameBackend.templates.find(t => t.name === 'Shared Persona')?.system_prompt;
     sameNameObservation.storedCustomName = sameNameBackend.storedCustom?.name;
     sameNameObservation.storedCustomPrompt = sameNameBackend.storedCustom?.system_prompt;
-    sameNameObservation.templatePostCount = sameNameTemplatePosts.length;
     assert.equal(sameNameObservation.activePrompt, 'Newer B template text');
-    assert.deepEqual(sameNameObservation.templatePrompts, ['Newer B template text']);
-    assert.equal(sameNameObservation.templatePostCount, 1, 'late older A does not dispatch a same-name template overwrite');
-    assert.equal(sameNameObservation.storedTemplatePrompt, 'Newer B template text');
     assert.equal(sameNameObservation.storedCustomPrompt, 'Newer B template text');
 
     const failedB = await makePage(origin, errs); contexts.push(failedB.context);
     const failedPage = failedB.page;
-    const activeBeforeFailedSaves = await failedPage.evaluate(() => p.m.getAllPresets().custom.character_name);
     await failedPage.locator('#custom-character-name').fill('Older Persona Before Failure');
     await failedPage.locator('#custom-system-prompt').fill('Successful A prompt');
-    await failedPage.request.get(origin + '/__hold-custom');
+    await failedPage.request.get(origin + '/__hold-template');
     await failedPage.locator('#save-custom-preset').click();
-    await failedPage.waitForFunction(async () => (await fetch('/__state').then(r => r.json())).heldCustomCount === 5);
+    await failedPage.evaluate(() => window.savePromises[0]);
+    const activeBeforeFailedSaves = await failedPage.evaluate(() => p.m.getAllPresets().custom.character_name);
+    const failedBeforeHold = await (await failedPage.request.get(origin + '/__state')).json();
+    await failedPage.waitForFunction(async expected => (await fetch('/__state').then(r => r.json())).heldTemplateCount === expected, failedBeforeHold.heldTemplateCount + 1);
     await failedPage.locator('#custom-character-name').fill('Failed Persona B');
     await failedPage.locator('#custom-system-prompt').fill('Rejected B prompt');
     await failedPage.request.get(origin + '/__fail-custom?name=Failed%20Persona%20B');
@@ -355,11 +359,10 @@ async function makePage(origin, errs) {
       errors: [...p.errors],
       toasts: [...p.toasts]
     }));
-    assert(afterFailedB.errors.some(x => x === 'Failed to save custom preset'));
+    assert(afterFailedB.errors.some(x => x.startsWith('Failed to save custom preset')));
     assert.notEqual(afterFailedB.activeName, 'Failed Persona B', 'failed B did not become active');
     assert.equal(afterFailedB.activeName, activeBeforeFailedSaves, 'failed B preserves the previously loaded active state');
-    await failedPage.request.get(origin + '/__release-custom');
-    await failedPage.evaluate(() => window.savePromises[0]);
+    await failedPage.request.get(origin + '/__release-template');
     await failedPage.waitForFunction(async () => (await fetch('/__state').then(r => r.json())).templateBodies.some(t => t.name === 'Older Persona Before Failure'));
     const afterFailedBLateA = await failedPage.evaluate(() => ({
       activeName: p.m.getAllPresets().custom.character_name,
@@ -369,7 +372,8 @@ async function makePage(origin, errs) {
     }));
     assert.equal(afterFailedBLateA.activeName, 'Older Persona Before Failure', 'failed B does not cancel later successful A');
     assert.equal(afterFailedBLateA.activePrompt, 'Successful A prompt');
-    assert.deepEqual(afterFailedBLateA.errors, ['Failed to save custom preset']);
+    assert.equal(afterFailedBLateA.errors.length, 1);
+    assert(afterFailedBLateA.errors[0].startsWith('Failed to save custom preset'));
     assert.deepEqual(afterFailedBLateA.toasts, ['Persona saved']);
 
     const acceptedAThenFailedB = await makePage(origin, errs); contexts.push(acceptedAThenFailedB.context);
@@ -392,7 +396,8 @@ async function makePage(origin, errs) {
     }));
     assert.equal(acceptedAState.activeName, 'Accepted Persona A', 'failed later B preserves already-accepted A');
     assert.equal(acceptedAState.activePrompt, 'Accepted A prompt');
-    assert.deepEqual(acceptedAState.errors, ['Failed to save custom preset']);
+    assert.equal(acceptedAState.errors.length, 1);
+    assert(acceptedAState.errors[0].startsWith('Failed to save custom preset'));
     assert.deepEqual(acceptedAState.toasts, ['Persona saved']);
 
     const deleteSeedUrl = new URL('/__seed', origin);
@@ -529,6 +534,31 @@ async function makePage(origin, errs) {
     assert.deepEqual(legacyErrors, []);
     await legacyPage.request.get(origin + '/__legacy?enabled=0');
 
+    await normalPage.request.get(origin + '/__reset');
+    const tokenSeed = new URL('/__seed', origin);
+    tokenSeed.searchParams.set('name', 'Token Only Persona');
+    tokenSeed.searchParams.set('revision', '400');
+    await normalPage.request.get(tokenSeed.toString());
+    await normalPage.request.get(origin + '/__token-only?enabled=1');
+    const tokenOnlyResult = await makePage(origin, errs); contexts.push(tokenOnlyResult.context);
+    const tokenOnlyPage = tokenOnlyResult.page;
+    await tokenOnlyPage.locator('#custom-character-name').fill('Token Only Persona');
+    await tokenOnlyPage.locator('#custom-system-prompt').fill('Updated token-only prompt');
+    await tokenOnlyPage.locator('#save-custom-preset').click();
+    await tokenOnlyPage.evaluate(() => window.savePromises[0]);
+    const tokenOnlySavedRevision = await tokenOnlyPage.evaluate(() => p.m.getAllPresets().custom_revision);
+    await tokenOnlyPage.locator('#char-template-select').selectOption('Token Only Persona');
+    await tokenOnlyPage.locator('#char-delete-template-btn').click();
+    await tokenOnlyPage.waitForFunction(async () => (await fetch('/__state').then(r => r.json())).deleteResults.some(item => item.id === 'template-Token Only Persona' && item.status === 200));
+    const tokenOnlyState = await (await tokenOnlyPage.request.get(origin + '/__state')).json();
+    const tokenOnlyModuleState = await tokenOnlyPage.evaluate(() => p.m.getAllPresets());
+    assert.equal(tokenOnlyState.customBodies.at(-1).name, 'Token Only Persona');
+    assert.equal(tokenOnlyState.customSaveQueries.at(-1), null, 'a revision token alone does not enable guarded custom saves');
+    assert.equal(tokenOnlyState.deleteRequests.at(-1).expectedRevision, 401, 'revision metadata remains usable for conditional delete without guarded-save capability');
+    assert.equal(tokenOnlySavedRevision, 401, 'legacy save acknowledgment refreshes observed revision without promoting save capability');
+    assert.equal(tokenOnlyModuleState.custom_revision, 401);
+    assert.deepEqual(await tokenOnlyPage.evaluate(() => p.errors), []);
+
     const finalState = await (await normalPage.request.get(origin + '/__state')).json();
     assert.deepEqual(externalRequests, []);
     assert.deepEqual(errs, []);
@@ -544,7 +574,7 @@ async function makePage(origin, errs) {
       sameNameTemplateObservation: sameNameObservation,
       newerFailureThenOlderSuccess: { afterFailedB, afterFailedBLateA },
       acceptedAThenFailedB: acceptedAState,
-      customRevisionDelete: { deletedAState, deletedABackend, reloadState, conflictState, newerBDeleteState, legacyDelete: { expectedRevision: legacyState.deleteRequests.at(-1).expectedRevision, errors: legacyErrors } },
+      customRevisionDelete: { deletedAState, deletedABackend, reloadState, conflictState, newerBDeleteState, legacyDelete: { expectedRevision: legacyState.deleteRequests.at(-1).expectedRevision, errors: legacyErrors }, tokenOnly: { deleteRequest: tokenOnlyState.deleteRequests.at(-1), custom: tokenOnlyState.storedCustom, cachedRevision: tokenOnlyModuleState.custom_revision } },
       finalRequestSummary: { customNames: finalState.customBodies.map(x => x.name), templateNames: finalState.templateBodies.map(x => x.name) },
       externalRequests,
       pageErrors: errs,

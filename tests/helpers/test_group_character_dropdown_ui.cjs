@@ -70,6 +70,10 @@ function listen() {
         if (!release) { res.writeHead(404).end(); return; }
         release(outcome); postWaiters.delete(id); res.writeHead(200).end(); return;
       }
+      if (url.pathname === '/api/presets' && req.method === 'GET') {
+        res.writeHead(200, {'content-type':'application/json'});
+        return res.end(JSON.stringify({custom: {enabled: false}}));
+      }
       if (url.pathname === '/api/presets/templates' && req.method === 'GET') {
         getCount++;
         const snapshot = templates.map(entry => ({...entry}));

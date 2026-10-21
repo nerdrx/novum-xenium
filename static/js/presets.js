@@ -8,13 +8,46 @@ let API_BASE = '';
 let selectedPreset = null;
 let presets = {};
 let customPresetRevision = null;
+let customPresetRevisionMode = 'unknown';
+let customPresetTemplateAutosave = false;
+let customPresetSaveQueue = Promise.resolve();
+let customPresetSaveQueueBlocked = false;
 let customSaveRevision = 0;
 let latestAcceptedCustomSaveRevision = 0;
-const latestAcceptedCustomSaveByName = new Map();
 
 function _acceptCustomPresetRevision(value) {
   if (!Number.isSafeInteger(value) || value < 0) return;
   if (customPresetRevision === null || value > customPresetRevision) customPresetRevision = value;
+}
+
+function _setCustomPresetRevisionMode(value) {
+  if (Number.isSafeInteger(value.custom_revision) && value.custom_revision >= 0) {
+    _acceptCustomPresetRevision(value.custom_revision);
+  }
+  if (value.custom_save_revision_guard === true) {
+    if (!Number.isSafeInteger(value.custom_revision) || value.custom_revision < 0) {
+      throw new Error('Invalid custom preset revision capability');
+    }
+    customPresetRevisionMode = 'modern';
+  } else {
+    customPresetRevisionMode = 'legacy';
+  }
+  customPresetTemplateAutosave = value.custom_template_autosave === true;
+}
+
+async function _preflightCustomPresetRevision(signal) {
+  const response = await fetch(`${API_BASE}/api/presets`, { signal });
+  if (!response.ok) throw new Error(`Server returned ${response.status}`);
+  const current = await response.json();
+  if (!current || typeof current !== 'object' || Array.isArray(current)) {
+    throw new Error('Invalid presets response');
+  }
+  _setCustomPresetRevisionMode(current);
+}
+
+function _showCustomSaveError(showError, message) {
+  if (showError) showError(message);
+  else window.uiModule?.showError?.(message);
 }
 
 export function loadStoredArray(key) {
@@ -83,6 +116,49 @@ export const PROMPT_TEMPLATES = [
 let userTemplates = [];
 const pendingUserTemplates = new Map();
 let userTemplateLoadRevision = 0;
+
+function _setPendingUserTemplate(name, template) {
+  const previous = pendingUserTemplates.get(name);
+  const previousUncertain = previous?.uncertain === true && previous.template.id === template.id ? previous : null;
+  const entry = { template, previousUncertain, uncertain: !!previousUncertain };
+  pendingUserTemplates.set(name, entry);
+  return entry;
+}
+
+function _rejectPendingUserTemplate(name, entry) {
+  if (pendingUserTemplates.get(name) !== entry) return;
+  if (entry.previousUncertain) pendingUserTemplates.set(name, entry.previousUncertain);
+  else pendingUserTemplates.delete(name);
+}
+
+function _confirmPendingUserTemplate(name, entry) {
+  if (pendingUserTemplates.get(name) === entry) pendingUserTemplates.delete(name);
+}
+
+function _setPendingUserTemplateUncertain(name, entry) {
+  if (pendingUserTemplates.get(name) === entry) entry.uncertain = true;
+}
+
+function _bundledTemplateMatches(template, candidate) {
+  if (!template || typeof template !== 'object' || Array.isArray(template)) return false;
+  return ['id', 'name', 'system_prompt', 'temperature', 'max_tokens', 'reasoning_mode', 'thinking_mode', 'persona_memory', 'persona_memory_schema']
+    .every(key => template[key] === candidate[key]);
+}
+
+function _confirmUserTemplate(template) {
+  const index = userTemplates.findIndex(item => item.id === template.id);
+  if (index < 0) userTemplates.push(template);
+  else userTemplates[index] = template;
+  userTemplateLoadRevision += 1;
+  _populateCharSelect();
+}
+
+function _showTemplateSaveWarning(showError, isInjectStart) {
+  const message = isInjectStart
+    ? 'Prompt saved, but reusable template save could not be confirmed.'
+    : 'Persona saved, but reusable template save could not be confirmed.';
+  _showCustomSaveError(showError, message);
+}
 
 /**
  * Initialize with dependencies
@@ -611,7 +687,7 @@ export async function loadPresets(showError) {
     ) {
       throw new Error('Invalid presets response');
     }
-    _acceptCustomPresetRevision(loadedPresets.custom_revision);
+    _setCustomPresetRevisionMode(loadedPresets);
     const preserveAcceptedCustom = latestAcceptedCustomSaveRevision > acceptedCustomSaveAtStart;
     const acceptedCustom = presets.custom;
     presets = preserveAcceptedCustom
@@ -960,6 +1036,8 @@ export async function saveCustomPreset(showToast, showError) {
   };
 
   const _templateSelectionAtSave = document.getElementById('char-template-select')?.value || '';
+  const _isBuiltinTemplate = PROMPT_TEMPLATES.some(t => t.isPreset && (t.name === name || t.name === _templateSelectionAtSave));
+  const _templateNameAtSave = !_isInjectStart && !_isBuiltinTemplate ? (name || null) : null;
   const _saveModal = document.getElementById('custom-preset-modal');
   const _saveModalWasOpen = !!_saveModal && !_saveModal.classList.contains('hidden');
   const _saveFormFields = [
@@ -985,18 +1063,101 @@ export async function saveCustomPreset(showToast, showError) {
     });
   const _saveRevision = ++customSaveRevision;
 
-  try {
-    const response = await fetch(`${API_BASE}/api/presets/custom`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config)
-    });
+  const _saveOperation = async () => {
+    if (customPresetSaveQueueBlocked) {
+      _showCustomSaveError(showError, 'A previous save has an unknown outcome. Copy this draft and reload the page before saving again.');
+      return;
+    }
 
-    const result = await response.json();
-    if (result.success) {
-      _acceptCustomPresetRevision(result.custom_revision);
-      if (_saveRevision > (latestAcceptedCustomSaveByName.get(name) || 0)) {
-        latestAcceptedCustomSaveByName.set(name, _saveRevision);
+    const controller = new AbortController();
+    const saveTimer = setTimeout(() => controller.abort(), 15000);
+    let postStarted = false;
+    let backendMode = customPresetRevisionMode;
+    let templateCandidate = null;
+    let pendingTemplateEntry = null;
+    let bundledTemplate = false;
+    try {
+      if (backendMode === 'unknown') {
+        try {
+          await _preflightCustomPresetRevision(controller.signal);
+          backendMode = customPresetRevisionMode;
+        } catch (error) {
+          _showCustomSaveError(showError, 'Could not check saved presets. This draft remains open; retry when the server is available.');
+          return;
+        }
+      }
+
+      const expectedRevision = backendMode === 'modern' ? customPresetRevision : null;
+      if (backendMode === 'modern' && !Number.isSafeInteger(expectedRevision)) {
+        _showCustomSaveError(showError, 'Could not confirm the current preset revision. This draft remains open; reload saved presets and retry.');
+        return;
+      }
+      if (_templateNameAtSave) {
+        const saveName = _templateNameAtSave;
+        const existing = userTemplates.find(item => item.name === saveName);
+        const previous = pendingUserTemplates.get(saveName);
+        templateCandidate = {
+          id: (existing && existing.id) || (previous && previous.template.id)
+            || 'user-' + Math.random().toString(16).slice(2, 10),
+          name: saveName,
+          system_prompt: config.system_prompt ?? '',
+          temperature: config.temperature,
+          max_tokens: config.max_tokens,
+          reasoning_mode: config.reasoning_mode,
+          thinking_mode: config.thinking_mode,
+          persona_memory: config.persona_memory || '',
+          persona_memory_schema: config.persona_memory_schema || 'general',
+        };
+        pendingTemplateEntry = _setPendingUserTemplate(saveName, templateCandidate);
+        bundledTemplate = backendMode === 'modern' && customPresetTemplateAutosave;
+      }
+      const endpoint = expectedRevision === null
+        ? `${API_BASE}/api/presets/custom`
+        : `${API_BASE}/api/presets/custom?expected_custom_revision=${expectedRevision}`;
+      postStarted = true;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bundledTemplate ? { ...config, template_autosave: templateCandidate } : config),
+        signal: controller.signal,
+      });
+
+      if (response.status === 409) {
+        const conflict = await response.json();
+        const currentRevision = conflict.custom_revision
+          ?? conflict.current_custom_revision
+          ?? conflict.detail?.custom_revision;
+        if (Number.isSafeInteger(currentRevision) && currentRevision >= 0) {
+          customPresetRevision = currentRevision;
+          if (presets && typeof presets === 'object') presets.custom_revision = currentRevision;
+        } else {
+          customPresetRevisionMode = 'unknown';
+        }
+        if (_templateNameAtSave && pendingTemplateEntry) _rejectPendingUserTemplate(_templateNameAtSave, pendingTemplateEntry);
+        _showCustomSaveError(showError, conflict.message || conflict.detail?.message || 'Preset changed elsewhere. Your draft remains open; review it before retrying.');
+        return;
+      }
+      if (!response.ok) throw new Error(`Server returned ${response.status}`);
+
+      const result = await response.json();
+      if (result.success !== true) {
+        if (_templateNameAtSave && pendingTemplateEntry) _rejectPendingUserTemplate(_templateNameAtSave, pendingTemplateEntry);
+        _showCustomSaveError(showError, result.message || 'Failed to save custom preset; this draft remains open.');
+        return;
+      }
+      if (backendMode === 'modern') {
+        if (result.custom_save_revision_guard !== true
+          || !Number.isSafeInteger(result.custom_revision)
+          || result.custom_revision <= expectedRevision) {
+          throw new Error('Save response did not confirm a newer preset revision');
+        }
+        _acceptCustomPresetRevision(result.custom_revision);
+        presets.custom_revision = customPresetRevision;
+      } else if (Number.isSafeInteger(result.custom_revision) && result.custom_revision >= 0) {
+        // Older backends may expose revisions for conditional template deletion
+        // without supporting guarded custom saves.
+        _acceptCustomPresetRevision(result.custom_revision);
+        presets.custom_revision = customPresetRevision;
       }
 
       const _ownsAcceptedCustomState = _saveRevision >= latestAcceptedCustomSaveRevision;
@@ -1037,62 +1198,69 @@ export async function saveCustomPreset(showToast, showError) {
         if (_ownsSaveForm()) _saveModal.classList.add('hidden');
       }
 
-      // Auto-save to templates (non-blocking) — skip built-in presets
-      const _selVal = _templateSelectionAtSave;
-      const isBuiltinPreset = PROMPT_TEMPLATES.some(t => t.isPreset && (t.name === name || t.name === _selVal));
-      const saveName = isBuiltinPreset ? null : (name || null);
-
-      if (saveName && latestAcceptedCustomSaveByName.get(saveName) === _saveRevision) {
-        const _existing = userTemplates.find(t => t.name === saveName);
-        const _pendingExisting = pendingUserTemplates.get(saveName);
-        const _entry = {
-          id: (_existing && _existing.id) || (_pendingExisting && _pendingExisting.id)
-            || 'user-' + Math.random().toString(16).slice(2, 10),
-          name: saveName,
-          // use ?? since it's more semantic for null-coalescing
-          system_prompt: system_prompt ?? '',
-          temperature: config.temperature,
-          max_tokens: config.max_tokens,
-          reasoning_mode: config.reasoning_mode,
-          thinking_mode: config.thinking_mode,
-          persona_memory: config.persona_memory || '',
-          persona_memory_schema: config.persona_memory_schema || 'general',
+      if (templateCandidate && pendingTemplateEntry) {
+        const saveName = templateCandidate.name;
+        if (bundledTemplate) {
+          const templateSave = result.template_save;
+          if (result.custom_template_autosave === true
+            && templateSave?.success === true
+            && _bundledTemplateMatches(templateSave.template, templateCandidate)) {
+            try {
+              _confirmUserTemplate(templateSave.template);
+              _confirmPendingUserTemplate(saveName, pendingTemplateEntry);
+            } catch (error) {
+              _setPendingUserTemplateUncertain(saveName, pendingTemplateEntry);
+              _showTemplateSaveWarning(showError, _isInjectStart);
+              console.error('Saved template could not be refreshed in the UI:', error);
+            }
+          } else if (templateSave?.success === false) {
+            _rejectPendingUserTemplate(saveName, pendingTemplateEntry);
+            _showTemplateSaveWarning(showError, _isInjectStart);
+          } else {
+            _setPendingUserTemplateUncertain(saveName, pendingTemplateEntry);
+            _showTemplateSaveWarning(showError, _isInjectStart);
+          }
+        } else {
+          fetch(`${API_BASE}/api/presets/templates`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(templateCandidate),
+          }).then(async response => {
+            if (!response.ok) throw new Error(`Server returned ${response.status}`);
+            const templateResult = await response.json();
+            if (templateResult.success !== true) throw new Error('Template save was not confirmed');
+            if (await loadUserTemplates()) _confirmPendingUserTemplate(saveName, pendingTemplateEntry);
+          }).catch(() => {
+            _rejectPendingUserTemplate(saveName, pendingTemplateEntry);
+            _showTemplateSaveWarning(showError, _isInjectStart);
+            loadUserTemplates();
+          }).finally(() => {
+            // A confirmed reload clears the entry; uncertain writes retain their ID.
+            if (!pendingTemplateEntry.uncertain) _rejectPendingUserTemplate(saveName, pendingTemplateEntry);
+          });
         }
-        const ENDPOINT = `${API_BASE}/api/presets/templates`;
-        pendingUserTemplates.set(saveName, _entry);
-
-        fetch(ENDPOINT, {
-          method: "POST",
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(_entry)
-        }).then(async (r) => {
-          if (!r.ok) throw new Error(`Server returned ${r.status}`);
-          const result = await r.json();
-          if (!result.success) throw new Error('Template save was not confirmed');
-          await loadUserTemplates();
-        }).catch(() => {
-          const message = _isInjectStart
-            ? 'Prompt saved, but reusable template save could not be confirmed.'
-            : 'Persona saved, but reusable template save could not be confirmed.';
-          if (showError) showError(message);
-          else window.uiModule?.showError?.(message);
-          loadUserTemplates();
-        }).finally(() => {
-          if (pendingUserTemplates.get(saveName) === _entry) pendingUserTemplates.delete(saveName);
-        });
       }
 
-    } else {
-      if (showError) {
-        showError('Failed to save custom preset');
+    } catch (error) {
+      if (postStarted) {
+        if (_templateNameAtSave && pendingTemplateEntry) {
+          if (bundledTemplate) _setPendingUserTemplateUncertain(_templateNameAtSave, pendingTemplateEntry);
+          else _rejectPendingUserTemplate(_templateNameAtSave, pendingTemplateEntry);
+        }
+        if (backendMode !== 'modern') customPresetSaveQueueBlocked = true;
+        _showCustomSaveError(showError, 'Save outcome could not be confirmed. Keep this draft and check saved presets before retrying.');
+      } else {
+        _showCustomSaveError(showError, 'Could not check saved presets. This draft remains open; retry when the server is available.');
       }
+      console.error('Error saving custom preset:', error);
+    } finally {
+      clearTimeout(saveTimer);
     }
-  } catch (error) {
-    console.error('Error saving custom preset:', error);
-    if (showError) {
-      showError('Failed to save custom preset');
-    }
-  }
+  };
+
+  const queuedSave = customPresetSaveQueue.then(_saveOperation, _saveOperation);
+  customPresetSaveQueue = queuedSave.catch(() => {});
+  await queuedSave;
 }
 
 /**
@@ -1123,9 +1291,10 @@ export function getAllPresets() {
 export function getUserTemplates() {
   const templates = [...userTemplates];
   for (const pending of pendingUserTemplates.values()) {
-    const index = templates.findIndex(t => t.name === pending.name);
-    if (index < 0) templates.push(pending);
-    else templates[index] = pending;
+    const template = pending.template;
+    const index = templates.findIndex(t => t.name === template.name);
+    if (index < 0) templates.push(template);
+    else templates[index] = template;
   }
   return templates;
 }

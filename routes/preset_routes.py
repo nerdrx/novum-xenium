@@ -6,6 +6,7 @@ import uuid
 from typing import Dict, Any, List, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.request_models import PresetUpdateRequest
@@ -31,15 +32,29 @@ class UserTemplateRequest(BaseModel):
     persona_memory_schema: str = Field("general", pattern="^(general|health)$")
 
 
+class CustomPresetSaveRequest(PresetUpdateRequest):
+    template_autosave: UserTemplateRequest | None = None
+
+
 def setup_preset_routes(preset_manager) -> APIRouter:
     router = APIRouter(tags=["presets"])
 
     @router.get("/api/presets")
     async def get_presets() -> Dict[str, Any]:
-        return preset_manager.get_all()
+        return {
+            **preset_manager.get_all(),
+            "custom_save_revision_guard": True,
+            "custom_template_autosave": True,
+        }
 
     @router.post("/api/presets/custom")
-    async def update_custom_preset(preset_update: PresetUpdateRequest, _admin: None = Depends(require_admin)) -> Dict[str, Any]:
+    async def update_custom_preset(
+        preset_update: CustomPresetSaveRequest,
+        expected_custom_revision: int | None = Query(default=None, ge=0),
+        _admin: None = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        if preset_update.template_autosave is not None and expected_custom_revision is None:
+            raise HTTPException(422, "Bundled template autosave requires expected_custom_revision")
         try:
             success = preset_manager.update_custom(
                 preset_update.temperature,
@@ -54,13 +69,40 @@ def setup_preset_routes(preset_manager) -> APIRouter:
                 preset_update.persona_memory_schema,
                 preset_update.thinking_mode,
                 preset_update.show_persona_name,
+                expected_custom_revision=expected_custom_revision,
             )
+            if success is None:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "success": False,
+                        "message": "Persona settings changed; retry saving your preserved edits.",
+                        "custom_revision": preset_manager.get_custom_revision(),
+                    },
+                )
             if success:
-                return {
+                result = {
                     "success": True,
                     "message": "Custom preset updated",
                     "custom_revision": preset_manager.get_custom_revision(),
+                    "custom_save_revision_guard": True,
+                    "custom_template_autosave": True,
                 }
+                if preset_update.template_autosave is not None:
+                    template = preset_update.template_autosave.model_dump()
+                    if not template["id"]:
+                        template["id"] = f"user-{uuid.uuid4().hex[:8]}"
+                    try:
+                        template_saved = preset_manager.save_user_template(template)
+                    except Exception:
+                        logger.exception("Bundled reusable template save failed")
+                        template_saved = False
+                    result["template_save"] = (
+                        {"success": True, "template": template}
+                        if template_saved
+                        else {"success": False, "message": "Failed to save reusable template"}
+                    )
+                return result
             return {"success": False, "message": "Failed to save preset"}
         except Exception as e:
             logger.error(f"Preset update error: {e}")

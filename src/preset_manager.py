@@ -155,7 +155,8 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
         persona_memory_schema: str = "general",
         thinking_mode: str = "",
         show_persona_name: bool = True,
-    ) -> bool:
+        expected_custom_revision: int | None = None,
+    ) -> bool | None:
         """Update the custom preset"""
         persona_memory_schema = persona_memory_schema if persona_memory_schema in {"general", "health"} else "general"
         current = self.presets.get("custom") if isinstance(self.presets, dict) else {}
@@ -191,10 +192,13 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
             "persona_memory": persona_memory if enabled and name else "",
             "persona_memory_schema": persona_memory_schema if enabled and name else "general",
         }
+        current_revision = self.get_custom_revision()
+        if expected_custom_revision is not None and expected_custom_revision != current_revision:
+            return None
         return self.save({
             **self.presets,
             "custom": custom,
-            "custom_revision": self.get_custom_revision() + 1,
+            "custom_revision": current_revision + 1,
         })
     
     def get_all(self) -> Dict[str, Any]:

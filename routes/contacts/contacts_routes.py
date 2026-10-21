@@ -142,6 +142,11 @@ def _save_local_contacts(contacts: List[Dict]) -> None:
     _contact_cache["failed_at"] = None
 
 
+def _local_contacts_transaction(function):
+    from core.atomic_io import store_transaction
+    return store_transaction(lambda: LOCAL_CONTACTS_FILE)(function)
+
+
 # ── vCard parsing ──
 
 def _vunesc(value: str) -> str:
@@ -509,26 +514,7 @@ def _create_contact(name: str, email: str = "", address: str = "", phones: Optio
     cfg = _get_carddav_config()
     owner_key = str(owner or "").strip()
     if owner_key.startswith("sft_") or not _carddav_configured(cfg):
-        contacts = _load_local_contacts()
-        email_l = email.lower()
-        for c in contacts:
-            if owner_key and not _contact_visible_to_owner(c, owner_key):
-                continue
-            if email_l and email_l in [e.lower() for e in c.get("emails", [])]:
-                return True
-            if phone_list and any(p in (c.get("phones") or []) for p in phone_list):
-                return True
-        row = {
-            "name": name,
-            "emails": [email] if email else [],
-            "phones": phone_list,
-            "address": address,
-        }
-        if owner_key:
-            row["owner"] = owner_key
-        contacts.append(_normalize_contact(row))
-        _save_local_contacts(contacts)
-        return True
+        return _create_local_contact(name, email, address, phone_list, owner_key)
 
     contact_uid = str(uuid.uuid4())
     vcard = _build_vcard(name, email, contact_uid, address=address, phones=phone_list)
@@ -555,6 +541,25 @@ def _create_contact(name: str, email: str = "", address: str = "", phones: Optio
         return False
 
 
+@_local_contacts_transaction
+def _create_local_contact(name: str, email: str, address: str, phones: List[str], owner: str) -> bool:
+    contacts = _load_local_contacts()
+    email_l = email.lower()
+    for c in contacts:
+        if owner and not _contact_visible_to_owner(c, owner):
+            continue
+        if email_l and email_l in [e.lower() for e in c.get("emails", [])]:
+            return True
+        if phones and any(p in (c.get("phones") or []) for p in phones):
+            return True
+    row = {"name": name, "emails": [email] if email else [], "phones": phones, "address": address}
+    if owner:
+        row["owner"] = owner
+    contacts.append(_normalize_contact(row))
+    _save_local_contacts(contacts)
+    return True
+
+
 def _vcard_url(uid: str) -> str:
     """The CardDAV resource URL for a given contact UID. The uid is URL-
     encoded so a value containing '/', '..' or other path chars can't
@@ -572,26 +577,7 @@ def _import_vcards(text: str) -> Dict:
     from urllib.parse import quote
     cfg = _get_carddav_config()
     if not cfg.get("url"):
-        parsed = _parse_vcards(text)
-        contacts = _load_local_contacts()
-        existing = {
-            e.lower()
-            for c in contacts
-            for e in (c.get("emails") or [])
-            if e
-        }
-        imported = 0
-        for c in parsed:
-            emails = [e for e in (c.get("emails") or []) if e]
-            if emails and any(e.lower() in existing for e in emails):
-                continue
-            contacts.append(_normalize_contact(c))
-            for e in emails:
-                existing.add(e.lower())
-            imported += 1
-        if imported:
-            _save_local_contacts(contacts)
-        return {"imported": imported, "failed": 0, "total": len(parsed)}
+        return _import_local_vcards(text)
     try:
         base_url = _carddav_base_url(cfg)
     except ValueError as e:
@@ -769,31 +755,7 @@ def _update_contact(uid: str, name: str, emails: List[str], phones: List[str], a
     cfg = _get_carddav_config()
     owner_key = str(owner or "").strip()
     if owner_key.startswith("sft_") or not _carddav_configured(cfg):
-        contacts = _load_local_contacts()
-        found = False
-        out = []
-        for c in contacts:
-            if c.get("uid") == uid:
-                if owner_key and not _contact_visible_to_owner(c, owner_key):
-                    out.append(c)
-                    continue
-                # Preserve existing address when caller passes "" (only
-                # updating name/emails/phones, not touching address).
-                addr = address if address else c.get("address", "")
-                row = {"uid": uid, "name": name, "emails": emails, "phones": phones, "address": addr}
-                if owner_key:
-                    row["owner"] = owner_key
-                out.append(_normalize_contact(row))
-                found = True
-            else:
-                out.append(c)
-        if not found:
-            row = {"uid": uid, "name": name, "emails": emails, "phones": phones, "address": address}
-            if owner_key:
-                row["owner"] = owner_key
-            out.append(_normalize_contact(row))
-        _save_local_contacts(out)
-        return True
+        return _update_local_contact(uid, name, emails, phones, address, owner_key)
 
     vcard = _build_vcard(name, "", uid=uid, emails=emails, phones=phones, address=address)
     # Use the real resource href (handles externally-created contacts whose
@@ -818,18 +780,40 @@ def _update_contact(uid: str, name: str, emails: List[str], phones: List[str], a
         return False
 
 
+@_local_contacts_transaction
+def _update_local_contact(uid: str, name: str, emails: List[str], phones: List[str], address: str, owner: str) -> bool:
+    contacts = _load_local_contacts()
+    found = False
+    out = []
+    for c in contacts:
+        if c.get("uid") == uid:
+            if owner and not _contact_visible_to_owner(c, owner):
+                out.append(c)
+                continue
+            # Preserve existing address when caller passes "".
+            addr = address if address else c.get("address", "")
+            row = {"uid": uid, "name": name, "emails": emails, "phones": phones, "address": addr}
+            if owner:
+                row["owner"] = owner
+            out.append(_normalize_contact(row))
+            found = True
+        else:
+            out.append(c)
+    if not found:
+        row = {"uid": uid, "name": name, "emails": emails, "phones": phones, "address": address}
+        if owner:
+            row["owner"] = owner
+        out.append(_normalize_contact(row))
+    _save_local_contacts(out)
+    return True
+
+
 def _delete_contact(uid: str, owner: Optional[str] = None) -> bool:
     """Delete a contact via CardDAV or local contacts."""
     cfg = _get_carddav_config()
     owner_key = str(owner or "").strip()
     if owner_key.startswith("sft_") or not _carddav_configured(cfg):
-        contacts = _load_local_contacts()
-        remaining = [
-            c for c in contacts
-            if c.get("uid") != uid or (owner_key and not _contact_visible_to_owner(c, owner_key))
-        ]
-        _save_local_contacts(remaining)
-        return True
+        return _delete_local_contact(uid, owner_key)
 
     try:
         url = _resolve_resource_url(uid)
@@ -859,6 +843,44 @@ def _delete_contact(uid: str, owner: Optional[str] = None) -> bool:
     except Exception as e:
         logger.error(f"Failed to delete contact: {e}")
         return False
+
+
+@_local_contacts_transaction
+def _delete_local_contact(uid: str, owner: str) -> bool:
+    contacts = _load_local_contacts()
+    remaining = [
+        c for c in contacts
+        if c.get("uid") != uid or (owner and not _contact_visible_to_owner(c, owner))
+    ]
+    _save_local_contacts(remaining)
+    return True
+
+
+@_local_contacts_transaction
+def _import_local_vcards(text: str) -> Dict:
+    parsed = _parse_vcards(text)
+    contacts = _load_local_contacts()
+    existing = {e.lower() for c in contacts for e in (c.get("emails") or []) if e}
+    imported = 0
+    for contact in parsed:
+        emails = [e for e in (contact.get("emails") or []) if e]
+        if emails and any(e.lower() in existing for e in emails):
+            continue
+        contacts.append(_normalize_contact(contact))
+        existing.update(e.lower() for e in emails)
+        imported += 1
+    if imported:
+        _save_local_contacts(contacts)
+    return {"imported": imported, "failed": 0, "total": len(parsed)}
+
+
+@_local_contacts_transaction
+def _clear_local_contacts(owner: Optional[str] = None) -> None:
+    if owner:
+        remaining = [c for c in _load_local_contacts() if not _contact_visible_to_owner(c, owner)]
+        _save_local_contacts(remaining)
+    else:
+        _save_local_contacts([])
 
 
 # ── Routes ──
@@ -907,7 +929,7 @@ def setup_contacts_routes():
             return {"success": False, "error": "Name, email, phone, or address required"}
         if not name:
             name = email.split("@")[0] if email else (phones[0] if phones else "Contact")
-        contacts = _fetch_contacts(owner=owner)
+        contacts = await asyncio.to_thread(_fetch_contacts, owner=owner)
         for c in contacts:
             if email and email.lower() in [e.lower() for e in c.get("emails", [])]:
                 return {"success": True, "message": "Already exists", "contact": c}
@@ -920,18 +942,18 @@ def setup_contacts_routes():
                 create_kwargs["phones"] = phones
             if "owner" in create_params:
                 create_kwargs["owner"] = owner
-            ok = _create_contact(name, email, address, **create_kwargs)
+            ok = await asyncio.to_thread(_create_contact, name, email, address, **create_kwargs)
         else:
-            ok = _create_contact(name, email)
+            ok = await asyncio.to_thread(_create_contact, name, email)
         # If a phone was provided, do an immediate update to thread it
         # through (the simple _create_contact signature only takes name +
         # email + address; phones happen via update).
         if ok and phones and "phones" not in create_params:
             try:
-                fresh = _fetch_contacts(force=True, owner=owner)
+                fresh = await asyncio.to_thread(_fetch_contacts, force=True, owner=owner)
                 created = next((c for c in fresh if name == c.get("name") and (not email or email in c.get("emails", []))), None)
                 if created:
-                    _update_contact(
+                    await asyncio.to_thread(_update_contact,
                         created["uid"], name,
                         created.get("emails", []),
                         phones,
@@ -953,9 +975,9 @@ def setup_contacts_routes():
         if text.strip():
             if "BEGIN:VCARD" not in text.upper():
                 return {"success": False, "error": "No vCard data found"}
-            result = _import_vcards(text)
+            result = await asyncio.to_thread(_import_vcards, text)
         elif csv_text.strip():
-            result = _import_csv_contacts(csv_text)
+            result = await asyncio.to_thread(_import_csv_contacts, csv_text)
         else:
             return {"success": False, "error": "No contact data found"}
         result["success"] = result.get("imported", 0) > 0
@@ -1021,14 +1043,7 @@ def setup_contacts_routes():
     async def clear_contacts(request: Request, _admin: str = Depends(require_admin)):
         """Clear all local contacts. If CardDAV is configured, only clears the local fallback cache."""
         owner = effective_user(request)
-        if owner:
-            remaining = [
-                c for c in _load_local_contacts()
-                if not _contact_visible_to_owner(c, owner)
-            ]
-            _save_local_contacts(remaining)
-        else:
-            _save_local_contacts([])
+        await asyncio.to_thread(_clear_local_contacts, owner)
         return {"success": True}
 
     # NOTE: the /{uid} routes are declared LAST so the literal paths above
@@ -1049,7 +1064,7 @@ def setup_contacts_routes():
             return {"success": False, "error": "Name, email, or address required"}
         if not name and emails:
             name = emails[0].split("@")[0]
-        ok = _update_contact(uid, name, emails, phones, address, owner=effective_user(request))
+        ok = await asyncio.to_thread(_update_contact, uid, name, emails, phones, address, owner=effective_user(request))
         return {"success": ok}
 
     @router.delete("/{uid}")
@@ -1057,7 +1072,7 @@ def setup_contacts_routes():
         """Delete a contact by UID."""
         if not uid:
             return {"success": False, "error": "UID required"}
-        ok = _delete_contact(uid, owner=effective_user(request))
+        ok = await asyncio.to_thread(_delete_contact, uid, owner=effective_user(request))
         return {"success": ok}
 
     return router

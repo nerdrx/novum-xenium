@@ -14637,13 +14637,17 @@ import { attachColorPicker } from './colorPicker.js?v=20260910eyedropper1';
     const textarea = document.getElementById('doc-editor-textarea');
     if (!textarea || !textarea.value) return;
     if (uiModule && uiModule.copyToClipboard) {
-      if (!await uiModule.copyToClipboard(textarea.value)) return;
+      if (!await uiModule.copyToClipboard(textarea.value)) return false;
     } else {
       try {
         await navigator.clipboard.writeText(textarea.value);
-      } catch (e) { /* ignore */ }
+      } catch (e) {
+        if (uiModule && uiModule.showError) uiModule.showError('Could not copy');
+        return false;
+      }
     }
     if (uiModule) uiModule.showToast('Copied to clipboard');
+    return true;
   }
 
   /* ---- Per-tab context menu ---- */

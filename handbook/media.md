@@ -81,8 +81,10 @@ If you switch chats while transcription finishes, the text is kept with that
 destination rather than inserted into the newly opened composer. A newer draft
 there is preserved and the transcript is appended. Page-only and incognito
 drafts are not saved for reload. If the original destination is unavailable,
-Novum can offer **Copy transcript** or **Discard transcript**; a changed account
-prevents delivery or recovery into another account.
+Novum can offer **Copy transcript** or **Discard transcript**. If copying fails,
+you can explicitly download `voice-transcript.txt` or discard it; Novum does not
+download automatically, persist the transcript, or insert it into the current
+chat, and it checks account identity again before downloading.
 
 Audio fallback attaches only when its destination is still current. Otherwise,
 Novum offers a download or discard instead of attaching it to another chat.
@@ -91,10 +93,11 @@ Novum offers explicit transcript/audio recovery without assigning it to either
 chat automatically. Browser recognition has the brief completion wait described
 above; server-side transcription can finish later. Review the result before
 sending it. See
-the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/98fe494a2116f0a66f733db0b28fc67abf1415ca/specs/speech.md)
+the pinned [Speech specification](https://github.com/nerdrx/novum-xenium/blob/67c6ceffac5908c8a6c667ab8227152735737d78/specs/speech.md)
 and [recording implementation](https://github.com/nerdrx/novum-xenium/blob/b1b3c622ec9f7b0fce5e1b6787beafcaad0d1229/static/js/voiceRecorder.js)
-for provider and fallback behavior. Chat model configuration alone does not
-enable speech input.
+for provider and fallback behavior. The [session recovery implementation](https://github.com/nerdrx/novum-xenium/blob/86b9d1d3b72166d0b1a28d0968a1da70713978c6/static/js/sessions.js)
+keeps this text recovery separate from chat insertion. Chat model configuration
+alone does not enable speech input.
 
 ## Troubleshooting
 

@@ -38,6 +38,8 @@ This spec covers speech behavior in:
 Provider runtime:
 
 - `disabled` returns unavailable and avoids provider calls;
+- only a literal JSON boolean `true` enables `stt_enabled`; missing or non-boolean saved values
+  resolve to disabled at runtime without rewriting the stored setting;
 - empty or non-string saved provider values resolve to `disabled` in the service at runtime without rewriting the stored setting; unknown non-empty provider names remain unavailable;
 - `browser` is client-side only through Web Speech API and does not call `/api/stt/transcribe`;
 - `local` lazily imports `faster-whisper`, writes uploaded audio to a temporary file using its recognized extension, transcribes, and deletes the temp file in `finally`;
@@ -51,7 +53,10 @@ replacement leaves no old model available to serve, and a later loader call can 
 Route behavior:
 
 - audio uploads are capped by the shared STT upload limit from `src.upload_limits`, including environment override validation;
-- empty uploads return a route error;
+- [`/api/stt/transcribe`](https://github.com/nerdrx/novum-xenium/blob/6fc1a623e0cb5e5c3d19b49cb901a0ca7ddc31f4/routes/stt_routes.py)
+  checks the bounded upload and rejects empty audio before provider availability. Empty audio returns
+  400 and oversized audio returns 413 even when speech is disabled; valid audio for a disabled or
+  unavailable service returns 503;
 - uploaded content type, extension, and magic bytes are not strongly validated today;
 - endpoint providers report optimistic availability and fail at request time if offline/misconfigured.
 

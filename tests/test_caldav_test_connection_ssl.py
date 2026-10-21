@@ -273,3 +273,77 @@ def test_test_route_uses_only_requested_saved_account(client, monkeypatch):
     assert validated == [adhoc_url]
     assert calls[0]["url"] == adhoc_url
     assert calls[0]["auth"] == ("adhoc-user", "adhoc-password")
+
+
+def test_partial_new_caldav_credentials_do_not_borrow_saved_account_password(client, monkeypatch):
+    """Explicit partial ad-hoc settings must not borrow the first account's secret."""
+    from src import caldav_sync
+
+    saved_accounts = [{
+        "id": "saved-account-a",
+        "url": "https://saved.caldav-proof.test/dav",
+        "username": "saved-user",
+        "password": "synthetic-saved-secret",
+    }]
+    loaded_accounts = []
+    validator_calls = []
+    provider_calls = []
+
+    async def validate_url_async(url):
+        validator_calls.append(url)
+        return url
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def request(self, method, url, **kwargs):
+            provider_calls.append({"method": method, "url": url, "auth": kwargs.get("auth")})
+            return _fake_response(207)
+
+    monkeypatch.setattr(
+        caldav_sync,
+        "_load_caldav_accounts",
+        lambda owner: loaded_accounts.append(owner) or [dict(account) for account in saved_accounts],
+    )
+    monkeypatch.setattr(caldav_sync, "validate_caldav_url_async", validate_url_async)
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("routes.calendar_routes._require_user", lambda request: "synthetic-owner")
+
+    partial_fields = (
+        ("url",),
+        ("username",),
+        ("password",),
+        ("url", "username"),
+        ("url", "password"),
+        ("username", "password"),
+    )
+    cases = [
+        {"url": "https://adhoc.caldav-proof.test/dav" if "url" in present else "",
+         "username": "adhoc-user" if "username" in present else "",
+         "password": "synthetic-adhoc-secret" if "password" in present else ""}
+        for present in partial_fields
+    ]
+    cases.extend({key: body[key] for key in present} for present, body in zip(partial_fields, cases[:]))
+    cases.append({"url": "", "username": "", "password": ""})
+    cases.append({"account_id": None, "url": "https://adhoc.caldav-proof.test/dav", "username": "adhoc-user"})
+
+    for body in cases:
+        validator_calls.clear()
+        provider_calls.clear()
+        loaded_accounts.clear()
+        response = client.post("/api/calendar/test", json=body)
+        assert response.status_code == 200
+        assert response.json() == {
+            "ok": False,
+            "error": "Enter URL, username, and password to test a new account",
+        }
+        assert validator_calls == []
+        assert provider_calls == []
+        assert loaded_accounts == []

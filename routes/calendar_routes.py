@@ -1140,11 +1140,14 @@ def setup_calendar_routes(upload_handler=None) -> APIRouter:
         url = (body.get("url") or "").strip()
         user = (body.get("username") or "").strip()
         pw = body.get("password") or ""
+        account_id = body.get("account_id")
+        has_adhoc_fields = any(key in body for key in ("url", "username", "password"))
+        if account_id is None and has_adhoc_fields and not (url and user and pw):
+            return {"ok": False, "error": "Enter URL, username, and password to test a new account"}
         if not (url and user and pw):
             # Look up a saved account: by id if supplied, else first account.
             accounts = _get_caldav_accounts(owner)
             acc = None
-            account_id = body.get("account_id")
             if account_id is not None:
                 acc = next((a for a in accounts if a.get("id") == account_id), None)
                 if acc is None:

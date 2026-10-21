@@ -18,15 +18,18 @@ let recordingIntent = 0;
 
 // Cached STT provider — refreshed on settings change
 let _sttProvider = 'disabled';
+let _sttProviderRevision = 0;
 
 /**
  * Fetch current STT provider from server settings
  */
 async function refreshSttProvider() {
+  const revision = ++_sttProviderRevision;
   try {
     const res = await fetch('/api/stt/stats', { credentials: 'same-origin' });
     if (res.ok) {
       const stats = await res.json();
+      if (revision !== _sttProviderRevision) return;
       _sttProvider = stats.provider || 'disabled';
       // Notify the send button to update its icon
       if (window._updateSendBtnIcon) window._updateSendBtnIcon();
@@ -405,7 +408,7 @@ const voiceRecorderModule = {
   init,
   refreshSttProvider,
   get _sttProvider() { return _sttProvider; },
-  set _sttProvider(v) { _sttProvider = v; },
+  set _sttProvider(v) { _sttProviderRevision++; _sttProvider = v; },
 };
 
 export default voiceRecorderModule;

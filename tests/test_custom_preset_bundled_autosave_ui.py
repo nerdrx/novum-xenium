@@ -1,4 +1,5 @@
 """Browser regression for bundled custom-preset and reusable-template saves."""
+import json
 import os
 from pathlib import Path
 import shutil
@@ -29,4 +30,4 @@ def test_bundled_template_autosave_keeps_confirmed_state_and_retry_identity():
         capture_output=True, text=True, timeout=90, cwd=ROOT, env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"pass": true' in result.stdout
+    assert json.loads(result.stdout).get("pass") is True

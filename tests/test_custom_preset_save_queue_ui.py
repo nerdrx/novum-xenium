@@ -1,4 +1,5 @@
 """Bounded browser coverage for ordered custom-preset writes."""
+import json
 import os
 from pathlib import Path
 import shutil
@@ -29,4 +30,4 @@ def test_custom_preset_save_queue_and_ambiguous_outcomes():
         capture_output=True, text=True, timeout=120, cwd=ROOT, env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"pass":true' in result.stdout
+    assert json.loads(result.stdout).get("pass") is True

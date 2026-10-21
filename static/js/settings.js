@@ -3532,7 +3532,7 @@ async function initUnifiedIntegrations() {
     formEl.style.display = '';
     if (type === 'api') showApiForm(editId, intent);
     else if (type === 'caldav') showCalDavForm(editId, intent);
-    else if (type === 'contacts' || type === 'carddav') showCardDavForm();
+    else if (type === 'contacts' || type === 'carddav') showCardDavForm(intent);
     else if (type === 'email') showEmailForm(editId);
     else if (type === 'mcp') showMcpForm(editId);
     else if (type === 'codex') showAgentForm('codex', editId);
@@ -3964,7 +3964,7 @@ async function initUnifiedIntegrations() {
   }
 
   // ── CardDAV form + contacts manager ──
-  async function showCardDavForm() {
+  async function showCardDavForm(formIntent) {
     formEl.innerHTML = `
       <div class="admin-card" style="margin-top:8px">
         <h2 style="font-size:13px;display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent, var(--red));flex-shrink:0;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Contacts (CardDAV)</h2>
@@ -3974,7 +3974,7 @@ async function initUnifiedIntegrations() {
           <div class="settings-row"><label class="settings-label">Password</label><input id="uf-carddav-pass" class="settings-input" type="password"></div>
           <div class="settings-row" style="margin-top:10px;align-items:center;justify-content:flex-end;gap:6px;">
             <span id="uf-carddav-msg" style="font-size:11px;flex:1;margin-right:8px"></span>
-            <button class="admin-btn-add" id="uf-carddav-save" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));font-weight:600;">
+            <button class="admin-btn-add" id="uf-carddav-save" disabled style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));font-weight:600;">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
               Save
             </button>
@@ -3986,6 +3986,7 @@ async function initUnifiedIntegrations() {
         </div>
       </div>
       <div class="admin-card contacts-manager" style="margin-top:8px">
+        <fieldset id="uf-carddav-manager-controls" disabled style="border:0;padding:0;margin:0;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <h2 style="font-size:13px;margin:0;display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent, var(--red));flex-shrink:0;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Contacts Import <span id="cm-count" style="opacity:0.5;font-weight:normal;font-size:11px;"></span></h2>
           <button class="admin-btn-sm" id="cm-import-btn" style="margin-left:auto;">Import</button>
@@ -4003,33 +4004,92 @@ async function initUnifiedIntegrations() {
         </div>
         <input type="text" id="cm-search" class="settings-input" placeholder="Search contacts (name, email, phone, address)" style="margin-top:6px;">
         <div id="cm-list" class="contacts-list"><div style="opacity:0.4;font-size:11px;padding:8px 2px;">Loading…</div></div>
+        </fieldset>
       </div>`;
+    const formRoot = formEl.firstElementChild;
+    const urlInput = el('uf-carddav-url');
+    const userInput = el('uf-carddav-user');
+    const passInput = el('uf-carddav-pass');
+    const messageEl = el('uf-carddav-msg');
+    const saveButton = el('uf-carddav-save');
+    const cancelButton = el('uf-carddav-cancel');
+    const managerControls = el('uf-carddav-manager-controls');
+    const editedFields = new Set();
+    [urlInput, userInput].forEach(input => input.addEventListener('input', () => editedFields.add(input)));
+    const isCurrentForm = () => {
+      if (formIntent !== activeFormIntent || !formRoot.isConnected || !formEl.contains(formRoot)) return false;
+      for (let node = formRoot; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (node.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
+      }
+      return true;
+    };
+    const setMessage = (text, ok) => {
+      messageEl.textContent = text;
+      messageEl.style.color = ok ? 'var(--green, #50fa7b)' : 'var(--red)';
+    };
+    cancelButton.addEventListener('click', () => {
+      if (isCurrentForm()) {
+        formEl.style.display = 'none';
+        prefillController?.abort();
+      }
+    });
+    let prefillController;
     try {
-      const r = await fetch('/api/contacts/config', { credentials: 'same-origin' }); const d = await r.json();
-      el('uf-carddav-url').value = d.url || ''; el('uf-carddav-user').value = d.username || '';
+      prefillController = new AbortController();
+      const prefillTimeout = setTimeout(() => prefillController.abort(), 15000);
+      let d;
+      try {
+        const r = await fetch('/api/contacts/config', { credentials: 'same-origin', signal: prefillController.signal });
+        if (!r.ok) throw new Error('Could not load saved settings');
+        d = await r.json();
+        if (!d || typeof d !== 'object' || Array.isArray(d)
+          || typeof d.url !== 'string' || typeof d.username !== 'string' || typeof d.password !== 'string') {
+          throw new Error('Invalid saved settings');
+        }
+        if (isCurrentForm()) {
+          if (!editedFields.has(urlInput)) urlInput.value = d.url || '';
+          if (!editedFields.has(userInput)) userInput.value = d.username || '';
+        }
+      } finally {
+        clearTimeout(prefillTimeout);
+      }
+      if (isCurrentForm()) {
       // Server masks the password as '***' when one is saved (or '' when
       // none). Surface that state via the input's placeholder so users
       // can tell their password is already on file without us echoing it.
-      const passInput = el('uf-carddav-pass');
-      if (passInput && d.password) passInput.placeholder = '(unchanged)';
-    } catch (_) {}
-    el('uf-carddav-cancel').addEventListener('click', () => { formEl.style.display = 'none'; });
-    el('uf-carddav-save').addEventListener('click', async () => {
-      const body = { carddav_url: el('uf-carddav-url').value, carddav_username: el('uf-carddav-user').value };
-      if (el('uf-carddav-pass').value) body.carddav_password = el('uf-carddav-pass').value;
+        if (passInput && d.password) passInput.placeholder = '(unchanged)';
+      }
+    } catch (_) {
+      if (isCurrentForm()) setMessage('Could not load saved CardDAV settings.', false);
+    }
+    if (!isCurrentForm()) return;
+    let saving = false;
+    saveButton.addEventListener('click', async () => {
+      if (saving || !isCurrentForm()) return;
+      saving = true;
+      const body = { carddav_url: urlInput.value, carddav_username: userInput.value };
+      if (passInput.value) body.carddav_password = passInput.value;
+      const submitted = { url: urlInput.value, username: userInput.value, password: passInput.value };
       try {
-        await fetch('/api/contacts/config', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        el('uf-carddav-msg').textContent = 'Saved';
-        el('uf-carddav-msg').style.color = 'var(--green, #50fa7b)';
-        // Refresh both the sub-panel (contacts manager) AND the
-        // outer integrations list so the CardDAV row appears
-        // immediately instead of waiting for a page reload.
-        await _renderContactsManager();
-        await renderList();
+        const r = await fetch('/api/contacts/config', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        let result;
+        try { result = await r.json(); } catch (_) { result = null; }
+        if (!r.ok || !result || result.success !== true) {
+          if (isCurrentForm()) setMessage('Save failed', false);
+          return;
+        }
+        if (isCurrentForm()) {
+          const changed = urlInput.value !== submitted.url || userInput.value !== submitted.username || passInput.value !== submitted.password;
+          setMessage(changed ? 'Saved; newer edits remain unsaved.' : 'Saved', true);
+        }
         notifyIntegrationsChanged();
+        try { await _renderContactsManager(); } catch (_) {}
+        try { await renderList(); } catch (_) {}
       } catch (_) {
-        el('uf-carddav-msg').textContent = 'Failed';
-        el('uf-carddav-msg').style.color = 'var(--red)';
+        if (isCurrentForm()) setMessage('Save failed', false);
+      } finally {
+        saving = false;
       }
     });
     // Add-row toggle + save
@@ -4170,6 +4230,10 @@ async function initUnifiedIntegrations() {
         await _renderContactsManager();
       }
     });
+    if (isCurrentForm()) {
+      managerControls.disabled = false;
+      saveButton.disabled = false;
+    }
     await _renderContactsManager();
   }
 

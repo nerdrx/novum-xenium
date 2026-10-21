@@ -3306,6 +3306,7 @@ async function initUnifiedIntegrations() {
   const addBtn = el('unified-intg-add-btn');
   if (!listEl) return;
   let integrationNotice = '';
+  let activeFormIntent = 0;
 
   // Hide the "+ Add Integration" button whenever the per-type create form
   // is open so it doesn't compete visually with the in-progress form.
@@ -3480,9 +3481,10 @@ async function initUnifiedIntegrations() {
   }
 
   function showForm(type, editId) {
+    const intent = ++activeFormIntent;
     formEl.style.display = '';
     if (type === 'api') showApiForm(editId);
-    else if (type === 'caldav') showCalDavForm(editId);
+    else if (type === 'caldav') showCalDavForm(editId, intent);
     else if (type === 'contacts' || type === 'carddav') showCardDavForm();
     else if (type === 'email') showEmailForm(editId);
     else if (type === 'mcp') showMcpForm(editId);
@@ -3695,7 +3697,7 @@ async function initUnifiedIntegrations() {
   }
 
   // ── CalDAV form (supports add + edit per account) ──
-  async function showCalDavForm(editId) {
+  async function showCalDavForm(editId, formIntent) {
     const isNew = !editId || editId === 'new';
     formEl.innerHTML = `
       <div class="admin-card" style="margin-top:8px">
@@ -3714,94 +3716,158 @@ async function initUnifiedIntegrations() {
         </div>
       </div>`;
 
+    const formRoot = formEl.firstElementChild;
+    const labelInput = el('uf-caldav-label');
+    const urlInput = el('uf-caldav-url');
+    const userInput = el('uf-caldav-user');
+    const passInput = el('uf-caldav-pass');
+    const messageEl = el('uf-caldav-msg');
+    const cancelButton = el('uf-caldav-cancel');
+    const testButton = el('uf-caldav-test');
+    const saveButton = el('uf-caldav-save');
+    const editedFields = new Set();
+    [labelInput, urlInput, userInput].forEach(input => {
+      input.addEventListener('input', () => editedFields.add(input));
+    });
+    const isCurrentForm = () => {
+      if (formIntent !== activeFormIntent) return false;
+      if (!formRoot.isConnected || !formEl.contains(formRoot)) return false;
+      for (let node = formRoot; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (node.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
+      }
+      return true;
+    };
+    const clearAbandonedMessage = () => {
+      if (formRoot.isConnected && formEl.contains(formRoot)
+        && ['Testing…', 'Saving…'].includes(messageEl.textContent)) messageEl.textContent = '';
+    };
+    cancelButton.addEventListener('click', () => { formEl.style.display = 'none'; });
+
     if (!isNew) {
       try {
         const r = await fetch('/api/calendar/config/accounts', { credentials: 'same-origin' });
+        if (!isCurrentForm()) return;
         const d = await r.json();
+        if (!isCurrentForm()) return;
         const acc = (d.accounts || []).find(a => a.id === editId);
         if (acc) {
-          el('uf-caldav-label').value = acc.label || '';
-          el('uf-caldav-url').value = acc.url || '';
-          el('uf-caldav-user').value = acc.username || '';
+          if (!editedFields.has(labelInput)) labelInput.value = acc.label || '';
+          if (!editedFields.has(urlInput)) urlInput.value = acc.url || '';
+          if (!editedFields.has(userInput)) userInput.value = acc.username || '';
         }
       } catch (_) {}
     }
+    if (!isCurrentForm()) return;
 
-    el('uf-caldav-cancel').addEventListener('click', () => { formEl.style.display = 'none'; });
-
-    const _runCalDavTest = async () => {
-      const body = {
-        url: el('uf-caldav-url').value.trim(),
-        username: el('uf-caldav-user').value.trim(),
-        password: el('uf-caldav-pass').value,
-      };
+    let busy = false;
+    const _readPayload = () => ({
+      label: labelInput.value.trim(),
+      url: urlInput.value.trim(),
+      username: userInput.value.trim(),
+      password: passInput.value,
+    });
+    const _payloadChanged = payload => {
+      const current = _readPayload();
+      return Object.keys(payload).some(key => payload[key] !== current[key]);
+    };
+    const _testBody = payload => {
+      const body = { url: payload.url, username: payload.username, password: payload.password };
       if (!isNew && !body.password) body.account_id = editId;
+      return body;
+    };
+    const _setMessage = (text, ok) => {
+      messageEl.textContent = text;
+      messageEl.style.color = ok ? 'var(--green, #50fa7b)' : 'var(--red)';
+    };
+    const _runCalDavTest = async body => {
       try {
         const r = await fetch('/api/calendar/test', {
           method: 'POST', credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        return await r.json();
+        if (!isCurrentForm()) return null;
+        const data = await r.json();
+        if (!isCurrentForm()) return null;
+        if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.ok !== 'boolean') {
+          return { ok: false, error: 'Invalid response from server' };
+        }
+        return data;
       } catch (e) {
         return { ok: false, error: 'Network error: ' + e.message };
       }
     };
 
-    const _setCalDavMsg = (text, ok) => {
-      const msg = el('uf-caldav-msg');
-      msg.textContent = text;
-      msg.style.color = ok ? 'var(--green, #50fa7b)' : 'var(--red)';
-    };
-
-    el('uf-caldav-save').addEventListener('click', async () => {
-      _setCalDavMsg('Testing…', true);
-      el('uf-caldav-msg').style.color = '';
-      const d = await _runCalDavTest();
-      if (!d.ok) {
-        _setCalDavMsg(d.error || 'Connection failed — not saved', false);
-        return;
-      }
+    saveButton.addEventListener('click', async () => {
+      if (busy || !isCurrentForm()) return;
+      busy = true;
+      const payload = _readPayload();
+      _setMessage('Testing…', true);
+      messageEl.style.color = '';
       try {
-        const payload = {
-          label: el('uf-caldav-label').value.trim(),
-          url: el('uf-caldav-url').value.trim(),
-          username: el('uf-caldav-user').value.trim(),
-          password: el('uf-caldav-pass').value,
-        };
-        let resp;
-        if (isNew) {
-          resp = await fetch('/api/calendar/config/accounts', {
-            method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-        } else {
-          resp = await fetch(`/api/calendar/config/accounts/${editId}`, {
-            method: 'PUT', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-        }
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({}));
-          _setCalDavMsg(err.detail || 'Save failed', false);
+        const d = await _runCalDavTest(_testBody(payload));
+        if (!isCurrentForm()) return;
+        if (!d.ok) {
+          _setMessage(d.error || 'Connection failed — not saved', false);
           return;
         }
-        _setCalDavMsg('Saved', true);
-        formEl.style.display = 'none';
-        await renderList();
-        notifyIntegrationsChanged();
-      } catch (_) {
-        _setCalDavMsg('Save failed', false);
+        if (_payloadChanged(payload)) {
+          _setMessage('Fields changed — test again before saving', false);
+          return;
+        }
+        const fields = [labelInput, urlInput, userInput, passInput];
+        fields.forEach(input => { input.disabled = true; });
+        _setMessage('Saving…', true);
+        messageEl.style.color = '';
+        try {
+          const resp = await fetch(isNew ? '/api/calendar/config/accounts' : `/api/calendar/config/accounts/${editId}`, {
+            method: isNew ? 'POST' : 'PUT', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!resp.ok) {
+            if (!isCurrentForm()) return;
+            const err = await resp.json().catch(() => ({}));
+            if (!isCurrentForm()) return;
+            _setMessage(err.detail || 'Save failed', false);
+            return;
+          }
+          if (isCurrentForm()) {
+            _setMessage('Saved', true);
+            formEl.style.display = 'none';
+          }
+          notifyIntegrationsChanged();
+          await renderList();
+        } finally {
+          fields.forEach(input => { input.disabled = false; });
+        }
+      } catch (e) {
+        if (isCurrentForm()) _setMessage('Save failed', false);
+      } finally {
+        busy = false;
+        clearAbandonedMessage();
       }
     });
 
-    el('uf-caldav-test').addEventListener('click', async () => {
-      _setCalDavMsg('Testing…', true);
-      el('uf-caldav-msg').style.color = '';
-      const d = await _runCalDavTest();
-      _setCalDavMsg(d.ok ? 'Connected' : (d.error || 'Failed'), d.ok);
+    testButton.addEventListener('click', async () => {
+      if (busy || !isCurrentForm()) return;
+      busy = true;
+      _setMessage('Testing…', true);
+      messageEl.style.color = '';
+      try {
+        const payload = _readPayload();
+        const d = await _runCalDavTest(_testBody(payload));
+        if (!isCurrentForm()) return;
+        if (_payloadChanged(payload)) {
+          _setMessage('Fields changed — test again', false);
+          return;
+        }
+        _setMessage(d.ok ? 'Connected' : (d.error || 'Failed'), d.ok);
+      } finally {
+        busy = false;
+        clearAbandonedMessage();
+      }
     });
   }
 

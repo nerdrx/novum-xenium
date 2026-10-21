@@ -174,15 +174,23 @@ export function startRecording(onFileCreated, showToast, showError) {
         return;
       }
 
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      let recorder;
+      try {
+        recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      } catch (error) {
+        stream.getTracks().forEach(track => track.stop());
+        if (mediaRecorder?.state !== 'recording') mediaRecorder = null;
+        throw error;
+      }
+      mediaRecorder = recorder;
 
-      mediaRecorder.ondataavailable = event => {
+      recorder.ondataavailable = event => {
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
       };
 
-      mediaRecorder.onstop = async () => {
+      recorder.onstop = async () => {
         stream.getTracks().forEach(track => track.stop());
 
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
@@ -223,7 +231,13 @@ export function startRecording(onFileCreated, showToast, showError) {
         _resetRecordingUI();
       };
 
-      mediaRecorder.start();
+      try {
+        recorder.start();
+      } catch (error) {
+        stream.getTracks().forEach(track => track.stop());
+        if (mediaRecorder === recorder) mediaRecorder = null;
+        throw error;
+      }
       isRecording = true;
       recordingStartTime = new Date();
 

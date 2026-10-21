@@ -52,3 +52,24 @@ def test_api_form_response_ownership_loopback():
     assert refresh["live"]["message"] == "Saved"
     assert refresh["live"]["changes"] == 1
     assert "API integration saved" in refresh["live"]["toast"]
+    edited = payload["cases"]["heldPrefillPreservesSameFormEdits"]
+    assert edited["after"] == edited["before"]
+    cancelled = payload["cases"]["cancelWorksDuringPrefill"]
+    assert cancelled["hiddenAfterCancel"] is True
+    assert cancelled["hiddenAfterRelease"] is True
+    api_b = payload["cases"]["heldPrefillAThenApiB"]
+    assert api_b["handlersBefore"] == api_b["handlersAfter"] == 1
+    assert api_b["testIntegrationIds"] == ["fixture-api-b"]
+    caldav_b = payload["cases"]["heldPrefillAThenCalDavB"]
+    assert caldav_b["live"]["activeType"] == "caldav"
+    assert caldav_b["newPageErrors"] == 0
+    preset = payload["cases"]["presetThenCustomEditsDuringHeldPrefill"]
+    assert preset["immediate"]["name"] == "Test Service"
+    assert preset["after"] == {
+        "name": "Custom name during load",
+        "url": "https://fixture.invalid/api",
+        "auth": "basic",
+        "header": "X-Custom",
+    }
+    normal_preset = payload["cases"]["presetAfterNormalPrefill"]
+    assert normal_preset == {"name": "Test Service", "auth": "header", "header": "X-Test"}

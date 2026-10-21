@@ -3634,16 +3634,16 @@ async function initUnifiedIntegrations() {
     })();
 
     const preset = el('uf-api-preset'), name = el('uf-api-name'), url = el('uf-api-url'), auth = el('uf-api-auth'), header = el('uf-api-header'), key = el('uf-api-key'), ntfyHint = el('uf-api-ntfy-hint');
-    let _editId = editId && editId !== 'new' ? editId : null;
-    // Load existing
-    if (_editId) {
-      try {
-        const r = await fetch('/api/auth/integrations', { credentials: 'same-origin' });
-        const d = await r.json();
-        const item = (d.integrations || []).find(i => i.id === _editId);
-        if (item) { name.value = item.name || ''; url.value = item.base_url || ''; auth.value = item.auth_type || 'none'; header.value = item.auth_header || ''; }
-      } catch (_) {}
+    const apiCancel = el('uf-api-cancel'), apiSave = el('uf-api-save'), apiTest = el('uf-api-test');
+    const editedFields = new Set();
+    for (const field of [name, url, auth, header]) {
+      const markEdited = () => editedFields.add(field);
+      field.addEventListener('input', markEdited);
+      field.addEventListener('change', markEdited);
     }
+    preset.addEventListener('change', () => [name, auth, header].forEach(field => editedFields.add(field)));
+    apiCancel.addEventListener('click', () => { formEl.style.display = 'none'; });
+    let _editId = editId && editId !== 'new' ? editId : null;
     // Native <select>: the option `value` is the preset key directly, so
     // no typed-name → key lookup is needed (datalist-era leftover).
     const _applyPreset = () => {
@@ -3672,15 +3672,35 @@ async function initUnifiedIntegrations() {
       auth.value = p.auth_type || 'none';
       header.value = p.auth_header || '';
     };
+    if (!isCurrentApiForm()) return;
     preset.addEventListener('change', _applyPreset);
     _applyPreset();
-    el('uf-api-cancel').addEventListener('click', () => { formEl.style.display = 'none'; });
-    el('uf-api-save').addEventListener('click', async () => {
+    if (!isCurrentApiForm()) return;
+    // Let preset choices update immediately while edit data loads. Preserve
+    // controls the user has touched when that delayed data arrives.
+    if (_editId) {
+      try {
+        if (!isCurrentApiForm()) return;
+        const r = await fetch('/api/auth/integrations', { credentials: 'same-origin' });
+        if (!isCurrentApiForm()) return;
+        const d = await r.json();
+        if (!isCurrentApiForm()) return;
+        const item = (d.integrations || []).find(i => i.id === _editId);
+        if (item) {
+          if (!editedFields.has(name)) name.value = item.name || '';
+          if (!editedFields.has(url)) url.value = item.base_url || '';
+          if (!editedFields.has(auth)) auth.value = item.auth_type || 'none';
+          if (!editedFields.has(header)) header.value = item.auth_header || '';
+        }
+      } catch (_) {}
+    }
+    if (!isCurrentApiForm()) return;
+    apiSave.addEventListener('click', async () => {
       const presetKey = preset.value || undefined;
       const nameValue = name.value.trim();
       const urlValue = url.value.trim();
-      if (!nameValue) { el('uf-api-msg').textContent = 'Name required'; el('uf-api-msg').style.color = 'var(--red)'; return; }
-      if (!urlValue) { el('uf-api-msg').textContent = 'Base URL required'; el('uf-api-msg').style.color = 'var(--red)'; return; }
+      if (!nameValue) { apiMessage.textContent = 'Name required'; apiMessage.style.color = 'var(--red)'; return; }
+      if (!urlValue) { apiMessage.textContent = 'Base URL required'; apiMessage.style.color = 'var(--red)'; return; }
       const body = { name: nameValue, base_url: urlValue, auth_type: auth.value, auth_header: header.value, preset: presetKey };
       if (key.value) body.api_key = key.value;
       try {
@@ -3703,8 +3723,9 @@ async function initUnifiedIntegrations() {
         if (isCurrentApiForm()) { apiMessage.textContent = 'Failed'; apiMessage.style.color = 'var(--red)'; }
       }
     });
-    el('uf-api-test').addEventListener('click', async () => {
-      if (!_editId) { el('uf-api-msg').textContent = 'Save first'; return; }
+    if (!isCurrentApiForm()) return;
+    apiTest.addEventListener('click', async () => {
+      if (!_editId) { apiMessage.textContent = 'Save first'; return; }
       try {
         const r = await fetch(`/api/auth/integrations/${_editId}/test`, { method: 'POST', credentials: 'same-origin' });
         const d = await r.json();

@@ -212,8 +212,16 @@ export async function initSttSettings() {
 
   // Add API endpoints that might support STT
   try {
-    var epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin' });
-    var endpoints = await epRes.json();
+    var endpointController = new AbortController();
+    var endpointTimeout = setTimeout(function() { endpointController.abort(); }, 15000);
+    var epRes;
+    var endpoints;
+    try {
+      epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin', signal: endpointController.signal });
+      endpoints = await epRes.json();
+    } finally {
+      clearTimeout(endpointTimeout);
+    }
     endpoints.forEach(function(ep) {
       if (!ep.is_enabled) return;
       var opt = document.createElement('option'); opt.value = 'endpoint:' + ep.id; opt.textContent = ep.name + ' (API)'; provSel.appendChild(opt);
@@ -223,9 +231,17 @@ export async function initSttSettings() {
   // Load saved settings
   var settingsLoaded = false;
   try {
-    var settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
-    if (!settingsRes.ok) throw new Error('HTTP ' + settingsRes.status);
-    var settings = await settingsRes.json();
+    var settingsController = new AbortController();
+    var settingsTimeout = setTimeout(function() { settingsController.abort(); }, 15000);
+    var settingsRes;
+    var settings;
+    try {
+      settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin', signal: settingsController.signal });
+      if (!settingsRes.ok) throw new Error('HTTP ' + settingsRes.status);
+      settings = await settingsRes.json();
+    } finally {
+      clearTimeout(settingsTimeout);
+    }
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
     if (typeof settings.stt_provider === 'string' && settings.stt_provider) {
       preserveSavedOption(provSel, settings.stt_provider, 'Saved provider (unavailable)');

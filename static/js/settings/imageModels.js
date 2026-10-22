@@ -12,6 +12,16 @@ export async function initImageSettings({ registerEndpointRefresh = () => {} } =
   const configWrap = modelSel ? modelSel.closest('div[style*="flex-direction"]') : null;
   if (!modelSel) return;
 
+  const controls = [modelSel, qualSel, enabledToggle].filter(Boolean);
+  let settingsLoaded = false;
+  controls.forEach(control => { control.disabled = true; });
+  if (msg) {
+    msg.setAttribute('role', 'status');
+    msg.setAttribute('aria-live', 'polite');
+    msg.textContent = 'Loading saved image settings…';
+    msg.style.color = 'var(--fg)';
+  }
+
   let _endpoints = [];
   let _savedModelSpec = '';
   let _imageSaveQueue = Promise.resolve();
@@ -109,22 +119,41 @@ export async function initImageSettings({ registerEndpointRefresh = () => {} } =
     }
   }
 
-  try {
-    _endpoints = await fetch('/api/model-endpoints', { credentials: 'same-origin' }).then(async response => {
+  async function fetchJsonWithTimeout(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.json();
-    });
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  try {
+    const endpoints = await fetchJsonWithTimeout('/api/model-endpoints');
+    if (!Array.isArray(endpoints)) throw new Error('Invalid model endpoint response');
+    _endpoints = endpoints;
   } catch (e) { console.warn('Failed to load endpoints for image settings', e); }
   try {
-    const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
-    const settings = await settingsRes.json();
+    const settings = await fetchJsonWithTimeout('/api/auth/settings');
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      throw new Error('Invalid image settings response');
+    }
     _savedModelSpec = settings.image_model || '';
     refreshModels(_savedModelSpec);
     if (settings.image_quality) qualSel.value = settings.image_quality;
     if (enabledToggle) enabledToggle.checked = settings.image_gen_enabled === true;
+    settingsLoaded = true;
+    controls.forEach(control => { control.disabled = false; });
+    if (msg) msg.textContent = '';
   } catch (e) {
     console.warn('Failed to load image settings', e);
-    refreshModels('');
+    if (msg) {
+      msg.textContent = 'Could not load saved image settings. Reload the page before changing them.';
+      msg.style.color = 'var(--red)';
+    }
   }
 
   function syncImgDisabled() {
@@ -133,9 +162,10 @@ export async function initImageSettings({ registerEndpointRefresh = () => {} } =
     if (card) card.style.opacity = off ? '0.45' : '';
     if (configWrap) configWrap.style.pointerEvents = off ? 'none' : '';
   }
-  syncImgDisabled();
+  if (settingsLoaded) syncImgDisabled();
 
   async function saveSettings() {
+    if (!settingsLoaded) return;
     const sequence = ++_imageSaveSequence;
     const snapshot = {
       image_gen_enabled: enabledToggle ? enabledToggle.checked : false,

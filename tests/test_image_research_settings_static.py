@@ -23,6 +23,12 @@ def test_image_settings_route_by_provider_and_preserve_saved_model():
     assert "saved; not listed" in image_settings
     assert "_imageSaveQueue = _imageSaveQueue.then(save, save)" in image_settings
 
+    index = (ROOT / 'static/index.html').read_text(encoding='utf-8')
+    assert 'id="set-imgEnabledToggle" disabled' in index
+    assert 'id="set-imgModelSelect" class="settings-select" disabled' in index
+    assert 'id="set-imgQualitySelect" class="settings-select" disabled' in index
+    assert 'id="set-imgSettingsMsg" role="status" aria-live="polite"' in index
+
 
 def test_deep_research_fields_are_constrained_to_their_card():
     styles = app_css()

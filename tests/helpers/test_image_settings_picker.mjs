@@ -55,7 +55,7 @@ function makeHarness({ endpoints, savedModel = '', savedQuality = 'medium' }) {
     { value: 'high', textContent: 'High' },
   ]);
   const backendMsg = { textContent: '' };
-  const statusMsg = { textContent: '', style: {} };
+  const statusMsg = { textContent: '', style: {}, setAttribute() {} };
   const toggle = new Select();
   toggle.checked = true;
   const elements = {
@@ -81,7 +81,9 @@ function makeHarness({ endpoints, savedModel = '', savedQuality = 'medium' }) {
     _postSettings: async body => { saves.push(body); return { ok: true }; },
     document: { createElement: () => ({ value: '', textContent: '', dataset: {} }) },
     console: { warn() {} },
-    setTimeout() {},
+    AbortController: class { abort() {} },
+    setTimeout() { return 1; },
+    clearTimeout() {},
   };
   const init = vm.runInNewContext(`(${initSource})`, context);
   return {

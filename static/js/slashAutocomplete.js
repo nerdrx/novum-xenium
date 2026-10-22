@@ -279,8 +279,23 @@ export function initSlashAutocomplete(textarea) {
   textarea.addEventListener('focus', () => { if (textarea.value.startsWith('/')) refresh(); });
   textarea.addEventListener('blur', () => { setTimeout(hide, 120); });  // delay so click works
 
+  // Resolve incomplete Enter before the app's composer submit listener.
+  // The autocomplete module loads asynchronously, so its bubble listener would
+  // otherwise run after the app has already submitted the incomplete prefix.
   textarea.addEventListener('keydown', (e) => {
-    if (!visible || !items.length) return;
+    if (e.isComposing || e.key !== 'Enter' || e.shiftKey || !visible || !items.length) return;
+    const v = textarea.value.trim().toLowerCase();
+    const exactHit = items.find(it => it.token.toLowerCase() === v || it.aliases.some(alias => alias.toLowerCase() === v));
+    if (exactHit) {
+      hide();
+      return;
+    }
+    e.preventDefault();
+    insert(items[selectedIdx].token);
+  }, true);
+
+  textarea.addEventListener('keydown', (e) => {
+    if (e.isComposing || !visible || !items.length) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       selectedIdx = (selectedIdx + 1) % items.length;

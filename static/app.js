@@ -3632,6 +3632,7 @@ function initializeEventListeners() {
     });
     textarea.addEventListener('drop', _noteDraftEdit);
     textarea.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented) return;
       const isMobile = _isMobileChatInput();
       if (isMobile && e.key === 'Enter' && !e.isComposing && (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey)) {
         _noteDraftEdit();

@@ -45,7 +45,9 @@ globalThis.fetch = (url, opts) => {
   return next();
 };
 globalThis.__calls = () => calls;
-globalThis.__json = (value) => () => Promise.resolve({ json: () => Promise.resolve(value) });
+globalThis.__json = (value) => () => Promise.resolve({
+  ok: true, status: 200, json: () => Promise.resolve(value),
+});
 globalThis.__fail = (msg) => () => Promise.reject(new Error(msg));
 
 const store = new Map();

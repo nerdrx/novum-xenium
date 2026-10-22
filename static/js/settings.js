@@ -115,8 +115,8 @@ const _shell = createSettingsShell({
 const _aiEndpointRefreshers = new Set();
 let _aiEndpointRefreshInFlight = null;
 
-async function _fetchModelEndpoints() {
-  const epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin' });
+async function _fetchModelEndpoints(signal) {
+  const epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin', signal });
   if (!epRes.ok) throw new Error(`HTTP ${epRes.status}`);
   const endpoints = await epRes.json();
   if (!Array.isArray(endpoints)) throw new Error('Invalid model endpoint inventory');
@@ -224,21 +224,42 @@ function _fillModelSelect(selectEl, models, selected, keepBlank) {
   _syncModelLogo(selectEl);
 }
 
+function _appendSavedModelOption(selectEl, modelId, endpointEnabled) {
+  if (!selectEl || !endpointEnabled || !modelId || Array.from(selectEl.options).some(option => option.value === modelId)) return;
+  const option = document.createElement('option');
+  option.value = modelId;
+  option.textContent = modelId + ' (saved; not in current list)';
+  option.dataset.savedModelOption = 'true';
+  selectEl.appendChild(option);
+  selectEl.value = modelId;
+  _syncModelLogo(selectEl);
+}
+
+function _removeSavedModelOption(selectEl) {
+  if (!selectEl) return;
+  Array.from(selectEl.querySelectorAll('option[data-saved-model-option="true"]')).forEach(function(option) {
+    if (option.value !== selectEl.value) option.remove();
+  });
+}
+
 function _registerAiEndpointRefresh(fn) {
   _aiEndpointRefreshers.add(fn);
 }
 
 export async function refreshAiModelEndpoints() {
   if (_aiEndpointRefreshInFlight) return _aiEndpointRefreshInFlight;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   _aiEndpointRefreshInFlight = (async function() {
     try {
-      const endpoints = await _fetchModelEndpoints();
+      const endpoints = await _fetchModelEndpoints(controller.signal);
       _aiEndpointRefreshers.forEach(function(fn) {
         try { fn(endpoints); } catch (e) { console.warn('[settings] endpoint refresh handler failed', e); }
       });
     } catch (e) {
       console.warn('[settings] failed to refresh model endpoints', e);
     } finally {
+      clearTimeout(timeout);
       _aiEndpointRefreshInFlight = null;
     }
   })();
@@ -442,6 +463,9 @@ async function initDefaultChat() {
   var modelSel = el('set-defaultModelSelect');
   var msg = el('set-defaultChatMsg');
   var _endpoints = [];
+  var savedModel = '';
+  var savedEndpoint = '';
+  let userChangedSelection = false;
   const saveSettings = _createSettingsSaver(msg, 2000);
 
   // Fill any <select> with the models for a given endpoint id.
@@ -450,13 +474,26 @@ async function initDefaultChat() {
     _fillModelSelect(selectEl, _selectableEndpointModels(ep), selected, false);
   }
 
-  function refreshModels(selectedModel) { fillModels(modelSel, epSel.value, selectedModel); }
+  function refreshModels(selectedModel) {
+    fillModels(modelSel, epSel.value, selectedModel);
+    var endpoint = _endpoints.find(function(ep) { return ep.id === epSel.value && ep.is_enabled; });
+    if (!userChangedSelection && savedEndpoint === epSel.value && selectedModel === savedModel
+        && savedModel && endpoint && !_selectableEndpointModels(endpoint).includes(savedModel)) {
+      var option = document.createElement('option');
+      option.value = savedModel;
+      option.textContent = savedModel + ' (saved; not in current list)';
+      option.disabled = true;
+      option.dataset.savedModelOption = 'true';
+      modelSel.appendChild(option);
+      modelSel.value = savedModel;
+      _syncModelLogo(modelSel);
+    }
+  }
   function refreshEndpointOptions(selectedEndpoint, selectedModel) {
     _fillEndpointSelect(epSel, _endpoints, selectedEndpoint !== undefined ? selectedEndpoint : epSel.value, false);
     refreshModels(selectedModel !== undefined ? selectedModel : modelSel.value);
   }
 
-  let userChangedSelection = false;
   epSel.addEventListener('change', function() {
     if (!_endpoints.some(function(ep) { return ep.id === epSel.value && ep.is_enabled; })) return;
     userChangedSelection = true;
@@ -483,9 +520,11 @@ async function initDefaultChat() {
     if (!userChangedSelection) {
       if (settings.default_endpoint_id
           && _endpoints.some(function(ep) { return ep.id === settings.default_endpoint_id && ep.is_enabled; })) {
-        epSel.value = settings.default_endpoint_id;
+        savedEndpoint = settings.default_endpoint_id;
+        epSel.value = savedEndpoint;
       }
-      refreshModels(settings.default_model || '');
+      savedModel = String(settings.default_model || '');
+      refreshModels(savedModel);
     } else {
       refreshModels(modelSel.value);
     }
@@ -517,6 +556,8 @@ async function initUtilityModel() {
   var fallbackWidget = null;
   var _levelsByEndpoint = {};
   var touched = new Set();
+  var savedModel = '';
+  var savedEndpoint = '';
   var refreshModels = null;
   var refreshEffort = null;
   var saveSettings = _createSettingsSaver(msg, 1500);
@@ -547,6 +588,7 @@ async function initUtilityModel() {
     saveUtility(keys);
   });
   modelSel.addEventListener('change', function() {
+    _removeSavedModelOption(modelSel);
     if (refreshEffort) refreshEffort(effortSel ? effortSel.value : '');
     else if (effortSel) effortSel.value = '';
     var keys = ['utility_model', 'utility_reasoning_effort'];
@@ -639,6 +681,9 @@ async function initUtilityModel() {
     var epId = epSel.value;
     var ep = _endpoints.find(function(e) { return e.id === epId; });
     _fillModelSelect(modelSel, ep ? ep.models : [], selectedModel, true);
+    if (!touched.has('utility_model') && savedEndpoint === epId && selectedModel === savedModel) {
+      _appendSavedModelOption(modelSel, savedModel, ep && ep.is_enabled);
+    }
   };
 
   await loadEffortLevels();
@@ -649,10 +694,12 @@ async function initUtilityModel() {
     var settings = await res.json();
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
     var has = function(key) { return Object.prototype.hasOwnProperty.call(settings, key); };
-    if (!touched.has('utility_endpoint_id') && has('utility_endpoint_id') && settings.utility_endpoint_id) {
-      epSel.value = settings.utility_endpoint_id;
+    if (!touched.has('utility_endpoint_id') && has('utility_endpoint_id')) {
+      savedEndpoint = settings.utility_endpoint_id || '';
+      if (savedEndpoint) epSel.value = savedEndpoint;
     }
-    refreshModels(touched.has('utility_model') || !has('utility_model') ? modelSel.value : (settings.utility_model || ''));
+    if (!touched.has('utility_model') && has('utility_model')) savedModel = String(settings.utility_model || '');
+    refreshModels(touched.has('utility_model') || !has('utility_model') ? modelSel.value : savedModel);
     refreshEffort(touched.has('utility_reasoning_effort') || !has('utility_reasoning_effort')
       ? (effortSel ? effortSel.value : '')
       : (settings.utility_reasoning_effort || ''));
@@ -1322,6 +1369,8 @@ async function initResearchSettings() {
   var msg = el('set-researchMsg');
   var endpoints = [];
   var touched = new Set();
+  var savedModel = '';
+  var savedEndpoint = '';
   var refreshModels = null;
   var showStatus = null;
   var saveSequence = 0;
@@ -1372,6 +1421,7 @@ async function initResearchSettings() {
     saveResearch(keys);
   });
   modelSel.addEventListener('change', function() {
+    _removeSavedModelOption(modelSel);
     markTouched(['research_model']);
     if (showStatus) showStatus();
     saveResearch(['research_model']);
@@ -1398,6 +1448,9 @@ async function initResearchSettings() {
     var epId = epSel.value;
     var ep = endpoints.find(function(e) { return e.id === epId; });
     _fillModelSelect(modelSel, ep ? ep.models : [], selectedModel, true);
+    if (!touched.has('research_model') && savedEndpoint === epId && selectedModel === savedModel) {
+      _appendSavedModelOption(modelSel, savedModel, ep && ep.is_enabled);
+    }
   };
 
   try {
@@ -1406,10 +1459,12 @@ async function initResearchSettings() {
     var settings = await res.json();
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
     var has = function(key) { return Object.prototype.hasOwnProperty.call(settings, key); };
-    if (!touched.has('research_endpoint_id') && has('research_endpoint_id') && settings.research_endpoint_id) {
-      epSel.value = settings.research_endpoint_id;
+    if (!touched.has('research_endpoint_id') && has('research_endpoint_id')) {
+      savedEndpoint = settings.research_endpoint_id || '';
+      if (savedEndpoint) epSel.value = savedEndpoint;
     }
-    refreshModels(touched.has('research_model') || !has('research_model') ? modelSel.value : (settings.research_model || ''));
+    if (!touched.has('research_model') && has('research_model')) savedModel = String(settings.research_model || '');
+    refreshModels(touched.has('research_model') || !has('research_model') ? modelSel.value : savedModel);
     if (!touched.has('research_max_tokens') && has('research_max_tokens') && settings.research_max_tokens) {
       tokensInput.value = settings.research_max_tokens;
     }

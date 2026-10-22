@@ -51,12 +51,18 @@ function _readPrefetchedSettings() {
 // and rethrow, so every caller's existing .catch() still runs exactly as before.
 function _get(key) {
   if (_cache[key]) return _cache[key];
-  const pending = fetch(_URLS[key], { credentials: 'same-origin' })
-    .then(r => r.json())
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  const pending = fetch(_URLS[key], { credentials: 'same-origin', signal: controller.signal })
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
     .catch(err => {
       if (_cache[key] === pending) _cache[key] = null;
       throw err;
-    });
+    })
+    .finally(() => clearTimeout(timeout));
   _cache[key] = pending;
   return pending;
 }

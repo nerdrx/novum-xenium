@@ -107,7 +107,16 @@ a 15-second deadline. If loading fails or returns an invalid settings shape,
 the panel shows a reload message and leaves the saved bindings untouched. A
 missing or empty legacy `keybinds` map remains usable with the default bindings;
 when a valid map is loaded, custom and unrecognized entries are retained when
-you save a rebind.
+you save a rebind. Starting another rebind, leaving Shortcuts, or closing
+Settings cancels key capture without saving its preview.
+
+A successful save activates its submitted bindings; an older successful reply
+does not replace a newer accepted save. A rejected save leaves the pending
+choice editable and reports failure instead of claiming success. Restore the
+connection or admin access before retrying. After a timeout or disconnect,
+reload and check the bindings first: the server may already have saved them.
+
+See the pinned [shortcut settings implementation](https://github.com/nerdrx/novum-xenium/blob/6672098835bcaa507d1e1fde954be7f9f61c4099/static/js/settings.js).
 
 Settings values can be sensitive, especially provider keys, webhook payloads,
 email destinations, and tool path roots. Use the app's Settings controls and

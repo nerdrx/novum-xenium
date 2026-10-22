@@ -116,11 +116,18 @@ const _aiEndpointRefreshers = new Set();
 let _aiEndpointRefreshInFlight = null;
 
 async function _fetchModelEndpoints(signal) {
-  const epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin', signal });
-  if (!epRes.ok) throw new Error(`HTTP ${epRes.status}`);
-  const endpoints = await epRes.json();
-  if (!Array.isArray(endpoints)) throw new Error('Invalid model endpoint inventory');
-  return endpoints;
+  const controller = signal ? null : new AbortController();
+  const requestSignal = signal || controller.signal;
+  const timeout = controller ? setTimeout(() => controller.abort(), 15000) : null;
+  try {
+    const epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin', signal: requestSignal });
+    if (!epRes.ok) throw new Error(`HTTP ${epRes.status}`);
+    const endpoints = await epRes.json();
+    if (!Array.isArray(endpoints)) throw new Error('Invalid model endpoint inventory');
+    return endpoints;
+  } finally {
+    if (timeout !== null) clearTimeout(timeout);
+  }
 }
 
 function _selectableEndpointModels(endpoint) {
@@ -490,8 +497,14 @@ async function initDefaultChat() {
     }
   }
   function refreshEndpointOptions(selectedEndpoint, selectedModel) {
-    _fillEndpointSelect(epSel, _endpoints, selectedEndpoint !== undefined ? selectedEndpoint : epSel.value, false);
-    refreshModels(selectedModel !== undefined ? selectedModel : modelSel.value);
+    var restoreSaved = !userChangedSelection && savedEndpoint
+      && _endpoints.some(function(ep) { return ep.id === savedEndpoint && ep.is_enabled; });
+    var endpoint = restoreSaved ? savedEndpoint
+      : (selectedEndpoint !== undefined ? selectedEndpoint : epSel.value);
+    var model = restoreSaved ? savedModel
+      : (selectedModel !== undefined ? selectedModel : modelSel.value);
+    _fillEndpointSelect(epSel, _endpoints, endpoint, false);
+    refreshModels(model);
   }
 
   epSel.addEventListener('change', function() {
@@ -518,10 +531,11 @@ async function initDefaultChat() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
     if (!userChangedSelection) {
-      if (settings.default_endpoint_id
-          && _endpoints.some(function(ep) { return ep.id === settings.default_endpoint_id && ep.is_enabled; })) {
+      if (settings.default_endpoint_id) {
         savedEndpoint = settings.default_endpoint_id;
-        epSel.value = savedEndpoint;
+        if (_endpoints.some(function(ep) { return ep.id === savedEndpoint && ep.is_enabled; })) {
+          epSel.value = savedEndpoint;
+        }
       }
       savedModel = String(settings.default_model || '');
       refreshModels(savedModel);
@@ -738,8 +752,10 @@ async function initUtilityModel() {
 
   _registerAiEndpointRefresh(async function(endpoints) {
     _endpoints = endpoints;
-    _fillEndpointSelect(epSel, _endpoints, epSel.value, true);
-    refreshModels(modelSel.value);
+    var restoreSaved = !touched.has('utility_endpoint_id') && !touched.has('utility_model')
+      && savedEndpoint && _endpoints.some(function(ep) { return ep.id === savedEndpoint && ep.is_enabled; });
+    _fillEndpointSelect(epSel, _endpoints, restoreSaved ? savedEndpoint : epSel.value, true);
+    refreshModels(restoreSaved ? savedModel : modelSel.value);
     await loadEffortLevels();
     refreshEffort(effortSel ? effortSel.value : '');
     if (fallbackWidget && fallbackWidget.refresh) fallbackWidget.refresh();
@@ -1517,8 +1533,10 @@ async function initResearchSettings() {
 
   _registerAiEndpointRefresh(function(nextEndpoints) {
     endpoints = nextEndpoints;
-    _fillEndpointSelect(epSel, endpoints, epSel.value, true);
-    refreshModels(modelSel.value);
+    var restoreSaved = !touched.has('research_endpoint_id') && !touched.has('research_model')
+      && savedEndpoint && endpoints.some(function(ep) { return ep.id === savedEndpoint && ep.is_enabled; });
+    _fillEndpointSelect(epSel, endpoints, restoreSaved ? savedEndpoint : epSel.value, true);
+    refreshModels(restoreSaved ? savedModel : modelSel.value);
   });
 }
 

@@ -98,14 +98,14 @@ def test_handbook_tool_rejects_symlink_pages_and_missing_bundle(tmp_path, monkey
     outside = tmp_path / "secret.md"
     outside.write_text("PRIVATE_SENTINEL", encoding="utf-8")
     (root / "linked.md").symlink_to(outside)
-    monkeypatch.setattr("src.agent_tools.handbook_tools.HANDBOOK_ROOT", root)
+    monkeypatch.setitem(read_handbook.__globals__, "HANDBOOK_ROOT", root)
 
     symlink_result = _execute({"page": "linked.md"})
     assert symlink_result["exit_code"] == 1
     assert "PRIVATE_SENTINEL" not in symlink_result["error"]
 
     missing_root = tmp_path / "missing"
-    monkeypatch.setattr("src.agent_tools.handbook_tools.HANDBOOK_ROOT", missing_root)
+    monkeypatch.setitem(read_handbook.__globals__, "HANDBOOK_ROOT", missing_root)
     missing_result = _execute({})
     assert missing_result["exit_code"] == 1
     assert "bundled handbook is unavailable" in missing_result["error"]
@@ -115,7 +115,7 @@ def test_handbook_tool_caps_page_size_and_pagination_output(tmp_path, monkeypatc
     root = tmp_path / "handbook"
     root.mkdir()
     (root / "large.md").write_text("x" * 256_001, encoding="utf-8")
-    monkeypatch.setattr("src.agent_tools.handbook_tools.HANDBOOK_ROOT", root)
+    monkeypatch.setitem(read_handbook.__globals__, "HANDBOOK_ROOT", root)
     too_large = _execute({"page": "large.md"})
     assert too_large["exit_code"] == 1
     assert "exceeds the supported size" in too_large["error"]
@@ -133,7 +133,7 @@ def test_handbook_index_has_bounded_entries_and_offsets(tmp_path, monkeypatch):
     root.mkdir()
     for i in range(95):
         (root / f"index-{i:03}.md").write_text(f"# Handbook page {i}\n", encoding="utf-8")
-    monkeypatch.setattr("src.agent_tools.handbook_tools.HANDBOOK_ROOT", root)
+    monkeypatch.setitem(read_handbook.__globals__, "HANDBOOK_ROOT", root)
 
     first = read_handbook({})
     second = read_handbook({"offset": 40})

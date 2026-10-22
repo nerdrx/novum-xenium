@@ -630,8 +630,10 @@ async function initUtilityModel() {
   // Effort levels come from /api/models `models_metadata` (same evidence the
   // chat composer uses); /api/model-endpoints does not carry them.
   async function loadEffortLevels() {
+    const controller = new AbortController();
+    const timeout = setTimeout(function() { controller.abort(); }, 15000);
     try {
-      var r = await fetch('/api/models', { credentials: 'same-origin' });
+      var r = await fetch('/api/models', { credentials: 'same-origin', signal: controller.signal });
       if (!r.ok) return;
       var data = await r.json();
       var items = Array.isArray(data) ? data : (data.models || data.items || []);
@@ -640,6 +642,7 @@ async function initUtilityModel() {
         if (item && item.endpoint_id) _levelsByEndpoint[item.endpoint_id] = item.models_metadata || {};
       });
     } catch (e) { console.warn('Failed to load reasoning levels for utility model', e); }
+    finally { clearTimeout(timeout); }
   }
 
   refreshEffort = function(selected) {
@@ -710,8 +713,10 @@ async function initUtilityModel() {
 
   await loadEffortLevels();
 
+  const settingsReadController = new AbortController();
+  const settingsReadTimeout = setTimeout(function() { settingsReadController.abort(); }, 15000);
   try {
-    var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    var res = await fetch('/api/auth/settings', { credentials: 'same-origin', signal: settingsReadController.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
@@ -748,6 +753,8 @@ async function initUtilityModel() {
   } catch (e) {
     console.warn('Failed to load utility model settings', e);
     _showSettingsLoadFailure(msg, 'Could not load saved Utility settings.');
+  } finally {
+    clearTimeout(settingsReadTimeout);
   }
 
   // Persist whatever's currently selected. Empty endpoint or model → backend
@@ -1029,6 +1036,20 @@ async function initSearchSettings() {
   var hint = el('set-searchHint');
   var msg = el('set-searchMsg');
   var _settings = {};
+  var searchSettingsLoaded = false;
+  var searchSettingsLoadController = new AbortController();
+  var searchSettingsLoadTimeout = setTimeout(function() { searchSettingsLoadController.abort(); }, 15000);
+
+  function setSearchControlsDisabled(disabled) {
+    ['search-provider-btn', 'set-searchProvider', 'set-searchResultCount',
+      'set-searchResultCountCustom', 'set-searchUrl', 'set-searchApiKey',
+      'set-searchCx', 'set-searchAddFallback', 'set-searchTestBtn'].forEach(function(id) {
+      var control = el(id);
+      if (control) control.disabled = disabled;
+    });
+  }
+
+  setSearchControlsDisabled(true);
 
   function keyFieldFor(prov) { return _searchKeyFields[prov] || ''; }
 
@@ -1064,14 +1085,35 @@ async function initSearchSettings() {
     }
   }
 
+  msg.textContent = 'Loading saved Search settings…';
   try {
-    var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
-    _settings = await res.json();
+    var res = await fetch('/api/auth/settings', { credentials: 'same-origin', signal: searchSettingsLoadController.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    var loadedSettings = await res.json();
+    if (!loadedSettings || typeof loadedSettings !== 'object' || Array.isArray(loadedSettings)) {
+      throw new Error('Invalid settings response');
+    }
+    if (Object.prototype.hasOwnProperty.call(loadedSettings, 'search_fallback_chain')
+        && !Array.isArray(loadedSettings.search_fallback_chain)) {
+      throw new Error('Invalid fallback chain');
+    }
+    if (!Object.prototype.hasOwnProperty.call(loadedSettings, 'search_fallback_chain')) {
+      loadedSettings.search_fallback_chain = [];
+    }
+    _settings = loadedSettings;
+    searchSettingsLoaded = true;
     if (_settings.search_provider) provSel.value = _settings.search_provider;
     updateCountDisplay();
     if (_settings.search_url) urlInput.value = _settings.search_url;
     if (_settings.google_pse_cx) cxInput.value = _settings.google_pse_cx;
-  } catch (e) { console.warn('Failed to load search settings', e); }
+    msg.textContent = '';
+  } catch (e) {
+    console.warn('Failed to load search settings', e);
+    msg.textContent = 'Could not load saved Search settings. Reload the page before changing them.';
+    msg.style.color = 'var(--red)';
+  } finally {
+    clearTimeout(searchSettingsLoadTimeout);
+  }
 
   countSel.addEventListener('change', function() {
     if (this.value === 'custom') {
@@ -1085,9 +1127,18 @@ async function initSearchSettings() {
   updateVisibility();
 
   async function refreshStatus() {
+    if (!searchSettingsLoaded) return;
     try {
       var sRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+      if (!sRes.ok) throw new Error('HTTP ' + sRes.status);
       var s = await sRes.json();
+      if (!s || typeof s !== 'object' || Array.isArray(s)
+          || (Object.prototype.hasOwnProperty.call(s, 'search_fallback_chain') && !Array.isArray(s.search_fallback_chain))) {
+        throw new Error('Invalid settings response');
+      }
+      if (!Object.prototype.hasOwnProperty.call(s, 'search_fallback_chain')) {
+        s.search_fallback_chain = _settings.search_fallback_chain.slice();
+      }
       _settings = s;
       var active = s.search_provider || 'searxng';
       var label = _searchLabels[active] || active;
@@ -1107,6 +1158,7 @@ async function initSearchSettings() {
   refreshStatus();
 
   async function saveSearch() {
+    if (!searchSettingsLoaded) return;
     try {
       var prov = provSel.value;
       var resultCount;
@@ -1307,6 +1359,7 @@ async function initSearchSettings() {
     if (addBtn) {
       var hasMore = _availableFallbackOptions().length > 0;
       addBtn.style.display = hasMore ? '' : 'none';
+      addBtn.disabled = !searchSettingsLoaded || !hasMore;
     }
   }
   if (addBtn && !addBtn._wired) {
@@ -1320,6 +1373,7 @@ async function initSearchSettings() {
     });
   }
   async function _saveFallbackChain(chain) {
+    if (!searchSettingsLoaded || !Array.isArray(chain)) return;
     _settings.search_fallback_chain = chain;
     try {
       await _postSettings({ search_fallback_chain: chain });
@@ -1328,6 +1382,7 @@ async function initSearchSettings() {
     } catch (e) { msg.textContent = e.status === 403 ? 'Admin access is required to change these settings.' : 'Failed to save'; msg.style.color = 'var(--red)'; }
     _renderFallbackChain();
   }
+  setSearchControlsDisabled(!searchSettingsLoaded);
   _renderFallbackChain();
   // Re-render whenever the primary changes (it gets filtered out of "Add").
   provSel.addEventListener('change', _renderFallbackChain);
@@ -1336,6 +1391,7 @@ async function initSearchSettings() {
   var testBtn = el('set-searchTestBtn');
   if (testBtn) {
     testBtn.addEventListener('click', async function() {
+      if (!searchSettingsLoaded) return;
       var prov = provSel.value;
       if (!prov || prov === 'disabled') {
         msg.textContent = 'Pick a provider first';
@@ -1484,8 +1540,10 @@ async function initResearchSettings() {
     }
   };
 
+  const settingsReadController = new AbortController();
+  const settingsReadTimeout = setTimeout(function() { settingsReadController.abort(); }, 15000);
   try {
-    var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    var res = await fetch('/api/auth/settings', { credentials: 'same-origin', signal: settingsReadController.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
@@ -1512,6 +1570,8 @@ async function initResearchSettings() {
   } catch (e) {
     console.warn('Failed to load research settings', e);
     _showSettingsLoadFailure(msg, 'Could not load saved Research settings.');
+  } finally {
+    clearTimeout(settingsReadTimeout);
   }
 
   showStatus = function() {
@@ -1595,8 +1655,10 @@ async function initResearchSearchSettings() {
     });
   }
 
+  const settingsReadController = new AbortController();
+  const settingsReadTimeout = setTimeout(function() { settingsReadController.abort(); }, 15000);
   try {
-    var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    var res = await fetch('/api/auth/settings', { credentials: 'same-origin', signal: settingsReadController.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
@@ -1607,6 +1669,8 @@ async function initResearchSearchSettings() {
   } catch (e) {
     console.warn('Failed to load research search settings', e);
     _showSettingsLoadFailure(msg, 'Could not load saved Research Search settings.');
+  } finally {
+    clearTimeout(settingsReadTimeout);
   }
 
 }

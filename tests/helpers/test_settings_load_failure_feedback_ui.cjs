@@ -51,7 +51,7 @@ function sendJson(res, payload, status = 200) {
   res.end(JSON.stringify(payload));
 }
 function deliverSettings(entry) {
-  if (entry.ended) return;
+  if (entry.ended || entry.closed) return;
   entry.ended = true;
   const mode = authCallerModes[entry.caller] || authMode;
   if (mode === 'http503') return sendJson(entry.res, { detail: 'synthetic fixture failure' }, 503);
@@ -61,7 +61,15 @@ function deliverSettings(entry) {
   }
   if (mode === 'null') return sendJson(entry.res, null);
   if (mode === 'array') return sendJson(entry.res, []);
+  if (entry.bodyStarted) return entry.res.end(JSON.stringify(authSnapshot).slice(1));
   return sendJson(entry.res, authSnapshot);
+}
+function startAuthBodies(callers) {
+  authReads.filter(entry => callers.includes(entry.caller) && !entry.ended && !entry.closed).forEach(entry => {
+    entry.bodyStarted = true;
+    entry.res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    entry.res.write('{');
+  });
 }
 function deliverModels(entry) {
   if (entry.ended) return;
@@ -92,7 +100,8 @@ const server = http.createServer((req, res) => {
     return res.end(fs.readFileSync(path.join(repo, 'static/index.html'), 'utf8').replaceAll('{{CSP_NONCE}}', 'fixture-nonce'));
   }
   if (url.pathname === '/api/auth/settings' && req.method === 'GET') {
-    const entry = { res, ended: false, caller: req.headers['x-fixture-caller'] || 'other' };
+    const entry = { res, ended: false, closed: false, bodyStarted: false, caller: req.headers['x-fixture-caller'] || 'other' };
+    res.on('close', () => { entry.closed = true; });
     authReads.push(entry);
     if (authReleased || !heldAuthCallers.has(entry.caller)) deliverSettings(entry);
     return;
@@ -164,9 +173,10 @@ function releaseModels() {
   modelsHeld = false;
   modelReads.forEach(deliverModels);
 }
-async function openSettings(browser, base, pageErrors, pageWarnings) {
+async function openSettings(browser, base, pageErrors, pageWarnings, installClock = false) {
   const context = await browser.newContext();
   await context.addInitScript(() => {
+    window.__settingsReadTrace = [];
     const nativeFetch = window.fetch.bind(window);
     window.fetch = function(input, init) {
       const url = typeof input === 'string' ? input : input.url;
@@ -176,8 +186,20 @@ async function openSettings(browser, base, pageErrors, pageWarnings) {
         const caller = method === 'GET'
           ? ['initUtilityModel', 'initVisionSettings', 'initResearchSettings', 'initResearchSearchSettings'].find(name => stack.includes(`at ${name} (`)) || 'other'
           : null;
+        const trace = caller ? { caller, signal: init && init.signal || null, jsonComplete: false } : null;
+        if (trace) window.__settingsReadTrace.push(trace);
         const nextInit = caller === null ? init : { ...init, headers: { ...(init && init.headers || {}), 'X-Fixture-Caller': caller } };
-        return nativeFetch(input, nextInit);
+        const request = nativeFetch(input, nextInit);
+        if (!trace) return request;
+        return request.then(response => {
+          const json = response.json.bind(response);
+          response.json = async function() {
+            const value = await json();
+            trace.jsonComplete = true;
+            return value;
+          };
+          return response;
+        });
       }
       return nativeFetch(input, init);
     };
@@ -188,6 +210,7 @@ async function openSettings(browser, base, pageErrors, pageWarnings) {
     return route.continue();
   });
   const page = await context.newPage();
+  if (installClock) await page.clock.install();
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   page.on('console', message => { if (message.type() === 'warning') pageWarnings.push(message.text()); });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
@@ -476,6 +499,59 @@ function exactPost(expected) {
       await context.close();
       assert.ok(authReads.every(entry => entry.ended), `${label}: responses released before cleanup`);
     }
+
+    const deadlineCallers = ['initUtilityModel', 'initResearchSettings', 'initResearchSearchSettings'];
+    const messageSelectors = {
+      initUtilityModel: '#set-utilityChatMsg',
+      initResearchSettings: '#set-researchMsg',
+      initResearchSearchSettings: '#set-researchSearchMsg',
+    };
+    for (const phase of ['headers', 'body']) {
+      for (const caller of deadlineCallers) {
+        pageWarnings.length = 0;
+        const callerModes = Object.fromEntries(deadlineCallers.map(name => [name, 'valid']));
+        configure({ settings: nondefault, holdAuthCallers: [caller], callerModes });
+        ({ page, context } = await openSettings(browser, base, pageErrors, pageWarnings, true));
+        await waitUntil(() => authReads.some(entry => entry.caller === caller && !entry.ended), `${caller} held settings headers`);
+        const target = authReads.find(entry => entry.caller === caller);
+        if (phase === 'body') startAuthBodies([caller]);
+        if (phase === 'body') await waitUntil(() => target.res.headersSent, `${caller} settings headers sent before held body`);
+        await page.clock.fastForward(15001);
+        await waitUntil(() => target.closed, `${caller} ${phase} response closes at deadline`);
+        await waitUntil(() => pageWarnings.some(text => text.includes(`Failed to load ${caller === 'initUtilityModel' ? 'utility model' : caller === 'initResearchSettings' ? 'research' : 'research search'} settings`)), `${caller} visible failure handler runs`);
+        const state = await page.evaluate(({ callerName, selector }) => ({
+          requestCount: window.__settingsReadTrace.filter(entry => entry.caller === callerName).length,
+          signalAborted: window.__settingsReadTrace.find(entry => entry.caller === callerName)?.signal?.aborted,
+          message: document.querySelector(selector)?.textContent.trim(),
+        }), { callerName: caller, selector: messageSelectors[caller] });
+        assert.equal(state.requestCount, 1, `${caller} ${phase}: exactly one target settings read`);
+        assert.equal(state.signalAborted, true, `${caller} ${phase}: native request signal aborted`);
+        assert.ok(state.message, `${caller} ${phase}: existing panel failure status is visible`);
+        assert.deepEqual(posts, [], `${caller} ${phase}: timeout does not save defaults or retry`);
+        results[`${caller}-${phase}-deadline`] = { ...state, responseClosed: target.closed, postCount: posts.length };
+        releaseAuth();
+        await context.close();
+        assert.ok(authReads.every(entry => entry.closed || entry.ended), `${caller} ${phase}: held responses are closed before cleanup`);
+      }
+    }
+
+    configure({ settings: nondefault });
+    ({ page, context } = await openSettings(browser, base, pageErrors, pageWarnings, true));
+    await page.locator('[data-settings-tab="search"]').click();
+    await waitUntil(() => deadlineCallers.every(caller => authReads.some(entry => entry.caller === caller && entry.ended)), 'normal Utility, Research, and Research Search reads finish');
+    await page.waitForFunction(callers => callers.every(caller => window.__settingsReadTrace.some(entry => entry.caller === caller && entry.jsonComplete)), deadlineCallers);
+    await page.waitForFunction(() => document.querySelector('#set-researchSearch')?.value === 'brave', null, { timeout: 10000 });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const beforeTimer = await page.evaluate(callers => window.__settingsReadTrace.filter(entry => callers.includes(entry.caller)).map(entry => ({ caller: entry.caller, aborted: entry.signal?.aborted })), deadlineCallers);
+    assert.equal(beforeTimer.length, 3, 'normal timer control observes all three target reads');
+    assert.ok(beforeTimer.every(entry => entry.aborted === false), 'completed reads are not already aborted');
+    await page.clock.fastForward(15001);
+    const afterTimer = await page.evaluate(callers => window.__settingsReadTrace.filter(entry => callers.includes(entry.caller)).map(entry => ({ caller: entry.caller, aborted: entry.signal?.aborted })), deadlineCallers);
+    assert.ok(afterTimer.every(entry => entry.aborted === false), `normal reads clear their deadline timers; signals=${JSON.stringify({ beforeTimer, afterTimer, reads: authReads.map(entry => ({ caller: entry.caller, ended: entry.ended, closed: entry.closed })) })}`);
+    assert.ok(afterTimer.every(entry => entry.aborted === false), 'normal reads clear their deadline timers');
+    results.normalDeadlineCleanup = afterTimer;
+    await context.close();
 
     assert.deepEqual(externalRequests, [], `unexpected non-loopback requests: ${externalRequests.join(', ')}`);
     assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\\n')}`);

@@ -1860,13 +1860,13 @@
                      its value so the existing JS that reads
                      set-searchProvider keeps working unchanged. -->
                 <div class="adm-provider-picker search-provider-picker" id="search-provider-picker" style="flex:1;position:relative;top:5px;">
-                  <button type="button" class="adm-provider-btn" id="search-provider-btn" aria-labelledby="set-searchProviderLabel search-provider-name" aria-haspopup="listbox" aria-controls="search-provider-menu" aria-expanded="false">
+                  <button type="button" class="adm-provider-btn" id="search-provider-btn" aria-labelledby="set-searchProviderLabel search-provider-name" aria-haspopup="listbox" aria-controls="search-provider-menu" aria-expanded="false" disabled>
                     <span class="adm-provider-current"><span class="adm-provider-logo"></span><span class="adm-provider-name" id="search-provider-name">SearXNG</span></span>
                     <svg class="adm-provider-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                   </button>
                   <div class="adm-provider-menu hidden" id="search-provider-menu" role="listbox" aria-label="Search provider"></div>
                 </div>
-                <select id="set-searchProvider" class="settings-select" style="display:none;">
+                <select id="set-searchProvider" class="settings-select" style="display:none;" disabled>
                   <option value="searxng" data-search-logo="searxng">SearXNG (self-hosted)</option>
                   <option value="duckduckgo" data-search-logo="duckduckgo">DuckDuckGo (free, no key)</option>
                   <option value="brave" data-search-logo="brave">Brave Search</option>
@@ -1875,47 +1875,47 @@
                   <option value="serper" data-search-logo="serper">Serper.dev</option>
                   <option value="disabled" data-search-logo="disabled">Disabled</option>
                 </select>
-                <button type="button" class="admin-btn-sm" id="set-searchTestBtn" title="Run a test query against the configured provider" style="margin-left:2px;flex-shrink:0;position:relative;top:2px;display:inline-flex;align-items:center;gap:4px;">
+                <button type="button" class="admin-btn-sm" id="set-searchTestBtn" title="Run a test query against the configured provider" style="margin-left:2px;flex-shrink:0;position:relative;top:2px;display:inline-flex;align-items:center;gap:4px;" disabled>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>Test
                 </button>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-searchResultCount" title="How many web search results to fetch per query">Results per query</label>
                 <div style="display:flex;gap:8px;flex:1;">
-                  <select id="set-searchResultCount" class="settings-select" style="flex:1;">
+                  <select id="set-searchResultCount" class="settings-select" style="flex:1;" disabled>
                     <option value="3">3</option>
                     <option value="5" selected>5</option>
                     <option value="10">10</option>
                     <option value="20">20</option>
                     <option value="custom">Custom</option>
                   </select>
-                  <input id="set-searchResultCountCustom" type="number" class="settings-select" aria-label="Custom results per query" placeholder="Enter custom value" style="flex:1;display:none;min-width:120px;" min="1" max="100">
+                  <input id="set-searchResultCountCustom" type="number" class="settings-select" aria-label="Custom results per query" placeholder="Enter custom value" style="flex:1;display:none;min-width:120px;" min="1" max="100" disabled>
                 </div>
               </div>
               <div id="set-searchUrlRow" class="settings-row">
                 <label class="settings-label" for="set-searchUrl">URL</label>
-                <input id="set-searchUrl" type="text" placeholder="http://localhost:8080 (optional)" class="settings-select">
+                <input id="set-searchUrl" type="text" placeholder="http://localhost:8080 (optional)" class="settings-select" disabled>
               </div>
               <div id="set-searchKeyRow" class="settings-row" style="display:none;">
                 <label class="settings-label" for="set-searchApiKey">API Key</label>
                 <div style="position:relative;flex:1;display:flex;align-items:center;">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);opacity:0.55;pointer-events:none;"><path d="M21 2l-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="M15.5 7.5l3 3"/></svg>
-                  <input id="set-searchApiKey" type="password" placeholder="API key" class="settings-select" style="flex:1;padding-left:28px;">
+                  <input id="set-searchApiKey" type="password" placeholder="API key" class="settings-select" style="flex:1;padding-left:28px;" disabled>
                 </div>
               </div>
               <div id="set-searchCxRow" class="settings-row" style="display:none;">
                 <label class="settings-label" for="set-searchCx">CX ID</label>
-                <input id="set-searchCx" type="text" placeholder="Google PSE engine ID" class="settings-select">
+                <input id="set-searchCx" type="text" placeholder="Google PSE engine ID" class="settings-select" disabled>
               </div>
               <div class="settings-row" style="align-items:flex-start;">
                 <label class="settings-label" style="margin-top:6px;" title="Providers tried in order when the primary fails or hits a rate limit">Fallbacks</label>
                 <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
                   <div class="settings-fallbacks" id="set-searchFallbackChain"></div>
-                  <button type="button" class="settings-fallback-add" id="set-searchAddFallback" title="Add a search provider to try if the primary fails">+ Add fallback</button>
+                  <button type="button" class="settings-fallback-add" id="set-searchAddFallback" title="Add a search provider to try if the primary fails" disabled>+ Add fallback</button>
                 </div>
               </div>
               <div id="set-searchHint" class="admin-toggle-sub"></div>
-              <div id="set-searchMsg" style="font-size:11px;"></div>
+              <div id="set-searchMsg" role="status" aria-live="polite" style="font-size:11px;"></div>
             </div>
           </div>
 

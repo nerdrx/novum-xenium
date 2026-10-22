@@ -35,6 +35,8 @@ let holdEndpointMode = null;
 let holdSettingsRead = false;
 let heldSettingsRead = null;
 let targetCaller = null;
+let holdUtilityInventory = null;
+let heldUtilityInventory = null;
 const sendJson = (res, body, status = 200) => {
   if (!res.headersSent) res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
@@ -100,6 +102,18 @@ const server = http.createServer((req, res) => {
     }
     return sendJson(res, endpointList);
   }
+  if (url.pathname === '/api/models' && req.headers['x-fixture-caller'] === 'utility-reasoning' && holdUtilityInventory) {
+    const entry = { res, ended: false, closed: false, aborted: false, phase: holdUtilityInventory };
+    assert.equal(heldUtilityInventory, null, 'only one Utility reasoning inventory request may be held');
+    heldUtilityInventory = entry;
+    res.on('finish', () => { entry.ended = true; });
+    res.on('close', () => { entry.closed = true; entry.aborted = !entry.ended; });
+    if (entry.phase === 'body') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.flushHeaders();
+    }
+    return;
+  }
   if (url.pathname === '/api/models') return sendJson(res, { items: [
     { endpoint_id: 'fixture-a', offline: false, models: ['chat-a', 'utility-a', 'research-a'], models_metadata: {} },
   ] });
@@ -162,6 +176,12 @@ const apiIdleExceptTarget = async () => {
             headers.set('x-fixture-caller', caller);
             init = { ...(init || {}), headers };
           }
+        }
+        if (url.pathname === '/api/models' && method === 'GET' && stack.includes('loadEffortLevels') && stack.includes('settings.js')) {
+          window.__utilityReasoningSignal = init && init.signal;
+          const headers = new Headers(init && init.headers ? init.headers : undefined);
+          headers.set('x-fixture-caller', 'utility-reasoning');
+          init = { ...(init || {}), headers };
         }
         const caller = window.__fixtureTargetCaller;
         const isTargetSettingsRead = url.pathname === '/api/auth/settings' && method === 'GET'
@@ -389,6 +409,38 @@ const apiIdleExceptTarget = async () => {
         resetCase();
       }
     }
+    // A separate reasoning-inventory wait must not block saved Utility settings.
+    for (const phase of ['normal', 'headers', 'body']) {
+      targetCaller = 'initUtilityModel';
+      holdUtilityInventory = phase === 'normal' ? null : phase;
+      heldUtilityInventory = null;
+      page = await launchPage();
+      await page.clock.install();
+      await openAiSettings(page);
+      if (phase !== 'normal') {
+        await waitFor(() => heldUtilityInventory, `Utility reasoning inventory held at ${phase}`);
+        const held = heldUtilityInventory;
+        assert.equal(held.res.headersSent, phase === 'body');
+        assert.equal(await page.evaluate(() => window.__settingsJsonReads.some(read => read.caller === 'initUtilityModel')), false);
+        await page.clock.fastForward(15000);
+        await waitFor(() => held.closed, `Utility reasoning ${phase} deadline closes the HTTP request`);
+        assert.equal(held.aborted, true, 'the actual inventory request is aborted');
+        assert.equal(await page.evaluate(() => window.__utilityReasoningSignal?.aborted), true);
+      }
+      await page.waitForFunction(() => document.querySelector('#set-utilityModelSelect')?.value === 'utility-b');
+      await waitFor(() => pendingRelevant.size === 0, 'saved Utility settings hydrate after reasoning inventory settles');
+      assert.equal(await page.locator('#set-utilityEpSelect').inputValue(), 'fixture-b');
+      assert.deepEqual(postBodies, [], 'inventory settlement and saved-settings hydration do not POST');
+      if (phase === 'normal') {
+        await page.clock.fastForward(15000);
+        assert.equal(await page.evaluate(() => window.__utilityReasoningSignal?.aborted), false, 'normal inventory completion clears its timer');
+      }
+      proofCases.push({ mode: `utility-reasoning-${phase}`, requestAborted: phase !== 'normal', endpoint: 'fixture-b', model: 'utility-b', postCount: 0 });
+      await page.close();
+      resetCase();
+      holdUtilityInventory = null;
+      heldUtilityInventory = null;
+    }
     console.log(JSON.stringify({
       pass: true,
       sourceHashes,
@@ -402,6 +454,7 @@ const apiIdleExceptTarget = async () => {
   } finally {
     if (heldTarget && !heldTarget.res.writableEnded && !heldTarget.res.destroyed) heldTarget.res.end(JSON.stringify(endpointList));
     if (heldSettingsRead && !heldSettingsRead.res.writableEnded && !heldSettingsRead.res.destroyed) heldSettingsRead.res.end(JSON.stringify(settings));
+    if (heldUtilityInventory && !heldUtilityInventory.res.writableEnded && !heldUtilityInventory.res.destroyed) heldUtilityInventory.res.end('{}');
     if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
     server.closeAllConnections?.();

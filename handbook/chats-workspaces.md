@@ -64,7 +64,7 @@ describe these save boundaries.
 
 Type `/` in the composer to see available commands. When the highlighted command
 is still an incomplete prefix, **Enter** accepts that completion without sending.
-Once the full command is entered, **Enter** follows the normal submission path.
+Once the full command is entered, **Enter** follows the normal composer behavior.
 **Tab** accepts a completion, the arrow keys change the selection, and **Escape**
 closes the suggestions. Reload an already-open page to load updated keyboard
 handling.

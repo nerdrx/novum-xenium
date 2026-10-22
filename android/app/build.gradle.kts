@@ -8,8 +8,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "com.novumxenium.app.ConnectionHeaderTest"
-        versionCode = 6
-        versionName = "0.1.7"
+        versionCode = 7
+        versionName = "0.1.8"
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }

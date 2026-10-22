@@ -32,6 +32,7 @@ let mode = 'normal';
 let serverSettings;
 let settingsReads;
 let pendingInitial;
+let pendingRefresh;
 let refreshCount;
 let posts;
 let searchQueries;
@@ -45,6 +46,7 @@ function reset(nextMode, chain) {
   else serverSettings.search_fallback_chain = structuredClone(chain);
   settingsReads = [];
   pendingInitial = null;
+  pendingRefresh = null;
   refreshCount = 0;
   posts = [];
   searchQueries = [];
@@ -84,6 +86,12 @@ const server = http.createServer((req, res) => {
       refreshCount += 1;
       if (mode === 'refresh-failure' && refreshCount > 1) {
         entry.status = 503; entry.ended = true; return sendJson(res, { detail: 'synthetic refresh failure' }, 503);
+      }
+      if (mode === 'hold-refresh' && refreshCount === 1) {
+        entry.status = 200;
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        pendingRefresh = { res, entry };
+        return;
       }
     }
     entry.status = 200;
@@ -246,6 +254,55 @@ async function closePage(context) { await context.close(); }
       } finally { await closePage(context); }
     }
 
+    reset('hold-refresh', ['duckduckgo']);
+    const stale = await openSearch(browser, origin);
+    try {
+      await waitNode(() => pendingRefresh, 'initial successful refresh held after headers');
+      await stale.page.clock.install();
+      await stale.page.locator('#set-searchAddFallback').click();
+      await waitNode(() => posts.length === 1, 'newer Add fallback POST accepted');
+      await waitPage(stale.page, () => Array.from(document.querySelectorAll('.settings-fallback-row select')).map(select => select.value).join(',') === 'duckduckgo,brave', 'newer Add fallback rendered');
+      assert.deepEqual(posts[0].search_fallback_chain, ['duckduckgo', 'brave']);
+      assert.deepEqual(serverSettings.search_fallback_chain, ['duckduckgo', 'brave']);
+      const visibleAfterAdd = await stale.page.locator('.settings-fallback-row select').evaluateAll(selects => selects.map(select => select.value));
+      const heldSnapshot = pendingRefresh.entry.snapshot.search_fallback_chain.slice();
+      pendingRefresh.entry.ended = true;
+      pendingRefresh.res.end(JSON.stringify(pendingRefresh.entry.snapshot));
+      await waitPage(stale.page, () => window.__settingsFetches.some(entry => entry.caller === 'search-refresh' && entry.jsonState === 'done'), 'stale successful refresh JSON consumed by client');
+      const visibleAfterRefresh = await stale.page.locator('.settings-fallback-row select').evaluateAll(selects => selects.map(select => select.value));
+      assert.deepEqual(visibleAfterRefresh, ['duckduckgo', 'brave']);
+      await stale.page.locator('.settings-fallback-remove').first().click();
+      await waitNode(() => posts.length === 2, 'remove first visible fallback after stale refresh');
+      const removePayload = posts[1].search_fallback_chain;
+      assert.deepEqual(removePayload, ['brave'], 'stale status refresh must not erase newer fallback before remove');
+      assert.deepEqual(serverSettings.search_fallback_chain, ['brave']);
+      result.cases.stale_success_then_remove_preserves_newer_chain = {
+        held_snapshot: heldSnapshot,
+        add_payload: posts[0].search_fallback_chain,
+        visible_after_add: visibleAfterAdd,
+        visible_after_stale_refresh: visibleAfterRefresh,
+        remove_payload: removePayload,
+        persisted_after_remove: serverSettings.search_fallback_chain,
+        client_consumed_refresh_json: true,
+      };
+    } finally { await closePage(stale.context); }
+
+    reset('normal', ['duckduckgo']);
+    const noStale = await openSearch(browser, origin);
+    try {
+      await waitPage(noStale.page, () => document.querySelector('#set-searchMsg')?.textContent.trim().startsWith('Active: '), 'positive control initial Search status');
+      await noStale.page.clock.install();
+      await noStale.page.locator('#set-searchAddFallback').click();
+      await waitNode(() => posts.length === 1, 'positive control Add POST accepted');
+      await waitPage(noStale.page, () => Array.from(document.querySelectorAll('.settings-fallback-row select')).map(select => select.value).join(',') === 'duckduckgo,brave', 'positive control Add fallback rendered');
+      await noStale.page.locator('.settings-fallback-remove').first().click();
+      await waitNode(() => posts.length === 2, 'positive control remove first visible fallback');
+      assert.deepEqual(posts[0].search_fallback_chain, ['duckduckgo', 'brave']);
+      assert.deepEqual(posts[1].search_fallback_chain, ['brave']);
+      assert.deepEqual(serverSettings.search_fallback_chain, ['brave']);
+      result.cases.no_stale_positive_control = { add_payload: posts[0].search_fallback_chain, remove_payload: posts[1].search_fallback_chain, persisted_after_remove: serverSettings.search_fallback_chain };
+    } finally { await closePage(noStale.context); }
+
     for (const scenario of ['read-503', 'malformed-json', 'null-settings', 'array-settings', 'invalid-chain']) {
       reset(scenario, ['duckduckgo', 'brave']);
       const { page, context } = await openSearch(browser, origin);
@@ -323,6 +380,7 @@ async function closePage(context) { await context.close(); }
     console.log(JSON.stringify(result, null, 2));
   } finally {
     if (pendingInitial && !pendingInitial.writableEnded) pendingInitial.destroy();
+    if (pendingRefresh && !pendingRefresh.res.writableEnded) pendingRefresh.res.destroy();
     if (browser) await browser.close().catch(() => {});
     if (server.listening) {
       server.closeAllConnections?.();

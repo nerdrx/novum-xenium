@@ -1136,9 +1136,9 @@ async function initSearchSettings() {
           || (Object.prototype.hasOwnProperty.call(s, 'search_fallback_chain') && !Array.isArray(s.search_fallback_chain))) {
         throw new Error('Invalid settings response');
       }
-      if (!Object.prototype.hasOwnProperty.call(s, 'search_fallback_chain')) {
-        s.search_fallback_chain = _settings.search_fallback_chain.slice();
-      }
+      // This refresh updates status only. Keep the locally edited chain; the
+      // visible fallback rows are not repainted from this response.
+      s.search_fallback_chain = (_settings.search_fallback_chain || []).slice();
       _settings = s;
       var active = s.search_provider || 'searxng';
       var label = _searchLabels[active] || active;
@@ -1895,14 +1895,39 @@ async function initShortcuts() {
 
   // Load saved keybinds
   let keybinds = { ...SHORTCUT_DEFAULTS };
+  let keybindsLoaded = false;
+  if (resetBtn) resetBtn.disabled = true;
+  listEl.setAttribute('role', 'status');
+  listEl.setAttribute('aria-live', 'polite');
+  listEl.textContent = 'Loading saved shortcuts…';
+  const settingsReadController = new AbortController();
+  const settingsReadTimeout = setTimeout(() => settingsReadController.abort(), 15000);
   try {
-    const res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    const res = await fetch('/api/auth/settings', { credentials: 'same-origin', signal: settingsReadController.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const settings = await res.json();
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
+    if (Object.prototype.hasOwnProperty.call(settings, 'keybinds')
+        && (!settings.keybinds || typeof settings.keybinds !== 'object' || Array.isArray(settings.keybinds))) {
+      throw new Error('Invalid keybinds response');
+    }
     if (settings.keybinds) keybinds = { ...keybinds, ...settings.keybinds };
     if (keybinds.toggle_sidebar === 'ctrl+b') {
       keybinds.toggle_sidebar = SHORTCUT_DEFAULTS.toggle_sidebar;
     }
-  } catch (e) {}
+    keybindsLoaded = true;
+  } catch (e) {
+    console.warn('Failed to load keyboard shortcuts', e);
+    listEl.textContent = 'Could not load saved shortcuts. Reload the page to try again.';
+    return;
+  } finally {
+    clearTimeout(settingsReadTimeout);
+  }
+
+  listEl.removeAttribute('role');
+  listEl.removeAttribute('aria-live');
+  listEl.textContent = '';
+  if (resetBtn) resetBtn.disabled = false;
 
   function _findConflicts() {
     const comboMap = {};
@@ -2058,6 +2083,7 @@ async function initShortcuts() {
   }
 
   async function saveKeybinds() {
+    if (!keybindsLoaded) return;
     try {
       await _postSettings({ keybinds });
       // Update global keybinds so they take effect immediately

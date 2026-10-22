@@ -526,10 +526,13 @@ async function initDefaultChat() {
     refreshModels(modelSel.value);
   } catch (e) { console.warn('Failed to load endpoints for default chat', e); }
 
+  const settingsReadController = new AbortController();
+  const settingsReadTimer = setTimeout(function() { settingsReadController.abort(); }, 15000);
   try {
-    var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    var res = await fetch('/api/auth/settings', { credentials: 'same-origin', signal: settingsReadController.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     var settings = await res.json();
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
     if (!userChangedSelection) {
       if (settings.default_endpoint_id) {
         savedEndpoint = settings.default_endpoint_id;
@@ -542,7 +545,12 @@ async function initDefaultChat() {
     } else {
       refreshModels(modelSel.value);
     }
-  } catch (e) { console.warn('Failed to load default chat settings', e); }
+  } catch (e) {
+    console.warn('Failed to load default chat settings', e);
+    if (!userChangedSelection) _showSettingsLoadFailure(msg, 'Could not load saved chat defaults. Displayed choices may differ from saved settings. Reload to verify.');
+  } finally {
+    clearTimeout(settingsReadTimer);
+  }
 
   function saveDefault() {
     return saveSettings({
@@ -904,8 +912,10 @@ async function initVisionSettings() {
     var lower = String(mid || '').toLowerCase();
     return !_vlExclude.some(function(kw) { return lower.includes(kw); });
   }
+  const modelsController = new AbortController();
+  const modelsLoadTimeout = setTimeout(function() { modelsController.abort(); }, 15000);
   try {
-    const modelsRes = await fetch('/api/models', { credentials: 'same-origin' });
+    const modelsRes = await fetch('/api/models', { credentials: 'same-origin', signal: modelsController.signal });
     const modelsData = await modelsRes.json();
     const visionModels = [];
     (modelsData.items || []).forEach(item => {
@@ -920,13 +930,16 @@ async function initVisionSettings() {
       var opt = document.createElement('option'); opt.value = mid; opt.textContent = mid; vlSel.appendChild(opt);
     });
   } catch (e) { console.warn('Failed to load models for vision settings', e); }
+  finally { clearTimeout(modelsLoadTimeout); }
   // Also pull the raw endpoint list so the fallback widget can resolve
   // endpoint-id → models the same way the other cards do.
   try {
     _visionEndpoints = await _fetchModelEndpoints();
   } catch (e) { console.warn('Failed to load endpoints for vision fallback', e); }
+  const settingsController = new AbortController();
+  const settingsTimeout = setTimeout(function() { settingsController.abort(); }, 15000);
   try {
-    const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin', signal: settingsController.signal });
     if (!settingsRes.ok) throw new Error(`HTTP ${settingsRes.status}`);
     const settings = await settingsRes.json();
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid settings response');
@@ -959,6 +972,8 @@ async function initVisionSettings() {
   } catch (e) {
     console.warn('Failed to load vision settings', e);
     _showSettingsLoadFailure(msg, 'Could not load saved Vision settings.');
+  } finally {
+    clearTimeout(settingsTimeout);
   }
 
   syncVisionDisabled();

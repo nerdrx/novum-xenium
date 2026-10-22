@@ -31,8 +31,9 @@ const inventory = { items: [
   { endpoint_id: 'fixture-a', offline: false, models: ['vision-a', 'vision-b'], models_metadata: { 'utility-a': { supported_reasoning_levels: ['low', 'high'] }, 'utility-b': { supported_reasoning_levels: ['low', 'high'] } } },
   { endpoint_id: 'fixture-b', offline: false, models: ['vision-a', 'vision-b'], models_metadata: { 'utility-a': { supported_reasoning_levels: ['low', 'high'] }, 'utility-b': { supported_reasoning_levels: ['low', 'high'] } } },
 ] };
-let config = { settings: saved('vision-a'), holdSettingsCallers: new Set() };
+let config = { settings: saved('vision-a'), holdSettingsCallers: new Set(), holdVisionSettings: null };
 let settingsReads = [];
+let modelReads = [];
 let requestLog = [];
 let posts = [];
 let serverSettings = {};
@@ -41,9 +42,10 @@ function json(res, body) {
   res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
 }
-function configure(settings, holdSettingsCallers = []) {
-  config = { settings: structuredClone(settings), holdSettingsCallers: new Set(holdSettingsCallers) };
+function configure(settings, holdSettingsCallers = [], holdVisionModels = null, holdVisionSettings = null) {
+  config = { settings: structuredClone(settings), holdSettingsCallers: new Set(holdSettingsCallers), holdVisionModels, holdVisionSettings };
   settingsReads = [];
+  modelReads = [];
   requestLog = [];
   posts = [];
   serverSettings = structuredClone(settings);
@@ -51,7 +53,13 @@ function configure(settings, holdSettingsCallers = []) {
 function deliver(entry) {
   if (entry.done) return;
   entry.done = true;
-  json(entry.res, config.settings);
+  if (entry.res.headersSent) entry.res.end(JSON.stringify(config.settings));
+  else json(entry.res, config.settings);
+}
+function deliverModels(entry) {
+  if (entry.done) return;
+  entry.done = true;
+  json(entry.res, inventory);
 }
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
@@ -62,8 +70,17 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/api/auth/settings' && req.method === 'GET') {
     const caller = req.headers['x-fixture-caller'] || 'other';
-    const entry = { res, done: false, caller };
+    const entry = { res, done: false, closed: false, aborted: false, caller };
     settingsReads.push(entry);
+    res.on('finish', () => { entry.done = true; entry.closed = true; });
+    res.on('close', () => { entry.closed = true; entry.aborted = !entry.done; entry.done = true; });
+    if (caller === 'initVisionSettings' && config.holdVisionSettings) {
+      if (config.holdVisionSettings === 'body') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.flushHeaders();
+      }
+      return;
+    }
     if (!config.holdSettingsCallers.has(caller)) deliver(entry);
     return;
   }
@@ -82,7 +99,21 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/auth/status') return json(res, { username: 'synthetic', is_admin: true, privileges: {} });
   if (url.pathname === '/api/auth/features') return json(res, {});
   if (url.pathname === '/api/model-endpoints') return json(res, endpoints);
-  if (url.pathname === '/api/models') return json(res, inventory);
+  if (url.pathname === '/api/models') {
+    const caller = req.headers['x-fixture-caller'] || 'other';
+    const entry = { res, done: false, closed: false, aborted: false, caller, phase: config.holdVisionModels };
+    modelReads.push(entry);
+    res.on('finish', () => { entry.done = true; entry.closed = true; });
+    res.on('close', () => { entry.closed = true; entry.aborted = !entry.done; });
+    if (caller === 'initVisionSettings' && config.holdVisionModels) {
+      if (config.holdVisionModels === 'body') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.flushHeaders();
+      }
+      return;
+    }
+    return deliverModels(entry);
+  }
   if (url.pathname === '/api/default-chat') return json(res, {});
   if (url.pathname.startsWith('/api/')) return json(res, {});
   const relative = decodeURIComponent(url.pathname.replace(/^\/static\//, ''));
@@ -103,15 +134,28 @@ const waitFor = async (predicate, label, timeout = 15000) => {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 };
-async function openSettings(browser, base, errors) {
+async function openSettings(browser, base, errors, installClock = false) {
   const context = await browser.newContext();
   await context.addInitScript(() => {
     const nativeFetch = window.fetch.bind(window);
     window.fetch = function(input, init) {
       const url = typeof input === 'string' ? input : input.url;
+      if (url.includes('/api/models') && (!init || !init.method || init.method === 'GET')) {
+        const stack = new Error().stack || '';
+        if (stack.includes('at initVisionSettings (') && stack.includes('settings.js')) {
+          const signal = init && init.signal;
+          window.__fixtureVisionModelSignals = window.__fixtureVisionModelSignals || [];
+          window.__fixtureVisionModelSignals.push(signal || null);
+          return nativeFetch(input, { ...(init || {}), headers: { ...((init && init.headers) || {}), 'X-Fixture-Caller': 'initVisionSettings' } });
+        }
+      }
       if (url.includes('/api/auth/settings') && (!init || !init.method || init.method === 'GET')) {
         const stack = new Error().stack || '';
         const caller = ['initDefaultChat', 'initUtilityModel', 'initVisionSettings', 'initResearchSettings'].find(name => stack.includes(`at ${name} (`)) || 'other';
+        if (caller === 'initVisionSettings') {
+          window.__fixtureVisionSettingsSignals = window.__fixtureVisionSettingsSignals || [];
+          window.__fixtureVisionSettingsSignals.push(init && init.signal ? init.signal : null);
+        }
         return nativeFetch(input, { ...(init || {}), headers: { ...((init && init.headers) || {}), 'X-Fixture-Caller': caller } }).then(response => {
           response.clone().json().then(body => {
             window.__fixtureSettingsBodies = window.__fixtureSettingsBodies || [];
@@ -132,6 +176,7 @@ async function openSettings(browser, base, errors) {
   page.on('pageerror', error => errors.push(error.stack || error.message));
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window._isAdmin === true);
+  if (installClock) await page.clock.install();
   await page.locator('#user-bar-settings').click();
   await page.locator('#settings-modal:not(.hidden)').waitFor({ state: 'visible' });
   await page.locator('[data-settings-tab="ai"]').click();
@@ -150,7 +195,8 @@ async function openSettings(browser, base, errors) {
     browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || '/opt/google/chrome/chrome', args: ['--no-sandbox', '--disable-gpu', '--disable-service-worker'] });
 
     configure(saved('vision-a'));
-    let { page, context } = await openSettings(browser, base, errors);
+    let { page, context } = await openSettings(browser, base, errors, true);
+    await waitFor(() => modelReads.some(entry => entry.caller === 'initVisionSettings' && entry.done), 'normal Vision inventory read completed');
     await page.waitForFunction(() => document.querySelector('#set-vlModelSelect')?.value === 'vision-a', null, { timeout: 12000 }).catch(async error => {
       const select = await page.locator('#set-vlModelSelect').evaluate(node => ({ value: node.value, options: Array.from(node.options).map(option => [option.value, option.textContent]) })).catch(() => null);
       throw new Error(`${error.message}; select=${JSON.stringify(select)}; settings=${JSON.stringify(settingsReads.map(entry => ({ caller: entry.caller, done: entry.done })))}; requests=${JSON.stringify(requestLog.filter(item => item.includes('settings') || item.includes('model')))}; errors=${JSON.stringify(errors)}`);
@@ -163,6 +209,13 @@ async function openSettings(browser, base, errors) {
     assert.equal(await page.locator('#set-researchModel').inputValue(), 'research-a');
     assert.equal(await page.locator('#set-defaultModelSelect').inputValue(), 'chat-a', 'Default Chat keeps its configured model');
     assert.equal(posts.length, 0, 'normal inventory selection hydrates without a save');
+    await page.clock.fastForward(15000);
+    const normalSignalAborted = await page.evaluate(() => window.__fixtureVisionModelSignals?.at(-1)?.aborted ?? null);
+    const normalSettingsSignalAborted = await page.evaluate(() => window.__fixtureVisionSettingsSignals?.at(-1)?.aborted ?? null);
+    assert.equal(normalSignalAborted, false, 'a normally completed inventory read does not get aborted after its deadline');
+    assert.equal(normalSettingsSignalAborted, false, 'a normally completed saved-settings read clears its deadline timer');
+    assert.equal(posts.length, 0, 'normal timeout cleanup does not cause a delayed save');
+    results.normalSavedModelDeadlineCleanup = { ...normal, signalAbortedAfter15s: normalSignalAborted, settingsSignalAbortedAfter15s: normalSettingsSignalAborted };
     results.normalSavedModel = normal;
     await context.close();
     assert.ok(settingsReads.every(entry => entry.done), 'normal case leaves no held settings responses');
@@ -405,6 +458,111 @@ async function openSettings(browser, base, errors) {
     assert.equal(posts.length, 1, 'late hydration does not generate an extra save');
     results.editedWhileVisionLoadHeld = { beforeRelease, afterRelease: await page.locator('#set-vlModelSelect').inputValue(), posts: structuredClone(posts) };
     await context.close();
+
+    const visionDeadlineResults = [];
+    for (const phase of ['headers', 'body']) {
+      configure(saved('vision-b', { vision_model_fallbacks: [{ endpoint_id: 'fixture-a', model: 'vision-a' }] }), [], phase);
+      ({ page, context } = await openSettings(browser, base, errors, true));
+      await waitFor(() => modelReads.some(entry => entry.caller === 'initVisionSettings' && !entry.done), `Vision model inventory held at ${phase}`);
+      const heldModels = modelReads.find(entry => entry.caller === 'initVisionSettings' && !entry.done);
+      await waitFor(() => settingsReads.filter(entry => entry.caller !== 'initVisionSettings').every(entry => entry.done), 'all unrelated initial settings reads complete');
+      const visionSettingsReadsBefore = settingsReads.filter(entry => entry.caller === 'initVisionSettings').length;
+      const beforeTimeout = await page.evaluate(() => ({
+        model: document.querySelector('#set-vlModelSelect').value,
+        modelDisabled: document.querySelector('#set-vlModelSelect').disabled,
+        fallbackRows: document.querySelectorAll('#set-visionFallbacks .settings-fallback-row').length,
+        message: document.querySelector('#set-visionSettingsMsg').textContent,
+      }));
+      assert.equal(beforeTimeout.model, '', 'Vision remains at Auto-detect while inventory is pending');
+      assert.equal(beforeTimeout.modelDisabled, false, 'the model control is not marked disabled during the inventory wait');
+      assert.equal(beforeTimeout.fallbackRows, 0);
+      assert.equal(visionSettingsReadsBefore, 0, 'saved Vision settings read waits for inventory completion');
+      assert.equal(posts.length, 0);
+
+      await page.clock.fastForward(15000);
+      await waitFor(() => heldModels.closed, `${phase} Vision inventory request aborted by its local deadline`);
+      assert.equal(heldModels.aborted, true, `${phase} held request is aborted, not merely hidden`);
+      const signalAborted = await page.evaluate(() => window.__fixtureVisionModelSignals?.at(-1)?.aborted ?? false);
+      assert.equal(signalAborted, true);
+      await waitFor(() => settingsReads.some(entry => entry.caller === 'initVisionSettings' && entry.done), 'saved Vision settings read resumes after inventory timeout');
+      await page.waitForFunction(() => document.querySelector('#set-vlModelSelect').value === 'vision-b');
+      const recovered = await page.evaluate(() => ({
+        model: document.querySelector('#set-vlModelSelect').value,
+        fallbacks: Array.from(document.querySelectorAll('#set-visionFallbacks .settings-fallback-row')).map(row => Array.from(row.querySelectorAll('select')).slice(0, 2).map(select => select.value)),
+        message: document.querySelector('#set-visionSettingsMsg').textContent,
+      }));
+      assert.deepEqual(recovered.fallbacks, [['fixture-a', 'vision-a']], 'saved fallback is rendered after the timed-out inventory request');
+      assert.equal(recovered.model, 'vision-b');
+      assert.equal(posts.length, 0, 'timeout and recovery do not save settings');
+      visionDeadlineResults.push({ phase, beforeTimeout, signalAborted, recovered });
+      await context.close();
+    }
+    results.visionInventoryDeadline = visionDeadlineResults;
+
+    const visionSettingsDeadlineResults = [];
+    for (const phase of ['headers', 'body']) {
+      configure(saved('vision-b', { vision_model_fallbacks: [{ endpoint_id: 'fixture-a', model: 'vision-a' }] }), [], null, phase);
+      ({ page, context } = await openSettings(browser, base, errors, true));
+      await waitFor(() => settingsReads.some(entry => entry.caller === 'initVisionSettings' && !entry.done), `Vision saved-settings GET held at ${phase}`);
+      const heldSettings = settingsReads.find(entry => entry.caller === 'initVisionSettings');
+      await waitFor(() => modelReads.some(entry => entry.caller === 'initVisionSettings' && entry.done), 'Vision model inventory completes before settings read');
+      await waitFor(() => settingsReads.filter(entry => entry.caller !== 'initVisionSettings').every(entry => entry.done), 'all unrelated settings reads complete before Vision timeout');
+      if (phase === 'body') assert.equal(heldSettings.res.headersSent, true, 'body case sends headers before holding JSON');
+      else assert.equal(heldSettings.res.headersSent, false, 'header case holds before response headers');
+      const beforeTimeout = await page.evaluate(() => ({
+        model: document.querySelector('#set-vlModelSelect').value,
+        label: document.querySelector('#set-vlModelSelect').selectedOptions[0]?.textContent || '',
+        fallbackRows: document.querySelectorAll('#set-visionFallbacks .settings-fallback-row').length,
+        message: document.querySelector('#set-visionSettingsMsg').textContent,
+      }));
+      assert.equal(beforeTimeout.model, '', 'saved model remains default-looking while settings GET waits');
+      assert.equal(beforeTimeout.label, 'Auto-detect');
+      assert.equal(beforeTimeout.fallbackRows, 0);
+      assert.equal(beforeTimeout.message, '');
+      assert.equal(posts.length, 0);
+
+      await page.clock.fastForward(15000);
+      await waitFor(() => heldSettings.closed, `${phase} Vision saved-settings request closes at its deadline`);
+      await page.waitForFunction(() => document.querySelector('#set-visionSettingsMsg')?.textContent === 'Could not load saved Vision settings.');
+      const afterTimeout = await page.evaluate(() => ({
+        model: document.querySelector('#set-vlModelSelect').value,
+        fallbackRows: document.querySelectorAll('#set-visionFallbacks .settings-fallback-row').length,
+        message: document.querySelector('#set-visionSettingsMsg').textContent,
+        signalAborted: window.__fixtureVisionSettingsSignals?.at(-1)?.aborted ?? null,
+        consumedBodies: (window.__fixtureSettingsBodies || []).filter(entry => entry.caller === 'initVisionSettings').length,
+      }));
+      assert.equal(heldSettings.aborted, true, 'deadline aborts the actual held HTTP request');
+      assert.equal(afterTimeout.signalAborted, true);
+      assert.equal(afterTimeout.consumedBodies, 0, 'the held settings response body was not consumed before abort');
+      assert.equal(afterTimeout.model, '');
+      assert.equal(afterTimeout.fallbackRows, 0);
+      assert.equal(afterTimeout.message, 'Could not load saved Vision settings.');
+      assert.equal(posts.length, 0, 'load timeout does not post settings');
+      visionSettingsDeadlineResults.push({ phase, beforeTimeout, afterTimeout, request: { closed: heldSettings.closed, aborted: heldSettings.aborted } });
+      await context.close();
+      assert.ok(settingsReads.every(entry => entry.done), `${phase} Vision settings timeout leaves no held requests`);
+    }
+
+    configure(saved('vision-a'), [], null, 'body');
+    ({ page, context } = await openSettings(browser, base, errors, true));
+    await waitFor(() => settingsReads.some(entry => entry.caller === 'initVisionSettings' && !entry.done), 'Vision settings body held for late edit control');
+    const lateEditHeldSettings = settingsReads.find(entry => entry.caller === 'initVisionSettings');
+    await waitFor(() => modelReads.some(entry => entry.caller === 'initVisionSettings' && entry.done), 'Vision inventory completes before late edit');
+    await page.clock.fastForward(14000);
+    await page.locator('#set-vlModelSelect').selectOption('vision-b');
+    await waitFor(() => posts.length === 1, 'user model edit saves before settings-read deadline');
+    await page.waitForFunction(() => document.querySelector('#set-visionSettingsMsg')?.textContent === 'Saved');
+    assert.deepEqual(posts[0], { vision_model: 'vision-b' });
+    await page.clock.fastForward(1000);
+    await waitFor(() => lateEditHeldSettings.closed, 'pending settings read aborts after newer model save');
+    await page.waitForFunction(() => document.querySelector('#set-visionSettingsMsg')?.textContent === 'Saved');
+    assert.equal(lateEditHeldSettings.aborted, true);
+    assert.equal(await page.locator('#set-vlModelSelect').inputValue(), 'vision-b');
+    assert.equal(posts.length, 1, 'timeout does not add a write after the user edit');
+    visionSettingsDeadlineResults.push({ phase: 'body-after-user-edit', selectedModel: await page.locator('#set-vlModelSelect').inputValue(), message: await page.locator('#set-visionSettingsMsg').textContent(), posts: structuredClone(posts), requestAborted: lateEditHeldSettings.aborted });
+    await context.close();
+    assert.ok(settingsReads.every(entry => entry.done), 'late-edit case leaves no held settings requests');
+    results.visionSavedSettingsDeadline = visionSettingsDeadlineResults;
 
     assert.deepEqual(externalRequests, [], `non-fixture requests: ${externalRequests.join(', ')}`);
     assert.deepEqual(errors, [], `page errors: ${errors.join('\n')}`);

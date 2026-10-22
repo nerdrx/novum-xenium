@@ -21,6 +21,7 @@ const settingsHelpers = api.slice(apiStart, apiEnd)
 const initializer = source.slice(initStart, initEnd);
 const calls = [];
 let releaseInitialSettings = null;
+let heldSettingsRead = null;
 const endpoints = [
   { id: 'ep1', name: 'One', is_enabled: true, models: ['m0', 'm1'] },
   { id: 'ep2', name: 'Two', is_enabled: true, models: ['m2', 'm3'] },
@@ -35,7 +36,17 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/') return res.end(html);
   if (url.pathname === '/api/auth/settings' && req.method === 'GET') {
     const respond = () => json({ default_endpoint_id: 'ep1', default_model: 'm0' });
-    if (url.searchParams.has('hold')) { releaseInitialSettings = respond; return; }
+    if (url.searchParams.has('hold')) {
+      const currentSettingsRead = { started: true, closed: false, bodyHeld: url.searchParams.has('body') };
+      heldSettingsRead = currentSettingsRead;
+      res.on('close', () => { currentSettingsRead.closed = true; });
+      if (currentSettingsRead.bodyHeld) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.flushHeaders();
+        releaseInitialSettings = () => res.end(JSON.stringify({ default_endpoint_id: 'ep1', default_model: 'm0' }));
+      } else releaseInitialSettings = respond;
+      return;
+    }
     return respond();
   }
   if (url.pathname === '/api/auth/settings' && req.method === 'POST') {
@@ -50,6 +61,7 @@ const server = http.createServer(async (req, res) => {
     release(); res.writeHead(204); return res.end();
   }
   if (url.pathname === '/__calls') return json(calls);
+  if (url.pathname === '/__settings-read') return json(heldSettingsRead);
   if (url.pathname === '/fixture.js') {
     res.setHeader('Content-Type', 'text/javascript');
     return res.end(`
@@ -159,11 +171,39 @@ const server = http.createServer(async (req, res) => {
     await failed.evaluate(() => window.__initPromise);
     assert.equal(await failed.locator('#set-defaultEpSelect').inputValue(), 'ep1', 'HTTP-error JSON must not hydrate saved selection');
     assert.equal(await failed.locator('#set-defaultModelSelect').inputValue(), 'm0');
+    assert.equal(await failed.locator('#set-defaultChatMsg').textContent(), 'Could not load saved chat defaults. Displayed choices may differ from saved settings. Reload to verify.');
     await failed.locator('#set-defaultEpSelect').selectOption('ep2');
     await failed.waitForFunction(async () => (await (await fetch('/__calls')).json()).length === 4);
     assert.deepEqual((await failed.evaluate(async () => (await (await fetch('/__calls')).json())))[3], { default_endpoint_id: 'ep2', default_model: 'm2' });
     assert.deepEqual(errors, [], `primary-page errors: ${errors.join('\n')}`);
     await failed.close();
+
+    // The actual initializer's timer also aborts a body-stalled JSON read and shows a visible failure.
+    heldSettingsRead = null;
+    releaseInitialSettings = null;
+    const callsBeforeTimeout = calls.length;
+    const timeoutPage = await browser.newPage();
+    const timeoutErrors = [];
+    timeoutPage.on('pageerror', error => timeoutErrors.push(error.stack || error.message));
+    await timeoutPage.clock.install();
+    await timeoutPage.route('**/api/auth/settings', route => route.request().method() === 'GET'
+      ? route.continue({ url: `${route.request().url()}?hold=1&body=1` })
+      : route.continue());
+    await timeoutPage.goto(`http://localhost:${server.address().port}`);
+    await timeoutPage.waitForFunction(() => window.fixtureReady);
+    await timeoutPage.evaluate(() => window.__releaseEndpointInventory());
+    await timeoutPage.waitForFunction(async () => (await (await fetch('/__settings-read')).json())?.started === true);
+    assert.equal(heldSettingsRead.bodyHeld, true, 'fixture holds JSON after sending response headers');
+    await timeoutPage.clock.fastForward(15000);
+    await timeoutPage.locator('#set-defaultChatMsg').getByText('Could not load saved chat defaults. Displayed choices may differ from saved settings. Reload to verify.', { exact: true }).waitFor({ state: 'visible' });
+    await timeoutPage.evaluate(() => window.__initPromise);
+    const readState = await timeoutPage.evaluate(async () => (await (await fetch('/__settings-read')).json()));
+    assert.equal(readState.closed, true, 'AbortController closes the pending JSON response');
+    assert.equal(await timeoutPage.locator('#set-defaultChatMsg').textContent(), 'Could not load saved chat defaults. Displayed choices may differ from saved settings. Reload to verify.');
+    assert.equal(calls.length, callsBeforeTimeout, 'failed read does not POST settings');
+    assert.deepEqual(timeoutErrors, [], `timeout page errors: ${timeoutErrors.join('\n')}`);
+    await timeoutPage.close();
+    console.log('PASS: initial saved-default timeout and load failure are visible without a settings write');
     console.log('PASS: early endpoint/model choices survive hydration, persist, and survive refresh/recovery');
   } finally {
     await browser.close();

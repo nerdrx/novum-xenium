@@ -3294,6 +3294,218 @@ def test_false_unavailable_tool_claim_ignores_unselected_calendar_tool():
     ) == ""
 
 
+def test_false_unavailable_tool_claim_detects_tool_before_negation_and_name():
+    assert al._false_unavailable_tool_claim(
+        "The memory tool isn't available this turn.",
+        {"manage_memory", "ask_user"},
+    ) == "manage_memory"
+    assert al._false_unavailable_tool_claim(
+        "list_models isn't available this turn.",
+        {"list_models", "ask_user"},
+    ) == "list_models"
+    assert al._false_unavailable_tool_claim(
+        "The memory tool isn't available this turn.",
+        {"ask_user"},
+    ) == ""
+    assert al._false_unavailable_tool_claim(
+        "list_models is not the tool for this task.",
+        {"list_models"},
+    ) == ""
+    assert al._false_unavailable_tool_claim(
+        "read_file cannot edit files.",
+        {"read_file"},
+    ) == ""
+    assert al._false_unavailable_tool_claim(
+        "I cannot use read_file to edit files.",
+        {"read_file"},
+    ) == ""
+    assert al._false_unavailable_tool_claim(
+        "list_models is unavailable",
+        {"list_models"},
+    ) == "list_models"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"explicitly_denied_tools": {"manage_memory"}},
+        {"force_answer": True},
+        {"guide_only": True},
+        {"nudge_count": 2},
+    ],
+)
+def test_false_unavailable_recovery_respects_existing_bounds(overrides):
+    state = {
+        "explicitly_denied_tools": set(),
+        "force_answer": False,
+        "guide_only": False,
+        "nudge_count": 0,
+    }
+    state.update(overrides)
+    assert not al._false_unavailable_claim_should_nudge(
+        "manage_memory",
+        max_nudges=2,
+        **state,
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["false-claim", "clarification", "denied", "unselected"],
+)
+def test_ask_user_false_unavailable_claim_returns_paired_tool_error(monkeypatch, case):
+    import copy
+
+    import src.ai_interaction as ai_interaction
+    from src.ai_interaction import do_manage_memory
+    from src.agent_tools.interaction_tools import AskUserTool
+    from src.tool_policy import ToolPolicy
+    from tests.test_agent_rounds_exhausted import _native_call, _patch_common
+    from tests.runtime_evidence_helpers import server_authorized_executor
+
+    class SyntheticMemory:
+        def load(self, owner=None):
+            return [{
+                "id": "synthetic-memory-1",
+                "owner": owner,
+                "text": "synthetic memory marker",
+                "category": "fact",
+            }]
+
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set())
+    monkeypatch.setattr(ai_interaction, "_memory_manager", SyntheticMemory())
+    requests = []
+    request_snapshots = []
+    executed = []
+    ask = AskUserTool()
+    selected_tools = {"ask_user"}
+    if case != "unselected":
+        selected_tools.add("manage_memory")
+    question = (
+        "Which of the matching saved memories did you mean?"
+        if case == "clarification"
+        else "The memory tool isn't available this turn. Can you enable it?"
+    )
+
+    async def fake_execute(block, *args, **kwargs):
+        executed.append(block.tool_type)
+        if block.tool_type == "manage_memory":
+            if case == "denied":
+                return block.tool_type, {"error": "Access denied", "exit_code": 1}
+            return block.tool_type, await do_manage_memory(
+                block.content, owner="synthetic-owner",
+            )
+        if block.tool_type == "ask_user":
+            return await ask.execute(block.content, {})
+        return block.tool_type, {"error": "unexpected synthetic tool"}
+
+    async def fake_stream(_candidates, messages, **kwargs):
+        requests.append(messages)
+        request_snapshots.append(copy.deepcopy(messages))
+        if len(requests) == 1 and case != "unselected":
+            calls = [_native_call(
+                "manage_memory",
+                {"action": "search", "text": "synthetic memory marker"},
+                "memory-call-1",
+            )]
+        elif len(requests) == (2 if case != "unselected" else 1):
+            calls = [_native_call(
+                "ask_user",
+                {
+                    "question": question,
+                    "options": ["A", "B"],
+                },
+                "ask-call-1",
+            )]
+        elif case == "false-claim" and len(requests) == 3:
+            calls = [_native_call(
+                "manage_memory",
+                {"action": "search", "text": "synthetic memory marker"},
+                "memory-call-2",
+            )]
+        else:
+            yield _delta_chunk("Continue using the available memory tool.")
+            yield "data: [DONE]\n\n"
+            return
+        yield "data: " + json.dumps({"type": "tool_calls", "calls": calls}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(
+        al, "execute_tool_block", server_authorized_executor(fake_execute),
+    )
+    monkeypatch.setattr(al, "stream_llm_with_fallback", fake_stream)
+    events = _events(_collect(al.stream_agent_loop(
+        "http://synthetic.invalid/v1",
+        "synthetic-model",
+        [{
+            "role": "user",
+            "content": (
+                "Search saved memories for synthetic marker."
+                if case != "unselected"
+                else "Help me with this synthetic issue."
+            ),
+        }],
+        max_rounds=4,
+        relevant_tools=selected_tools,
+        approval_mode="full",
+        tool_policy=ToolPolicy(),
+    )))
+
+    ask_result = next(
+        event for event in events
+        if event.get("type") == "tool_output" and event.get("tool") == "ask_user"
+    )
+    assert ask_result["call_id"] == "ask-call-1"
+    ask_cards = [event for event in events if event.get("type") == "ask_user"]
+    if case == "false-claim":
+        memory_result = next(
+            event for event in events
+            if event.get("type") == "tool_output" and event.get("tool") == "manage_memory"
+        )
+        assert "Found 1 matching memories" in memory_result["output"]
+        assert executed == ["manage_memory", "ask_user", "manage_memory"]
+        memory_results = [
+            event for event in events
+            if event.get("type") == "tool_output" and event.get("tool") == "manage_memory"
+        ]
+        assert len(memory_results) == 2
+        assert all("Found 1 matching memories" in event["output"] for event in memory_results)
+        assert ask_result["exit_code"] == 1
+        assert "selected and permitted" in ask_result["output"]
+        assert not ask_cards
+        assert len(requests) == 4
+        retry_messages = request_snapshots[2]
+        paired_assistant = next(
+            message for message in retry_messages
+            if message.get("role") == "assistant"
+            and any(
+                call.get("id") == "ask-call-1"
+                for call in message.get("tool_calls", [])
+            )
+        )
+        paired_result = next(
+            message for message in retry_messages
+            if message.get("role") == "tool"
+            and message.get("tool_call_id") == "ask-call-1"
+        )
+        assert paired_assistant
+        assert "selected and permitted" in paired_result.get("content", "")
+    elif case == "denied":
+        assert executed == ["manage_memory", "ask_user"]
+        assert any(event.get("output") == "Access denied" for event in events)
+        assert ask_cards
+        assert "isn't available" in ask_cards[0]["data"]["question"]
+    elif case == "unselected":
+        assert executed == ["ask_user"]
+        assert ask_cards
+        assert "isn't available" in ask_cards[0]["data"]["question"]
+    else:
+        assert executed == ["manage_memory", "ask_user"]
+        assert ask_cards
+        assert "matching saved memories" in ask_cards[0]["data"]["question"]
+
+
 def _run_unavailable_tool_feedback_case(
     monkeypatch, *, first_tool=None, tool_error=None, explanation,
     explicit_followup_tool=None,

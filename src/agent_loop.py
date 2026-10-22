@@ -20639,12 +20639,50 @@ def _false_unavailable_tool_claim(text: str, selected_tools: Optional[Set[str]])
     if not text or not selected_tools:
         return ""
     plain = _strip_think_blocks(strip_tool_blocks(str(text))).lower()
-    if not re.search(
+    unavailable = (
         r"\b(?:don'?t|do not|can'?t|cannot|unable|no)\b.{0,90}"
         r"\b(?:tool|tools|access|available|loaded|enabled|integration)\b",
-        plain,
-        re.I | re.S,
-    ):
+        r"\b(?:tool|tools|access|integration)\b.{0,90}"
+        r"\b(?:is\s+not|are\s+not|isn't|aren't)\s+"
+        r"(?:available|enabled|loaded|accessible|usable)\b",
+        r"\b(?:tool|tools|access|integration)\b.{0,90}"
+        r"\b(?:unavailable|disabled|not\s+available|not\s+enabled|"
+        r"not\s+loaded|not\s+accessible)\b",
+    )
+    has_unavailable_claim = any(
+        re.search(pattern, plain, re.I | re.S) for pattern in unavailable
+    )
+    selected = set(selected_tools or set())
+    # Models also name the canonical function directly (for example,
+    # "list_models isn't available") instead of saying "the tool".
+    for tool_name in sorted(selected):
+        if not isinstance(tool_name, str) or not tool_name:
+            continue
+        tool_pattern = re.escape(tool_name).replace("_", r"[_\s-]+")
+        if re.search(
+            rf"\b{tool_pattern}\b.{{0,90}}\b(?:is\s+not|are\s+not|isn't|aren't)\s+"
+            rf"(?:available|enabled|loaded|accessible|usable)\b",
+            plain,
+            re.I | re.S,
+        ) or re.search(
+            rf"\b{tool_pattern}\b.{{0,90}}\b(?:unavailable|disabled|not\s+available|"
+            rf"not\s+enabled|not\s+loaded|not\s+accessible)\b",
+            plain,
+            re.I | re.S,
+        ) or re.search(
+            rf"\b(?:unavailable|disabled|not\s+available|not\s+enabled|"
+            rf"not\s+loaded|not\s+accessible)\b.{{0,90}}\b{tool_pattern}\b",
+            plain,
+            re.I | re.S,
+        ) or re.search(
+            rf"\b(?:don't\s+have\s+access\s+to|do\s+not\s+have\s+access\s+to|"
+            rf"can't\s+access|cannot\s+access|unable\s+to\s+access)"
+            rf".{{0,90}}\b{tool_pattern}\b",
+            plain,
+            re.I | re.S,
+        ):
+            return tool_name
+    if not has_unavailable_claim:
         return ""
     checks = (
         ("manage_calendar", r"\b(?:calendar|event|meeting|appointment|schedule|reminder)\b"),
@@ -20656,20 +20694,39 @@ def _false_unavailable_tool_claim(text: str, selected_tools: Optional[Set[str]])
         ("manage_documents", r"\b(?:document|documents|doc|library)\b"),
         ("manage_memory", r"\b(?:memory|memories|remembered)\b"),
     )
-    selected = set(selected_tools or set())
     for tool, domain_re in checks:
         if tool in selected and re.search(domain_re, plain, re.I):
             return tool
-    if selected & {
+    email_tools = selected & {
         "list_emails",
         "read_email",
         "search_emails",
         "mcp__email__list_emails",
         "mcp__email__read_email",
         "mcp__email__search_emails",
-    } and re.search(r"\b(?:email|emails|mail|inbox|message|messages)\b", plain, re.I):
-        return "email"
+    }
+    if email_tools and re.search(r"\b(?:email|emails|mail|inbox|message|messages)\b", plain, re.I):
+        return sorted(email_tools)[0]
     return ""
+
+
+def _false_unavailable_claim_should_nudge(
+    tool_name: str,
+    *,
+    explicitly_denied_tools: Set[str],
+    force_answer: bool,
+    guide_only: bool,
+    nudge_count: int,
+    max_nudges: int,
+) -> bool:
+    """Keep false-availability recovery inside its existing bounded gates."""
+    return bool(
+        tool_name
+        and tool_name not in explicitly_denied_tools
+        and not force_answer
+        and not guide_only
+        and nudge_count < max_nudges
+    )
 
 
 def _read_only_shell_command(content: str) -> bool:
@@ -33678,10 +33735,14 @@ async def stream_agent_loop(
                 continue
             if (
                 _false_missing_tool
-                and _false_missing_tool not in explicitly_denied_tools
-                and not _force_answer
-                and _intent_nudge_count < _MAX_INTENT_NUDGES
-                and not guide_only
+                and _false_unavailable_claim_should_nudge(
+                    _false_missing_tool,
+                    explicitly_denied_tools=explicitly_denied_tools,
+                    force_answer=_force_answer,
+                    guide_only=guide_only,
+                    nudge_count=_intent_nudge_count,
+                    max_nudges=_MAX_INTENT_NUDGES,
+                )
             ):
                 _intent_nudge_count += 1
                 if round_texts:
@@ -36908,6 +36969,63 @@ async def stream_agent_loop(
                             await _tool_task
                         except (asyncio.CancelledError, Exception):
                             pass
+
+            _false_ask_claim_tool = ""
+            if (
+                block.tool_type == "ask_user"
+                and isinstance(result, dict)
+                and isinstance(result.get("ask_user"), dict)
+                and _intent_nudge_count < _MAX_INTENT_NUDGES
+                and not guide_only
+                and not _force_answer
+            ):
+                _false_ask_claim_tool = _false_unavailable_tool_claim(
+                    str(result["ask_user"].get("question") or ""),
+                    set(_relevant_tools or ()),
+                )
+                _false_ask_policy_names = tool_policy_names(
+                    _false_ask_claim_tool,
+                ) if _false_ask_claim_tool else frozenset()
+                if _false_unavailable_claim_should_nudge(
+                    _false_ask_claim_tool,
+                    explicitly_denied_tools=explicitly_denied_tools,
+                    force_answer=_force_answer,
+                    guide_only=guide_only,
+                    nudge_count=_intent_nudge_count,
+                    max_nudges=_MAX_INTENT_NUDGES,
+                ) and (
+                    _false_ask_claim_tool not in _hard_blocked_tools
+                    and not (
+                        disabled_tools
+                        and not _false_ask_policy_names.isdisjoint(disabled_tools)
+                    )
+                    and not (
+                        tool_policy
+                        and any(
+                            tool_policy.blocks(policy_name)
+                            for policy_name in _false_ask_policy_names
+                        )
+                    )
+                    and run_security.decision_for(
+                        _false_ask_claim_tool, "", workspace=workspace,
+                    ).allowed
+                ):
+                    _intent_nudge_count += 1
+                    result = {
+                        "error": (
+                            f"The question says `{_false_ask_claim_tool}` is unavailable, "
+                            "but that tool is selected and permitted in this turn. Continue "
+                            "without asking this availability question. Use the tool if it "
+                            "is needed; report any actual tool error instead."
+                        ),
+                        "exit_code": 1,
+                    }
+                    logger.info(
+                        "[agent] false-unavailable ask_user for selected tool %s; "
+                        "returning bounded tool feedback round %s",
+                        _false_ask_claim_tool,
+                        round_num,
+                    )
 
             if isinstance(result, dict) and result.get("error") == "Access denied":
                 explicitly_denied_tools.add(block.tool_type)

@@ -60,6 +60,17 @@ default. Older templates without an override use the model default. The pinned
 and [preset persistence](https://github.com/nerdrx/novum-xenium/blob/a05e88ec77cd9d0ed88c5fe5fa5d3ffb44adb2aa/src/preset_manager.py)
 describe these save boundaries.
 
+## Slash-command completion
+
+Type `/` in the composer to see available commands. When the highlighted command
+is still an incomplete prefix, **Enter** accepts that completion without sending.
+Once the full command is entered, **Enter** follows the normal submission path.
+**Tab** accepts a completion, the arrow keys change the selection, and **Escape**
+closes the suggestions. Reload an already-open page to load updated keyboard
+handling.
+
+See the pinned [slash-completion implementation](https://github.com/nerdrx/novum-xenium/blob/6b653e92facae8ec9190545ed182f89946e5b959/static/js/slashAutocomplete.js).
+
 ## Unsent drafts
 
 Ordinary composer text is saved separately from sent chat history and restored

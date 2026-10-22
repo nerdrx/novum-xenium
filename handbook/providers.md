@@ -72,6 +72,8 @@ The README documents Ollama and OpenAI-compatible provider endpoints. In Docker,
 
 On Linux, the desktop manager also provides a separate llama.cpp-based text provider. Regular mode uses llama-server. Experimental zVram mode manages eligible Vulkan allocations for supported Linux GPU configurations. It may page data into system memory, which can be slow. This is a bounded memory technique, not extra physical VRAM or a guarantee that any model will fit. The provider uses a separate server; it does not convert a running Ollama process into a zVram-managed process.
 
+The local text provider also lets you unload an idle model after 1–1,440 minutes; the default is 30 minutes. Changing this setting while the provider is running uses the existing apply/restart flow. It is separate from the Image Engine's idle setting.
+
 The desktop text provider, Cookbook image models, and chat provider selection are different controls. Downloaded model files may be reused only when they match the supported model format and discovery path.
 
 ## AMD and ROCm

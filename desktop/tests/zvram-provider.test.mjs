@@ -53,7 +53,7 @@ test('local provider offers Regular and zVram modes and registers after health',
       ram_guard_opt_out_supported: true,
       live_control_supported: true,
       models: [{ name: 'Test Model.gguf', path: '/models/test.gguf', size: 1234 }, { name: 'Second.gguf', path: '/models/second.gguf', size: 5678 }],
-      router: { name: 'nx-zvram-router', mode: 'regular', auto_start: true, min_available_mib: 4096, port: 8097, context: 32768, resident_mib: 18000, cold_mib: 22000, clean_cache_mib: 512, headroom_mib: 768, virtual_gib: 48, running: false, healthy: false, state: 'stopped', recovery_enabled: false, models: [] },
+      router: { name: 'nx-zvram-router', mode: 'regular', auto_start: true, sleep_idle_seconds: 1800, min_available_mib: 4096, port: 8097, context: 32768, resident_mib: 18000, cold_mib: 22000, clean_cache_mib: 512, headroom_mib: 768, virtual_gib: 48, running: false, healthy: false, state: 'stopped', recovery_enabled: false, models: [] },
       profiles: [{ name: 'legacy-model', alias: 'Qwen 9B', port: 8097, running: true, state: 'running', lastlog: '' }],
       memory: { ram_available_mib: 8000, swap_available_mib: 12000 }, gpu: [{ card: 'card1', vram_used_mib: 9000, vram_total_mib: 24000 }],
     };
@@ -87,10 +87,10 @@ test('local provider offers Regular and zVram modes and registers after health',
         const request = args.request;
         if (window.__failAction === request.action) { window.__failAction = ''; throw 'Fixture action failure'; }
         if (request.action === 'router_start') {
-          window.__zvram.router = { ...window.__zvram.router, name: 'nx-zvram-router', mode: request.mode, auto_start: request.auto_start, min_available_mib: request.min_available_mib, running: true, healthy: true, state: 'running', recovery_enabled: true, port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, resident_mib: request.resident_mib, cold_mib: request.cold_mib, clean_cache_mib: request.clean_cache_mib, headroom_mib: request.headroom_mib, virtual_gib: request.virtual_gib, models: [] };
+          window.__zvram.router = { ...window.__zvram.router, name: 'nx-zvram-router', mode: request.mode, auto_start: request.auto_start, sleep_idle_seconds: request.sleep_idle_seconds, min_available_mib: request.min_available_mib, running: true, healthy: true, state: 'running', recovery_enabled: true, port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, resident_mib: request.resident_mib, cold_mib: request.cold_mib, clean_cache_mib: request.clean_cache_mib, headroom_mib: request.headroom_mib, virtual_gib: request.virtual_gib, models: [] };
           if (window.__routerStartStatus) Object.assign(window.__zvram.router, window.__routerStartStatus);
         }
-        if (request.action === 'router_configure') window.__zvram.router = { ...window.__zvram.router, mode: request.mode, auto_start: request.auto_start, min_available_mib: request.min_available_mib, port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, ...Object.fromEntries(['resident_mib', 'cold_mib', 'clean_cache_mib', 'headroom_mib', 'virtual_gib'].filter(key => Number.isInteger(request[key])).map(key => [key, request[key]])) };
+        if (request.action === 'router_configure') window.__zvram.router = { ...window.__zvram.router, mode: request.mode, auto_start: request.auto_start, sleep_idle_seconds: request.sleep_idle_seconds, min_available_mib: request.min_available_mib, port: request.port, context: request.context, compressed: request.compressed, ignore_swap_guard: request.ignore_swap_guard, ...Object.fromEntries(['resident_mib', 'cold_mib', 'clean_cache_mib', 'headroom_mib', 'virtual_gib'].filter(key => Number.isInteger(request[key])).map(key => [key, request[key]])) };
         if (request.action === 'router_register') window.__zvram.router.registered = true;
         if (request.action === 'router_stop') window.__zvram.router = { ...window.__zvram.router, running: false, healthy: false, state: 'stopped', recovery_enabled: false, models: [] };
         if (request.action === 'stop') window.__zvram.profiles = window.__zvram.profiles.map(profile => profile.name === request.profile ? { ...profile, running: false, state: 'stopped' } : profile);
@@ -102,6 +102,21 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.waitForFunction(() => window.__calls.some(call => call.command === 'zvram_status'));
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.locator('#zvram-sleep-idle-minutes').inputValue(), '30', 'default local-model idle timeout is 30 minutes');
+  assert.equal(await page.locator('#zvram-sleep-idle-minutes').isVisible(), true, 'local-model timeout is outside Advanced settings');
+  await page.locator('#zvram-advanced > summary').click();
+  await page.evaluate(() => { window.__zvram.router = { ...window.__zvram.router, sleep_idle_seconds: 2700 }; });
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.locator('#zvram-sleep-idle-minutes').inputValue(), '45', 'saved timeout is displayed in minutes');
+  await page.locator('#zvram-sleep-idle-minutes').fill('1441');
+  const configCallsBeforeInvalidTimeout = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_configure').length);
+  await page.locator('#zvram-apply').click();
+  await page.waitForFunction(() => document.getElementById('zvram-error').textContent.includes('1 to 1440 minutes'));
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_configure').length), configCallsBeforeInvalidTimeout,
+    'out-of-range timeout never reaches the native host');
+  await page.locator('#zvram-sleep-idle-minutes').fill('45');
+  await page.locator('#zvram-advanced > summary').click();
   await page.waitForFunction(() => document.getElementById('image-engine-status').textContent.includes('stopped'));
   assert.match(await page.locator('#image-engine-models').textContent(), /SD CPP/);
   assert.match(await page.locator('#image-engine-pending').textContent(), /FLUX: missing components/);
@@ -165,6 +180,10 @@ test('local provider offers Regular and zVram modes and registers after health',
   await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
   assert.equal(await page.locator('#zvram-port').inputValue(), '8120', 'manual refresh preserves dirty port');
   assert.equal(await page.locator('#zvram-context').inputValue(), '8192', 'manual refresh preserves dirty context');
+  await page.locator('#zvram-sleep-idle-minutes').fill('42');
+  await page.locator('#zvram-refresh').click();
+  await page.waitForFunction(() => !document.getElementById('zvram-refresh').disabled);
+  assert.equal(await page.locator('#zvram-sleep-idle-minutes').inputValue(), '42', 'manual refresh preserves a dirty timeout setting');
   assert.equal(await page.locator('#zvram-mode-zvram').isChecked(), true, 'manual refresh preserves dirty mode');
   assert.equal(await page.locator('#zvram-auto-start').isChecked(), false, 'manual refresh preserves dirty auto-start setting');
   assert.equal(await page.locator('#zvram-compressed').isChecked(), false, 'manual refresh preserves dirty compression setting');
@@ -239,6 +258,7 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.equal(await page.locator('#zvram-live-control').isDisabled(), true);
   assert.equal(await page.locator('#zvram-ignore-swap-guard').isDisabled(), true);
   await page.locator('#zvram-auto-start').uncheck();
+  await page.locator('#zvram-sleep-idle-minutes').fill('20');
   await page.locator('#zvram-apply').click();
   await page.waitForFunction(() => document.getElementById('zvram-status').textContent.includes('Settings saved'));
   assert.equal(await page.locator('#zvram-router-state-value').textContent(), 'Provider stopped', 'applying while stopped does not start the provider');
@@ -247,6 +267,7 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.equal(savedRegular.min_available_mib, 4096, 'default regular-mode guard stays at 4 GiB');
   assert.equal(savedRegular.ignore_swap_guard, false, 'Regular mode never sends the swap-growth override');
   assert.equal(savedRegular.auto_start, false);
+  assert.equal(savedRegular.sleep_idle_seconds, 1200, 'whole minutes serialize to seconds');
   assert.equal(await page.evaluate(() => window.__zvram.router.running), false);
   await page.locator('#zvram-mode-zvram').check();
   assert.equal(await page.locator('#zvram-compressed').isEnabled(), true, 'zVram mode enables BP16 control');
@@ -295,12 +316,12 @@ test('local provider offers Regular and zVram modes and registers after health',
   const requests = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action').map(call => call.args.request));
   assert.deepEqual(requests.map(request => request.action), ['stop', 'router_stop', 'router_configure', 'router_configure', 'router_configure', 'router_configure', 'router_configure', 'router_start', 'router_configure', 'router_start', 'router_register', 'router_register']);
   assert.deepEqual(requests.find(request => request.action === 'router_configure' && request.port === 8098), {
-    action: 'router_configure', mode: 'zvram', auto_start: true, port: 8098, context: 8192, compressed: true,
+    action: 'router_configure', mode: 'zvram', auto_start: true, sleep_idle_seconds: 1200, port: 8098, context: 8192, compressed: true,
     live_control: true, min_available_mib: 16384, ignore_swap_guard: false, resident_mib: 12000, cold_mib: 22000,
     clean_cache_mib: 512, headroom_mib: 768, virtual_gib: 48,
   });
   assert.deepEqual(requests.find(request => request.action === 'router_start'), {
-    action: 'router_start', mode: 'zvram', auto_start: true, port: 8098, context: 8192, compressed: true,
+    action: 'router_start', mode: 'zvram', auto_start: true, sleep_idle_seconds: 1200, port: 8098, context: 8192, compressed: true,
     live_control: true, min_available_mib: 16384, ignore_swap_guard: false, resident_mib: 12000, cold_mib: 22000,
     clean_cache_mib: 512, headroom_mib: 768, virtual_gib: 48,
   });
@@ -308,6 +329,13 @@ test('local provider offers Regular and zVram modes and registers after health',
   assert.equal(await page.locator('#zvram-router-models').textContent(), 'No model loaded');
   assert.equal(await page.locator('#zvram-start').isDisabled(), true, 'running router cannot be started twice');
   assert.equal(await page.locator('#zvram-stop').isEnabled(), true);
+  const registrationsBeforeTimeoutApply = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_register').length);
+  await page.locator('#zvram-sleep-idle-minutes').fill('25');
+  await page.locator('#zvram-apply').click();
+  await page.waitForFunction(() => document.getElementById('zvram-status').textContent.includes('Settings applied'));
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_configure').at(-1).args.request.sleep_idle_seconds), 1500);
+  assert.equal(await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_action' && call.args.request.action === 'router_register').length), registrationsBeforeTimeoutApply + 1,
+    'applying a timeout to an owned running provider uses the existing readiness and registration flow');
   await page.evaluate(() => { window.__holdNextStatusPoll = true; });
   await page.waitForFunction(() => typeof window.__rejectHeldStatusPoll === 'function');
   const statusCallsAtHeldPoll = await page.evaluate(() => window.__calls.filter(call => call.command === 'zvram_status').length);

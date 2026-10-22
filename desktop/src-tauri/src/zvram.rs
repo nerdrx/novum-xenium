@@ -225,6 +225,8 @@ pub(super) struct ZvramRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     context: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    sleep_idle_seconds: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     compressed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resident_mib: Option<u32>,
@@ -817,6 +819,7 @@ impl ZvramRequest {
             alias: None,
             port: None,
             context: None,
+            sleep_idle_seconds: None,
             compressed: None,
             resident_mib: None,
             cold_mib: None,

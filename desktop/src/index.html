@@ -116,6 +116,8 @@
               <label><input type="radio" name="zvram-mode" value="zvram" id="zvram-mode-zvram"><span><strong>zVram</strong><small>Memory paging</small></span></label>
             </div>
             <label class="zvram-optin"><input id="zvram-auto-start" type="checkbox" checked><span>Start provider when Novum opens</span></label>
+            <label class="field"><span>Unload idle models after (minutes)</span><input id="zvram-sleep-idle-minutes" type="number" min="1" max="1440" step="1" value="30" required aria-describedby="zvram-sleep-idle-note"></label>
+            <p class="zvram-budget-note" id="zvram-sleep-idle-note">Applies to local text models served by this provider. Image models have a separate setting.</p>
             <p id="zvram-error" class="zvram-error" role="alert" hidden></p>
             <p id="zvram-status" class="zvram-status" role="status" aria-live="polite">Checking your local provider…</p>
             <div class="zvram-hardware" id="zvram-hardware" hidden>

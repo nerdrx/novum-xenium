@@ -11,7 +11,7 @@ const elements = {
   routerState: $('#zvram-router-state-value'), routerModels: $('#zvram-router-models'),
   routerLog: $('#zvram-router-log'), modelList: $('#zvram-model-list'), budgetDetails: $('#zvram-budget-details'),
   apply: $('#zvram-apply'), modeRegular: $('#zvram-mode-regular'), modeZvram: $('#zvram-mode-zvram'),
-  autoStart: $('#zvram-auto-start'),
+  autoStart: $('#zvram-auto-start'), sleepIdleMinutes: $('#zvram-sleep-idle-minutes'),
 };
 const budgetInputs = ['resident', 'cold', 'clean-cache', 'headroom', 'virtual'].map(id => $(`#zvram-${id}`));
 let invoke = null;
@@ -52,6 +52,7 @@ function updateControls() {
   elements.modeRegular.disabled = !usable;
   elements.modeZvram.disabled = !usable;
   elements.autoStart.disabled = !invoke || busy;
+  elements.sleepIdleMinutes.disabled = !invoke || busy;
   elements.connect.disabled = !usable || !routerSupported || router.healthy !== true;
   elements.stop.disabled = !usable || !active;
   elements.port.disabled = !usable || active;
@@ -129,6 +130,11 @@ function renderStatus(result, { preserveConfiguration = false } = {}) {
     }
     elements.modeRegular.checked = router.mode !== 'zvram';
     elements.modeZvram.checked = router.mode === 'zvram';
+    if (Number.isInteger(router.sleep_idle_seconds) && router.sleep_idle_seconds >= 60 && router.sleep_idle_seconds <= 86400) {
+      elements.sleepIdleMinutes.value = String(Math.ceil(router.sleep_idle_seconds / 60));
+    } else {
+      elements.sleepIdleMinutes.value = '30';
+    }
     elements.ignoreSwapGuard.checked = ignoreSwapGuardSupported && (
       router.mode === 'zvram' && typeof router.ignore_swap_guard === 'boolean'
         ? router.ignore_swap_guard : true
@@ -243,12 +249,16 @@ async function refreshStatus() {
 function buildRouterRequest() {
   const port = Number(elements.port.value);
   const context = Number(elements.context.value);
+  const sleepIdleMinutes = Number(elements.sleepIdleMinutes.value);
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isInteger(context) || context < 256) {
     throw new Error('Enter a valid port and context size.');
   }
+  if (!Number.isInteger(sleepIdleMinutes) || sleepIdleMinutes < 1 || sleepIdleMinutes > 1440) {
+    throw new Error('Idle model unload time must be a whole number from 1 to 1440 minutes.');
+  }
   const request = {
     action: 'router_start', mode: elements.modeZvram.checked ? 'zvram' : 'regular',
-    auto_start: elements.autoStart.checked, port, context,
+    auto_start: elements.autoStart.checked, sleep_idle_seconds: sleepIdleMinutes * 60, port, context,
     compressed: elements.modeZvram.checked && elements.compressed.checked,
     live_control: elements.modeZvram.checked && (elements.compressed.checked || elements.liveControl.checked),
     min_available_mib: elements.keepaliveLowRam.checked ? 0 : elements.modeZvram.checked && elements.compressed.checked ? 16384 : 4096,
@@ -318,7 +328,7 @@ elements.modeZvram.addEventListener('change', () => {
   configurationDirty = true;
   updateControls();
 });
-for (const input of [elements.modeRegular, elements.autoStart, elements.port, elements.context, elements.compressed, elements.keepaliveLowRam, elements.ignoreSwapGuard, ...budgetInputs]) {
+for (const input of [elements.modeRegular, elements.autoStart, elements.sleepIdleMinutes, elements.port, elements.context, elements.compressed, elements.keepaliveLowRam, elements.ignoreSwapGuard, ...budgetInputs]) {
   const markConfigurationDirty = () => { configurationDirty = true; updateControls(); };
   input.addEventListener('input', markConfigurationDirty);
   input.addEventListener('change', markConfigurationDirty);

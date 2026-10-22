@@ -29,7 +29,7 @@ _ALLOWED_KEYS = {
     "resident_mib", "cold_mib", "clean_cache_mib", "headroom_mib", "virtual_gib",
     "ignore_swap_guard", "min_available_mib",
     "live_control",
-    "mode", "auto_start", "enable_existing",
+    "mode", "auto_start", "enable_existing", "sleep_idle_seconds",
 }
 _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _ALIAS_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,128}\Z")
@@ -412,6 +412,7 @@ def _parameters(request, model_helper, backend_checkout, ignore_swap_guard_defau
         "ignore_swap_guard": ignore_swap_guard, **values,
         "live_control": live_control,
         "mode": mode,
+        "sleep_idle_seconds": _integer(request, "sleep_idle_seconds", 1800, 60, 86400),
     }
 
 
@@ -504,7 +505,8 @@ def _build_router_profile(model_helper, manager, params, models, backend_checkou
     if '--mmproj' in command[start:]:
         index = command.index('--mmproj', start)
         del command[index:index + 2]
-    command += ['--models-preset', str(_router_preset_path(manager)), '--models-max', '1', '--models-autoload']
+    command += ['--models-preset', str(_router_preset_path(manager)), '--models-max', '1', '--models-autoload',
+                '--sleep-idle-seconds', str(params.get('sleep_idle_seconds', 1800))]
     _write_router_preset(manager, models, backend_checkout)
     profile['env']['LLAMA_CACHE'] = str(_router_cache_path(manager))
     return profile
@@ -841,7 +843,8 @@ def _router_inventory(params):
 def _router_status(model_helper, manager_helper, manager, params_state):
     params = params_state.get(_ROUTER_NAME, {})
     result = {'name': _ROUTER_NAME, 'running': False, 'healthy': False, 'state': 'stopped',
-              'port': params.get('port', 8097), 'context': params.get('context', 32768), 'models': []}
+              'port': params.get('port', 8097), 'context': params.get('context', 32768), 'models': [],
+              'sleep_idle_seconds': params.get('sleep_idle_seconds', 1800)}
     budgets = {key: params.get(key) for key in
                ('resident_mib', 'cold_mib', 'clean_cache_mib', 'headroom_mib', 'virtual_gib')}
     if all(type(value) is int and 1 <= value <= 1048576 for value in budgets.values()) and \

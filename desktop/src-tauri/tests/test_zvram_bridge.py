@@ -357,6 +357,8 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('--alias', argv)
         self.assertEqual(argv[argv.index('--models-max') + 1], '1')
         self.assertIn('--models-autoload', argv)
+        self.assertEqual(argv[argv.index('--sleep-idle-seconds') + 1], '1800')
+        self.assertEqual(result['router']['sleep_idle_seconds'], 1800)
         self.assertTrue(stored['live_control'])
         self.assertNotIn('--no-live-control', argv)
         self.assertTrue(stored['ignore_swap_guard'])
@@ -365,6 +367,19 @@ class BridgeTests(unittest.TestCase):
         preset = self.home / 'router-models.ini'
         self.assertEqual(preset.stat().st_mode & 0o777, 0o600)
         self.assertIn(f'[nx-model-0]\nalias = tiny\nmodel = {self.model}\nload-on-startup = false', preset.read_text())
+
+    def test_router_idle_unload_timer_is_saved_and_validated_before_start(self):
+        result = self.start_router(sleep_idle_seconds=2700, auto_start=False)
+        self.assertEqual(result['router']['sleep_idle_seconds'], 2700)
+        self.assertFalse(result['router']['auto_start'])
+        stored = json.loads(self.manager.profiles_path.read_text())['nx-zvram-router']
+        argv = stored['command']
+        self.assertEqual(argv[argv.index('--sleep-idle-seconds') + 1], '2700')
+        self.manager.starts.clear()
+        for value in (False, '1800', 0, 59, 86401):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'sleep_idle_seconds'):
+                self.start_router(sleep_idle_seconds=value)
+        self.assertEqual(self.manager.starts, [])
 
     def test_ram_guard_opt_out_rejects_older_manager_before_start(self):
         with mock.patch.object(self.manager_helper, 'RAM_GUARD_CAN_DISABLE', False):

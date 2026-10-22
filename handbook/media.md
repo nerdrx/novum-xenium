@@ -10,6 +10,8 @@ On Linux, the documented Vulkan route needs a host driver, Docker access to `/de
 
 To use a local image model, download a supported model in Cookbook, wait for the completed download to appear, then select it under **Settings → AI → Image Generation**. Use a small request first. If loading fails, check the selected engine, model support, and available host/container resources.
 
+Image Generation controls stay unavailable while saved settings load. If loading fails, Novum shows reload guidance and keeps the controls unavailable, so a toggle cannot overwrite the saved model or quality with defaults. Reload after the connection recovers. The initial inventory and saved-settings reads each stop waiting after 15 seconds, including their response bodies; these sequential reads can wait up to 30 seconds together. See [image and speech settings loading](providers.md#image-and-speech-settings-loading).
+
 ## Hosted image providers
 
 Image providers are configured separately from chat providers. Some workflows can use an existing host login through the optional Codex image bridge, which needs its own setup. It is not installed or enabled merely by using a chat model. See the [Codex image bridge instructions](https://github.com/nerdrx/novum-xenium/blob/main/docs/codex-image-bridge.md).
@@ -60,8 +62,7 @@ on the setting, and choose **Browser (built-in)**, **Local model**, or a
 configured API endpoint. Speech input is off by default, and changing these
 instance settings requires administrator access. Only a saved boolean `true`
 enables speech input; missing or malformed values act as off without rewriting the
-saved setting. If saved settings cannot be loaded, the controls stay unavailable;
-reload the app and try again. The speech
+saved setting. The initial endpoint-inventory and saved-settings reads each stop waiting after 15 seconds, including a stalled response body. These requests run sequentially. If saved settings cannot be loaded, the controls stay unavailable with an error; reload the app after the connection recovers. These checks do not request microphone access or run transcription. The speech
 service treats an empty or non-string saved provider as disabled without
 rewriting that stored setting. The browser provider uses the browser's Web Speech
 API, whose availability and behavior depend on the browser. A Local model status

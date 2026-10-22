@@ -16,7 +16,7 @@ Do not paste API keys into chat or public logs. Hosted providers receive request
 
 ## Model choices during endpoint refresh
 
-Each time you enter Settings → AI, Novum refreshes the endpoint inventory. This refresh stops waiting after 15 seconds, including a stalled response body. If it fails or returns a non-array response, it leaves already displayed endpoint and model selections unchanged. This does not confirm provider health, and Novum does not retry automatically. A valid empty inventory clears the selectors. After the service recovers, leave and re-enter AI to refresh the inventory. Initial endpoint-inventory reads for Default Chat, Utility, Deep Research, and Vision’s fallback options also stop waiting after 15 seconds. Other panel requests, including the separate Image and Speech loaders, have their own loading behavior; this does not bound all settings loading.
+Each time you enter Settings → AI, Novum refreshes the endpoint inventory. This refresh stops waiting after 15 seconds, including a stalled response body. If it fails or returns a non-array response, it leaves already displayed endpoint and model selections unchanged. This does not confirm provider health, and Novum does not retry automatically. A valid empty inventory clears the selectors. After the service recovers, leave and re-enter AI to refresh the inventory. Initial endpoint-inventory reads for Default Chat, Utility, Deep Research, and Vision’s fallback options also stop waiting after 15 seconds. Image Generation and Speech to Text use separate per-request loading deadlines described below; this does not bound all settings loading.
 
 During initial loading, Utility, Vision, Deep Research, and Research Search keep fields you have edited instead of replacing them with a late settings response. Their saves send only the changed setting and any dependent model or effort reset. Failed or malformed initial settings reads show a panel-local warning and leave the controls available for editing. Existing save feedback takes precedence over a late load error. Research Search also displays its own save status.
 
@@ -27,6 +27,16 @@ If an initial inventory request fails, leave and re-enter AI after the service r
 A save that receives no response stops waiting after 15 seconds; Novum does not retry it automatically. Check the save message: keeping an edit visible does not confirm it reached the server. A failed request may still have been saved; reload Novum and check Settings before retrying.
 
 See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/61b537be1610009f6b90033f4be9d2f2c253495a/static/js/settings.js).
+
+## Image and speech settings loading
+
+Image Generation and Speech to Text keep their controls unavailable until saved settings load successfully. Each panel first reads the endpoint inventory, then its saved settings. Each request has its own 15-second deadline, including a stalled response body; together, the two reads can wait up to 30 seconds.
+
+If the optional inventory read fails but saved settings load, the saved choice remains available. This does not confirm provider health. If the saved-settings read fails, returns malformed JSON or a non-object settings response, or times out, Novum keeps the controls unavailable and displays reload guidance. Image settings cannot save guessed model or quality defaults in that state.
+
+After the connection recovers, reload Novum to retry these initial reads. Leaving and re-entering AI refreshes the inventory but does not repeat a failed saved-settings read. There is no automatic retry, provider restart, microphone request, image generation, or transcription from these loading checks.
+
+See the pinned [image settings loader](https://github.com/nerdrx/novum-xenium/blob/ee919f549335be7950371591dc0fdc783a44f239/static/js/settings/imageModels.js) and [speech settings loader](https://github.com/nerdrx/novum-xenium/blob/ee919f549335be7950371591dc0fdc783a44f239/static/js/settings/speech.js).
 
 ## Connect an account with sign-in
 

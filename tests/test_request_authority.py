@@ -126,7 +126,7 @@ def test_untrusted_quoted_download_text_cannot_add_download_authority():
 
 def test_unknown_intent_has_no_generic_execution_floor():
     grant = create_request_authority("Please solve this")
-    assert {g.tool for g in grant.grants} == {"ask_user", "update_plan"}
+    assert {g.tool for g in grant.grants} == {"ask_user", "update_plan", "read_handbook"}
 
 
 @pytest.mark.parametrize("metadata", [

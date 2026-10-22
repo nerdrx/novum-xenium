@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # any turn. Specialist tools (documents, email, cookbook/model serving,
 # settings, etc.) are still injected by retrieval or keyword intent.
 ALWAYS_AVAILABLE = frozenset({
+    "read_handbook",
     # Let the model ask for another capability when initial retrieval misses.
     "search_tools",
     # Core execution, inspection, and external lookup capabilities. These are
@@ -106,6 +107,7 @@ COLLECTION_NAME = "odysseus_tool_index"
 # Each tool gets a searchable description that helps retrieval.
 # These are richer than the system prompt one-liners — they're for embedding.
 BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
+    "read_handbook": "Search and read the bundled Novum Xenium handbook offline. Troubleshoot startup, loading, local providers, models, tools, permissions, tasks, media, and settings; get page IDs and public citation URLs. Read-only; no workspace or network needed.",
     "native_preview": "Render and inspect a real workspace-local Electron desktop app under private Xvfb. Optionally run an existing project test module and collect screenshots, DOM/style measurements, and renderer diagnostics. Requires the active Bash-authorized workspace; unavailable when a separate executor is configured. Use for native desktop UI verification, not static mockups.",
     "search_tools": "Search the available tool catalog by capability when the currently selected tools do not cover the requested task. Discovery is read-only; the server filters disabled, unavailable, owner-restricted, and plan-mode tools before exposing schemas on the next model turn.",
     "bash": "Run shell commands on the server. Install packages, git operations, builds, system info, process management. Prefer a dedicated tool whenever one fits the job (file read/write/edit, search, listing); use bash only for what no dedicated tool covers. Do not use for web lookup/search; use web_search or web_fetch when web tools are available.",

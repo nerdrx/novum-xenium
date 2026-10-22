@@ -27,6 +27,7 @@ from .coding_tools import TodoWriteTool
 from .document_tools import CreateDocumentTool, UpdateDocumentTool, EditDocumentTool, SuggestDocumentTool, ManageDocumentTool
 from .interaction_tools import AskUserTool, UpdatePlanTool
 from .context_tools import ContextSearchTool
+from .handbook_tools import ReadHandbookTool
 from .model_interaction_tools import ChatWithModelTool, AskTeacherTool, ListModelsTool
 from .bg_job_tools import ManageBgJobsTool
 from .session_tools import CreateSessionTool, ListSessionsTool, SendToSessionTool, ManageSessionTool
@@ -68,6 +69,7 @@ TOOL_HANDLERS = {
     "ask_user": AskUserTool().execute,
     "update_plan": UpdatePlanTool().execute,
     "context_search": ContextSearchTool().execute,
+    "read_handbook": ReadHandbookTool().execute,
     "chat_with_model": ChatWithModelTool().execute,
     "ask_teacher": AskTeacherTool().execute,
     "list_models": ListModelsTool().execute,

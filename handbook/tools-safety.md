@@ -2,6 +2,23 @@
 
 An agent can use tools to read files, browse pages, run commands, or call configured integrations. Available tools depend on your deployment, installed modules, per-tool settings, account permissions, and the selected mode. A tool being listed does not mean every action is allowed.
 
+## Ask the model to consult this handbook
+
+In **Agent** mode, ask “Check the handbook: why is my local provider unavailable?”
+or “Read the handbook before changing my settings.” The built-in `read_handbook`
+tool searches the bundled handbook and reads pages without internet access,
+workspace access, or administrator privileges. It also works in Plan mode.
+
+The model can search by keywords, list page IDs, read a matching page, and
+continue long pages using the returned line offset. Results include public
+handbook URLs for citations. Search snippets are only a starting point; the
+model should read the relevant page before giving detailed advice.
+
+The bundled copy follows the installed backend version. It describes expected
+behavior; it does not inspect your running services, prove a diagnosis, or
+authorize changes. Disabled tools and Chat/guide-only mode remain respected.
+Older backend images need an update to include the tool and handbook files.
+
 ## Choose the mode deliberately
 
 Use **Chat** for questions and answers. Choose **Agent** when you want the model to use enabled tools. The magnifying-glass **Search & fetch** toggle enables native web search/fetch in Agent mode and adds web results in Chat mode; Browser/MCP controls are separate. A URL in an Agent request can select enabled browser tools even when Search & fetch is off, so disable the browser tool itself when browser access must be blocked. Check the selected mode and tool toggles before sending.

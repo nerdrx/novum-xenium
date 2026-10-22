@@ -80,7 +80,7 @@ _register(
     ToolEffect.USER_INTERACTION,
 )
 _register(
-    {"context_search", "search_tools"},
+    {"context_search", "search_tools", "read_handbook"},
     ToolEffect.READ_CONTEXT,
     result_integrity=ResultIntegrity.EXTERNAL_UNTRUSTED,
 )

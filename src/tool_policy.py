@@ -465,6 +465,7 @@ def web_intent_may_enable_for_turn(
 
 
 _COMMON_TOOL_NAMES = {
+    "read_handbook",
     "context_search",
     "api_call",
     "app_api",

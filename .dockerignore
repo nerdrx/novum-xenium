@@ -76,3 +76,9 @@ desktop/
 
 # Packaged owner-scoped design skills are backend runtime data.
 !agent-skills/**
+
+# Public handbook is runtime reference data for the read-only help tool.
+!handbook/
+!handbook/**/*.md
+handbook/*.yml
+handbook/*.txt

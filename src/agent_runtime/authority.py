@@ -457,6 +457,9 @@ def create_request_authority(request_text, *, owner=None, session_id=None, works
         tools = tools & set(selected) if families else set(selected)
         if tools & {"web_search", "web_fetch"}:
             tools.add("private_browser")
+    # Bundled public help is a server-owned read-only capability, independent
+    # of private-data intent families. Disabled/guide-only policy still applies.
+    tools.add("read_handbook")
     operation = intent.required_read
     if operation is not None and canonical_tool(operation.tool) in {canonical_tool(n) for n in tools}:
         tools = {canonical_tool(operation.tool)}

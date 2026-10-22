@@ -55,7 +55,7 @@ Download the [latest release](https://github.com/nerdrx/novum-xenium/releases/la
 
 </details>
 
-The [handbook](https://nerdrx.github.io/novum-xenium/) covers providers, tools and permissions, backups, troubleshooting, and configuration.
+The [handbook](https://nerdrx.github.io/novum-xenium/) covers providers, tools and permissions, backups, troubleshooting, and configuration. In Agent mode, ask the model to consult it: the read-only `read_handbook` tool searches and reads the bundled pages offline, with source links. Backend updates ship the matching handbook copy.
 
 ## The desktop app
 

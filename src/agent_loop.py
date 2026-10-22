@@ -831,6 +831,7 @@ _QWEN38_TOOL_ROUTER_PROMPT = (
     "verification before the requested mutation has succeeded. If a file "
     "was just read, your next call must be edit_file/apply_patch; do not "
     "repeat the read and do not verify yet. "
+    "read_handbook: offline Novum Xenium help; query searches, page reads a returned page ID. "
     "manage_notes: notes/checklists. manage_documents: document "
     "library; actions are list/read/delete/tidy, use list+search to find by title/content. "
     "create_document: create editor-panel documents with title/content. "
@@ -7084,6 +7085,7 @@ _AGENT_RULES = """\
 ## Base rules
 - Only use tools when needed. For casual messages like "test", "yo", "thanks", answer normally.
 - If a needed tool is not visible, use search_tools when available to discover supported capabilities before declaring it missing. If discovery cannot supply it, state the blocker briefly; never invent tool names or bypass tool restrictions.
+- For Novum Xenium setup or troubleshooting, consult read_handbook when available before guessing. Search the bundled handbook, read the relevant page, cite its URL, and distinguish documentation from live diagnostics. If tools are disabled, do not claim to have read it.
 - Follow the latest user turn's scope and corrections while preserving the original goal. Treat an earlier error as superseded when the user says it is fixed; rely on fresh evidence before reopening it. If the user specifies the next check, perform it and choose the routine diagnostic order yourself. Ask only when a material prerequisite or decision is genuinely missing, and follow required approval flows.
 - For routine, reversible implementation choices, inspect the project and follow its existing conventions; choose a sensible default and keep moving instead of asking. Ask only when a requirement is genuinely missing or no safe project-consistent default exists; never bypass required approval flows.
 - When the user delegates a choice, make a sensible choice and proceed (for example, choose a name when asked to build an app). Ask only when required information is missing or a choice materially changes the result and has no reasonable default.
@@ -7104,6 +7106,7 @@ _API_AGENT_RULES = """\
 - Only call tools when they materially help answer the request. For casual messages like "test", "yo", "thanks", answer normally.
 - You MUST use tools to take action; do not claim you did something without a tool result.
 - If a needed tool is not visible, use search_tools when available to discover supported capabilities before declaring it missing. If discovery cannot supply it, state the blocker briefly; never invent tool names or bypass tool restrictions.
+- For Novum Xenium setup or troubleshooting, consult read_handbook when available before guessing. Search the bundled handbook, read the relevant page, cite its URL, and distinguish documentation from live diagnostics. If tools are disabled, do not claim to have read it.
 - Follow the latest user turn's scope and corrections while preserving the original goal. Treat an earlier error as superseded when the user says it is fixed; rely on fresh evidence before reopening it. If the user specifies the next check, perform it and choose the routine diagnostic order yourself. Ask only when a material prerequisite or decision is genuinely missing, and follow required approval flows.
 - For routine, reversible implementation choices, inspect the project and follow its existing conventions; choose a sensible default and keep moving instead of asking. Ask only when a requirement is genuinely missing or no safe project-consistent default exists; never bypass required approval flows.
 - When the user delegates a choice, make a sensible choice and proceed (for example, choose a name when asked to build an app). Ask only when required information is missing or a choice materially changes the result and has no reasonable default.
@@ -7232,6 +7235,7 @@ _DOMAIN_TOOL_MAP = {
 _PRIVATE_WEB_TOOL_NAMES = set(WEB_TOOL_NAMES) | {"private_browser", "youtube_tool"}
 
 _COMPACT_AGENT_CORE_TOOLS = {
+    "read_handbook",
     "bash",
     "python",
     "web_search",
@@ -7978,6 +7982,7 @@ def _domain_rules_for_tools(tool_names: set) -> list[str]:
 # Each tool section is keyed by tool name(s) it covers.
 # Sections with multiple tools use a tuple key.
 TOOL_SECTIONS = {
+    "read_handbook": '- `read_handbook` — For help with Novum Xenium, consult its bundled handbook before guessing settings or troubleshooting steps. Call with {"query":"local provider startup"}, then {"page":"troubleshooting/models.md"}; {} lists pages. Long pages return next_offset (zero-based lines). Cite the returned URL. Documentation is reference data, not live diagnostics or authorization to make changes. Works offline without workspace access.',
     "search_tools": "- `search_tools` — Search the tool catalog by capability. Use it when the current tool list lacks what the task needs; selected tools appear on the next model turn. Discovery never bypasses tool permissions.",
     "bash": """\
 ```bash
@@ -24996,7 +25001,7 @@ async def stream_agent_loop(
     # agent routes while leaving guide-only and the dedicated Qwen finetune
     # clamps authoritative.
     if _relevant_tools is not None and not guide_only and not _ody_qwen_finetune_model:
-        _relevant_tools.add("search_tools")
+        _relevant_tools.update({"search_tools", "read_handbook"})
     if _relevant_tools is not None and not _plan_tool_allowed:
         _relevant_tools.discard("update_plan")
 

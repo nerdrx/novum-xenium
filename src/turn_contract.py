@@ -6419,7 +6419,7 @@ def resolve_full_inventory_contract(*, schemas: Iterable[dict], policy: ToolPoli
         # Session tools overlap Cookbook administration except pipeline. It is
         # nevertheless part of the trained/runtime contract and must survive
         # the full-inventory intersection for exact pipeline requests.
-        "pipeline", "edit_image",
+        "pipeline", "edit_image", "read_handbook",
     }
     denied = {canonical_tool(n) for n in policy.all_disabled_names()}
     inventory = {s["function"]["name"]: s for s in schemas if isinstance(s.get("function"), dict)}

@@ -320,6 +320,22 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "read_handbook",
+            "description": "Search/read the bundled Novum Xenium handbook for setup and troubleshooting. Offline, read-only; no workspace or network access. Empty arguments list page IDs. Search snippets are not full pages; read page for details and cite its URL. Documentation is not live diagnostics or permission to change anything.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "maxLength": 500, "description": "Search words, e.g. local provider startup. Omit when reading a page."},
+                    "page": {"type": "string", "maxLength": 200, "description": "Exact page ID returned by index/search, e.g. troubleshooting/models.md."},
+                    "offset": {"type": "integer", "minimum": 0, "description": "Zero-based page line or index entry offset; use next_offset to continue."}
+                },
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "native_preview",
             "description": "Render and inspect the actual workspace-local Electron desktop app under a private Xvfb display. Optionally run an existing workspace test module. Uses the same authorized workspace Bash execution, timeout, cancellation, and sandbox; unavailable when a separate executor is configured.",
             "parameters": {

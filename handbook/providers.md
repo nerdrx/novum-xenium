@@ -20,13 +20,15 @@ Each time you enter Settings → AI, Novum refreshes the endpoint inventory. Thi
 
 During initial loading, Utility, Vision, Deep Research, and Research Search keep fields you have edited instead of replacing them with a late settings response. Their saves send only the changed setting and any dependent model or effort reset. Failed or malformed initial settings reads show a panel-local warning and leave the controls available for editing. Existing save feedback takes precedence over a late load error. Research Search also displays its own save status.
 
+Default Chat loads endpoint inventory, then saved settings. Each request has its own 15-second deadline, including its response body. If saved settings fail before you change a selection, a warning says displayed choices may differ from saved settings; reload after the connection recovers to verify them. Vision loads primary models, endpoint inventory, then saved settings, with a separate 15-second deadline per request. These waits can add up to 45 seconds, but do not cap total panel startup time. Inventory failures do not retry automatically; the saved-settings read still runs. A failed Vision settings read uses its existing warning unless save feedback takes priority.
+
 A saved Vision model missing from the current inventory remains visible with a “saved; not in current list” label. Utility and Deep Research retain the same label when their matching saved endpoint is enabled. Default Chat also shows its saved model instead of silently displaying the first listed model; its saved-only option is disabled. Choose an available model to change Default Chat. Displaying a saved choice does not prove the provider can serve it. Explicit model or endpoint changes keep their existing save behavior, and late initial responses preserve newer selections.
 
 If an initial inventory request fails, leave and re-enter AI after the service recovers. A successful refresh restores the saved endpoint/model only when that endpoint is enabled and you have not changed either control. A newer explicit selection remains authoritative. Recovery does not post settings or restart the provider.
 
 A save that receives no response stops waiting after 15 seconds; Novum does not retry it automatically. Check the save message: keeping an edit visible does not confirm it reached the server. A failed request may still have been saved; reload Novum and check Settings before retrying.
 
-See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/61b537be1610009f6b90033f4be9d2f2c253495a/static/js/settings.js).
+See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/d752cd5d596f561c2585d243842d4b1b24588e07/static/js/settings.js).
 
 ## Image and speech settings loading
 

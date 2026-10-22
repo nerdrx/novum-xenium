@@ -104,6 +104,36 @@ def test_standalone_iptc_is_filtered_from_default_and_explicit_lists(monkeypatch
         assert image.size == (16, 16)
 
 
+def test_msp_is_filtered_from_default_and_explicit_format_lists(monkeypatch):
+    Image.init()
+    if "MSP" not in Image.SAVE:
+        pytest.skip("Pillow cannot encode MSP in this runtime")
+    payload_buffer = BytesIO()
+    Image.new("1", (4, 4), 0).save(payload_buffer, format="MSP")
+    payload = payload_buffer.getvalue()
+    entered = []
+    _factory, accept = Image.OPEN["MSP"]
+
+    def reject_factory(*args, **kwargs):
+        entered.append("factory")
+        raise AssertionError("MSP decoder factory must not run")
+
+    def observe_accept(prefix):
+        entered.append("accept")
+        return accept(prefix)
+
+    monkeypatch.setitem(Image.OPEN, "MSP", (reject_factory, observe_accept))
+    with pytest.raises(UnidentifiedImageError):
+        open_image(BytesIO(payload))
+    with pytest.raises(UnidentifiedImageError):
+        open_image(BytesIO(payload), formats=["MSP"])
+    assert entered == []
+
+    with open_image(BytesIO(_encoded_image("PNG"))) as image:
+        assert image.format == "PNG"
+        assert image.size == (16, 16)
+
+
 def test_external_binary_stream_lifetime_matches_native_open():
     native_stream = BytesIO(_encoded_image("PNG"))
     helper_stream = BytesIO(_encoded_image("PNG"))

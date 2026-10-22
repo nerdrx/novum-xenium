@@ -78,6 +78,12 @@ function _createSettingsSaver(messageEl, clearAfterMs) {
   };
 }
 
+function _showSettingsLoadFailure(messageEl, message) {
+  if (!messageEl || ['Saving…', 'Saved', 'Failed to save', 'Admin access is required to change these settings.'].includes(messageEl.textContent)) return;
+  messageEl.textContent = message;
+  messageEl.style.color = 'var(--red)';
+}
+
 const el = byId;
 function esc(s) { return uiModule.esc(s); }
 function safeRasterDataUrl(raw) {
@@ -670,7 +676,10 @@ async function initUtilityModel() {
           })
         : [],
     });
-  } catch (e) { console.warn('Failed to load utility model settings', e); }
+  } catch (e) {
+    console.warn('Failed to load utility model settings', e);
+    _showSettingsLoadFailure(msg, 'Could not load saved Utility settings.');
+  }
 
   // Persist whatever's currently selected. Empty endpoint or model → backend
   // transparently falls back to the chat model (mirrors the teacher panel:
@@ -884,7 +893,10 @@ async function initVisionSettings() {
         ? settings.vision_model_fallbacks.map(function(f) { return { endpoint_id: (f && f.endpoint_id) || '', model: (f && f.model) || '' }; })
         : [],
     });
-  } catch (e) { console.warn('Failed to load vision settings', e); }
+  } catch (e) {
+    console.warn('Failed to load vision settings', e);
+    _showSettingsLoadFailure(msg, 'Could not load saved Vision settings.');
+  }
 
   syncVisionDisabled();
 
@@ -1411,7 +1423,10 @@ async function initResearchSettings() {
         && settings.research_run_timeout_seconds !== null) {
       runTimeoutInput.value = settings.research_run_timeout_seconds;
     }
-  } catch (e) { console.warn('Failed to load research settings', e); }
+  } catch (e) {
+    console.warn('Failed to load research settings', e);
+    _showSettingsLoadFailure(msg, 'Could not load saved Research settings.');
+  }
 
   showStatus = function() {
     var parts = [];
@@ -1501,7 +1516,10 @@ async function initResearchSearchSettings() {
         && settings.research_search_provider) searchSel.value = settings.research_search_provider;
     updateSearchOptions(settings);
     updateSearchLogo();
-  } catch (e) { console.warn('Failed to load research search settings', e); }
+  } catch (e) {
+    console.warn('Failed to load research search settings', e);
+    _showSettingsLoadFailure(msg, 'Could not load saved Research Search settings.');
+  }
 
 }
 

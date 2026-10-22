@@ -95,6 +95,15 @@ function safeRasterDataUrl(raw) {
    Panel activation side effects, the admin handoff, admin-only visibility and
    the public open/close API live in ./settings/shell.js. This coordinator only
    supplies the panel-owned pieces the shell needs. */
+let _cancelActiveShortcutRebind = null;
+let _renderShortcutList = null;
+
+function _cancelShortcutRebind() {
+  if (typeof _cancelActiveShortcutRebind !== 'function') return;
+  _cancelActiveShortcutRebind();
+  if (typeof _renderShortcutList === 'function') _renderShortcutList();
+}
+
 const _shell = createSettingsShell({
   getModal: () => modalEl,
   ensureInitialized: () => { if (!initialized) initAll(); },
@@ -103,6 +112,7 @@ const _shell = createSettingsShell({
   isAdmin: () => !!window._isAdmin,
   getAdminModule: () => window.adminModule,
   afterPanelActivated(tab) {
+    if (tab !== 'shortcuts') _cancelShortcutRebind();
     if (tab === 'usage') refreshUsage({ force: true });
     if (tab === 'modules') refreshModules();
   },
@@ -1896,6 +1906,8 @@ async function initShortcuts() {
   // Load saved keybinds
   let keybinds = { ...SHORTCUT_DEFAULTS };
   let keybindsLoaded = false;
+  let saveSequence = 0;
+  let lastAppliedSuccessSequence = 0;
   if (resetBtn) resetBtn.disabled = true;
   listEl.setAttribute('role', 'status');
   listEl.setAttribute('aria-live', 'polite');
@@ -1943,6 +1955,7 @@ async function initShortcuts() {
   }
 
   function render() {
+    if (typeof _cancelActiveShortcutRebind === 'function') _cancelActiveShortcutRebind();
     listEl.innerHTML = '';
     const conflicts = _findConflicts();
 
@@ -1987,6 +2000,7 @@ async function initShortcuts() {
 
     listEl.querySelectorAll('.shortcut-action-btn.is-reset').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (!btn.classList.contains('is-reset')) return;
         const action = btn.dataset.action;
         keybinds[action] = SHORTCUT_DEFAULTS[action];
         saveKeybinds();
@@ -1995,8 +2009,13 @@ async function initShortcuts() {
     });
   }
 
+  _renderShortcutList = render;
+
   function startRebind(btn) {
     const action = btn.dataset.action;
+    _cancelShortcutRebind();
+    btn = Array.from(listEl.querySelectorAll('.shortcut-key')).find(keyButton => keyButton.dataset.action === action);
+    if (!btn) return;
     const row = btn.closest('.shortcut-row');
     const actionBtn = row.querySelector('.shortcut-action-btn');
     const hintEl = row.querySelector('.shortcut-hint');
@@ -2024,6 +2043,7 @@ async function initShortcuts() {
     }
 
     let pendingCombo = null;
+    let cancelRebind;
 
     // Wire confirm button
     const confirmHandler = () => {
@@ -2077,21 +2097,31 @@ async function initShortcuts() {
       if (hintEl) { hintEl.hidden = true; hintEl.textContent = ''; }
       document.removeEventListener('keydown', onKey, true);
       actionBtn.removeEventListener('click', confirmHandler);
+      if (_cancelActiveShortcutRebind === cancelRebind) _cancelActiveShortcutRebind = null;
     }
+
+    cancelRebind = cleanup;
+    _cancelActiveShortcutRebind = cancelRebind;
 
     document.addEventListener('keydown', onKey, true);
   }
 
   async function saveKeybinds() {
     if (!keybindsLoaded) return;
+    const sequence = ++saveSequence;
+    const submittedKeybinds = { ...keybinds };
     try {
-      await _postSettings({ keybinds });
+      await _postSettings({ keybinds: submittedKeybinds });
+      if (sequence <= lastAppliedSuccessSequence) return false;
+      lastAppliedSuccessSequence = sequence;
       // Update global keybinds so they take effect immediately
-      window._odysseusKeybinds = keybinds;
+      window._odysseusKeybinds = { ...submittedKeybinds };
       if (uiModule && uiModule.showToast) uiModule.showToast('Shortcut saved');
+      return true;
     } catch (e) {
       console.error('Failed to save keybinds:', e);
-      if (uiModule && uiModule.showToast) uiModule.showToast('Failed to save shortcut');
+      if (sequence > lastAppliedSuccessSequence && e.status !== 403 && uiModule && uiModule.showError) uiModule.showError('Failed to save shortcut');
+      return false;
     }
   }
 
@@ -2099,8 +2129,7 @@ async function initShortcuts() {
     resetBtn.addEventListener('click', async () => {
       keybinds = { ...SHORTCUT_DEFAULTS };
       render();
-      await saveKeybinds();
-      if (uiModule && uiModule.showToast) uiModule.showToast('Shortcuts reset to defaults');
+      if (await saveKeybinds() && uiModule && uiModule.showToast) uiModule.showToast('Shortcuts reset to defaults');
     });
   }
 
@@ -2308,7 +2337,10 @@ function initAll() {
   modalEl = el('settings-modal');
 
   bindSettingsNavigation(modalEl, {
-    openAdminTab: _shell.openAdminTab,
+    openAdminTab(tab, button) {
+      _cancelShortcutRebind();
+      return _shell.openAdminTab(tab, button);
+    },
     onPanelActivated: _shell.onPanelActivated,
   });
 
@@ -6115,8 +6147,14 @@ async function initUnifiedIntegrations() {
 /* ═══════════════════════════════════════════
    PUBLIC API
    ═══════════════════════════════════════════ */
-export function open(tab) { _shell.open(tab); }
-export function close() { _shell.close(); }
+export function open(tab) {
+  if (tab && tab !== 'shortcuts') _cancelShortcutRebind();
+  _shell.open(tab);
+}
+export function close() {
+  _cancelShortcutRebind();
+  _shell.close();
+}
 function syncAdminVisibility() { _shell.syncAdminVisibility(); }
 
 handleSettingsOauthReturn({ openSettings: open });

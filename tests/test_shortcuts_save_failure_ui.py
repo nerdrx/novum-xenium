@@ -1,0 +1,28 @@
+"""Opt-in actual-app browser checks for shortcut-save failures."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="Node is required for browser checks")
+def test_shortcuts_save_failure_ui():
+    if not os.environ.get("PLAYWRIGHT_PACKAGE") or not os.environ.get("BROWSER_EXECUTABLE"):
+        pytest.skip("Set PLAYWRIGHT_PACKAGE and BROWSER_EXECUTABLE for browser checks")
+    env = os.environ.copy()
+    env["SOURCE_ROOT"] = str(ROOT)
+    result = subprocess.run(
+        ["node", str(ROOT / "tests/helpers/test_shortcuts_save_failure_ui.cjs")],
+        capture_output=True, text=True, timeout=120, cwd=ROOT, env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    evidence = json.loads(result.stdout)
+    assert evidence["pass"] is True
+    assert evidence["externalRequests"] == []
+    assert evidence["pageErrors"] == []
+    assert evidence["cleanup"] == {"browserClosed": True, "contextClosed": True, "serverClosed": True}

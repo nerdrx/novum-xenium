@@ -3,27 +3,25 @@
 </p>
 
 <h1 align="center">Novum Xenium</h1>
-<p align="center">An Odysseus fork focused on reliability, usability, and desktop integration.</p>
+<p align="center">A self-hosted workspace for AI chats, models, files, projects, and tools.</p>
 
-**Novum Xenium builds on [Odysseus](https://github.com/odysseus-dev/odysseus).** This fork improves the existing workspace with NX usability, reliability, and desktop/mobile integration work. The original project, authorship, history, and AGPL license remain credited.
+<p align="center"><strong><a href="https://github.com/nerdrx/novum-xenium/releases/latest">Download latest</a> · <a href="https://nerdrx.github.io/novum-xenium/">Handbook</a> · <a href="#get-started">Get started</a> · <a href="https://nerdrx.github.io/novum-xenium/reference/security/">Security notes</a></strong></p>
 
-Novum Xenium brings your models, tools, projects and chats together. The lightweight Tauri app manages the Docker backend and opens your workspace. Prefer a browser? Same workspace, same data.
+Built on [Odysseus](https://github.com/odysseus-dev/odysseus), with original authors credited and the [AGPL-3.0-or-later license](LICENSE) retained.
 
-This started with [Odysseus](https://github.com/odysseus-dev/odysseus), then NX-Odysseus. We kept using it, fixing what got in the way and adding what was missing. Now it has its own desktop app, interface and way of working. The original history, credits and AGPL license stay with it.
+Run the backend with Docker Compose and use it in a browser. The optional desktop manager controls an existing backend; the Android companion connects to one already running. All three use the same workspace and saved data.
 
-**[Handbook](https://nerdrx.github.io/novum-xenium/)** · **[Get started](#get-started)** · [Desktop app](#the-desktop-app) · [Android](#android-companion) · [See it work](#give-it-a-real-job) · [Workflow guide](docs/nx-workflows.md) · [What changed](FORK-CHANGES.md)
+<p><a href="#the-desktop-app">Desktop manager</a> · <a href="#android-companion">Android companion</a> · <a href="#local-image-generation">Local image generation</a> · <a href="FORK-CHANGES.md">Change record</a></p>
 
 ![Novum Xenium home dashboard](assets/branding/workspace-home.png)
 
-<sub>The workspace, with example activity. Colours, fonts and background effects are yours to change.</sub>
-
-![Novum Xenium sign-in page](assets/branding/login.png)
-
-<sub>The sign-in page uses the Novum Xenium name and app mark.</sub>
+<sub>The workspace with example activity. Colours, fonts, and background effects are yours to change.</sub>
 
 ## Get started
 
-Install Git and Docker Compose, then:
+### Browser workspace
+
+You need Git and Docker Engine with the Compose plugin. Start the backend:
 
 ```bash
 git clone https://github.com/nerdrx/novum-xenium.git
@@ -38,11 +36,26 @@ Open **[localhost:7000](http://localhost:7000)**. Use your `ODYSSEUS_ADMIN_PASSW
 docker compose logs odysseus
 ```
 
-Connect a provider in **Settings**, choose **Agent** for tools, and select your workspace. Use a local model or a hosted provider, including a ChatGPT subscription. No local LLM download or image bridge needed to get going.
+Authentication is enabled and ports bind to localhost by default. Application data lives in `data/`; project files live in `data/agent_workspace/workspace/`, mounted as `/workspace` in the container. Connect a provider in **Settings**; choose **Agent** when you want to use tools.
 
-That's the setup: clone, copy the environment file, run Compose. Authentication is on. Ports bind to localhost by default. Your application data lives in `data/`; project files live in `data/agent_workspace/workspace/`, mounted as `/workspace` in the container.
+### Desktop manager
 
-[Read the handbook](https://nerdrx.github.io/novum-xenium/) for setup, providers, tools, permissions, backups, troubleshooting, and configuration.
+Download the [latest desktop release](https://github.com/nerdrx/novum-xenium/releases/latest) to manage an existing checkout and open the same workspace. The manager does not install Docker, WSL, or Git for you. [Desktop setup and update details](docs/desktop.md).
+
+For local text models, **Manager → Local Provider** has **Unload idle models after (minutes)**, set to 30 by default and visible outside Advanced settings. The Image Engine has a separate idle setting.
+
+### Android setup
+
+Download the [latest release](https://github.com/nerdrx/novum-xenium/releases/latest). The Android app connects to your existing backend; it does not run a local model. Android 8 or newer and a current Android System WebView are required. [Connection and compatibility details](android/README.md).
+
+<details>
+<summary>See the sign-in screen</summary>
+
+![Novum Xenium sign-in page](assets/branding/login.png)
+
+</details>
+
+The [handbook](https://nerdrx.github.io/novum-xenium/) covers providers, tools and permissions, backups, troubleshooting, and configuration.
 
 ## The desktop app
 
@@ -58,9 +71,9 @@ On Linux, the embedded workspace keeps its native Wayland window. If Chrome or C
 
 Copy an image to another app, save it with a native file dialog or open it in your default browser. Ordinary web links open there too. Desktop notifications are optional and off by default; enable them in Settings while the app is running.
 
-Install a [desktop release](https://github.com/nerdrx/novum-xenium/releases) directly or through [NX Hub](https://github.com/nerdrx/nx-hub). The current app adopts an existing Compose checkout; it does not install Docker, WSL or Git for you.
+Install the [latest desktop release](https://github.com/nerdrx/novum-xenium/releases/latest) directly or through [NX Hub](https://github.com/nerdrx/nx-hub). The current app adopts an existing Compose checkout; it does not install Docker, WSL or Git for you.
 
-On Linux, the [local model provider](docs/desktop.md#local-model-provider-linux) starts with Novum and loads your existing GGUF models on demand. Completed compatible text GGUF downloads in Cookbook's shared local cache join the provider automatically. Choose **Regular** for plain llama-server or **zVram** for memory management. Connection to chat is automatic once signed in; port and paging controls live under Advanced settings. Ollama stays available.
+On Linux, the [local model provider](docs/desktop.md#local-model-provider-linux) can start with Novum and loads your existing GGUF models on demand. Completed compatible text GGUF downloads in Cookbook's shared local cache join the provider automatically. Choose **Regular** for plain llama-server or **zVram** for memory management. Connection to chat is automatic once signed in; port and paging controls live under Advanced settings. Ollama stays available.
 
 The manager also controls the backend's **Image engine**: choose Auto, CPU, Vulkan or zVram, manage automatic startup, refresh downloaded models and set idle unloading. Engines stay ready without loading every model into VRAM. Manual Stop disables automatic startup for that engine until you enable it again.
 
@@ -82,7 +95,7 @@ Requires Rust and the [Tauri system dependencies](https://v2.tauri.app/start/pre
 
 Open the same workspace on your phone. The Android app includes its own Tailscale connection, so other phone apps keep their normal network. Enter your server address, sign in to Tailscale, then sign in to Novum. A router with an approved subnet route can provide access to your LAN server.
 
-Install the APK from [Releases](https://github.com/nerdrx/novum-xenium/releases) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. The companion routes the configured server through Tailscale while loading embedded external media over the phone’s normal connection. [Connection, build, and compatibility details](android/README.md).
+Install the APK from the [latest release](https://github.com/nerdrx/novum-xenium/releases/latest) or NX Hub. Android 8 or newer and a current Android System WebView are required. The phone connects to your existing backend; it does not run a local model. The companion routes the configured server through Tailscale while loading embedded external media over the phone’s normal connection. [Connection, build, and compatibility details](android/README.md).
 
 Open chat navigation with the menu button; sideways gestures in chat no longer open the drawer. Streaming updates avoid repeated page-wide selection scans, and chat-status ownership checks run outside the server's event loop. These paths have headless touch and responsiveness checks; smoothness on a physical phone remains unverified.
 
@@ -184,6 +197,8 @@ These are checked examples, not a promise that every model handles every project
 
 Hosted inference sends data to the provider you choose. Keeping the application self-hosted does not make a cloud model local.
 
+The current dependency audit still reports unresolved Pillow advisories. FastEmbed 0.9.0 requires Pillow below 13, while the listed Pillow fixes are in 13.0.0. Some input paths have scoped format guards; they are not a general decoder fix or an all-clear. See the [security notes](handbook/reference/security.md).
+
 - **Full access stays within your setup.** It doesn't mount extra host folders, enable disabled tools or override account permissions. The shell isn't an operating-system sandbox.
 - **Stop has boundaries.** It cancels owned foreground process groups, background jobs and commands tracked in the persistent tmux pane. Detached or reparented processes may need separate cleanup. It cannot undo side effects.
 - **Snapshots cover included workspace files.** Limits are 2,000 files, 8 MiB per file and 64 MiB total. Stop concurrent file writers before restoring. Snapshots don't undo external services, running processes or shell effects outside the workspace.
@@ -200,7 +215,7 @@ Found something odd? Show how to reproduce it, the relevant tool output and what
 
 ## Where it came from
 
-Novum Xenium is an independent fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). The upstream base is `dev` at `0590edd4f2e9a9eeb294d67864bdc8d9699876ac` (October 16, 2026), with Novum Xenium changes maintained on top.
+Novum Xenium is an independent fork of [Odysseus](https://github.com/odysseus-dev/odysseus), maintained by [nerdrx](https://github.com/nerdrx). Its upstream history, authorship, and AGPL license remain credited; the [change record](FORK-CHANGES.md) describes the Novum Xenium work.
 
 **AGPL-3.0-or-later.** Original authors and third-party notices remain in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md). See [LICENSE](LICENSE). Keep the license and notices, and provide corresponding source as required when distributing or serving modified versions.
 

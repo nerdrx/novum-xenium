@@ -16,13 +16,15 @@ Do not paste API keys into chat or public logs. Hosted providers receive request
 
 ## Model choices during endpoint refresh
 
-Each time you enter Settings → AI, Novum refreshes the endpoint inventory. If that refresh fails or returns a non-array response, it leaves already displayed endpoint and model selections unchanged. This inventory-refresh behavior does not confirm provider health. A valid empty inventory clears the endpoint and model selectors. After the service recovers, leave and re-enter AI to refresh the inventory.
+Each time you enter Settings → AI, Novum refreshes the endpoint inventory. This refresh stops waiting after 15 seconds, including a stalled response body. If it fails or returns a non-array response, it leaves already displayed endpoint and model selections unchanged. This does not confirm provider health, and Novum does not retry automatically. A valid empty inventory clears the selectors. After the service recovers, leave and re-enter AI to refresh the inventory. The separate initial reads used to populate individual model panels do not share this refresh deadline.
 
-During initial loading, Utility, Vision, Deep Research, and Research Search keep fields you have edited instead of replacing them with a late settings response. Their saves send only the changed setting and any dependent model or effort reset. Failed or malformed initial settings reads show a panel-local warning and leave the controls available for editing. Existing save feedback takes precedence over a late load error. Research Search also displays its own save status. A saved Vision model absent from the inventory remains selected with a “saved; not in current list” label. You can explicitly choose another model or Auto-detect.
+During initial loading, Utility, Vision, Deep Research, and Research Search keep fields you have edited instead of replacing them with a late settings response. Their saves send only the changed setting and any dependent model or effort reset. Failed or malformed initial settings reads show a panel-local warning and leave the controls available for editing. Existing save feedback takes precedence over a late load error. Research Search also displays its own save status.
+
+A saved Vision model missing from the current inventory remains visible with a “saved; not in current list” label. Utility and Deep Research retain the same label when their matching saved endpoint is enabled. Default Chat also shows its saved model instead of silently displaying the first listed model; its saved-only option is disabled. Choose an available model to change Default Chat. Displaying a saved choice does not prove the provider can serve it. Explicit model or endpoint changes keep their existing save behavior, and late initial responses preserve newer selections.
 
 A save that receives no response stops waiting after 15 seconds; Novum does not retry it automatically. Check the save message: keeping an edit visible does not confirm it reached the server. A failed request may still have been saved; reload Novum and check Settings before retrying.
 
-See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/90c8198c4b46ea43faa12b2eb76f5366faf85bc8/static/js/settings.js).
+See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/72c9e29de53ff1ab0949843831520fc000c419e4/static/js/settings.js).
 
 ## Connect an account with sign-in
 

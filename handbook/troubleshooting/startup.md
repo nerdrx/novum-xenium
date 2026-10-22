@@ -82,6 +82,14 @@ checking whether the prior request produced a result. Older builds may not
 include these recovery changes; compare the installed version with the
 [current source](https://github.com/nerdrx/novum-xenium/blob/main/static/js/chat.js).
 
+## Preferences or tool details use defaults after a loading error
+
+The shared settings and tool-list reads reject unsuccessful HTTP responses instead of caching an error response as valid configuration. They stop waiting after 15 seconds, including a stalled response body. Later reads can try again after a failure; there is no automatic retry.
+
+Some features initialize only once and keep their fallback state after a failed read. After the backend recovers, reload the page to initialize those features again. This timeout does not restart providers, replay prompts, or change tool permissions. Do not delete settings or account data as a loading fix.
+
+See the pinned [shared configuration reads](https://github.com/nerdrx/novum-xenium/blob/72c9e29de53ff1ab0949843831520fc000c419e4/static/js/appConfig.js).
+
 ## Persona settings fail to load
 
 **Failed to load presets** means the settings request failed, exceeded its

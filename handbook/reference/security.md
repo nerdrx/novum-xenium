@@ -68,7 +68,7 @@ gallery inputs, chat image metadata and thumbnails, media inspection, image-edit
 sources, and inline tool-result image packing. This narrows the input path for the
 [XBM header-parser denial of service advisory](https://github.com/python-pillow/Pillow/security/advisories/GHSA-xgh8-jp6q-p5x8).
 It does not patch Pillow; existing TIFF decoding and its reported risks remain.
-See the pinned [decoder helper](https://github.com/nerdrx/novum-xenium/blob/90c8198c4b46ea43faa12b2eb76f5366faf85bc8/src/safe_image_open.py)
+See the pinned [decoder helper](https://github.com/nerdrx/novum-xenium/blob/72c9e29de53ff1ab0949843831520fc000c419e4/src/safe_image_open.py)
 and [gallery validation](https://github.com/nerdrx/novum-xenium/blob/b178357088ec920083e040291abf5a76cab76b1a/routes/gallery/gallery_routes.py).
 
 The shared opener also excludes the standalone IPTC decoder, including explicit

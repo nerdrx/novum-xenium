@@ -30,9 +30,9 @@ If an initial inventory request fails, leave and re-enter AI after the service r
 
 A save that receives no response stops waiting after 15 seconds; Novum does not retry it automatically. Check the save message: keeping an edit visible does not confirm it reached the server. A failed request may still have been saved; reload Novum and check Settings before retrying.
 
-The web Search configuration controls remain unavailable until the initial saved-settings snapshot is validated; that read waits up to 15 seconds, including its JSON response. A failed read shows reload guidance and preserves the unknown saved fallback list. After a valid read, an empty chain or a legacy response with no chain remains editable, including removal of the last fallback. This load gate does not change tool permissions or provider policy.
+The web Search configuration controls remain unavailable until the initial saved-settings snapshot is validated; that read waits up to 15 seconds, including its JSON response. A failed read shows reload guidance and preserves the unknown saved fallback list. After a valid read, an empty chain or a legacy response with no chain remains editable, including removal of the last fallback. This load gate does not change tool permissions or provider policy. Status refresh keeps this page’s current fallback order; changes made elsewhere appear after reloading the page.
 
-See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/2e68e7e78f180fb6c506f25249201a5fdb76d63c/static/js/settings.js).
+See the pinned [settings loading and saving](https://github.com/nerdrx/novum-xenium/blob/08415d336c01a1130fe7d48247586ca9507650ca/static/js/settings.js).
 
 ## Image and speech settings loading
 

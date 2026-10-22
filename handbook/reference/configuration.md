@@ -101,6 +101,14 @@ controls.
 | Reminders and alerts | `app_public_url`, `reminder_channel`, `reminder_llm_synthesis`, `reminder_llm_persona`, `reminder_ntfy_topic`, `reminder_email_to`, `reminder_webhook_integration_id`, `reminder_webhook_payload_template`, `urgent_email_prompt` |
 | Interface and compatibility | `keybinds`, `default_model_fallbacks` (legacy; retained for compatibility, not used for routing) |
 
+The **Shortcuts** panel loads and validates saved key bindings before it enables
+editing or Reset. The settings request, including reading its response body, has
+a 15-second deadline. If loading fails or returns an invalid settings shape,
+the panel shows a reload message and leaves the saved bindings untouched. A
+missing or empty legacy `keybinds` map remains usable with the default bindings;
+when a valid map is loaded, custom and unrecognized entries are retained when
+you save a rebind.
+
 Settings values can be sensitive, especially provider keys, webhook payloads,
 email destinations, and tool path roots. Use the app's Settings controls and
 admin permissions; do not manually edit `settings.json` during service
